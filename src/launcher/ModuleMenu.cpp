@@ -127,6 +127,8 @@ void registerModulesWithLauncher() {
                 }
             }
 
+            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_strength") displayName = "Aim Speed";
+
             TmpConfigEntry entry;
             entry.key = k;
             entry.displayName = displayName;
@@ -205,6 +207,7 @@ void registerModulesWithLauncher() {
                 } else if (kLower.find("speed") != std::string::npos || kLower.find("strength") != std::string::npos) {
                     minVal = 0.05f;
                     maxVal = 1.0f;
+                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") maxVal = 5.0f;
                 } else if (kLower.find("thick") != std::string::npos) {
                     maxVal = 20.0f;
                 }

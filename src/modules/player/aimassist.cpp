@@ -13,7 +13,6 @@
 #include <string>
 #include <limits>
 
-bool bedaimApplySyntheticLocalPlayerTurnDelta(void* localPlayer, float pitchDelta, float yawDelta);
 
 namespace {
 using ActorIsPlayerFn = bool (*)(void*);
@@ -44,8 +43,10 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadToDeg = 180.0f / kPi;
 
 float wrapDegrees(float angle) {
-    while (angle > 180.0f) angle -= 360.0f;
-    while (angle < -180.0f) angle += 360.0f;
+    if (!std::isfinite(angle)) return 0.0f;
+    angle = std::fmod(angle, 360.0f);
+    if (angle > 180.0f) angle -= 360.0f;
+    else if (angle < -180.0f) angle += 360.0f;
     return angle;
 }
 
@@ -154,75 +155,26 @@ void AimAssistModule::onInit() {
 
 void AimAssistModule::onEnable() {
     m_lastTarget = nullptr;
-    m_aimPointTarget = nullptr;
-    m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};
-    m_aimOffsetTo = m_aimOffsetFrom;
-    m_aimOffsetTransitionStart = {};
-    m_nextAimOffsetChange = {};
-    std::lock_guard lock(m_frameMutex);
-    m_cachedPlayer = nullptr;
-    m_hasDesiredRotation = false;
-    m_lastTargetUpdate = {};
-    m_lastFrameUpdate = {};
+    m_lastRotationUpdate = {};
 }
 
 void AimAssistModule::onDisable() {
     m_lastTarget = nullptr;
-    m_aimPointTarget = nullptr;
-    m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};
-    m_aimOffsetTo = m_aimOffsetFrom;
-    m_aimOffsetTransitionStart = {};
-    m_nextAimOffsetChange = {};
-    std::lock_guard lock(m_frameMutex);
-    m_cachedPlayer = nullptr;
-    m_hasDesiredRotation = false;
-    m_lastTargetUpdate = {};
-    m_lastFrameUpdate = {};
+    m_lastRotationUpdate = {};
 }
 
-bedrocktools::sdk::Vec3 AimAssistModule::sampleAimOffset() {
-    return {0.5f, 0.55f, 0.5f};
-}
 
-bedrocktools::sdk::Vec3 AimAssistModule::currentAimOffset(std::chrono::steady_clock::time_point now) const {
-    const float duration = std::max(m_aimOffsetTransitionSeconds, 0.01f);
-    const float elapsed = std::chrono::duration<float>(now - m_aimOffsetTransitionStart).count();
-    float t = std::clamp(elapsed / duration, 0.0f, 1.0f);
-    t = t * t * (3.0f - 2.0f * t);
-    return {
-        m_aimOffsetFrom.x + (m_aimOffsetTo.x - m_aimOffsetFrom.x) * t,
-        m_aimOffsetFrom.y + (m_aimOffsetTo.y - m_aimOffsetFrom.y) * t,
-        m_aimOffsetFrom.z + (m_aimOffsetTo.z - m_aimOffsetFrom.z) * t
-    };
-}
 
-void AimAssistModule::updateAimOffsetTarget(void* target, std::chrono::steady_clock::time_point now) {
-    if (!target) {
-        m_aimPointTarget = nullptr;
-        return;
-    }
 
-    // Keep one stable point near the target's center instead of chasing a moving random point.
-    const bedrocktools::sdk::Vec3 stableOffset{0.5f, 0.55f, 0.5f};
-    if (m_aimPointTarget != target || m_aimOffsetTransitionStart.time_since_epoch().count() == 0) {
-        m_aimPointTarget = target;
-        m_aimOffsetFrom = stableOffset;
-        m_aimOffsetTo = stableOffset;
-        m_aimOffsetTransitionStart = now;
-        m_aimOffsetTransitionSeconds = 0.01f;
-        m_nextAimOffsetChange = std::chrono::steady_clock::time_point::max();
-    }
-}
+
+
 
 void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
-    {
-        std::lock_guard lock(m_frameMutex);
-        m_cachedPlayer = nullptr;
-        m_hasDesiredRotation = false;
-    }
+
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
         m_lastTarget = nullptr;
+        m_lastRotationUpdate = {};
         return;
     }
 
@@ -230,19 +182,24 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto* level = player->level();
     if (!rotationComponent || !level) {
         m_lastTarget = nullptr;
+        m_lastRotationUpdate = {};
         return;
     }
 
     Vec2 currentRotation = field<Vec2>(rotationComponent, 0);
     if (!std::isfinite(currentRotation.x) || !std::isfinite(currentRotation.y)) {
         m_lastTarget = nullptr;
+        m_lastRotationUpdate = {};
         return;
     }
+    currentRotation.x = std::clamp(currentRotation.x, -89.0f, 89.0f);
+    currentRotation.y = wrapDegrees(currentRotation.y);
 
     const AABB playerBounds = player->bounds();
     const Vec3 playerPosition = player->position();
     if (!finiteVec3(playerPosition)) {
         m_lastTarget = nullptr;
+        m_lastRotationUpdate = {};
         return;
     }
 
@@ -255,25 +212,26 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         eyePosition.y += 1.5f;
     }
 
-    Vec3 extent{m_range, m_range, m_range};
+    const float range = std::clamp(m_range, 2.0f, 80.0f);
+    Vec3 extent{range, range, range};
     void* actorManager = field<void*>(level, offsets::Level::mActorManager);
     if (!actorManager) {
         m_lastTarget = nullptr;
+        m_lastRotationUpdate = {};
         return;
     }
 
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     if (!actors.begin || !actors.end || actors.end < actors.begin) {
         m_lastTarget = nullptr;
+        m_lastRotationUpdate = {};
         return;
     }
 
-    const auto targetNow = std::chrono::steady_clock::now();
     void* bestTarget = nullptr;
-    AABB bestBounds{};
     Vec2 bestRotation{};
-    float bestAngleScore = std::numeric_limits<float>::max();
-    const float maxDistanceSq = m_range * m_range;
+    float bestScore = std::numeric_limits<float>::max();
+    const float maxDistanceSq = range * range;
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
@@ -290,21 +248,17 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) continue;
         if (g_actorIsInvisible && g_actorIsInvisible(candidate)) continue;
 
-        // Actor is a lightweight SDK wrapper; no ownership or memory is transferred.
         auto* target = reinterpret_cast<Actor*>(candidate);
         const Vec3 targetPosition = target->position();
         const AABB targetBounds = target->bounds();
         if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
 
-        Vec3 normalizedOffset{0.5f, 0.55f, 0.5f};
-        if (candidate == m_lastTarget && candidate == m_aimPointTarget) {
-            normalizedOffset = currentAimOffset(targetNow);
-        }
-
-        Vec3 aimPoint{};
-        aimPoint.x = targetBounds.min.x + (targetBounds.max.x - targetBounds.min.x) * normalizedOffset.x;
-        aimPoint.y = targetBounds.min.y + (targetBounds.max.y - targetBounds.min.y) * normalizedOffset.y;
-        aimPoint.z = targetBounds.min.z + (targetBounds.max.z - targetBounds.min.z) * normalizedOffset.z;
+        // Aim at a fixed point in the target's hitbox; never chase a randomized offset.
+        const Vec3 aimPoint{
+            (targetBounds.min.x + targetBounds.max.x) * 0.5f,
+            targetBounds.min.y + (targetBounds.max.y - targetBounds.min.y) * 0.55f,
+            (targetBounds.min.z + targetBounds.max.z) * 0.5f
+        };
 
         const float d2 = distanceSquared(eyePosition, aimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
@@ -321,108 +275,57 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        // Prefer the target closest to the crosshair, using distance only as a tiebreaker.
-        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 2.0f;
+        // Hysteresis: keep the current target unless another one is clearly better.
+        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 8.0f;
         const float score = angleScore + std::sqrt(d2) * 0.001f + targetStickiness;
-        if (score < bestAngleScore) {
-            bestAngleScore = score;
+        if (score < bestScore) {
+            bestScore = score;
             bestTarget = candidate;
-            bestBounds = targetBounds;
             bestRotation = {desiredPitch, desiredYaw};
         }
     }
 
     if (!bestTarget) {
         m_lastTarget = nullptr;
-        m_aimPointTarget = nullptr;
+        m_lastRotationUpdate = {};
         return;
     }
 
     m_lastTarget = bestTarget;
-    updateAimOffsetTarget(bestTarget, targetNow);
-    const Vec3 normalizedOffset = currentAimOffset(targetNow);
-    const Vec3 aimPoint{
-        bestBounds.min.x + (bestBounds.max.x - bestBounds.min.x) * normalizedOffset.x,
-        bestBounds.min.y + (bestBounds.max.y - bestBounds.min.y) * normalizedOffset.y,
-        bestBounds.min.z + (bestBounds.max.z - bestBounds.min.z) * normalizedOffset.z
-    };
-    const float finalDx = aimPoint.x - eyePosition.x;
-    const float finalDy = aimPoint.y - eyePosition.y;
-    const float finalDz = aimPoint.z - eyePosition.z;
-    const float finalHorizontal = std::sqrt(finalDx * finalDx + finalDz * finalDz);
-    bestRotation.y = std::atan2(-finalDx, finalDz) * kRadToDeg;
-    bestRotation.x = -std::atan2(finalDy, std::max(finalHorizontal, 0.001f)) * kRadToDeg;
+    const float yawError = wrapDegrees(bestRotation.y - currentRotation.y);
+    const float pitchError = bestRotation.x - currentRotation.x;
+    if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
-    {
-        std::lock_guard lock(m_frameMutex);
-        m_cachedPlayer = player;
-        m_desiredRotation = bestRotation;
-        m_lastTargetUpdate = std::chrono::steady_clock::now();
-        m_hasDesiredRotation = true;
-    }
-}
-
-void AimAssistModule::onFrame() {
-    using namespace bedrocktools::sdk;
-
-    Player* player = nullptr;
-    Vec2 desiredRotation{};
-    float alpha = 0.0f;
     const auto now = std::chrono::steady_clock::now();
-
-    {
-        std::lock_guard lock(m_frameMutex);
-        if (!enabled) return;
-
-        if (!m_hasDesiredRotation || !m_cachedPlayer) {
-            m_lastFrameUpdate = now;
-            return;
-        }
-
-        // Never dereference an old player pointer if ticks stop during a world transition.
-        if (now - m_lastTargetUpdate > std::chrono::milliseconds(150)) {
-            m_cachedPlayer = nullptr;
-            m_hasDesiredRotation = false;
-            m_lastFrameUpdate = now;
-            return;
-        }
-
-        player = m_cachedPlayer;
-        desiredRotation = m_desiredRotation;
-
-        if (m_lastFrameUpdate.time_since_epoch().count() == 0) {
-            m_lastFrameUpdate = now;
-        }
-        const float frameDelta = std::clamp(
-            std::chrono::duration<float>(now - m_lastFrameUpdate).count(), 0.0f, 0.05f);
-        m_lastFrameUpdate = now;
-
-        // Preserve the configured per-tick strength, but distribute it over rendered frames.
-        const float strength = std::clamp(m_strength, 0.01f, 0.95f);
-        alpha = 1.0f - std::pow(1.0f - strength, frameDelta * 20.0f);
-        alpha = std::clamp(alpha, 0.0f, 0.20f);
+    float deltaSeconds = 0.05f;
+    if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
+        deltaSeconds = std::clamp(
+            std::chrono::duration<float>(now - m_lastRotationUpdate).count(), 0.01f, 0.05f);
     }
+    m_lastRotationUpdate = now;
 
-    if (!player || alpha <= 0.0001f) return;
+    // Strength is a speed control from 0.05 to 5.0, not a raw exponent base.
+    // The exponential response stays finite for every supported setting.
+    const float speed = std::clamp(m_strength, 0.05f, 5.0f);
+    const float alpha = std::clamp(1.0f - std::exp(-speed * 20.0f * deltaSeconds), 0.0f, 0.95f);
+    const float maxTurnRate = 240.0f + 72.0f * speed;
+    const float maxStep = maxTurnRate * deltaSeconds;
 
-    auto* rotationComponent = player->rotationComponent();
-    if (!rotationComponent) return;
+    const float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
+    const float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+    const Vec2 updatedRotation{
+        std::clamp(currentRotation.x + (std::abs(pitchDelta) < 0.002f ? 0.0f : pitchDelta), -89.0f, 89.0f),
+        wrapDegrees(currentRotation.y + (std::abs(yawDelta) < 0.002f ? 0.0f : yawDelta))
+    };
 
-    const Vec2 currentRotation = field<Vec2>(rotationComponent, 0);
-    if (!std::isfinite(currentRotation.x) || !std::isfinite(currentRotation.y)) return;
+    if (!std::isfinite(updatedRotation.x) || !std::isfinite(updatedRotation.y)) return;
 
-    const float yawError = wrapDegrees(desiredRotation.y - currentRotation.y);
-    const float pitchError = desiredRotation.x - currentRotation.x;
-    float yawDelta = std::clamp(yawError * alpha, -3.0f, 3.0f);
-    float pitchDelta = std::clamp(pitchError * alpha, -3.0f, 3.0f);
-
-    // Ignore sub-pixel-sized corrections to prevent tiny oscillations around the target.
-    if (std::abs(yawDelta) < 0.01f) yawDelta = 0.0f;
-    if (std::abs(pitchDelta) < 0.01f) pitchDelta = 0.0f;
-    if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
-
-    bedaimApplySyntheticLocalPlayerTurnDelta(player, pitchDelta, yawDelta);
+    // Apply the bounded correction directly to the same rotation component we read.
+    // This avoids a synthetic-input path with a separate/stale rotation state.
+    field<Vec2>(rotationComponent, 0) = updatedRotation;
 }
+
+
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
@@ -430,7 +333,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
-    m_strength = std::clamp(j.value("m_strength", m_strength), 0.01f, 1.0f);
+    m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 5.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
 
