@@ -50,6 +50,18 @@ static float _getFov_zoom_hook(void* _this, float a, int enableVariableFOV) {
 struct Vec2 { float x, y; };
 static void (*_applyTurnDelta_orig)(void*, Vec2*) = nullptr;
 
+// Used by Aim Assist to apply a small turn through the game's native camera path.
+bool bedaimApplySyntheticLocalPlayerTurnDelta(void* localPlayer, float pitchDelta, float yawDelta) {
+    if (!localPlayer || !_applyTurnDelta_orig ||
+        !std::isfinite(pitchDelta) || !std::isfinite(yawDelta)) {
+        return false;
+    }
+
+    Vec2 delta{pitchDelta, yawDelta};
+    _applyTurnDelta_orig(localPlayer, &delta);
+    return true;
+}
+
 static void _applyTurnDelta_hook(void* _this, Vec2* rotationDelta) {
     if (g_zoomMod && (g_zoomMod->isZoomActive() || !g_zoomMod->m_animationFinished) && g_zoomMod->m_lowSens && g_zoomMod->m_baseFov > 0.1f) {
         float zoomRatio = g_zoomMod->m_currentFov / g_zoomMod->m_baseFov;

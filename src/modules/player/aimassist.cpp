@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <limits>
 
+bool bedaimApplySyntheticLocalPlayerTurnDelta(void* localPlayer, float pitchDelta, float yawDelta);
+
 namespace {
 using ActorIsPlayerFn = bool (*)(void*);
 using ActorIsInvisibleFn = bool (*)(void*);
@@ -214,16 +216,14 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!bestTarget) return;
 
     const float strength = std::clamp(m_strength, 0.01f, 1.0f);
-    const float yawDelta = wrapDegrees(bestRotation.y - currentRotation.y);
-    const float pitchDelta = bestRotation.x - currentRotation.x;
+    const float yawDelta = wrapDegrees(bestRotation.y - currentRotation.y) * strength;
+    const float pitchDelta = std::clamp(
+        currentRotation.x + (bestRotation.x - currentRotation.x) * strength,
+        -89.0f, 89.0f) - currentRotation.x;
 
-    Vec2 updatedRotation{};
-    updatedRotation.y = wrapDegrees(currentRotation.y + yawDelta * strength);
-    updatedRotation.x = std::clamp(currentRotation.x + pitchDelta * strength, -89.0f, 89.0f);
-
-    // The SDK already reads this Vec2 from the actor rotation component. Write only
-    // these two floats, and only after a nearby valid training target has been selected.
-    field<Vec2>(rotationComponent, 0) = updatedRotation;
+    // Apply the small rotation through the game's native local-player turn path,
+    // rather than only changing the actor's stored rotation component.
+    bedaimApplySyntheticLocalPlayerTurnDelta(player, pitchDelta, yawDelta);
 }
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
