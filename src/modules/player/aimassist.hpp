@@ -17,6 +17,7 @@ public:
     void saveConfig(nlohmann::json& j) override;
 
     void processPlayerTick(bedrocktools::sdk::Player* player);
+    void onFrame() override;
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
@@ -30,6 +31,10 @@ public:
 private:
     void resetTrackingState();
     void* m_lastTarget = nullptr;
+    bedrocktools::sdk::Player* m_lastPlayer = nullptr;
+    float m_targetPitch = 0.0f;
+    float m_targetYaw = 0.0f;
+    bool m_hasTargetRotation = false;
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
     float m_smoothedYawVelocity = 0.0f;
     float m_smoothedPitchVelocity = 0.0f;

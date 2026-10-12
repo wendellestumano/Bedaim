@@ -2,6 +2,7 @@
 #include "core/InventoryAccess.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/FrameEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -74,40 +75,6 @@ float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk:
     return dx * dx + dy * dy + dz * dz;
 }
 
-
-bool viewRayIntersectsAabb(
-    const bedrocktools::sdk::Vec3& origin,
-    const bedrocktools::sdk::Vec2& rotation,
-    const bedrocktools::sdk::Vec3& boundsMin,
-    const bedrocktools::sdk::Vec3& boundsMax) {
-    using bedrocktools::sdk::Vec3;
-
-    const float yaw = rotation.y / kRadToDeg;
-    const float pitch = rotation.x / kRadToDeg;
-    const float cosPitch = std::cos(pitch);
-    const Vec3 direction{
-        -std::sin(yaw) * cosPitch,
-        -std::sin(pitch),
-        std::cos(yaw) * cosPitch
-    };
-
-    float tMin = 0.0f;
-    float tMax = std::numeric_limits<float>::infinity();
-    const auto clipAxis = [&](float o, float d, float lo, float hi) {
-        if (std::abs(d) < 1.0e-6f) return o >= lo && o <= hi;
-        float t1 = (lo - o) / d;
-        float t2 = (hi - o) / d;
-        if (t1 > t2) std::swap(t1, t2);
-        tMin = std::max(tMin, t1);
-        tMax = std::min(tMax, t2);
-        return tMax >= tMin && tMax >= 0.0f;
-    };
-
-    return clipAxis(origin.x, direction.x, boundsMin.x, boundsMax.x) &&
-           clipAxis(origin.y, direction.y, boundsMin.y, boundsMax.y) &&
-           clipAxis(origin.z, direction.z, boundsMin.z, boundsMax.z) &&
-           tMax >= 0.0f;
-}
 
 float smoothedAxisStep(float error, float& velocity, float deltaSeconds,
                        float maxTurnRate, float acceleration, float response) {
@@ -227,6 +194,8 @@ AimAssistModule::~AimAssistModule() {
 
 void AimAssistModule::resetTrackingState() {
     m_lastTarget = nullptr;
+    m_lastPlayer = nullptr;
+    m_hasTargetRotation = false;
     m_lastRotationUpdate = {};
     m_smoothedYawVelocity = 0.0f;
     m_smoothedPitchVelocity = 0.0f;
@@ -248,6 +217,12 @@ void AimAssistModule::onInit() {
         [](auto& event) {
             if (g_aimAssist && g_aimAssist->enabled) {
                 g_aimAssist->processPlayerTick(event.player);
+            }
+        });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
+        [](auto&) {
+            if (g_aimAssist && g_aimAssist->enabled) {
+                g_aimAssist->onFrame();
             }
         });
 }
@@ -322,8 +297,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     void* bestTarget = nullptr;
     Vec2 bestRotation{};
-    Vec3 bestAimBoundsMin{};
-    Vec3 bestAimBoundsMax{};
     float bestScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = range * range;
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
@@ -355,31 +328,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             (targetBounds.min.z + targetBounds.max.z) * 0.5f
         };
 
-        // The scaled hitbox is a separate dead zone: when the view ray crosses it,
-        // steering stops, so the crosshair can rest anywhere inside instead of
-        // continually correcting toward the exact center.
-        const float hitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
-        const Vec3 boundsCenter{
-            (targetBounds.min.x + targetBounds.max.x) * 0.5f,
-            (targetBounds.min.y + targetBounds.max.y) * 0.5f,
-            (targetBounds.min.z + targetBounds.max.z) * 0.5f
-        };
-        const Vec3 halfExtent{
-            (targetBounds.max.x - targetBounds.min.x) * 0.5f * hitboxScale,
-            (targetBounds.max.y - targetBounds.min.y) * 0.5f * hitboxScale,
-            (targetBounds.max.z - targetBounds.min.z) * 0.5f * hitboxScale
-        };
-        const Vec3 aimBoundsMin{
-            boundsCenter.x - halfExtent.x,
-            boundsCenter.y - halfExtent.y,
-            boundsCenter.z - halfExtent.z
-        };
-        const Vec3 aimBoundsMax{
-            boundsCenter.x + halfExtent.x,
-            boundsCenter.y + halfExtent.y,
-            boundsCenter.z + halfExtent.z
-        };
-
         const float d2 = distanceSquared(eyePosition, aimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
 
@@ -402,8 +350,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             bestScore = score;
             bestTarget = candidate;
             bestRotation = {desiredPitch, desiredYaw};
-            bestAimBoundsMin = aimBoundsMin;
-            bestAimBoundsMax = aimBoundsMax;
         }
     }
 
@@ -416,43 +362,60 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (targetChanged) {
         m_smoothedYawVelocity = 0.0f;
         m_smoothedPitchVelocity = 0.0f;
+        m_lastRotationUpdate = {};
     }
     m_lastTarget = bestTarget;
+    m_lastPlayer = player;
+    m_targetPitch = bestRotation.x;
+    m_targetYaw = bestRotation.y;
+    m_hasTargetRotation = true;
+}
 
-    if (viewRayIntersectsAabb(eyePosition, currentRotation, bestAimBoundsMin, bestAimBoundsMax)) {
-        m_smoothedYawVelocity = 0.0f;
-        m_smoothedPitchVelocity = 0.0f;
-        m_lastRotationUpdate = std::chrono::steady_clock::now();
+void AimAssistModule::onFrame() {
+    using namespace bedrocktools::sdk;
+    if (!enabled || !m_hasTargetRotation || !m_lastPlayer || !g_applyLocalPlayerTurnDelta) return;
+
+    auto* player = m_lastPlayer;
+    auto* rotationComponent = player->rotationComponent();
+    if (!rotationComponent) {
+        resetTrackingState();
         return;
     }
 
-    const float yawError = wrapDegrees(bestRotation.y - currentRotation.y);
-    const float pitchError = bestRotation.x - currentRotation.x;
+    Vec2 currentRotation = field<Vec2>(rotationComponent, 0);
+    if (!std::isfinite(currentRotation.x) || !std::isfinite(currentRotation.y)) {
+        resetTrackingState();
+        return;
+    }
+    currentRotation.x = std::clamp(currentRotation.x, -89.0f, 89.0f);
+    currentRotation.y = wrapDegrees(currentRotation.y);
+
+    const float yawError = wrapDegrees(m_targetYaw - currentRotation.y);
+    const float pitchError = m_targetPitch - currentRotation.x;
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
     const auto now = std::chrono::steady_clock::now();
-    float deltaSeconds = 0.05f;
+    float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
         deltaSeconds = std::clamp(
-            std::chrono::duration<float>(now - m_lastRotationUpdate).count(), 0.01f, 0.05f);
+            std::chrono::duration<float>(now - m_lastRotationUpdate).count(), 0.001f, 0.033f);
     }
     m_lastRotationUpdate = now;
 
-    // Aim speed controls an acceleration-limited response to avoid hard snaps/orbiting.
+    // Apply the steering once per rendered frame, with bounded acceleration and braking.
     const float speed = std::clamp(m_strength, 0.05f, 5.0f);
-    const float maxTurnRate = 30.0f + 30.0f * speed;
-    const float acceleration = 90.0f + 110.0f * speed;
-    const float response = 4.0f + 2.0f * speed;
+    const float speedScale = std::sqrt(speed);
+    const float maxTurnRate = 28.0f + 18.0f * speedScale;
+    const float acceleration = 65.0f + 75.0f * speedScale;
+    const float response = 4.5f + 1.1f * speedScale;
 
-    float yawDelta = smoothedAxisStep(yawError, m_smoothedYawVelocity,
+    const float yawDelta = smoothedAxisStep(yawError, m_smoothedYawVelocity,
         deltaSeconds, maxTurnRate, acceleration, response);
-    float pitchDelta = smoothedAxisStep(pitchError, m_smoothedPitchVelocity,
+    const float pitchDelta = smoothedAxisStep(pitchError, m_smoothedPitchVelocity,
         deltaSeconds, maxTurnRate, acceleration, response);
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
-    // X is horizontal yaw and Y is vertical pitch in Minecraft's native turn path.
-    if (!g_applyLocalPlayerTurnDelta) return;
     Vec2 turnDelta{yawDelta, pitchDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
 }
