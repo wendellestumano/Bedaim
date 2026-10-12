@@ -20,6 +20,7 @@ public:
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
+    bool m_weaponOnly = false;
     float m_range = 5.5f;
     float m_fov = 35.0f;
     float m_strength = 0.12f;

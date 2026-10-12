@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "core/InventoryAccess.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
@@ -9,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstddef>
 #include <cctype>
 #include <string>
 #include <limits>
@@ -125,6 +127,33 @@ bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist
     }
     return false;
 }
+
+bool hasWeaponInMainHand(const bedrocktools::sdk::Player* player) {
+    if (!player) return false;
+
+    auto** vtable = *reinterpret_cast<void***>(
+        const_cast<bedrocktools::sdk::Player*>(player));
+    constexpr std::size_t getCarriedItemIndex =
+        bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
+    if (!vtable || !vtable[getCarriedItemIndex]) return false;
+
+    using GetCarriedItemFn = const void* (*)(void*);
+    const void* stack = reinterpret_cast<GetCarriedItemFn>(
+        vtable[getCarriedItemIndex])(const_cast<bedrocktools::sdk::Player*>(player));
+    if (!stack) return false;
+
+    const auto& inventory = bedrocktools::core::InventoryAccess::get();
+    constexpr const char* weaponIdentifiers[] = {
+        "_sword", "_axe", "mace", "trident", "spear", "bow",
+        "dagger", "katana", "rapier", "scythe", "hammer",
+        "halberd", "glaive", "lance"
+    };
+    for (const char* identifier : weaponIdentifiers) {
+        if (inventory.countStack(stack, identifier) > 0) return true;
+    }
+    return false;
+}
+
 }
 
 AimAssistModule::AimAssistModule()
@@ -176,7 +205,8 @@ void AimAssistModule::onDisable() {
 void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
-    if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
+    if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs) ||
+        (m_weaponOnly && !hasWeaponInMainHand(player))) {
         m_lastTarget = nullptr;
         m_lastRotationUpdate = {};
         return;
@@ -335,6 +365,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
+    m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 5.0f);
@@ -345,6 +376,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     j["m_targetPlayers"] = m_targetPlayers;
     j["m_targetMobs"] = m_targetMobs;
+    j["m_weaponOnly"] = m_weaponOnly;
     j["m_range"] = m_range;
     j["m_fov"] = m_fov;
     j["m_strength"] = m_strength;
