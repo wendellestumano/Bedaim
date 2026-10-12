@@ -102,14 +102,29 @@ void AimAssistModule::onInit() {
 
 void AimAssistModule::onEnable() {
     m_lastTarget = nullptr;
+    std::lock_guard lock(m_frameMutex);
+    m_cachedPlayer = nullptr;
+    m_hasDesiredRotation = false;
+    m_lastTargetUpdate = {};
+    m_lastFrameUpdate = {};
 }
 
 void AimAssistModule::onDisable() {
     m_lastTarget = nullptr;
+    std::lock_guard lock(m_frameMutex);
+    m_cachedPlayer = nullptr;
+    m_hasDesiredRotation = false;
+    m_lastTargetUpdate = {};
+    m_lastFrameUpdate = {};
 }
 
 void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
+    {
+        std::lock_guard lock(m_frameMutex);
+        m_cachedPlayer = nullptr;
+        m_hasDesiredRotation = false;
+    }
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
         m_lastTarget = nullptr;
         return;
@@ -215,14 +230,74 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_lastTarget = bestTarget;
     if (!bestTarget) return;
 
-    const float strength = std::clamp(m_strength, 0.01f, 1.0f);
-    const float yawDelta = wrapDegrees(bestRotation.y - currentRotation.y) * strength;
-    const float pitchDelta = std::clamp(
-        currentRotation.x + (bestRotation.x - currentRotation.x) * strength,
-        -89.0f, 89.0f) - currentRotation.x;
+    {
+        std::lock_guard lock(m_frameMutex);
+        m_cachedPlayer = player;
+        m_desiredRotation = bestRotation;
+        m_lastTargetUpdate = std::chrono::steady_clock::now();
+        m_hasDesiredRotation = true;
+    }
+}
 
-    // Apply the small rotation through the game's native local-player turn path,
-    // rather than only changing the actor's stored rotation component.
+void AimAssistModule::onFrame() {
+    using namespace bedrocktools::sdk;
+
+    Player* player = nullptr;
+    Vec2 desiredRotation{};
+    float alpha = 0.0f;
+    const auto now = std::chrono::steady_clock::now();
+
+    {
+        std::lock_guard lock(m_frameMutex);
+        if (!enabled) return;
+
+        if (!m_hasDesiredRotation || !m_cachedPlayer) {
+            m_lastFrameUpdate = now;
+            return;
+        }
+
+        // Never dereference an old player pointer if ticks stop during a world transition.
+        if (now - m_lastTargetUpdate > std::chrono::milliseconds(150)) {
+            m_cachedPlayer = nullptr;
+            m_hasDesiredRotation = false;
+            m_lastFrameUpdate = now;
+            return;
+        }
+
+        player = m_cachedPlayer;
+        desiredRotation = m_desiredRotation;
+
+        if (m_lastFrameUpdate.time_since_epoch().count() == 0) {
+            m_lastFrameUpdate = now;
+        }
+        const float frameDelta = std::clamp(
+            std::chrono::duration<float>(now - m_lastFrameUpdate).count(), 0.0f, 0.05f);
+        m_lastFrameUpdate = now;
+
+        // Preserve the configured per-tick strength, but distribute it over rendered frames.
+        const float strength = std::clamp(m_strength, 0.01f, 0.95f);
+        alpha = 1.0f - std::pow(1.0f - strength, frameDelta * 20.0f);
+        alpha = std::clamp(alpha, 0.0f, 0.20f);
+    }
+
+    if (!player || alpha <= 0.0001f) return;
+
+    auto* rotationComponent = player->rotationComponent();
+    if (!rotationComponent) return;
+
+    const Vec2 currentRotation = field<Vec2>(rotationComponent, 0);
+    if (!std::isfinite(currentRotation.x) || !std::isfinite(currentRotation.y)) return;
+
+    const float yawError = wrapDegrees(desiredRotation.y - currentRotation.y);
+    const float pitchError = desiredRotation.x - currentRotation.x;
+    float yawDelta = std::clamp(yawError * alpha, -3.0f, 3.0f);
+    float pitchDelta = std::clamp(pitchError * alpha, -3.0f, 3.0f);
+
+    // Ignore sub-pixel-sized corrections to prevent tiny oscillations around the target.
+    if (std::abs(yawDelta) < 0.01f) yawDelta = 0.0f;
+    if (std::abs(pitchDelta) < 0.01f) pitchDelta = 0.0f;
+    if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
+
     bedaimApplySyntheticLocalPlayerTurnDelta(player, pitchDelta, yawDelta);
 }
 

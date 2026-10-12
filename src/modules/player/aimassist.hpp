@@ -2,6 +2,8 @@
 
 #include "../Module.hpp"
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <chrono>
+#include <mutex>
 
 class AimAssistModule final : public Module {
 public:
@@ -15,6 +17,7 @@ public:
     void saveConfig(nlohmann::json& j) override;
 
     void processPlayerTick(bedrocktools::sdk::Player* player);
+    void onFrame() override;
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
@@ -24,4 +27,10 @@ public:
 
 private:
     void* m_lastTarget = nullptr;
+    bedrocktools::sdk::Player* m_cachedPlayer = nullptr;
+    bedrocktools::sdk::Vec2 m_desiredRotation{};
+    bool m_hasDesiredRotation = false;
+    std::chrono::steady_clock::time_point m_lastTargetUpdate{};
+    std::chrono::steady_clock::time_point m_lastFrameUpdate{};
+    std::mutex m_frameMutex;
 };

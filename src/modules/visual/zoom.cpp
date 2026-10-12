@@ -57,7 +57,9 @@ bool bedaimApplySyntheticLocalPlayerTurnDelta(void* localPlayer, float pitchDelt
         return false;
     }
 
-    Vec2 delta{pitchDelta, yawDelta};
+    // applyTurnDelta consumes input-space axes: X is horizontal yaw, Y is vertical pitch.
+    // The actor rotation component itself is ordered as (pitch, yaw), so do not copy that order here.
+    Vec2 delta{yawDelta, pitchDelta};
     _applyTurnDelta_orig(localPlayer, &delta);
     return true;
 }
