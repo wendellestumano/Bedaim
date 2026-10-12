@@ -18,6 +18,7 @@ namespace {
 using ActorIsPlayerFn = bool (*)(void*);
 using ActorIsInvisibleFn = bool (*)(void*);
 using ActorGetNameTagFn = std::string (*)(void*);
+using LocalPlayerApplyTurnDeltaFn = void (*)(void*, bedrocktools::sdk::Vec2*);
 
 struct DistanceSortedActor {
     void* actor;
@@ -37,6 +38,7 @@ AimAssistModule* g_aimAssist = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
+LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
 
 constexpr float kPi = 3.14159265358979323846f;
@@ -144,6 +146,8 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
     g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
+    g_applyLocalPlayerTurnDelta = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
@@ -308,21 +312,21 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // The exponential response stays finite for every supported setting.
     const float speed = std::clamp(m_strength, 0.05f, 5.0f);
     const float alpha = std::clamp(1.0f - std::exp(-speed * 20.0f * deltaSeconds), 0.0f, 0.95f);
-    const float maxTurnRate = 240.0f + 72.0f * speed;
-    const float maxStep = maxTurnRate * deltaSeconds;
+    const float maxTurnRate = 180.0f + 36.0f * speed;
+    const float maxStep = std::clamp(maxTurnRate * deltaSeconds, 0.0f, 8.0f);
 
     const float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
     const float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
-    const Vec2 updatedRotation{
-        std::clamp(currentRotation.x + (std::abs(pitchDelta) < 0.002f ? 0.0f : pitchDelta), -89.0f, 89.0f),
-        wrapDegrees(currentRotation.y + (std::abs(yawDelta) < 0.002f ? 0.0f : yawDelta))
-    };
+    if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
+    if (std::abs(yawDelta) < 0.002f) yawDelta = 0.0f;
+    if (std::abs(pitchDelta) < 0.002f) pitchDelta = 0.0f;
+    if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
-    if (!std::isfinite(updatedRotation.x) || !std::isfinite(updatedRotation.y)) return;
-
-    // Apply the bounded correction directly to the same rotation component we read.
-    // This avoids a synthetic-input path with a separate/stale rotation state.
-    field<Vec2>(rotationComponent, 0) = updatedRotation;
+    // Route the correction through Minecraft's own camera-turn method instead of
+    // writing ActorRotationComponent directly (which may not move the local camera).
+    if (!g_applyLocalPlayerTurnDelta) return;
+    Vec2 turnDelta{pitchDelta, yawDelta};
+    g_applyLocalPlayerTurnDelta(player, &turnDelta);
 }
 
 
