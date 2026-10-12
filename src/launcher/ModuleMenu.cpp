@@ -128,6 +128,7 @@ void registerModulesWithLauncher() {
             }
 
             if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_strength") displayName = "Aim Speed";
+            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_hitboxScale") displayName = "Hitbox Area";
 
             TmpConfigEntry entry;
             entry.key = k;
@@ -174,7 +175,10 @@ void registerModulesWithLauncher() {
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
 
-                if (kLower.find("opacity") != std::string::npos ||
+                if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
+                    minVal = 0.5f;
+                    maxVal = 1.0f;
+                } else if (kLower.find("opacity") != std::string::npos ||
                     kLower.find("color") != std::string::npos ||
                     kLower.find("alpha") != std::string::npos) {
                     maxVal = 1.0f;

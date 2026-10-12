@@ -23,10 +23,14 @@ public:
     bool m_weaponOnly = false;
     float m_range = 5.5f;
     float m_fov = 35.0f;
+    float m_hitboxScale = 1.0f;
     float m_strength = 0.12f;
     std::string m_whitelistNames = "";
 
 private:
+    void resetTrackingState();
     void* m_lastTarget = nullptr;
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
+    float m_smoothedYawVelocity = 0.0f;
+    float m_smoothedPitchVelocity = 0.0f;
 };

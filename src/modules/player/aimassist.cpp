@@ -74,6 +74,68 @@ float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk:
     return dx * dx + dy * dy + dz * dz;
 }
 
+
+bedrocktools::sdk::Vec3 closestPointOnViewRay(
+    const bedrocktools::sdk::Vec3& origin,
+    const bedrocktools::sdk::Vec2& rotation,
+    const bedrocktools::sdk::Vec3& boundsMin,
+    const bedrocktools::sdk::Vec3& boundsMax) {
+    using bedrocktools::sdk::Vec3;
+
+    const float yaw = rotation.y / kRadToDeg;
+    const float pitch = rotation.x / kRadToDeg;
+    const float cosPitch = std::cos(pitch);
+    const Vec3 direction{
+        -std::sin(yaw) * cosPitch,
+        -std::sin(pitch),
+        std::cos(yaw) * cosPitch
+    };
+    const Vec3 center{
+        (boundsMin.x + boundsMax.x) * 0.5f,
+        (boundsMin.y + boundsMax.y) * 0.5f,
+        (boundsMin.z + boundsMax.z) * 0.5f
+    };
+    const float toCenterX = center.x - origin.x;
+    const float toCenterY = center.y - origin.y;
+    const float toCenterZ = center.z - origin.z;
+    const float alongRay = std::max(0.05f,
+        toCenterX * direction.x + toCenterY * direction.y + toCenterZ * direction.z);
+    const Vec3 rayPoint{
+        origin.x + direction.x * alongRay,
+        origin.y + direction.y * alongRay,
+        origin.z + direction.z * alongRay
+    };
+    return Vec3{
+        std::clamp(rayPoint.x, boundsMin.x, boundsMax.x),
+        std::clamp(rayPoint.y, boundsMin.y, boundsMax.y),
+        std::clamp(rayPoint.z, boundsMin.z, boundsMax.z)
+    };
+}
+
+float smoothedAxisStep(float error, float& velocity, float deltaSeconds,
+                       float maxTurnRate, float acceleration, float response) {
+    const float absError = std::abs(error);
+    if (!std::isfinite(error) || absError < 0.04f) {
+        velocity = 0.0f;
+        return 0.0f;
+    }
+    const float brakingRate = std::sqrt(std::max(0.0f, 2.0f * acceleration * absError));
+    const float desiredRate = std::copysign(
+        std::min({maxTurnRate, absError * response, brakingRate}), error);
+    // Brake first if the previous frame's momentum points away from the target.
+    const float requestedRate = velocity * error < 0.0f ? 0.0f : desiredRate;
+    const float maxVelocityChange = acceleration * deltaSeconds;
+    velocity += std::clamp(requestedRate - velocity,
+                           -maxVelocityChange, maxVelocityChange);
+    if (velocity * error <= 0.0f) return 0.0f;
+    const float step = velocity * deltaSeconds;
+    if (std::abs(step) >= absError) {
+        velocity = 0.0f;
+        return error;
+    }
+    return step;
+}
+
 bool categoryHasMobBit(void* actor) {
     if (!actor) return false;
     const auto categories = *reinterpret_cast<const std::uint32_t*>(
@@ -166,6 +228,13 @@ AimAssistModule::~AimAssistModule() {
     if (g_aimAssist == this) g_aimAssist = nullptr;
 }
 
+void AimAssistModule::resetTrackingState() {
+    m_lastTarget = nullptr;
+    m_lastRotationUpdate = {};
+    m_smoothedYawVelocity = 0.0f;
+    m_smoothedPitchVelocity = 0.0f;
+}
+
 void AimAssistModule::onInit() {
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
@@ -187,13 +256,11 @@ void AimAssistModule::onInit() {
 }
 
 void AimAssistModule::onEnable() {
-    m_lastTarget = nullptr;
-    m_lastRotationUpdate = {};
+    resetTrackingState();
 }
 
 void AimAssistModule::onDisable() {
-    m_lastTarget = nullptr;
-    m_lastRotationUpdate = {};
+    resetTrackingState();
 }
 
 
@@ -207,23 +274,20 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs) ||
         (m_weaponOnly && !hasWeaponInMainHand(player))) {
-        m_lastTarget = nullptr;
-        m_lastRotationUpdate = {};
+        resetTrackingState();
         return;
     }
 
     auto* rotationComponent = player->rotationComponent();
     auto* level = player->level();
     if (!rotationComponent || !level) {
-        m_lastTarget = nullptr;
-        m_lastRotationUpdate = {};
+        resetTrackingState();
         return;
     }
 
     Vec2 currentRotation = field<Vec2>(rotationComponent, 0);
     if (!std::isfinite(currentRotation.x) || !std::isfinite(currentRotation.y)) {
-        m_lastTarget = nullptr;
-        m_lastRotationUpdate = {};
+        resetTrackingState();
         return;
     }
     currentRotation.x = std::clamp(currentRotation.x, -89.0f, 89.0f);
@@ -232,8 +296,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const AABB playerBounds = player->bounds();
     const Vec3 playerPosition = player->position();
     if (!finiteVec3(playerPosition)) {
-        m_lastTarget = nullptr;
-        m_lastRotationUpdate = {};
+        resetTrackingState();
         return;
     }
 
@@ -250,15 +313,13 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     Vec3 extent{range, range, range};
     void* actorManager = field<void*>(level, offsets::Level::mActorManager);
     if (!actorManager) {
-        m_lastTarget = nullptr;
-        m_lastRotationUpdate = {};
+        resetTrackingState();
         return;
     }
 
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     if (!actors.begin || !actors.end || actors.end < actors.begin) {
-        m_lastTarget = nullptr;
-        m_lastRotationUpdate = {};
+        resetTrackingState();
         return;
     }
 
@@ -287,12 +348,31 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const AABB targetBounds = target->bounds();
         if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
 
-        // Aim at a fixed point in the target's hitbox; never chase a randomized offset.
-        const Vec3 aimPoint{
+        // FOV chooses targets; the hitbox area is a separate deadzone. Aim at the
+        // closest point on the hitbox relative to the current view ray.
+        const float hitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
+        const Vec3 boundsCenter{
             (targetBounds.min.x + targetBounds.max.x) * 0.5f,
-            targetBounds.min.y + (targetBounds.max.y - targetBounds.min.y) * 0.55f,
+            (targetBounds.min.y + targetBounds.max.y) * 0.5f,
             (targetBounds.min.z + targetBounds.max.z) * 0.5f
         };
+        const Vec3 halfExtent{
+            (targetBounds.max.x - targetBounds.min.x) * 0.5f * hitboxScale,
+            (targetBounds.max.y - targetBounds.min.y) * 0.5f * hitboxScale,
+            (targetBounds.max.z - targetBounds.min.z) * 0.5f * hitboxScale
+        };
+        const Vec3 aimBoundsMin{
+            boundsCenter.x - halfExtent.x,
+            boundsCenter.y - halfExtent.y,
+            boundsCenter.z - halfExtent.z
+        };
+        const Vec3 aimBoundsMax{
+            boundsCenter.x + halfExtent.x,
+            boundsCenter.y + halfExtent.y,
+            boundsCenter.z + halfExtent.z
+        };
+        const Vec3 aimPoint = closestPointOnViewRay(
+            eyePosition, currentRotation, aimBoundsMin, aimBoundsMax);
 
         const float d2 = distanceSquared(eyePosition, aimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
@@ -309,7 +389,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        // Hysteresis: keep the current target unless another one is clearly better.
+        // Prefer the current target a little, avoiding jitter between nearby actors.
         const float targetStickiness = candidate == m_lastTarget ? 0.0f : 8.0f;
         const float score = angleScore + std::sqrt(d2) * 0.001f + targetStickiness;
         if (score < bestScore) {
@@ -320,12 +400,17 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     if (!bestTarget) {
-        m_lastTarget = nullptr;
-        m_lastRotationUpdate = {};
+        resetTrackingState();
         return;
     }
 
+    const bool targetChanged = bestTarget != m_lastTarget;
+    if (targetChanged) {
+        m_smoothedYawVelocity = 0.0f;
+        m_smoothedPitchVelocity = 0.0f;
+    }
     m_lastTarget = bestTarget;
+
     const float yawError = wrapDegrees(bestRotation.y - currentRotation.y);
     const float pitchError = bestRotation.x - currentRotation.x;
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
@@ -338,22 +423,20 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
     m_lastRotationUpdate = now;
 
-    // Strength is a speed control from 0.05 to 5.0, not a raw exponent base.
-    // The exponential response stays finite for every supported setting.
+    // Aim speed controls an acceleration-limited response to avoid hard snaps/orbiting.
     const float speed = std::clamp(m_strength, 0.05f, 5.0f);
-    const float alpha = std::clamp(1.0f - std::exp(-speed * 20.0f * deltaSeconds), 0.0f, 0.95f);
-    const float maxTurnRate = 180.0f + 36.0f * speed;
-    const float maxStep = std::clamp(maxTurnRate * deltaSeconds, 0.0f, 8.0f);
+    const float maxTurnRate = 30.0f + 30.0f * speed;
+    const float acceleration = 90.0f + 110.0f * speed;
+    const float response = 4.0f + 2.0f * speed;
 
-    float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
-    float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+    float yawDelta = smoothedAxisStep(yawError, m_smoothedYawVelocity,
+        deltaSeconds, maxTurnRate, acceleration, response);
+    float pitchDelta = smoothedAxisStep(pitchError, m_smoothedPitchVelocity,
+        deltaSeconds, maxTurnRate, acceleration, response);
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
-    if (std::abs(yawDelta) < 0.002f) yawDelta = 0.0f;
-    if (std::abs(pitchDelta) < 0.002f) pitchDelta = 0.0f;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
-    // Route the correction through Minecraft's own camera-turn method instead of
-    // writing ActorRotationComponent directly (which may not move the local camera).
+    // X is horizontal yaw and Y is vertical pitch in Minecraft's native turn path.
     if (!g_applyLocalPlayerTurnDelta) return;
     Vec2 turnDelta{yawDelta, pitchDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
@@ -368,6 +451,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
+    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 5.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
@@ -379,6 +463,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_weaponOnly"] = m_weaponOnly;
     j["m_range"] = m_range;
     j["m_fov"] = m_fov;
+    j["m_hitboxScale"] = m_hitboxScale;
     j["m_strength"] = m_strength;
     j["m_whitelistNames"] = m_whitelistNames;
 }
