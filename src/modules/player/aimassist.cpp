@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cctype>
+#include <string>
 #include <limits>
 
 bool bedaimApplySyntheticLocalPlayerTurnDelta(void* localPlayer, float pitchDelta, float yawDelta);
@@ -16,6 +18,7 @@ bool bedaimApplySyntheticLocalPlayerTurnDelta(void* localPlayer, float pitchDelt
 namespace {
 using ActorIsPlayerFn = bool (*)(void*);
 using ActorIsInvisibleFn = bool (*)(void*);
+using ActorGetNameTagFn = std::string (*)(void*);
 
 struct DistanceSortedActor {
     void* actor;
@@ -34,6 +37,7 @@ using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
 AimAssistModule* g_aimAssist = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
+ActorGetNameTagFn g_actorGetNameTag = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
 
 constexpr float kPi = 3.14159265358979323846f;
@@ -72,6 +76,52 @@ bool categoryHasMobBit(void* actor) {
     // BedrockTools' existing Hitbox module uses category bit 2 to identify entities.
     return (categories & 2u) != 0;
 }
+
+std::string normalizeName(std::string value) {
+    std::string result;
+    result.reserve(value.size());
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (i + 2 < value.size() && byte == 0xC2u &&
+            static_cast<unsigned char>(value[i + 1]) == 0xA7u) {
+            i += 2;
+            continue;
+        }
+        result.push_back(static_cast<char>(std::tolower(byte)));
+    }
+    const auto first = result.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = result.find_last_not_of(" \t\r\n");
+    return result.substr(first, last - first + 1);
+}
+
+bool whitelistContainsName(const std::string& whitelist, const std::string& name) {
+    const std::string normalizedName = normalizeName(name);
+    if (normalizedName.empty()) return false;
+    std::size_t start = 0;
+    while (start <= whitelist.size()) {
+        const std::size_t end = whitelist.find_first_of(",;\r\n", start);
+        const std::string entry = normalizeName(whitelist.substr(
+            start, end == std::string::npos ? std::string::npos : end - start));
+        if (!entry.empty() && entry == normalizedName) return true;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return false;
+}
+
+bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist) {
+    if (!actor || normalizeName(whitelist).empty()) return false;
+    if (isPlayer) {
+        const auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+        if (whitelistContainsName(whitelist, player->name())) return true;
+    }
+    if (g_actorGetNameTag) {
+        const std::string nameTag = g_actorGetNameTag(actor);
+        if (whitelistContainsName(whitelist, nameTag)) return true;
+    }
+    return false;
+}
 }
 
 AimAssistModule::AimAssistModule()
@@ -91,6 +141,8 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
+    g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
@@ -102,6 +154,11 @@ void AimAssistModule::onInit() {
 
 void AimAssistModule::onEnable() {
     m_lastTarget = nullptr;
+    m_aimPointTarget = nullptr;
+    m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};
+    m_aimOffsetTo = m_aimOffsetFrom;
+    m_aimOffsetTransitionStart = {};
+    m_nextAimOffsetChange = {};
     std::lock_guard lock(m_frameMutex);
     m_cachedPlayer = nullptr;
     m_hasDesiredRotation = false;
@@ -111,11 +168,64 @@ void AimAssistModule::onEnable() {
 
 void AimAssistModule::onDisable() {
     m_lastTarget = nullptr;
+    m_aimPointTarget = nullptr;
+    m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};
+    m_aimOffsetTo = m_aimOffsetFrom;
+    m_aimOffsetTransitionStart = {};
+    m_nextAimOffsetChange = {};
     std::lock_guard lock(m_frameMutex);
     m_cachedPlayer = nullptr;
     m_hasDesiredRotation = false;
     m_lastTargetUpdate = {};
     m_lastFrameUpdate = {};
+}
+
+bedrocktools::sdk::Vec3 AimAssistModule::sampleAimOffset() {
+    std::uniform_real_distribution<float> horizontal(0.14f, 0.86f);
+    std::uniform_real_distribution<float> vertical(0.12f, 0.92f);
+    return {horizontal(m_rng), vertical(m_rng), horizontal(m_rng)};
+}
+
+bedrocktools::sdk::Vec3 AimAssistModule::currentAimOffset(std::chrono::steady_clock::time_point now) const {
+    const float duration = std::max(m_aimOffsetTransitionSeconds, 0.01f);
+    const float elapsed = std::chrono::duration<float>(now - m_aimOffsetTransitionStart).count();
+    float t = std::clamp(elapsed / duration, 0.0f, 1.0f);
+    t = t * t * (3.0f - 2.0f * t);
+    return {
+        m_aimOffsetFrom.x + (m_aimOffsetTo.x - m_aimOffsetFrom.x) * t,
+        m_aimOffsetFrom.y + (m_aimOffsetTo.y - m_aimOffsetFrom.y) * t,
+        m_aimOffsetFrom.z + (m_aimOffsetTo.z - m_aimOffsetFrom.z) * t
+    };
+}
+
+void AimAssistModule::updateAimOffsetTarget(void* target, std::chrono::steady_clock::time_point now) {
+    if (!target) {
+        m_aimPointTarget = nullptr;
+        return;
+    }
+
+    std::uniform_real_distribution<float> transition(0.32f, 0.58f);
+    std::uniform_real_distribution<float> pause(0.25f, 0.65f);
+
+    if (m_aimPointTarget != target || m_aimOffsetTransitionStart.time_since_epoch().count() == 0) {
+        m_aimPointTarget = target;
+        m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};
+        m_aimOffsetTo = sampleAimOffset();
+        m_aimOffsetTransitionStart = now;
+        m_aimOffsetTransitionSeconds = transition(m_rng);
+        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));
+        return;
+    }
+
+    if (now >= m_nextAimOffsetChange) {
+        m_aimOffsetFrom = currentAimOffset(now);
+        m_aimOffsetTo = sampleAimOffset();
+        m_aimOffsetTransitionStart = now;
+        m_aimOffsetTransitionSeconds = transition(m_rng);
+        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));
+    }
 }
 
 void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
@@ -172,7 +282,9 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    const auto targetNow = std::chrono::steady_clock::now();
     void* bestTarget = nullptr;
+    AABB bestBounds{};
     Vec2 bestRotation{};
     float bestAngleScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = m_range * m_range;
@@ -189,6 +301,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             if (!m_targetMobs || !categoryHasMobBit(candidate)) continue;
         }
 
+        if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) continue;
         if (g_actorIsInvisible && g_actorIsInvisible(candidate)) continue;
 
         // Actor is a lightweight SDK wrapper; no ownership or memory is transferred.
@@ -197,10 +310,15 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const AABB targetBounds = target->bounds();
         if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
 
+        Vec3 normalizedOffset{0.5f, 0.55f, 0.5f};
+        if (candidate == m_lastTarget && candidate == m_aimPointTarget) {
+            normalizedOffset = currentAimOffset(targetNow);
+        }
+
         Vec3 aimPoint{};
-        aimPoint.x = (targetBounds.min.x + targetBounds.max.x) * 0.5f;
-        aimPoint.y = targetBounds.min.y + (targetBounds.max.y - targetBounds.min.y) * 0.78f;
-        aimPoint.z = (targetBounds.min.z + targetBounds.max.z) * 0.5f;
+        aimPoint.x = targetBounds.min.x + (targetBounds.max.x - targetBounds.min.x) * normalizedOffset.x;
+        aimPoint.y = targetBounds.min.y + (targetBounds.max.y - targetBounds.min.y) * normalizedOffset.y;
+        aimPoint.z = targetBounds.min.z + (targetBounds.max.z - targetBounds.min.z) * normalizedOffset.z;
 
         const float d2 = distanceSquared(eyePosition, aimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
@@ -223,12 +341,31 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (score < bestAngleScore) {
             bestAngleScore = score;
             bestTarget = candidate;
+            bestBounds = targetBounds;
             bestRotation = {desiredPitch, desiredYaw};
         }
     }
 
+    if (!bestTarget) {
+        m_lastTarget = nullptr;
+        m_aimPointTarget = nullptr;
+        return;
+    }
+
     m_lastTarget = bestTarget;
-    if (!bestTarget) return;
+    updateAimOffsetTarget(bestTarget, targetNow);
+    const Vec3 normalizedOffset = currentAimOffset(targetNow);
+    const Vec3 aimPoint{
+        bestBounds.min.x + (bestBounds.max.x - bestBounds.min.x) * normalizedOffset.x,
+        bestBounds.min.y + (bestBounds.max.y - bestBounds.min.y) * normalizedOffset.y,
+        bestBounds.min.z + (bestBounds.max.z - bestBounds.min.z) * normalizedOffset.z
+    };
+    const float finalDx = aimPoint.x - eyePosition.x;
+    const float finalDy = aimPoint.y - eyePosition.y;
+    const float finalDz = aimPoint.z - eyePosition.z;
+    const float finalHorizontal = std::sqrt(finalDx * finalDx + finalDz * finalDz);
+    bestRotation.y = std::atan2(-finalDx, finalDz) * kRadToDeg;
+    bestRotation.x = -std::atan2(finalDy, std::max(finalHorizontal, 0.001f)) * kRadToDeg;
 
     {
         std::lock_guard lock(m_frameMutex);
@@ -308,6 +445,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 12.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 90.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.01f, 1.0f);
+    m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
 
 void AimAssistModule::saveConfig(nlohmann::json& j) {
@@ -317,4 +455,5 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_range"] = m_range;
     j["m_fov"] = m_fov;
     j["m_strength"] = m_strength;
+    j["m_whitelistNames"] = m_whitelistNames;
 }
