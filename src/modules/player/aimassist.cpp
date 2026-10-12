@@ -181,9 +181,7 @@ void AimAssistModule::onDisable() {
 }
 
 bedrocktools::sdk::Vec3 AimAssistModule::sampleAimOffset() {
-    std::uniform_real_distribution<float> horizontal(0.14f, 0.86f);
-    std::uniform_real_distribution<float> vertical(0.12f, 0.92f);
-    return {horizontal(m_rng), vertical(m_rng), horizontal(m_rng)};
+    return {0.5f, 0.55f, 0.5f};
 }
 
 bedrocktools::sdk::Vec3 AimAssistModule::currentAimOffset(std::chrono::steady_clock::time_point now) const {
@@ -204,27 +202,15 @@ void AimAssistModule::updateAimOffsetTarget(void* target, std::chrono::steady_cl
         return;
     }
 
-    std::uniform_real_distribution<float> transition(0.32f, 0.58f);
-    std::uniform_real_distribution<float> pause(0.25f, 0.65f);
-
+    // Keep one stable point near the target's center instead of chasing a moving random point.
+    const bedrocktools::sdk::Vec3 stableOffset{0.5f, 0.55f, 0.5f};
     if (m_aimPointTarget != target || m_aimOffsetTransitionStart.time_since_epoch().count() == 0) {
         m_aimPointTarget = target;
-        m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};
-        m_aimOffsetTo = sampleAimOffset();
+        m_aimOffsetFrom = stableOffset;
+        m_aimOffsetTo = stableOffset;
         m_aimOffsetTransitionStart = now;
-        m_aimOffsetTransitionSeconds = transition(m_rng);
-        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));
-        return;
-    }
-
-    if (now >= m_nextAimOffsetChange) {
-        m_aimOffsetFrom = currentAimOffset(now);
-        m_aimOffsetTo = sampleAimOffset();
-        m_aimOffsetTransitionStart = now;
-        m_aimOffsetTransitionSeconds = transition(m_rng);
-        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));
+        m_aimOffsetTransitionSeconds = 0.01f;
+        m_nextAimOffsetChange = std::chrono::steady_clock::time_point::max();
     }
 }
 
@@ -288,7 +274,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     Vec2 bestRotation{};
     float bestAngleScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = m_range * m_range;
-    const float maxFov = std::clamp(m_fov, 1.0f, 90.0f);
+    const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* candidate = entry->actor;
@@ -442,8 +428,8 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
-    m_range = std::clamp(j.value("m_range", m_range), 2.0f, 12.0f);
-    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 90.0f);
+    m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
+    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.01f, 1.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }

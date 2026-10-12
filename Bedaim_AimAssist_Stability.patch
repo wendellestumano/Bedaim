@@ -1,0 +1,87 @@
+diff --git a/src/modules/player/aimassist.cpp b/src/modules/player/aimassist.cpp
+index 33eec35..0000000 100644
+--- a/src/modules/player/aimassist.cpp
++++ b/src/modules/player/aimassist.cpp
+@@ -202,28 +202,17 @@
+     if (!target) {
+         m_aimPointTarget = nullptr;
+         return;
+     }
+ 
+-    std::uniform_real_distribution<float> transition(0.32f, 0.58f);
+-    std::uniform_real_distribution<float> pause(0.25f, 0.65f);
+-
+-    if (m_aimPointTarget != target || m_aimOffsetTransitionStart.time_since_epoch().count() == 0) {
+-        m_aimPointTarget = target;
+-        m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};
+-        m_aimOffsetTo = sampleAimOffset();
+-        m_aimOffsetTransitionStart = now;
+-        m_aimOffsetTransitionSeconds = transition(m_rng);
+-        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+-            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));
+-        return;
+-    }
+-
+-    if (now >= m_nextAimOffsetChange) {
+-        m_aimOffsetFrom = currentAimOffset(now);
+-        m_aimOffsetTo = sampleAimOffset();
+-        m_aimOffsetTransitionStart = now;
+-        m_aimOffsetTransitionSeconds = transition(m_rng);
+-        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+-            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));
+-    }
++    // Pick a dynamic point inside the hitbox once per target lock. Moving this
++    // point every few frames makes the camera chase a moving spot and orbit.
++    if (m_aimPointTarget == target && m_aimOffsetTransitionStart.time_since_epoch().count() != 0) return;
++
++    m_aimPointTarget = target;
++    const auto sampledOffset = sampleAimOffset();
++    m_aimOffsetFrom = sampledOffset;
++    m_aimOffsetTo = sampledOffset;
++    m_aimOffsetTransitionStart = now;
++    m_aimOffsetTransitionSeconds = 0.01f;
++    m_nextAimOffsetChange = std::chrono::steady_clock::time_point::max();
+ }
+@@ -286,6 +275,6 @@
+     void* bestTarget = nullptr;
+     AABB bestBounds{};
+     Vec2 bestRotation{};
+     float bestAngleScore = std::numeric_limits<float>::max();
+     const float maxDistanceSq = m_range * m_range;
+-    const float maxFov = std::clamp(m_fov, 1.0f, 90.0f);
++    const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
+@@ -336,5 +325,5 @@
+         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
+ 
+         // Prefer the target closest to the crosshair, using distance only as a tiebreaker.
+-        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 2.0f;
++        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 15.0f;
+         const float score = angleScore + std::sqrt(d2) * 0.001f + targetStickiness;
+@@ -441,9 +430,9 @@
+ void AimAssistModule::loadConfig(const nlohmann::json& j) {
+     Module::loadConfig(j);
+     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
+     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
+-    m_range = std::clamp(j.value("m_range", m_range), 2.0f, 12.0f);
+-    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 90.0f);
++    m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
++    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
+     m_strength = std::clamp(j.value("m_strength", m_strength), 0.01f, 1.0f);
+     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
+ }
+diff --git a/src/launcher/ModuleMenu.cpp b/src/launcher/ModuleMenu.cpp
+index 13ae765..0000000 100644
+--- a/src/launcher/ModuleMenu.cpp
++++ b/src/launcher/ModuleMenu.cpp
+@@ -192,4 +192,4 @@
+                     if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_range") {
+                         minVal = 2.0f;
+-                        maxVal = 12.0f;
++                        maxVal = 80.0f;
+                     }
+@@ -199,4 +199,4 @@
+                     if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_fov") {
+                         minVal = 1.0f;
+-                        maxVal = 90.0f;
++                        maxVal = 360.0f;
+                     }

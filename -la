@@ -1,0 +1,90 @@
+[1mdiff --git a/src/launcher/ModuleMenu.cpp b/src/launcher/ModuleMenu.cpp[m
+[1mindex 13ae765..82a8e9d 100644[m
+[1m--- a/src/launcher/ModuleMenu.cpp[m
+[1m+++ b/src/launcher/ModuleMenu.cpp[m
+[36m@@ -191,14 +191,14 @@[m [mvoid registerModulesWithLauncher() {[m
+                     maxVal = 180.0f;[m
+                     if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_range") {[m
+                         minVal = 2.0f;[m
+[31m-                        maxVal = 12.0f;[m
+[32m+[m[32m                        maxVal = 80.0f;[m
+                     }[m
+                 } else if (kLower.find("fov") != std::string::npos) {[m
+                     minVal = 1.0f;[m
+                     maxVal = 179.0f;[m
+                     if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_fov") {[m
+                         minVal = 1.0f;[m
+[31m-                        maxVal = 90.0f;[m
+[32m+[m[32m                        maxVal = 360.0f;[m
+                     }[m
+                 } else if (kLower.find("intensity") != std::string::npos) {[m
+                     maxVal = 10.0f;[m
+[1mdiff --git a/src/modules/player/aimassist.cpp b/src/modules/player/aimassist.cpp[m
+[1mindex 33eec35..11fe3cf 100644[m
+[1m--- a/src/modules/player/aimassist.cpp[m
+[1m+++ b/src/modules/player/aimassist.cpp[m
+[36m@@ -181,9 +181,7 @@[m [mvoid AimAssistModule::onDisable() {[m
+ }[m
+ [m
+ bedrocktools::sdk::Vec3 AimAssistModule::sampleAimOffset() {[m
+[31m-    std::uniform_real_distribution<float> horizontal(0.14f, 0.86f);[m
+[31m-    std::uniform_real_distribution<float> vertical(0.12f, 0.92f);[m
+[31m-    return {horizontal(m_rng), vertical(m_rng), horizontal(m_rng)};[m
+[32m+[m[32m    return {0.5f, 0.55f, 0.5f};[m
+ }[m
+ [m
+ bedrocktools::sdk::Vec3 AimAssistModule::currentAimOffset(std::chrono::steady_clock::time_point now) const {[m
+[36m@@ -204,27 +202,15 @@[m [mvoid AimAssistModule::updateAimOffsetTarget(void* target, std::chrono::steady_cl[m
+         return;[m
+     }[m
+ [m
+[31m-    std::uniform_real_distribution<float> transition(0.32f, 0.58f);[m
+[31m-    std::uniform_real_distribution<float> pause(0.25f, 0.65f);[m
+[31m-[m
+[32m+[m[32m    // Keep one stable point near the target's center instead of chasing a moving random point.[m
+[32m+[m[32m    const bedrocktools::sdk::Vec3 stableOffset{0.5f, 0.55f, 0.5f};[m
+     if (m_aimPointTarget != target || m_aimOffsetTransitionStart.time_since_epoch().count() == 0) {[m
+         m_aimPointTarget = target;[m
+[31m-        m_aimOffsetFrom = {0.5f, 0.55f, 0.5f};[m
+[31m-        m_aimOffsetTo = sampleAimOffset();[m
+[31m-        m_aimOffsetTransitionStart = now;[m
+[31m-        m_aimOffsetTransitionSeconds = transition(m_rng);[m
+[31m-        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>([m
+[31m-            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));[m
+[31m-        return;[m
+[31m-    }[m
+[31m-[m
+[31m-    if (now >= m_nextAimOffsetChange) {[m
+[31m-        m_aimOffsetFrom = currentAimOffset(now);[m
+[31m-        m_aimOffsetTo = sampleAimOffset();[m
+[32m+[m[32m        m_aimOffsetFrom = stableOffset;[m
+[32m+[m[32m        m_aimOffsetTo = stableOffset;[m
+         m_aimOffsetTransitionStart = now;[m
+[31m-        m_aimOffsetTransitionSeconds = transition(m_rng);[m
+[31m-        m_nextAimOffsetChange = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>([m
+[31m-            std::chrono::duration<float>(m_aimOffsetTransitionSeconds + pause(m_rng)));[m
+[32m+[m[32m        m_aimOffsetTransitionSeconds = 0.01f;[m
+[32m+[m[32m        m_nextAimOffsetChange = std::chrono::steady_clock::time_point::max();[m
+     }[m
+ }[m
+ [m
+[36m@@ -288,7 +274,7 @@[m [mvoid AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {[m
+     Vec2 bestRotation{};[m
+     float bestAngleScore = std::numeric_limits<float>::max();[m
+     const float maxDistanceSq = m_range * m_range;[m
+[31m-    const float maxFov = std::clamp(m_fov, 1.0f, 90.0f);[m
+[32m+[m[32m    const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);[m
+ [m
+     for (auto* entry = actors.begin; entry < actors.end; ++entry) {[m
+         void* candidate = entry->actor;[m
+[36m@@ -442,8 +428,8 @@[m [mvoid AimAssistModule::loadConfig(const nlohmann::json& j) {[m
+     Module::loadConfig(j);[m
+     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);[m
+     m_targetMobs = j.value("m_targetMobs", m_targetMobs);[m
+[31m-    m_range = std::clamp(j.value("m_range", m_range), 2.0f, 12.0f);[m
+[31m-    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 90.0f);[m
+[32m+[m[32m    m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);[m
+[32m+[m[32m    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);[m
+     m_strength = std::clamp(j.value("m_strength", m_strength), 0.01f, 1.0f);[m
+     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);[m
+ }[m
