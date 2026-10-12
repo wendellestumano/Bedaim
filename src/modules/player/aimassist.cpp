@@ -355,7 +355,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // Route the correction through Minecraft's own camera-turn method instead of
     // writing ActorRotationComponent directly (which may not move the local camera).
     if (!g_applyLocalPlayerTurnDelta) return;
-    Vec2 turnDelta{pitchDelta, yawDelta};
+    Vec2 turnDelta{yawDelta, pitchDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
 }
 
