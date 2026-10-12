@@ -75,7 +75,7 @@ float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk:
 }
 
 
-bedrocktools::sdk::Vec3 closestPointOnViewRay(
+bool viewRayIntersectsAabb(
     const bedrocktools::sdk::Vec3& origin,
     const bedrocktools::sdk::Vec2& rotation,
     const bedrocktools::sdk::Vec3& boundsMin,
@@ -90,26 +90,23 @@ bedrocktools::sdk::Vec3 closestPointOnViewRay(
         -std::sin(pitch),
         std::cos(yaw) * cosPitch
     };
-    const Vec3 center{
-        (boundsMin.x + boundsMax.x) * 0.5f,
-        (boundsMin.y + boundsMax.y) * 0.5f,
-        (boundsMin.z + boundsMax.z) * 0.5f
+
+    float tMin = 0.0f;
+    float tMax = std::numeric_limits<float>::infinity();
+    const auto clipAxis = [&](float o, float d, float lo, float hi) {
+        if (std::abs(d) < 1.0e-6f) return o >= lo && o <= hi;
+        float t1 = (lo - o) / d;
+        float t2 = (hi - o) / d;
+        if (t1 > t2) std::swap(t1, t2);
+        tMin = std::max(tMin, t1);
+        tMax = std::min(tMax, t2);
+        return tMax >= tMin && tMax >= 0.0f;
     };
-    const float toCenterX = center.x - origin.x;
-    const float toCenterY = center.y - origin.y;
-    const float toCenterZ = center.z - origin.z;
-    const float alongRay = std::max(0.05f,
-        toCenterX * direction.x + toCenterY * direction.y + toCenterZ * direction.z);
-    const Vec3 rayPoint{
-        origin.x + direction.x * alongRay,
-        origin.y + direction.y * alongRay,
-        origin.z + direction.z * alongRay
-    };
-    return Vec3{
-        std::clamp(rayPoint.x, boundsMin.x, boundsMax.x),
-        std::clamp(rayPoint.y, boundsMin.y, boundsMax.y),
-        std::clamp(rayPoint.z, boundsMin.z, boundsMax.z)
-    };
+
+    return clipAxis(origin.x, direction.x, boundsMin.x, boundsMax.x) &&
+           clipAxis(origin.y, direction.y, boundsMin.y, boundsMax.y) &&
+           clipAxis(origin.z, direction.z, boundsMin.z, boundsMax.z) &&
+           tMax >= 0.0f;
 }
 
 float smoothedAxisStep(float error, float& velocity, float deltaSeconds,
@@ -325,6 +322,8 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     void* bestTarget = nullptr;
     Vec2 bestRotation{};
+    Vec3 bestAimBoundsMin{};
+    Vec3 bestAimBoundsMax{};
     float bestScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = range * range;
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
@@ -348,8 +347,17 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const AABB targetBounds = target->bounds();
         if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
 
-        // FOV chooses targets; the hitbox area is a separate deadzone. Aim at the
-        // closest point on the hitbox relative to the current view ray.
+        // Use a fixed, center-biased aim point. It must not move with the view ray,
+        // or the aim can chase the edges of the hitbox and orbit around the target.
+        const Vec3 aimPoint{
+            (targetBounds.min.x + targetBounds.max.x) * 0.5f,
+            targetBounds.min.y + (targetBounds.max.y - targetBounds.min.y) * 0.55f,
+            (targetBounds.min.z + targetBounds.max.z) * 0.5f
+        };
+
+        // The scaled hitbox is a separate dead zone: when the view ray crosses it,
+        // steering stops, so the crosshair can rest anywhere inside instead of
+        // continually correcting toward the exact center.
         const float hitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
         const Vec3 boundsCenter{
             (targetBounds.min.x + targetBounds.max.x) * 0.5f,
@@ -371,8 +379,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             boundsCenter.y + halfExtent.y,
             boundsCenter.z + halfExtent.z
         };
-        const Vec3 aimPoint = closestPointOnViewRay(
-            eyePosition, currentRotation, aimBoundsMin, aimBoundsMax);
 
         const float d2 = distanceSquared(eyePosition, aimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
@@ -389,13 +395,15 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        // Prefer the current target a little, avoiding jitter between nearby actors.
-        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 8.0f;
+        // Prefer the existing target modestly to avoid target switching jitter.
+        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 6.0f;
         const float score = angleScore + std::sqrt(d2) * 0.001f + targetStickiness;
         if (score < bestScore) {
             bestScore = score;
             bestTarget = candidate;
             bestRotation = {desiredPitch, desiredYaw};
+            bestAimBoundsMin = aimBoundsMin;
+            bestAimBoundsMax = aimBoundsMax;
         }
     }
 
@@ -410,6 +418,13 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_smoothedPitchVelocity = 0.0f;
     }
     m_lastTarget = bestTarget;
+
+    if (viewRayIntersectsAabb(eyePosition, currentRotation, bestAimBoundsMin, bestAimBoundsMax)) {
+        m_smoothedYawVelocity = 0.0f;
+        m_smoothedPitchVelocity = 0.0f;
+        m_lastRotationUpdate = std::chrono::steady_clock::now();
+        return;
+    }
 
     const float yawError = wrapDegrees(bestRotation.y - currentRotation.y);
     const float pitchError = bestRotation.x - currentRotation.x;
