@@ -3,6 +3,7 @@
 #include "../Module.hpp"
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <chrono>
+#include <mutex>
 #include <string>
 
 class AimAssistModule final : public Module {
@@ -30,12 +31,11 @@ public:
 
 private:
     void resetTrackingState();
+    std::mutex m_stateMutex;
     void* m_lastTarget = nullptr;
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     float m_targetPitch = 0.0f;
     float m_targetYaw = 0.0f;
     bool m_hasTargetRotation = false;
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
-    float m_smoothedYawVelocity = 0.0f;
-    float m_smoothedPitchVelocity = 0.0f;
 };

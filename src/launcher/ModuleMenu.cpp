@@ -211,7 +211,7 @@ void registerModulesWithLauncher() {
                 } else if (kLower.find("speed") != std::string::npos || kLower.find("strength") != std::string::npos) {
                     minVal = 0.05f;
                     maxVal = 1.0f;
-                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") maxVal = 5.0f;
+                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") maxVal = 0.65f;
                 } else if (kLower.find("thick") != std::string::npos) {
                     maxVal = 20.0f;
                 }

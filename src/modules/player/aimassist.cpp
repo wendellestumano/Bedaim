@@ -2,7 +2,6 @@
 #include "core/InventoryAccess.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/FrameEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -76,28 +75,20 @@ float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk:
 }
 
 
-float smoothedAxisStep(float error, float& velocity, float deltaSeconds,
-                       float maxTurnRate, float acceleration, float response) {
+float smoothedAxisStep(float error, float deltaSeconds,
+                       float maxTurnRate, float response) {
     const float absError = std::abs(error);
-    if (!std::isfinite(error) || absError < 0.04f) {
-        velocity = 0.0f;
+    if (!std::isfinite(error) || !std::isfinite(deltaSeconds) ||
+        deltaSeconds <= 0.0f || absError < 0.015f) {
         return 0.0f;
     }
-    const float brakingRate = std::sqrt(std::max(0.0f, 2.0f * acceleration * absError));
-    const float desiredRate = std::copysign(
-        std::min({maxTurnRate, absError * response, brakingRate}), error);
-    // Brake first if the previous frame's momentum points away from the target.
-    const float requestedRate = velocity * error < 0.0f ? 0.0f : desiredRate;
-    const float maxVelocityChange = acceleration * deltaSeconds;
-    velocity += std::clamp(requestedRate - velocity,
-                           -maxVelocityChange, maxVelocityChange);
-    if (velocity * error <= 0.0f) return 0.0f;
-    const float step = velocity * deltaSeconds;
-    if (std::abs(step) >= absError) {
-        velocity = 0.0f;
-        return error;
-    }
-    return step;
+
+    // First-order response has no stored momentum, so the correction cannot
+    // continue accelerating past a target after the angular error shrinks.
+    const float alpha = 1.0f - std::exp(-response * deltaSeconds);
+    const float maxStep = maxTurnRate * deltaSeconds;
+    const float step = std::min(absError * alpha, maxStep);
+    return std::copysign(step, error);
 }
 
 bool categoryHasMobBit(void* actor) {
@@ -195,10 +186,10 @@ AimAssistModule::~AimAssistModule() {
 void AimAssistModule::resetTrackingState() {
     m_lastTarget = nullptr;
     m_lastPlayer = nullptr;
+    m_targetPitch = 0.0f;
+    m_targetYaw = 0.0f;
     m_hasTargetRotation = false;
     m_lastRotationUpdate = {};
-    m_smoothedYawVelocity = 0.0f;
-    m_smoothedPitchVelocity = 0.0f;
 }
 
 void AimAssistModule::onInit() {
@@ -219,19 +210,15 @@ void AimAssistModule::onInit() {
                 g_aimAssist->processPlayerTick(event.player);
             }
         });
-    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
-        [](auto&) {
-            if (g_aimAssist && g_aimAssist->enabled) {
-                g_aimAssist->onFrame();
-            }
-        });
 }
 
 void AimAssistModule::onEnable() {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
 void AimAssistModule::onDisable() {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
@@ -242,6 +229,7 @@ void AimAssistModule::onDisable() {
 
 
 void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
     using namespace bedrocktools::sdk;
 
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs) ||
@@ -360,8 +348,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const bool targetChanged = bestTarget != m_lastTarget;
     if (targetChanged) {
-        m_smoothedYawVelocity = 0.0f;
-        m_smoothedPitchVelocity = 0.0f;
         m_lastRotationUpdate = {};
     }
     m_lastTarget = bestTarget;
@@ -372,6 +358,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 }
 
 void AimAssistModule::onFrame() {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
     using namespace bedrocktools::sdk;
     if (!enabled || !m_hasTargetRotation || !m_lastPlayer || !g_applyLocalPlayerTurnDelta) return;
 
@@ -402,17 +389,17 @@ void AimAssistModule::onFrame() {
     }
     m_lastRotationUpdate = now;
 
-    // Apply the steering once per rendered frame, with bounded acceleration and braking.
-    const float speed = std::clamp(m_strength, 0.05f, 5.0f);
+    // One bounded, no-momentum correction per rendered frame. The range is capped
+    // at 0.65 as a conservative ceiling below the reported crash band (0.70–1.0).
+    const float speed = std::clamp(m_strength, 0.05f, 0.65f);
     const float speedScale = std::sqrt(speed);
-    const float maxTurnRate = 28.0f + 18.0f * speedScale;
-    const float acceleration = 65.0f + 75.0f * speedScale;
-    const float response = 4.5f + 1.1f * speedScale;
+    const float maxTurnRate = 40.0f + 45.0f * speedScale;
+    const float response = 2.0f + 2.0f * speedScale;
 
-    const float yawDelta = smoothedAxisStep(yawError, m_smoothedYawVelocity,
-        deltaSeconds, maxTurnRate, acceleration, response);
-    const float pitchDelta = smoothedAxisStep(pitchError, m_smoothedPitchVelocity,
-        deltaSeconds, maxTurnRate, acceleration, response);
+    const float yawDelta = smoothedAxisStep(yawError,
+        deltaSeconds, maxTurnRate, response);
+    const float pitchDelta = smoothedAxisStep(pitchError,
+        deltaSeconds, maxTurnRate, response);
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
@@ -424,18 +411,20 @@ void AimAssistModule::onFrame() {
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
-    m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 5.0f);
+    m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 0.65f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
 
 void AimAssistModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
     j["m_targetPlayers"] = m_targetPlayers;
     j["m_targetMobs"] = m_targetMobs;
     j["m_weaponOnly"] = m_weaponOnly;
