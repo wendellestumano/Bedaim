@@ -345,8 +345,8 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const float maxTurnRate = 180.0f + 36.0f * speed;
     const float maxStep = std::clamp(maxTurnRate * deltaSeconds, 0.0f, 8.0f);
 
-    const float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
-    const float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+    float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
+    float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (std::abs(yawDelta) < 0.002f) yawDelta = 0.0f;
     if (std::abs(pitchDelta) < 0.002f) pitchDelta = 0.0f;
