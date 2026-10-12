@@ -6,6 +6,8 @@
 #include <mutex>
 #include <string>
 
+namespace bedrocktools::sdk { class ClientInstance; }
+
 class AimAssistModule final : public Module {
 public:
     AimAssistModule();
@@ -18,7 +20,7 @@ public:
     void saveConfig(nlohmann::json& j) override;
 
     void processPlayerTick(bedrocktools::sdk::Player* player);
-    void onFrame() override;
+    void processClientInstanceUpdate(bedrocktools::sdk::ClientInstance* clientInstance);
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
@@ -33,7 +35,6 @@ private:
     void resetTrackingState();
     std::mutex m_stateMutex;
     void* m_lastTarget = nullptr;
-    bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     float m_targetPitch = 0.0f;
     float m_targetYaw = 0.0f;
     bool m_hasTargetRotation = false;

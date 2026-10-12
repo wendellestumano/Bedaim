@@ -6,6 +6,7 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -185,7 +186,6 @@ AimAssistModule::~AimAssistModule() {
 
 void AimAssistModule::resetTrackingState() {
     m_lastTarget = nullptr;
-    m_lastPlayer = nullptr;
     m_targetPitch = 0.0f;
     m_targetYaw = 0.0f;
     m_hasTargetRotation = false;
@@ -208,6 +208,15 @@ void AimAssistModule::onInit() {
         [](auto& event) {
             if (g_aimAssist && g_aimAssist->enabled) {
                 g_aimAssist->processPlayerTick(event.player);
+            }
+        });
+    // ClientInstanceUpdate runs on the game's update path, not the EGL swap/render
+    // callback. Resolve the live local player for each update instead of retaining
+    // a player pointer across frames.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>(
+        [](auto& event) {
+            if (g_aimAssist && g_aimAssist->enabled) {
+                g_aimAssist->processClientInstanceUpdate(event.clientInstance);
             }
         });
 }
@@ -287,7 +296,17 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     Vec2 bestRotation{};
     float bestScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = range * range;
-    const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
+    // FOV is the angular cone around the view direction, not a 0..360 scan.
+    // A 90-degree cap keeps the cone in front of the player and excludes targets behind.
+    const float maxFov = std::clamp(m_fov, 1.0f, 90.0f);
+    const float viewYaw = currentRotation.y / kRadToDeg;
+    const float viewPitch = currentRotation.x / kRadToDeg;
+    const float viewCosPitch = std::cos(viewPitch);
+    const Vec3 viewDirection{
+        -std::sin(viewYaw) * viewCosPitch,
+        -std::sin(viewPitch),
+        std::cos(viewYaw) * viewCosPitch
+    };
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* candidate = entry->actor;
@@ -326,14 +345,21 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float desiredYaw = std::atan2(-dx, dz) * kRadToDeg;
         const float desiredPitch = -std::atan2(dy, std::max(horizontal, 0.001f)) * kRadToDeg;
 
-        const float yawError = wrapDegrees(desiredYaw - currentRotation.y);
-        const float pitchError = desiredPitch - currentRotation.x;
-        const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
+        const float targetDistance = std::sqrt(d2);
+        if (!std::isfinite(targetDistance) || targetDistance <= 0.001f) continue;
+
+        // Evaluate the true 3D angle between the camera's forward direction and
+        // the target point. This is the angle-based priority: nearer the crosshair wins.
+        const float viewDot = std::clamp(
+            (dx * viewDirection.x + dy * viewDirection.y + dz * viewDirection.z) /
+                targetDistance,
+            -1.0f, 1.0f);
+        const float angleScore = std::acos(viewDot) * kRadToDeg;
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        // Prefer the existing target modestly to avoid target switching jitter.
-        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 6.0f;
-        const float score = angleScore + std::sqrt(d2) * 0.001f + targetStickiness;
+        // Only a tiny tie-break bias prevents jitter between almost-equal targets.
+        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 0.35f;
+        const float score = angleScore + targetDistance * 0.001f + targetStickiness;
         if (score < bestScore) {
             bestScore = score;
             bestTarget = candidate;
@@ -347,22 +373,25 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const bool targetChanged = bestTarget != m_lastTarget;
-    if (targetChanged) {
-        m_lastRotationUpdate = {};
-    }
+    if (targetChanged) m_lastRotationUpdate = {};
     m_lastTarget = bestTarget;
-    m_lastPlayer = player;
     m_targetPitch = bestRotation.x;
     m_targetYaw = bestRotation.y;
     m_hasTargetRotation = true;
 }
 
-void AimAssistModule::onFrame() {
+void AimAssistModule::processClientInstanceUpdate(bedrocktools::sdk::ClientInstance* clientInstance) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     using namespace bedrocktools::sdk;
-    if (!enabled || !m_hasTargetRotation || !m_lastPlayer || !g_applyLocalPlayerTurnDelta) return;
+    if (!enabled || !m_hasTargetRotation || !clientInstance || !g_applyLocalPlayerTurnDelta) return;
 
-    auto* player = m_lastPlayer;
+    // Never call LocalPlayer::applyTurnDelta on a retained pointer from the EGL
+    // render callback. Resolve the current local player on this client update.
+    auto* player = clientInstance->localPlayer();
+    if (!player) {
+        resetTrackingState();
+        return;
+    }
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent) {
         resetTrackingState();
@@ -385,29 +414,25 @@ void AimAssistModule::onFrame() {
     float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
         deltaSeconds = std::clamp(
-            std::chrono::duration<float>(now - m_lastRotationUpdate).count(), 0.001f, 0.033f);
+            std::chrono::duration<float>(now - m_lastRotationUpdate).count(),
+            0.001f, 0.033f);
     }
     m_lastRotationUpdate = now;
 
-    // One bounded, no-momentum correction per rendered frame. The range is capped
-    // at 0.65 as a conservative ceiling below the reported crash band (0.70–1.0).
+    // No stored velocity: the step shrinks with angular error, preventing momentum
+    // from carrying the aim past the target. Strength remains capped for stability.
     const float speed = std::clamp(m_strength, 0.05f, 0.65f);
     const float speedScale = std::sqrt(speed);
     const float maxTurnRate = 40.0f + 45.0f * speedScale;
     const float response = 2.0f + 2.0f * speedScale;
-
-    const float yawDelta = smoothedAxisStep(yawError,
-        deltaSeconds, maxTurnRate, response);
-    const float pitchDelta = smoothedAxisStep(pitchError,
-        deltaSeconds, maxTurnRate, response);
+    const float yawDelta = smoothedAxisStep(yawError, deltaSeconds, maxTurnRate, response);
+    const float pitchDelta = smoothedAxisStep(pitchError, deltaSeconds, maxTurnRate, response);
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
     Vec2 turnDelta{yawDelta, pitchDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
 }
-
-
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
@@ -416,7 +441,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
-    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
+    m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 90.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 0.65f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);

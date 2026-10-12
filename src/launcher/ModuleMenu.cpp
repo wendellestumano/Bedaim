@@ -204,7 +204,7 @@ void registerModulesWithLauncher() {
                     maxVal = 179.0f;
                     if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_fov") {
                         minVal = 1.0f;
-                        maxVal = 360.0f;
+                        maxVal = 90.0f;
                     }
                 } else if (kLower.find("intensity") != std::string::npos) {
                     maxVal = 10.0f;
