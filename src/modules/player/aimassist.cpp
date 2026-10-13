@@ -3,6 +3,8 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/FrameEvent.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
@@ -109,7 +111,7 @@ float smoothDampedAxisStep(float error, float deltaSeconds,
     velocity = (velocity - omega * temp) * decay;
 
     float step = target + (change + temp) * decay;
-    const float maxStep = maxTurnRate * dt;
+    const float maxStep = std::min(maxTurnRate * dt, 10.0f);
     const float limitedStep = std::clamp(step, -maxStep, maxStep);
     if (limitedStep != step) velocity = limitedStep / dt;
     step = limitedStep;
@@ -219,9 +221,12 @@ AimAssistModule::~AimAssistModule() {
 
 void AimAssistModule::resetTrackingState() {
     m_lastTarget = nullptr;
+    m_lastTargetBounds = {};
     m_lastAimPoint = {};
+    m_hasAimPoint = false;
     m_yawVelocity = 0.0f;
     m_pitchVelocity = 0.0f;
+    m_lastTargetUpdate = {};
     m_lastRotationUpdate = {};
 }
 
@@ -243,6 +248,13 @@ void AimAssistModule::onInit() {
                 g_aimAssist->processPlayerTick(event.player);
             }
         });
+
+    // Rotation is advanced at render-frame cadence; target discovery remains on player ticks.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>([](auto&) {
+        if (g_aimAssist && g_aimAssist->enabled) {
+            g_aimAssist->processPlayerFrame();
+        }
+    });
 }
 
 void AimAssistModule::onEnable() {
@@ -317,23 +329,14 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     void* bestTarget = nullptr;
-    Vec3 bestAimPoint{};
+    AABB bestTargetBounds{};
     void* retainedTarget = nullptr;
-    Vec3 retainedAimPoint{};
+    AABB retainedTargetBounds{};
     float bestScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = range * range;
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
     // remain required even when the angular limit is set to 360 degrees.
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
-    const float viewYawRadians = currentRotation.y / kRadToDeg;
-    const float viewPitchRadians = currentRotation.x / kRadToDeg;
-    const float cosViewPitch = std::cos(viewPitchRadians);
-    const Vec3 viewDirection{
-        -std::sin(viewYawRadians) * cosViewPitch,
-        -std::sin(viewPitchRadians),
-        std::cos(viewYawRadians) * cosViewPitch
-    };
-    const float hitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* candidate = entry->actor;
@@ -382,56 +385,23 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        // Experimental hitbox sliding: project the current view line onto the target's
-        // bounds, clamp to the selected hitbox area, and blend toward it rather than
-        // chasing the exact edge. The selected point is smoothed again after target lock.
-        const Vec3 boundsCenter{
-            (targetBounds.min.x + targetBounds.max.x) * 0.5f,
-            (targetBounds.min.y + targetBounds.max.y) * 0.5f,
-            (targetBounds.min.z + targetBounds.max.z) * 0.5f
-        };
-        const float centerDx = boundsCenter.x - eyePosition.x;
-        const float centerDy = boundsCenter.y - eyePosition.y;
-        const float centerDz = boundsCenter.z - eyePosition.z;
-        const float alongView = centerDx * viewDirection.x + centerDy * viewDirection.y + centerDz * viewDirection.z;
-        const Vec3 projectedPoint{
-            eyePosition.x + viewDirection.x * alongView,
-            eyePosition.y + viewDirection.y * alongView,
-            eyePosition.z + viewDirection.z * alongView
-        };
-        const Vec3 halfExtents{
-            (targetBounds.max.x - targetBounds.min.x) * 0.5f * hitboxScale,
-            (targetBounds.max.y - targetBounds.min.y) * 0.5f * hitboxScale,
-            (targetBounds.max.z - targetBounds.min.z) * 0.5f * hitboxScale
-        };
-        const Vec3 clampedSlidePoint{
-            std::clamp(projectedPoint.x, boundsCenter.x - halfExtents.x, boundsCenter.x + halfExtents.x),
-            std::clamp(projectedPoint.y, boundsCenter.y - halfExtents.y, boundsCenter.y + halfExtents.y),
-            std::clamp(projectedPoint.z, boundsCenter.z - halfExtents.z, boundsCenter.z + halfExtents.z)
-        };
-        constexpr float kHitboxSlideBlend = 0.65f;
-        const Vec3 slideAimPoint{
-            centerAimPoint.x + (clampedSlidePoint.x - centerAimPoint.x) * kHitboxSlideBlend,
-            centerAimPoint.y + (clampedSlidePoint.y - centerAimPoint.y) * kHitboxSlideBlend,
-            centerAimPoint.z + (clampedSlidePoint.z - centerAimPoint.z) * kHitboxSlideBlend
-        };
-
+        // Keep selection independent from the moving in-hitbox point to avoid target orbiting.
         if (candidate == m_lastTarget) {
             retainedTarget = candidate;
-            retainedAimPoint = slideAimPoint;
+            retainedTargetBounds = targetBounds;
         }
 
         const float score = angleScore + targetDistance * 0.0001f;
         if (score < bestScore) {
             bestScore = score;
             bestTarget = candidate;
-            bestAimPoint = slideAimPoint;
+            bestTargetBounds = targetBounds;
         }
     }
 
     if (retainedTarget) {
         bestTarget = retainedTarget;
-        bestAimPoint = retainedAimPoint;
+        bestTargetBounds = retainedTargetBounds;
     }
 
     if (!bestTarget) {
@@ -440,28 +410,119 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const bool targetChanged = bestTarget != m_lastTarget;
-    const auto now = std::chrono::steady_clock::now();
-    float deltaSeconds = 1.0f / 20.0f;
-    if (!targetChanged && m_lastRotationUpdate.time_since_epoch().count() != 0) {
-        deltaSeconds = std::clamp(
-            std::chrono::duration<float>(now - m_lastRotationUpdate).count(),
-            0.005f, 0.1f);
-    }
-
     if (targetChanged) {
         m_yawVelocity = 0.0f;
         m_pitchVelocity = 0.0f;
-        m_lastAimPoint = bestAimPoint;
-    } else {
-        const float slideAlpha = 1.0f - std::exp(-6.0f * deltaSeconds);
-        m_lastAimPoint.x += (bestAimPoint.x - m_lastAimPoint.x) * slideAlpha;
-        m_lastAimPoint.y += (bestAimPoint.y - m_lastAimPoint.y) * slideAlpha;
-        m_lastAimPoint.z += (bestAimPoint.z - m_lastAimPoint.z) * slideAlpha;
+        m_hasAimPoint = false;
+        m_lastRotationUpdate = {};
     }
     m_lastTarget = bestTarget;
+    m_lastTargetBounds = bestTargetBounds;
+    m_lastTargetUpdate = std::chrono::steady_clock::now();
+}
+
+
+void AimAssistModule::processPlayerFrame() {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    using namespace bedrocktools::sdk;
+
+    if (!enabled || !m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (m_lastTargetUpdate.time_since_epoch().count() == 0 ||
+        std::chrono::duration<float>(now - m_lastTargetUpdate).count() > 0.25f) {
+        resetTrackingState();
+        return;
+    }
+
+    auto* client = ClientInstance::current();
+    auto* player = client ? client->localPlayer() : nullptr;
+    if (!player) {
+        resetTrackingState();
+        return;
+    }
+
+    auto* rotationComponent = player->rotationComponent();
+    if (!rotationComponent || !validBounds(m_lastTargetBounds)) return;
+
+    Vec2 currentRotation = field<Vec2>(rotationComponent, 0);
+    if (!std::isfinite(currentRotation.x) || !std::isfinite(currentRotation.y)) return;
+    currentRotation.x = std::clamp(currentRotation.x, -89.0f, 89.0f);
+    currentRotation.y = wrapDegrees(currentRotation.y);
+
+    const Vec3 playerPosition = player->position();
+    if (!finiteVec3(playerPosition)) return;
+    const AABB playerBounds = player->bounds();
+    Vec3 eyePosition = playerPosition;
+    if (validBounds(playerBounds)) {
+        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
+        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+
+    const AABB bounds = m_lastTargetBounds;
+    const Vec3 boundsCenter{
+        (bounds.min.x + bounds.max.x) * 0.5f,
+        (bounds.min.y + bounds.max.y) * 0.5f,
+        (bounds.min.z + bounds.max.z) * 0.5f
+    };
+    const Vec3 centerAimPoint{
+        boundsCenter.x,
+        bounds.min.y + (bounds.max.y - bounds.min.y) * 0.55f,
+        boundsCenter.z
+    };
+
+    const float yawRadians = currentRotation.y / kRadToDeg;
+    const float pitchRadians = currentRotation.x / kRadToDeg;
+    const float cosPitch = std::cos(pitchRadians);
+    const Vec3 viewDirection{
+        -std::sin(yawRadians) * cosPitch,
+        -std::sin(pitchRadians),
+        std::cos(yawRadians) * cosPitch
+    };
+    const float toCenterX = boundsCenter.x - eyePosition.x;
+    const float toCenterY = boundsCenter.y - eyePosition.y;
+    const float toCenterZ = boundsCenter.z - eyePosition.z;
+    const float alongView = std::max(0.0f,
+        toCenterX * viewDirection.x + toCenterY * viewDirection.y + toCenterZ * viewDirection.z);
+    const Vec3 projectedPoint{
+        eyePosition.x + viewDirection.x * alongView,
+        eyePosition.y + viewDirection.y * alongView,
+        eyePosition.z + viewDirection.z * alongView
+    };
+
+    // Hitbox Area scales the actual region in which the aim point can slide.
+    const float hitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
+    const Vec3 halfExtents{
+        (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
+        (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
+        (bounds.max.z - bounds.min.z) * 0.5f * hitboxScale
+    };
+    const Vec3 slidePoint{
+        std::clamp(projectedPoint.x, boundsCenter.x - halfExtents.x, boundsCenter.x + halfExtents.x),
+        std::clamp(projectedPoint.y, boundsCenter.y - halfExtents.y, boundsCenter.y + halfExtents.y),
+        std::clamp(projectedPoint.z, boundsCenter.z - halfExtents.z, boundsCenter.z + halfExtents.z)
+    };
+
+    float deltaSeconds = 1.0f / 60.0f;
+    if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
+        deltaSeconds = std::clamp(
+            std::chrono::duration<float>(now - m_lastRotationUpdate).count(),
+            0.001f, 0.033f);
+    }
     m_lastRotationUpdate = now;
 
-    // Aim at the temporally filtered point that slides within the selected hitbox.
+    if (!m_hasAimPoint) {
+        m_lastAimPoint = centerAimPoint;
+        m_hasAimPoint = true;
+    }
+    const float slideAlpha = 1.0f - std::exp(-18.0f * deltaSeconds);
+    m_lastAimPoint.x += (slidePoint.x - m_lastAimPoint.x) * slideAlpha;
+    m_lastAimPoint.y += (slidePoint.y - m_lastAimPoint.y) * slideAlpha;
+    m_lastAimPoint.z += (slidePoint.z - m_lastAimPoint.z) * slideAlpha;
+
     const float aimDx = m_lastAimPoint.x - eyePosition.x;
     const float aimDy = m_lastAimPoint.y - eyePosition.y;
     const float aimDz = m_lastAimPoint.z - eyePosition.z;
@@ -472,13 +533,12 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const float pitchError = desiredPitch - currentRotation.x;
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
-    // Apply on the same player-tick path that acquired the target.
-    if (!g_applyLocalPlayerTurnDelta) return;
-
+    // A stronger speed curve makes the full 0.05..5.0 range perceptible.
+    // The per-frame cap limits visible jumps when FPS drops.
     const float speed = std::clamp(m_strength, 0.05f, 5.0f);
     const float speedScale = std::sqrt(speed);
-    const float maxTurnRate = 40.0f + 45.0f * speedScale;
-    const float smoothTime = std::clamp(0.14f / (0.75f + 0.5f * speedScale), 0.06f, 0.16f);
+    const float maxTurnRate = 100.0f + 280.0f * speedScale;
+    const float smoothTime = std::clamp(0.12f / (0.6f + 0.7f * speedScale), 0.035f, 0.15f);
     const float yawDelta = smoothDampedAxisStep(
         yawError, deltaSeconds, maxTurnRate, smoothTime, m_yawVelocity);
     const float pitchDelta = smoothDampedAxisStep(
@@ -486,7 +546,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
-    // Bedrock's applyTurnDelta convention uses -pitch for x and yaw for y.
     Vec2 turnDelta{-pitchDelta, yawDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
 }

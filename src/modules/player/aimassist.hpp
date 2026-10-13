@@ -18,6 +18,7 @@ public:
     void saveConfig(nlohmann::json& j) override;
 
     void processPlayerTick(bedrocktools::sdk::Player* player);
+    void processPlayerFrame();
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
@@ -32,8 +33,11 @@ private:
     void resetTrackingState();
     std::mutex m_stateMutex;
     void* m_lastTarget = nullptr;
+    bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
+    bool m_hasAimPoint = false;
     float m_yawVelocity = 0.0f;
     float m_pitchVelocity = 0.0f;
+    std::chrono::steady_clock::time_point m_lastTargetUpdate{};
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
 };
