@@ -2,10 +2,12 @@
 #include "core/InventoryAccess.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -315,6 +317,15 @@ void AimAssistModule::onInit() {
                 g_aimAssist->processPlayerTick(event.player);
             }
         });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>(
+        [](auto& event) {
+            auto* module = g_aimAssist;
+            if (!module) return;
+            auto* client = event.clientInstance;
+            auto* player = client ? client->localPlayer() : nullptr;
+            module->applyAimStep(player);
+        });
+
 
 }
 
@@ -501,18 +512,19 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
     m_lastTarget = bestTarget;
     m_lastTargetBounds = bestTargetBounds;
-
-    // Apply the camera delta on the same game tick that supplied the valid player pointer.
-    // Avoid calling game-owned camera code from the EGL/render-frame callback; the crash log
-    // showed Scudo heap-header corruption after that cross-cadence path was introduced.
-    applyAimStep(player);
 }
 
 
 void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
 
-    if (!enabled || !player || !m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
+    if (!enabled || !player) {
+        if (!player) resetTrackingState();
+        return;
+    }
+    if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
+    m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
     const auto now = std::chrono::steady_clock::now();
 
     auto* rotationComponent = player->rotationComponent();
@@ -594,7 +606,7 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     // Never let the point fully follow the camera ray: that makes aim error collapse
     // to zero inside the hitbox and then jump when the ray exits its edge. Blending
     // from the stable center preserves a steering signal while allowing visible slide.
-    constexpr float kHitboxSlideBlend = 0.62f;
+    constexpr float kHitboxSlideBlend = 0.42f;
     Vec3 slidePoint{
         centerAimPoint.x + (clampedSlidePoint.x - centerAimPoint.x) * kHitboxSlideBlend,
         centerAimPoint.y + (clampedSlidePoint.y - centerAimPoint.y) * kHitboxSlideBlend,
@@ -605,14 +617,14 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     if (m_elytraMode && m_localPlayerGliding && std::isfinite(targetDistance) &&
         targetDistance >= 7.0f && targetDistance <= 8.0f) {
         const float targetHeight = bounds.max.y - bounds.min.y;
-        slidePoint.y -= std::clamp(targetHeight * 0.10f, 0.08f, 0.18f);
+        slidePoint.y -= std::clamp(targetHeight * 0.15f, 0.12f, 0.28f);
     }
 
     float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
         deltaSeconds = std::clamp(
             std::chrono::duration<float>(now - m_lastRotationUpdate).count(),
-            0.005f, 0.05f);
+            0.002f, 0.05f);
     }
     m_lastRotationUpdate = now;
 
@@ -620,7 +632,7 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
         m_lastAimPoint = centerAimPoint;
         m_hasAimPoint = true;
     }
-    const float slideAlpha = 1.0f - std::exp(-10.0f * deltaSeconds);
+    const float slideAlpha = 1.0f - std::exp(-18.0f * deltaSeconds);
     m_lastAimPoint.x += (slidePoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (slidePoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (slidePoint.z - m_lastAimPoint.z) * slideAlpha;
@@ -635,34 +647,38 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     const float pitchError = desiredPitch - currentRotation.x;
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
-    float response = 7.0f;
-    float maxTurnRate = 170.0f;
+    const float aimSpeed = std::clamp(m_aimSpeed, 0.1f, 10.0f);
+    float modeResponse = 1.0f;
+    float modeRate = 1.0f;
     if (m_aimMode == "Robotic") {
-        response = 11.0f;
-        maxTurnRate = 230.0f;
+        modeResponse = 1.35f;
+        modeRate = 1.25f;
     } else if (m_aimMode == "Human") {
-        response = 4.5f;
-        maxTurnRate = 105.0f;
+        modeResponse = 0.68f;
+        modeRate = 0.68f;
     }
 
-    // All modes use exponential easing and a degrees-per-second cap. The difference
-    // between modes is their response profile, not abrupt steps or artificial camera noise.
+    const float response = (3.0f + 2.6f * aimSpeed) * modeResponse;
+    const float maxTurnRate = (70.0f + 58.0f * aimSpeed) * modeRate;
     const float alpha = 1.0f - std::exp(-response * deltaSeconds);
     const float maxStep = maxTurnRate * deltaSeconds;
     float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
     float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
 
+    // Strongness is not aim speed: it controls how much the assist resists an
+    // opposing manual drag. At 0, meaningful opposing input can fully suppress
+    // the assist for that update; at 1, normal tracking strength is maintained.
     const float manualMagnitude = std::sqrt(
         manualYawDelta * manualYawDelta + manualPitchDelta * manualPitchDelta);
     const float errorMagnitude = std::sqrt(yawError * yawError + pitchError * pitchError);
-    if (manualMagnitude > 0.20f && errorMagnitude > 0.01f &&
+    if (manualMagnitude > 0.12f && errorMagnitude > 0.01f &&
         std::isfinite(manualMagnitude) && std::isfinite(errorMagnitude)) {
         const float alignment = (manualYawDelta * yawError + manualPitchDelta * pitchError)
             / (manualMagnitude * errorMagnitude);
         const float opposingInput = std::clamp(-alignment, 0.0f, 1.0f);
-        const float inputConfidence = std::clamp((manualMagnitude - 0.20f) / 1.25f, 0.0f, 1.0f);
-        const float strength = std::clamp(m_strength, 0.0f, 1.0f);
-        const float dragScale = 1.0f - opposingInput * inputConfidence * (1.0f - strength) * 0.95f;
+        const float inputConfidence = std::clamp((manualMagnitude - 0.12f) / 1.0f, 0.0f, 1.0f);
+        const float strongness = std::clamp(m_strength, 0.0f, 1.0f);
+        const float dragScale = 1.0f - opposingInput * inputConfidence * (1.0f - strongness);
         yawDelta *= dragScale;
         pitchDelta *= dragScale;
     }
@@ -672,8 +688,8 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
 
     Vec2 turnDelta{-pitchDelta, yawDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
-    m_lastAssistYawDelta = yawDelta;
-    m_lastAssistPitchDelta = pitchDelta;
+    m_lastAssistYawDelta = turnDelta.y;
+    m_lastAssistPitchDelta = turnDelta.x;
 }
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
@@ -698,6 +714,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
+    m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
 
@@ -722,5 +739,6 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_fov"] = m_fov;
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_strength"] = m_strength;
+    j["m_aimSpeed"] = m_aimSpeed;
     j["m_whitelistNames"] = m_whitelistNames;
 }

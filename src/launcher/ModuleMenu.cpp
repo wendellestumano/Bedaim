@@ -143,6 +143,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_aimMode") displayName = "Aim behavior > Mode";
                 else if (k == "m_elytraMode") displayName = "Aim behavior > Elytra Mode";
                 else if (k == "m_strength") displayName = "Aim settings > Strongness";
+                else if (k == "m_aimSpeed") displayName = "Aim settings > AimSpeed";
                 else if (k == "m_range") displayName = "Aim settings > Range";
                 else if (k == "m_fov") displayName = "Aim settings > FOV";
                 else if (k == "m_hitboxScale") displayName = "Aim settings > Hitbox Area";
@@ -193,10 +194,12 @@ void registerModulesWithLauncher() {
 
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
-
                 if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") {
                     minVal = 0.0f;
                     maxVal = 1.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_aimspeed") {
+                    minVal = 0.1f;
+                    maxVal = 10.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
                     minVal = 0.5f;
                     maxVal = 1.0f;
