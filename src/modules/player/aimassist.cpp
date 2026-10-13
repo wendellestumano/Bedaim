@@ -115,6 +115,33 @@ float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk:
     return dx * dx + dy * dy + dz * dz;
 }
 
+bool rayIntersectsAABB(const bedrocktools::sdk::Vec3& origin,
+                       const bedrocktools::sdk::Vec3& direction,
+                       const bedrocktools::sdk::AABB& bounds) {
+    float tMin = 0.0f;
+    float tMax = std::numeric_limits<float>::infinity();
+
+    const auto testAxis = [&tMin, &tMax](float rayOrigin, float rayDirection,
+                                         float minimum, float maximum) {
+        if (std::abs(rayDirection) < 1.0e-6f) {
+            return rayOrigin >= minimum && rayOrigin <= maximum;
+        }
+
+        float t1 = (minimum - rayOrigin) / rayDirection;
+        float t2 = (maximum - rayOrigin) / rayDirection;
+        if (t1 > t2) std::swap(t1, t2);
+
+        tMin = std::max(tMin, t1);
+        tMax = std::min(tMax, t2);
+        return tMax >= tMin;
+    };
+
+    return testAxis(origin.x, direction.x, bounds.min.x, bounds.max.x) &&
+           testAxis(origin.y, direction.y, bounds.min.y, bounds.max.y) &&
+           testAxis(origin.z, direction.z, bounds.min.z, bounds.max.z) &&
+           tMax >= 0.0f;
+}
+
 bool hasClearLineOfSight(void* blockSource,
                          const bedrocktools::sdk::Vec3& from,
                          const bedrocktools::sdk::Vec3& to) {
@@ -291,6 +318,9 @@ void AimAssistModule::resetTrackingState() {
     m_lastAimPoint = {};
     m_hasAimPoint = false;
     m_localPlayerGliding = false;
+    m_lastPlayerY = 0.0f;
+    m_hasLastPlayerY = false;
+    m_pitchHoldUntil = {};
     m_lastObservedRotation = {};
     m_hasObservedRotation = false;
     m_lastAssistYawDelta = 0.0f;
@@ -396,6 +426,26 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (!finiteVec3(playerPosition)) {
         resetTrackingState();
         return;
+    }
+
+    // Detect the start of an upward jump from consecutive local-player positions.
+    // Hold pitch steady briefly so the assist can keep tracking horizontally
+    // without pulling the camera toward the target's lower/central hitbox mid-jump.
+    if (m_naturalization) {
+        if (m_hasLastPlayerY) {
+            const float verticalDelta = playerPosition.y - m_lastPlayerY;
+            if (std::isfinite(verticalDelta) && verticalDelta > 0.035f &&
+                verticalDelta < 0.85f) {
+                m_pitchHoldUntil = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(550);
+            }
+        }
+        m_lastPlayerY = playerPosition.y;
+        m_hasLastPlayerY = true;
+    } else {
+        m_lastPlayerY = playerPosition.y;
+        m_hasLastPlayerY = true;
+        m_pitchHoldUntil = {};
     }
 
     Vec3 eyePosition = playerPosition;
@@ -650,6 +700,24 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
         (bounds.max.z - bounds.min.z) * 0.5f * hitboxScale
     };
+
+    const bool stickyMode = (m_trackingMode == "Grudado");
+    const AABB scaledAimBounds{
+        {boundsCenter.x - halfExtents.x, boundsCenter.y - halfExtents.y,
+         boundsCenter.z - halfExtents.z},
+        {boundsCenter.x + halfExtents.x, boundsCenter.y + halfExtents.y,
+         boundsCenter.z + halfExtents.z}
+    };
+
+    // In Smooth mode, do not keep steering toward the center once the crosshair
+    // ray already intersects the configured hitbox area. This lets the crosshair
+    // move across the hitbox naturally instead of magnetically snapping to center.
+    if (!stickyMode && rayIntersectsAABB(eyePosition, viewDirection, scaledAimBounds)) {
+        m_hasAimPoint = false;
+        m_lastRotationUpdate = now;
+        return;
+    }
+
     const Vec3 clampedSlidePoint{
         std::clamp(projectedPoint.x, boundsCenter.x - halfExtents.x, boundsCenter.x + halfExtents.x),
         std::clamp(projectedPoint.y, boundsCenter.y - halfExtents.y, boundsCenter.y + halfExtents.y),
@@ -684,7 +752,6 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         m_lastAimPoint = centerAimPoint;
         m_hasAimPoint = true;
     }
-    const bool stickyMode = (m_trackingMode == "Grudado");
     const float slideAlpha = stickyMode ? 1.0f : (1.0f - std::exp(-12.0f * deltaSeconds));
     const Vec3 effectiveAimPoint = stickyMode ? centerAimPoint : slidePoint;
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
@@ -748,6 +815,10 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         pitchDelta *= dragScale;
     }
 
+    // Naturalization suppresses vertical correction during the jump hold, but
+    // keeps horizontal tracking active.
+    if (m_naturalization && now < m_pitchHoldUntil) pitchDelta = 0.0f;
+
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
@@ -766,7 +837,18 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_aimMode = j.value("m_aimMode", m_aimMode);
     m_trackingMode = j.value("m_trackingMode", m_trackingMode);
     m_elytraMode = j.value("m_elytraMode", m_elytraMode);
+    m_naturalization = j.value("m_naturalization", m_naturalization);
+
+    // LeviLauncher Radio callbacks send the selected option index ("0", "1", ...),
+    // not necessarily the displayed label. Accept both the index and legacy label
+    // so changes take effect immediately and older saved configs remain compatible.
+    if (m_aimMode == "0") m_aimMode = "Robotic";
+    else if (m_aimMode == "1") m_aimMode = "Classic";
+    else if (m_aimMode == "2") m_aimMode = "Human";
     if (m_aimMode != "Robotic" && m_aimMode != "Classic" && m_aimMode != "Human") m_aimMode = "Classic";
+
+    if (m_trackingMode == "0") m_trackingMode = "Grudado";
+    else if (m_trackingMode == "1") m_trackingMode = "Smooth";
     if (m_trackingMode != "Grudado" && m_trackingMode != "Smooth") m_trackingMode = "Smooth";
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_weaponSword = j.value("m_weaponSword", m_weaponSword);
@@ -794,6 +876,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_aimMode"] = m_aimMode;
     j["m_trackingMode"] = m_trackingMode;
     j["m_elytraMode"] = m_elytraMode;
+    j["m_naturalization"] = m_naturalization;
     j["m_weaponOnly"] = m_weaponOnly;
     j["m_weaponSword"] = m_weaponSword;
     j["m_weaponAxe"] = m_weaponAxe;
