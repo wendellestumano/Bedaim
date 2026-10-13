@@ -131,6 +131,7 @@ void registerModulesWithLauncher() {
                 if (k == "m_aimMode") displayName = "AIM OPTIONS > Profile";
                 else if (k == "m_trackingMode") displayName = "AIM OPTIONS > Tracking mode";
                 else if (k == "m_naturalization") displayName = "AIM OPTIONS > Naturalization during jumps";
+                else if (k == "m_naturalizationWeapon") displayName = "AIM OPTIONS > Naturalization weapon";
                 else if (k == "m_fov") displayName = "BEHAVIOR > FOV";
                 else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
@@ -248,8 +249,20 @@ void registerModulesWithLauncher() {
                 std::string str = v.get<std::string>();
                 if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_trackingMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
-                    entry.default_value = (str == "Grudado") ? "0" : "1";
-                    entry.min_value = "Grudado,Smooth";
+                    if (str == "Grudado") entry.default_value = "0";
+                    else if (str == "Adaptativo") entry.default_value = "2";
+                    else entry.default_value = "1";
+                    entry.min_value = "Grudado,Smooth,Adaptativo";
+
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_naturalizationWeapon") {
+                    entry.type = pl::modmenu::ConfigType::Radio;
+                    const std::vector<std::string> weapons = {
+                        "All", "Sword", "Axe", "Mace", "Bow", "Crossbow", "Trident", "Spear", "Other melee"
+                    };
+                    const auto selected = std::find(weapons.begin(), weapons.end(), str);
+                    entry.default_value = selected == weapons.end()
+                        ? "0" : std::to_string(std::distance(weapons.begin(), selected));
+                    entry.min_value = "All,Sword,Axe,Mace,Bow,Crossbow,Trident,Spear,Other melee";
 
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
@@ -280,7 +293,7 @@ void registerModulesWithLauncher() {
             // Keep the flat launcher menu visually grouped by consistent prefixes
             // and a deliberate order; the current public menu API has no section header.
             const std::vector<std::string> priority = {
-                "m_aimMode", "m_trackingMode", "m_naturalization",
+                "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
                 "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
                 "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
