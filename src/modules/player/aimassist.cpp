@@ -281,6 +281,8 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     void* bestTarget = nullptr;
     Vec2 bestRotation{};
+    void* retainedTarget = nullptr;
+    Vec2 retainedRotation{};
     float bestScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = range * range;
     // FOV is the angular cone around the view direction, not a 0..360 scan.
@@ -336,13 +338,22 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        const float targetStickiness = candidate == m_lastTarget ? 0.0f : 0.02f;
-        const float score = angleScore + targetDistance * 0.0001f + targetStickiness;
+        if (candidate == m_lastTarget) {
+            retainedTarget = candidate;
+            retainedRotation = {desiredPitch, desiredYaw};
+        }
+
+        const float score = angleScore + targetDistance * 0.0001f;
         if (score < bestScore) {
             bestScore = score;
             bestTarget = candidate;
             bestRotation = {desiredPitch, desiredYaw};
         }
+    }
+
+    if (retainedTarget) {
+        bestTarget = retainedTarget;
+        bestRotation = retainedRotation;
     }
 
     if (!bestTarget) {
