@@ -140,7 +140,8 @@ void registerModulesWithLauncher() {
                 else if (k == "m_targetPlayers") displayName = "Targeting > Players";
                 else if (k == "m_targetMobs") displayName = "Targeting > Mobs";
                 else if (k == "m_cantSeeThroughBlocks") displayName = "Targeting > Can't See Through Blocks";
-                else if (k == "m_aimMode") displayName = "Aim behavior > Mode";
+                else if (k == "m_aimMode") displayName = "Aim behavior > Response profile";
+                else if (k == "m_trackingMode") displayName = "Aim behavior > Tracking mode";
                 else if (k == "m_elytraMode") displayName = "Aim behavior > Elytra Mode";
                 else if (k == "m_strength") displayName = "Aim settings > Strongness";
                 else if (k == "m_aimSpeed") displayName = "Aim settings > AimSpeed";
@@ -244,7 +245,12 @@ void registerModulesWithLauncher() {
                 entry.max_value = std::to_string(maxVal);
             } else if (v.is_string()) {
                 std::string str = v.get<std::string>();
-                if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") {
+                if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_trackingMode") {
+                    entry.type = pl::modmenu::ConfigType::Radio;
+                    entry.default_value = str.empty() ? "Smooth" : str;
+                    entry.min_value = "Grudado,Smooth";
+
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     entry.default_value = str.empty() ? "Classic" : str;
                     entry.min_value = "Robotic,Classic,Human";

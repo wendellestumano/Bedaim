@@ -18,11 +18,13 @@ public:
     void saveConfig(nlohmann::json& j) override;
 
     void processPlayerTick(bedrocktools::sdk::Player* player);
+    void processPlayerFrame();
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
     bool m_cantSeeThroughBlocks = true;
     std::string m_aimMode = "Classic";
+    std::string m_trackingMode = "Smooth";
     bool m_elytraMode = false;
     bool m_weaponOnly = false;
     bool m_weaponSword = true;
@@ -42,8 +44,10 @@ public:
 
 private:
     void resetTrackingState();
-    void applyAimStep(bedrocktools::sdk::Player* player);
+    void processPlayerTickLocked(bedrocktools::sdk::Player* player);
+    void applyAimStepLocked(bedrocktools::sdk::Player* player);
     std::mutex m_stateMutex;
+    bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};

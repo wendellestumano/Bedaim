@@ -285,6 +285,7 @@ AimAssistModule::~AimAssistModule() {
 }
 
 void AimAssistModule::resetTrackingState() {
+    m_lastPlayer = nullptr;
     m_lastTarget = nullptr;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
@@ -321,9 +322,10 @@ void AimAssistModule::onInit() {
         [](auto& event) {
             auto* module = g_aimAssist;
             if (!module) return;
-            auto* client = event.clientInstance;
-            auto* player = client ? client->localPlayer() : nullptr;
-            module->applyAimStep(player);
+            if (!event.clientInstance) return;
+            // Reuse the known-good player pointer from LocalPlayerTickEvent.
+            // A second localPlayer() lookup may transiently return null and wipe tracking.
+            module->processPlayerFrame();
         });
 
 
@@ -347,6 +349,10 @@ void AimAssistModule::onDisable() {
 
 void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    processPlayerTickLocked(player);
+}
+
+void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
@@ -354,6 +360,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    m_lastPlayer = player;
     m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
 
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
@@ -480,8 +487,8 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        // Deterministically select the nearest eligible entity.
-        const float score = d2;
+        // Minimize angular error first; use distance only as a tiny tie-breaker.
+        const float score = angleScore + targetDistance * 0.0001f;
         if (candidate == m_lastTarget) {
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
@@ -515,14 +522,54 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 }
 
 
-void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
-    using namespace bedrocktools::sdk;
+void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    using namespace bedrocktools::sdk;
 
-    if (!enabled || !player) {
-        if (!player) resetTrackingState();
+    auto* player = m_lastPlayer;
+    if (!enabled || !player || !m_lastTarget || !g_fetchNearbyActors ||
+        !g_applyLocalPlayerTurnDelta) return;
+
+    // Refresh target bounds at the client-update cadence, rather than following
+    // a hitbox sampled only on LocalPlayerTickEvent. Match the pointer in the
+    // current native actor list before dereferencing it, so a despawned target
+    // is never accessed through the cached pointer.
+    const float range = std::clamp(m_range, 2.0f, 80.0f);
+    Vec3 extent{range, range, range};
+    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (!actors.begin || !actors.end || endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
+        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
+        resetTrackingState();
         return;
     }
+
+    bool targetFound = false;
+    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        if (entry->actor != m_lastTarget) continue;
+        const AABB currentBounds = reinterpret_cast<Actor*>(entry->actor)->bounds();
+        if (!validBounds(currentBounds)) {
+            resetTrackingState();
+            return;
+        }
+        m_lastTargetBounds = currentBounds;
+        targetFound = true;
+        break;
+    }
+    if (!targetFound) {
+        resetTrackingState();
+        return;
+    }
+
+    applyAimStepLocked(player);
+}
+
+void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+
+    if (!enabled || !player) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
     m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
     const auto now = std::chrono::steady_clock::now();
@@ -632,10 +679,12 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
         m_lastAimPoint = centerAimPoint;
         m_hasAimPoint = true;
     }
-    const float slideAlpha = 1.0f - std::exp(-18.0f * deltaSeconds);
-    m_lastAimPoint.x += (slidePoint.x - m_lastAimPoint.x) * slideAlpha;
-    m_lastAimPoint.y += (slidePoint.y - m_lastAimPoint.y) * slideAlpha;
-    m_lastAimPoint.z += (slidePoint.z - m_lastAimPoint.z) * slideAlpha;
+    const bool stickyMode = (m_trackingMode == "Grudado");
+    const float slideAlpha = stickyMode ? 1.0f : (1.0f - std::exp(-12.0f * deltaSeconds));
+    const Vec3 effectiveAimPoint = stickyMode ? centerAimPoint : slidePoint;
+    m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
+    m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
+    m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
 
     const float aimDx = m_lastAimPoint.x - eyePosition.x;
     const float aimDy = m_lastAimPoint.y - eyePosition.y;
@@ -648,22 +697,33 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
     const float aimSpeed = std::clamp(m_aimSpeed, 0.1f, 10.0f);
-    float modeResponse = 1.0f;
-    float modeRate = 1.0f;
-    if (m_aimMode == "Robotic") {
-        modeResponse = 1.35f;
-        modeRate = 1.25f;
-    } else if (m_aimMode == "Human") {
-        modeResponse = 0.68f;
-        modeRate = 0.68f;
-    }
+    float yawDelta = 0.0f;
+    float pitchDelta = 0.0f;
+    const float baseTurnRate = 70.0f + 58.0f * aimSpeed;
 
-    const float response = (3.0f + 2.6f * aimSpeed) * modeResponse;
-    const float maxTurnRate = (70.0f + 58.0f * aimSpeed) * modeRate;
-    const float alpha = 1.0f - std::exp(-response * deltaSeconds);
-    const float maxStep = maxTurnRate * deltaSeconds;
-    float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
-    float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+    if (stickyMode) {
+        // No easing tail: react directly to the current error, while respecting AimSpeed.
+        const float maxStep = baseTurnRate * deltaSeconds;
+        yawDelta = std::clamp(yawError, -maxStep, maxStep);
+        pitchDelta = std::clamp(pitchError, -maxStep, maxStep);
+    } else {
+        // Smooth mode uses time-based easing with no hard-coded 30-FPS step.
+        float modeResponse = 1.0f;
+        float modeRate = 1.0f;
+        if (m_aimMode == "Robotic") {
+            modeResponse = 1.35f;
+            modeRate = 1.15f;
+        } else if (m_aimMode == "Human") {
+            modeResponse = 0.68f;
+            modeRate = 0.78f;
+        }
+        const float response = (3.0f + 2.6f * aimSpeed) * modeResponse;
+        const float maxTurnRate = baseTurnRate * modeRate;
+        const float alpha = 1.0f - std::exp(-response * deltaSeconds);
+        const float maxStep = maxTurnRate * deltaSeconds;
+        yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
+        pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+    }
 
     // Strongness is not aim speed: it controls how much the assist resists an
     // opposing manual drag. At 0, meaningful opposing input can fully suppress
@@ -699,8 +759,10 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
     m_aimMode = j.value("m_aimMode", m_aimMode);
+    m_trackingMode = j.value("m_trackingMode", m_trackingMode);
     m_elytraMode = j.value("m_elytraMode", m_elytraMode);
     if (m_aimMode != "Robotic" && m_aimMode != "Classic" && m_aimMode != "Human") m_aimMode = "Classic";
+    if (m_trackingMode != "Grudado" && m_trackingMode != "Smooth") m_trackingMode = "Smooth";
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_weaponSword = j.value("m_weaponSword", m_weaponSword);
     m_weaponAxe = j.value("m_weaponAxe", m_weaponAxe);
@@ -725,6 +787,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_targetMobs"] = m_targetMobs;
     j["m_cantSeeThroughBlocks"] = m_cantSeeThroughBlocks;
     j["m_aimMode"] = m_aimMode;
+    j["m_trackingMode"] = m_trackingMode;
     j["m_elytraMode"] = m_elytraMode;
     j["m_weaponOnly"] = m_weaponOnly;
     j["m_weaponSword"] = m_weaponSword;
