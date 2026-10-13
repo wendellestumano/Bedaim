@@ -2,6 +2,7 @@
 
 #include "../Module.hpp"
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -19,6 +20,7 @@ public:
 
     void processPlayerTick(bedrocktools::sdk::Player* player);
     void processPlayerFrame();
+    void observeGameMode(void* gameMode);
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
@@ -27,6 +29,7 @@ public:
     std::string m_trackingMode = "Smooth";
     bool m_elytraMode = false;
     bool m_naturalization = true;
+    bool m_autoHit = false;
     bool m_weaponOnly = false;
     bool m_weaponSword = true;
     bool m_weaponAxe = true;
@@ -54,6 +57,9 @@ private:
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
     bool m_hasAimPoint = false;
     bool m_localPlayerGliding = false;
+    std::atomic<void*> m_lastGameMode{nullptr};
+    void* m_lastLevel = nullptr;
+    std::chrono::steady_clock::time_point m_nextAutoHit{};
     float m_lastPlayerY = 0.0f;
     bool m_hasLastPlayerY = false;
     std::chrono::steady_clock::time_point m_pitchHoldUntil{};
