@@ -32,5 +32,8 @@ private:
     void resetTrackingState();
     std::mutex m_stateMutex;
     void* m_lastTarget = nullptr;
+    bedrocktools::sdk::Vec3 m_lastAimPoint{};
+    float m_yawVelocity = 0.0f;
+    float m_pitchVelocity = 0.0f;
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
 };

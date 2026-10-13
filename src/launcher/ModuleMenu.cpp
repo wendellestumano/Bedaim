@@ -204,14 +204,14 @@ void registerModulesWithLauncher() {
                     maxVal = 179.0f;
                     if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_fov") {
                         minVal = 1.0f;
-                        maxVal = 90.0f;
+                        maxVal = 360.0f;
                     }
                 } else if (kLower.find("intensity") != std::string::npos) {
                     maxVal = 10.0f;
                 } else if (kLower.find("speed") != std::string::npos || kLower.find("strength") != std::string::npos) {
                     minVal = 0.05f;
                     maxVal = 1.0f;
-                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") maxVal = 0.65f;
+                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") maxVal = 5.0f;
                 } else if (kLower.find("thick") != std::string::npos) {
                     maxVal = 20.0f;
                 }
