@@ -26,6 +26,7 @@ public:
     std::string m_aimMode = "Classic";
     std::string m_trackingMode = "Smooth";
     bool m_elytraMode = false;
+    bool m_naturalization = true;
     bool m_weaponOnly = false;
     bool m_weaponSword = true;
     bool m_weaponAxe = true;
@@ -53,6 +54,9 @@ private:
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
     bool m_hasAimPoint = false;
     bool m_localPlayerGliding = false;
+    float m_lastPlayerY = 0.0f;
+    bool m_hasLastPlayerY = false;
+    std::chrono::steady_clock::time_point m_pitchHoldUntil{};
     bedrocktools::sdk::Vec2 m_lastObservedRotation{};
     bool m_hasObservedRotation = false;
     float m_lastAssistYawDelta = 0.0f;
