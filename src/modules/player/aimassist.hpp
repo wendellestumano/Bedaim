@@ -39,6 +39,7 @@ public:
     bool m_weaponOtherMelee = true;
     float m_range = 5.5f;
     float m_fov = 35.0f;
+    float m_targetSwitchHysteresis = 4.0f;
     float m_hitboxScale = 1.0f;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
