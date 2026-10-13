@@ -140,15 +140,28 @@ void registerModulesWithLauncher() {
                 else if (k == "m_targetPlayers") displayName = "Targeting > Players";
                 else if (k == "m_targetMobs") displayName = "Targeting > Mobs";
                 else if (k == "m_cantSeeThroughBlocks") displayName = "Targeting > Can't See Through Blocks";
-                else if (k == "m_aimMode") displayName = "Aim behavior > Response profile";
-                else if (k == "m_trackingMode") displayName = "Aim behavior > Tracking mode";
-                else if (k == "m_elytraMode") displayName = "Aim behavior > Elytra Mode";
-                else if (k == "m_strength") displayName = "Aim settings > Strongness";
-                else if (k == "m_aimSpeed") displayName = "Aim settings > AimSpeed";
-                else if (k == "m_range") displayName = "Aim settings > Range";
-                else if (k == "m_fov") displayName = "Aim settings > FOV";
-                else if (k == "m_hitboxScale") displayName = "Aim settings > Hitbox Area";
-                else if (k == "m_whitelistNames") displayName = "Targeting > Ignore names";
+                else if (k == "m_aimMode") displayName = "AIM OPTIONS > Profile";
+                else if (k == "m_trackingMode") displayName = "AIM OPTIONS > Tracking mode";
+                else if (k == "m_naturalization") displayName = "AIM OPTIONS > Naturalization during jumps";
+                else if (k == "m_elytraMode") displayName = "SPECIAL > Elytra mode";
+                else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
+                else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
+                else if (k == "m_range") displayName = "BEHAVIOR > Range";
+                else if (k == "m_fov") displayName = "BEHAVIOR > FOV";
+                else if (k == "m_hitboxScale") displayName = "BEHAVIOR > Hitbox area";
+                else if (k == "m_targetPlayers") displayName = "TARGETING > Players";
+                else if (k == "m_targetMobs") displayName = "TARGETING > Mobs";
+                else if (k == "m_cantSeeThroughBlocks") displayName = "TARGETING > Require line of sight";
+                else if (k == "m_whitelistNames") displayName = "TARGETING > Ignore names";
+                else if (k == "m_weaponOnly") displayName = "WEAPON FILTER > Enable filter";
+                else if (k == "m_weaponSword") displayName = "WEAPON FILTER > Sword";
+                else if (k == "m_weaponAxe") displayName = "WEAPON FILTER > Axe";
+                else if (k == "m_weaponMace") displayName = "WEAPON FILTER > Mace";
+                else if (k == "m_weaponBow") displayName = "WEAPON FILTER > Bow";
+                else if (k == "m_weaponCrossbow") displayName = "WEAPON FILTER > Crossbow";
+                else if (k == "m_weaponTrident") displayName = "WEAPON FILTER > Trident";
+                else if (k == "m_weaponSpear") displayName = "WEAPON FILTER > Spear";
+                else if (k == "m_weaponOtherMelee") displayName = "WEAPON FILTER > Other melee";
             }
 
             TmpConfigEntry entry;
@@ -247,12 +260,14 @@ void registerModulesWithLauncher() {
                 std::string str = v.get<std::string>();
                 if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_trackingMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
-                    entry.default_value = str.empty() ? "Smooth" : str;
+                    entry.default_value = (str == "Grudado") ? "0" : "1";
                     entry.min_value = "Grudado,Smooth";
 
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
-                    entry.default_value = str.empty() ? "Classic" : str;
+                    if (str == "Robotic") entry.default_value = "0";
+                    else if (str == "Human") entry.default_value = "2";
+                    else entry.default_value = "1";
                     entry.min_value = "Robotic,Classic,Human";
 
                 } else if (str.find(',') != std::string::npos) {
@@ -271,6 +286,27 @@ void registerModulesWithLauncher() {
                 continue;
             }
             configs.push_back(entry);
+        }
+
+        if (mod->moduleId == "bedrocktools.Aim Assist") {
+            // Keep the flat launcher menu visually grouped by consistent prefixes
+            // and a deliberate order; the current public menu API has no section header.
+            const std::vector<std::string> priority = {
+                "m_aimMode", "m_trackingMode", "m_naturalization",
+                "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
+                "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
+                "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
+                "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
+                "m_weaponOtherMelee", "m_elytraMode"
+            };
+            const auto rank = [&priority](const std::string& key) {
+                const auto it = std::find(priority.begin(), priority.end(), key);
+                return static_cast<std::size_t>(std::distance(priority.begin(), it));
+            };
+            std::stable_sort(configs.begin(), configs.end(),
+                [&rank](const TmpConfigEntry& a, const TmpConfigEntry& b) {
+                    return rank(a.key) < rank(b.key);
+                });
         }
 
         for (auto& entry : configs) {
