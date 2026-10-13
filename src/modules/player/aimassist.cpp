@@ -391,7 +391,7 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
-    Vec2 turnDelta{pitchDelta, yawDelta};
+    Vec2 turnDelta{yawDelta, pitchDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
 }
 
