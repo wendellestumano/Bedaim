@@ -27,6 +27,7 @@ public:
     std::string m_trackingMode = "Smooth";
     bool m_elytraMode = false;
     bool m_naturalization = true;
+    std::string m_naturalizationWeapon = "All";
     bool m_weaponOnly = false;
     bool m_weaponSword = true;
     bool m_weaponAxe = true;
