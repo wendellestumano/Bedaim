@@ -133,6 +133,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_naturalization") displayName = "AIM OPTIONS > Naturalization during jumps";
                 else if (k == "m_naturalizationWeapon") displayName = "AIM OPTIONS > Naturalization weapon";
                 else if (k == "m_fov") displayName = "BEHAVIOR > FOV";
+                else if (k == "m_targetSwitchHysteresis") displayName = "TARGETING > Target switch stability";
                 else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
                 else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
@@ -206,6 +207,9 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
                     minVal = 0.5f;
                     maxVal = 1.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchhysteresis") {
+                    minVal = 0.0f;
+                    maxVal = 12.0f;
                 } else if (kLower.find("opacity") != std::string::npos ||
                     kLower.find("color") != std::string::npos ||
                     kLower.find("alpha") != std::string::npos) {
@@ -295,6 +299,7 @@ void registerModulesWithLauncher() {
             const std::vector<std::string> priority = {
                 "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
                 "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
+                "m_targetSwitchHysteresis",
                 "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
