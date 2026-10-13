@@ -503,8 +503,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         }
     }
 
-    // Retain the previous target if still valid and within 15% of the closest target.
-    if (retainedTarget && retainedTargetScore <= bestScore * 1.15f) {
+    // Use an additive angular margin instead of a percentage. A percentage
+    // collapses toward zero when the crosshair is already close to a target,
+    // which can make two nearby entities alternate as tiny rotation changes occur.
+    constexpr float kTargetSwitchHysteresis = 3.0f;
+    if (retainedTarget && retainedTargetScore <= bestScore + kTargetSwitchHysteresis) {
         bestTarget = retainedTarget;
         bestTargetBounds = retainedTargetBounds;
     }
