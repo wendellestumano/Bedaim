@@ -128,26 +128,13 @@ void registerModulesWithLauncher() {
             }
 
             if (mod->moduleId == "bedrocktools.Aim Assist") {
-                if (k == "m_weaponOnly") displayName = "Weapon only";
-                else if (k == "m_weaponSword") displayName = "Weapon only > Sword";
-                else if (k == "m_weaponAxe") displayName = "Weapon only > Axe";
-                else if (k == "m_weaponMace") displayName = "Weapon only > Mace";
-                else if (k == "m_weaponBow") displayName = "Weapon only > Bow";
-                else if (k == "m_weaponCrossbow") displayName = "Weapon only > Crossbow";
-                else if (k == "m_weaponTrident") displayName = "Weapon only > Trident";
-                else if (k == "m_weaponSpear") displayName = "Weapon only > Spear";
-                else if (k == "m_weaponOtherMelee") displayName = "Weapon only > Other melee";
-                else if (k == "m_targetPlayers") displayName = "Targeting > Players";
-                else if (k == "m_targetMobs") displayName = "Targeting > Mobs";
-                else if (k == "m_cantSeeThroughBlocks") displayName = "Targeting > Can't See Through Blocks";
-                else if (k == "m_aimMode") displayName = "AIM OPTIONS > Profile";
+                if (k == "m_aimMode") displayName = "AIM OPTIONS > Profile";
                 else if (k == "m_trackingMode") displayName = "AIM OPTIONS > Tracking mode";
                 else if (k == "m_naturalization") displayName = "AIM OPTIONS > Naturalization during jumps";
-                else if (k == "m_elytraMode") displayName = "SPECIAL > Elytra mode";
-                else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
-                else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
-                else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_fov") displayName = "BEHAVIOR > FOV";
+                else if (k == "m_range") displayName = "BEHAVIOR > Range";
+                else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
+                else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
                 else if (k == "m_hitboxScale") displayName = "BEHAVIOR > Hitbox area";
                 else if (k == "m_targetPlayers") displayName = "TARGETING > Players";
                 else if (k == "m_targetMobs") displayName = "TARGETING > Mobs";
@@ -162,6 +149,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_weaponTrident") displayName = "WEAPON FILTER > Trident";
                 else if (k == "m_weaponSpear") displayName = "WEAPON FILTER > Spear";
                 else if (k == "m_weaponOtherMelee") displayName = "WEAPON FILTER > Other melee";
+                else if (k == "m_elytraMode") displayName = "SPECIAL > Elytra mode";
             }
 
             TmpConfigEntry entry;
