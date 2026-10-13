@@ -568,11 +568,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         }
     }
 
-    // Use an additive angular margin instead of a percentage. A percentage
-    // collapses toward zero when the crosshair is already close to a target,
-    // which can make two nearby entities alternate as tiny rotation changes occur.
-    constexpr float kTargetSwitchHysteresis = 3.0f;
-    if (retainedTarget && retainedTargetScore <= bestScore + kTargetSwitchHysteresis) {
+    // Prefer the current target when a challenger is only marginally better.
+    // Make the angular margin configurable to reduce alternation between
+    // nearby entities without forcing the same lock strength on every player.
+    const float targetSwitchHysteresis = std::clamp(m_targetSwitchHysteresis, 0.0f, 12.0f);
+    if (retainedTarget && retainedTargetScore <= bestScore + targetSwitchHysteresis) {
         bestTarget = retainedTarget;
         bestTargetBounds = retainedTargetBounds;
     }
@@ -904,6 +904,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_weaponOtherMelee = j.value("m_weaponOtherMelee", m_weaponOtherMelee);
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
+    m_targetSwitchHysteresis = std::clamp(j.value("m_targetSwitchHysteresis", m_targetSwitchHysteresis), 0.0f, 12.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
@@ -932,6 +933,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_weaponOtherMelee"] = m_weaponOtherMelee;
     j["m_range"] = m_range;
     j["m_fov"] = m_fov;
+    j["m_targetSwitchHysteresis"] = m_targetSwitchHysteresis;
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
