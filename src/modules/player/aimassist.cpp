@@ -3,7 +3,6 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
-#include <bedrocktools/events/FrameEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
@@ -180,30 +179,52 @@ bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist
     return false;
 }
 
-bool hasWeaponInMainHand(const bedrocktools::sdk::Player* player) {
-    if (!player) return false;
+enum class HeldWeapon {
+    None, Sword, Axe, Mace, Bow, Crossbow, Trident, Spear, OtherMelee
+};
 
-    auto** vtable = *reinterpret_cast<void***>(
-        const_cast<bedrocktools::sdk::Player*>(player));
-    constexpr std::size_t getCarriedItemIndex =
-        bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
-    if (!vtable || !vtable[getCarriedItemIndex]) return false;
-
+HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
+    if (!player) return HeldWeapon::None;
+    auto** vtable = *reinterpret_cast<void***>(const_cast<bedrocktools::sdk::Player*>(player));
+    constexpr std::size_t getCarriedItemIndex = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
+    if (!vtable || !vtable[getCarriedItemIndex]) return HeldWeapon::None;
     using GetCarriedItemFn = const void* (*)(void*);
-    const void* stack = reinterpret_cast<GetCarriedItemFn>(
-        vtable[getCarriedItemIndex])(const_cast<bedrocktools::sdk::Player*>(player));
-    if (!stack) return false;
+    const void* stack = reinterpret_cast<GetCarriedItemFn>(vtable[getCarriedItemIndex])(
+        const_cast<bedrocktools::sdk::Player*>(player));
+    if (!stack) return HeldWeapon::None;
 
     const auto& inventory = bedrocktools::core::InventoryAccess::get();
-    constexpr const char* weaponIdentifiers[] = {
-        "_sword", "_axe", "mace", "trident", "spear", "bow",
-        "dagger", "katana", "rapier", "scythe", "hammer",
-        "halberd", "glaive", "lance"
+    // Check crossbow before bow because some item-name matchers use substrings.
+    if (inventory.countStack(stack, "crossbow") > 0) return HeldWeapon::Crossbow;
+    if (inventory.countStack(stack, "trident") > 0) return HeldWeapon::Trident;
+    if (inventory.countStack(stack, "bow") > 0) return HeldWeapon::Bow;
+    if (inventory.countStack(stack, "_sword") > 0) return HeldWeapon::Sword;
+    if (inventory.countStack(stack, "_axe") > 0) return HeldWeapon::Axe;
+    if (inventory.countStack(stack, "mace") > 0) return HeldWeapon::Mace;
+    if (inventory.countStack(stack, "spear") > 0) return HeldWeapon::Spear;
+
+    constexpr const char* otherWeapons[] = {
+        "dagger", "katana", "rapier", "scythe", "hammer", "halberd", "glaive", "lance"
     };
-    for (const char* identifier : weaponIdentifiers) {
-        if (inventory.countStack(stack, identifier) > 0) return true;
+    for (const char* identifier : otherWeapons) {
+        if (inventory.countStack(stack, identifier) > 0) return HeldWeapon::OtherMelee;
     }
-    return false;
+    return HeldWeapon::None;
+}
+
+bool weaponAllowed(HeldWeapon weapon, bool sword, bool axe, bool mace,
+                   bool bow, bool crossbow, bool trident, bool spear, bool otherMelee) {
+    switch (weapon) {
+        case HeldWeapon::Sword: return sword;
+        case HeldWeapon::Axe: return axe;
+        case HeldWeapon::Mace: return mace;
+        case HeldWeapon::Bow: return bow;
+        case HeldWeapon::Crossbow: return crossbow;
+        case HeldWeapon::Trident: return trident;
+        case HeldWeapon::Spear: return spear;
+        case HeldWeapon::OtherMelee: return otherMelee;
+        case HeldWeapon::None: default: return false;
+    }
 }
 
 }
@@ -219,13 +240,15 @@ AimAssistModule::~AimAssistModule() {
 }
 
 void AimAssistModule::resetTrackingState() {
-    m_lastPlayer = nullptr;
     m_lastTarget = nullptr;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
     m_yawVelocity = 0.0f;
     m_pitchVelocity = 0.0f;
+    m_previousTargetPosition = {};
+    m_targetVelocity = {};
+    m_previousTargetSample = {};
     m_lastTargetUpdate = {};
     m_lastRotationUpdate = {};
 }
@@ -249,12 +272,6 @@ void AimAssistModule::onInit() {
             }
         });
 
-    // Rotation is advanced at render-frame cadence; target discovery remains on player ticks.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>([](auto&) {
-        if (g_aimAssist && g_aimAssist->enabled) {
-            g_aimAssist->processPlayerFrame();
-        }
-    });
 }
 
 void AimAssistModule::onEnable() {
@@ -277,15 +294,17 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     using namespace bedrocktools::sdk;
 
-    if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs) ||
-        (m_weaponOnly && !hasWeaponInMainHand(player))) {
+    if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
         resetTrackingState();
         return;
     }
 
-    // Cache the known-good player pointer delivered by the game tick event.
-    // The render-frame path must not depend on a second signature/API lookup.
-    m_lastPlayer = player;
+    const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
+    if (m_weaponOnly && !weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
+            m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee)) {
+        resetTrackingState();
+        return;
+    }
 
     auto* rotationComponent = player->rotationComponent();
     auto* level = player->level();
@@ -327,7 +346,12 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    if (!actors.begin || !actors.end || actors.end < actors.begin) {
+    const auto actorsBeginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto actorsEndAddress = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (!actors.begin || !actors.end || actorsEndAddress < actorsBeginAddress ||
+        (actorsEndAddress - actorsBeginAddress) % sizeof(DistanceSortedActor) != 0 ||
+        (actorsEndAddress - actorsBeginAddress) / sizeof(DistanceSortedActor) > 4096) {
+        // Reject malformed native vector metadata before iterating it.
         resetTrackingState();
         return;
     }
@@ -413,40 +437,66 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    const auto sampleNow = std::chrono::steady_clock::now();
     const bool targetChanged = bestTarget != m_lastTarget;
+    const Vec3 targetCenter{
+        (bestTargetBounds.min.x + bestTargetBounds.max.x) * 0.5f,
+        (bestTargetBounds.min.y + bestTargetBounds.max.y) * 0.5f,
+        (bestTargetBounds.min.z + bestTargetBounds.max.z) * 0.5f
+    };
+
     if (targetChanged) {
         m_yawVelocity = 0.0f;
         m_pitchVelocity = 0.0f;
+        m_targetVelocity = {};
+        m_previousTargetSample = {};
         m_hasAimPoint = false;
         m_lastRotationUpdate = {};
+    } else if (m_previousTargetSample.time_since_epoch().count() != 0) {
+        const float sampleDt = std::chrono::duration<float>(sampleNow - m_previousTargetSample).count();
+        if (std::isfinite(sampleDt) && sampleDt >= 0.01f && sampleDt <= 0.25f) {
+            Vec3 measuredVelocity{
+                (targetCenter.x - m_previousTargetPosition.x) / sampleDt,
+                (targetCenter.y - m_previousTargetPosition.y) / sampleDt,
+                (targetCenter.z - m_previousTargetPosition.z) / sampleDt
+            };
+            const float measuredSpeed = std::sqrt(measuredVelocity.x * measuredVelocity.x +
+                measuredVelocity.y * measuredVelocity.y + measuredVelocity.z * measuredVelocity.z);
+            if (!finiteVec3(measuredVelocity)) {
+                measuredVelocity = {};
+            } else if (measuredSpeed > 8.0f) {
+                const float scale = 8.0f / measuredSpeed;
+                measuredVelocity.x *= scale;
+                measuredVelocity.y *= scale;
+                measuredVelocity.z *= scale;
+            }
+            const float velocityAlpha = 1.0f - std::exp(-10.0f * sampleDt);
+            m_targetVelocity.x += (measuredVelocity.x - m_targetVelocity.x) * velocityAlpha;
+            m_targetVelocity.y += (measuredVelocity.y - m_targetVelocity.y) * velocityAlpha;
+            m_targetVelocity.z += (measuredVelocity.z - m_targetVelocity.z) * velocityAlpha;
+        } else {
+            m_targetVelocity = {};
+        }
     }
+
+    m_previousTargetPosition = targetCenter;
+    m_previousTargetSample = sampleNow;
     m_lastTarget = bestTarget;
     m_lastTargetBounds = bestTargetBounds;
-    m_lastTargetUpdate = std::chrono::steady_clock::now();
+    m_lastTargetUpdate = sampleNow;
+
+    // Apply the camera delta on the same game tick that supplied the valid player pointer.
+    // Avoid calling game-owned camera code from the EGL/render-frame callback; the crash log
+    // showed Scudo heap-header corruption after that cross-cadence path was introduced.
+    applyAimStep(player);
 }
 
 
-void AimAssistModule::processPlayerFrame() {
-    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
-    if (!enabled || !m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
-
+    if (!enabled || !player || !m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
     const auto now = std::chrono::steady_clock::now();
-    if (m_lastTargetUpdate.time_since_epoch().count() == 0 ||
-        std::chrono::duration<float>(now - m_lastTargetUpdate).count() > 0.25f) {
-        resetTrackingState();
-        return;
-    }
-
-    // Reuse the player instance passed by LocalPlayerTickEvent. Looking up a
-    // second player through ClientInstance can fail on some runtime/API versions;
-    // resetting tracking on each failed lookup made the Aim Assist appear inactive.
-    auto* player = m_lastPlayer;
-    if (!player) {
-        resetTrackingState();
-        return;
-    }
 
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent || !validBounds(m_lastTargetBounds)) return;
@@ -468,7 +518,43 @@ void AimAssistModule::processPlayerFrame() {
         eyePosition.y += 1.5f;
     }
 
-    const AABB bounds = m_lastTargetBounds;
+    AABB bounds = m_lastTargetBounds;
+    const HeldWeapon predictionWeapon = heldWeaponInMainHand(player);
+    float predictionSeconds = 0.0f;
+    switch (predictionWeapon) {
+        case HeldWeapon::Sword:
+        case HeldWeapon::Axe:
+        case HeldWeapon::Mace:
+        case HeldWeapon::Spear:
+        case HeldWeapon::OtherMelee:
+            predictionSeconds = std::clamp(m_meleePredict, 0.10f, 1.0f);
+            break;
+        case HeldWeapon::Bow:
+        case HeldWeapon::Crossbow:
+        case HeldWeapon::Trident:
+            predictionSeconds = std::clamp(m_rangedPredict, 0.10f, 1.0f);
+            break;
+        case HeldWeapon::None: default:
+            predictionSeconds = 0.0f;
+            break;
+    }
+    Vec3 predictedOffset{
+        m_targetVelocity.x * predictionSeconds,
+        m_targetVelocity.y * predictionSeconds,
+        m_targetVelocity.z * predictionSeconds
+    };
+    const float predictedDistance = std::sqrt(predictedOffset.x * predictedOffset.x +
+        predictedOffset.y * predictedOffset.y + predictedOffset.z * predictedOffset.z);
+    if (std::isfinite(predictedDistance) && predictedDistance > 2.5f) {
+        const float predictionScale = 2.5f / predictedDistance;
+        predictedOffset.x *= predictionScale;
+        predictedOffset.y *= predictionScale;
+        predictedOffset.z *= predictionScale;
+    }
+    bounds.min.x += predictedOffset.x; bounds.max.x += predictedOffset.x;
+    bounds.min.y += predictedOffset.y; bounds.max.y += predictedOffset.y;
+    bounds.min.z += predictedOffset.z; bounds.max.z += predictedOffset.z;
+
     const Vec3 boundsCenter{
         (bounds.min.x + bounds.max.x) * 0.5f,
         (bounds.min.y + bounds.max.y) * 0.5f,
@@ -506,17 +592,26 @@ void AimAssistModule::processPlayerFrame() {
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
         (bounds.max.z - bounds.min.z) * 0.5f * hitboxScale
     };
-    const Vec3 slidePoint{
+    const Vec3 clampedSlidePoint{
         std::clamp(projectedPoint.x, boundsCenter.x - halfExtents.x, boundsCenter.x + halfExtents.x),
         std::clamp(projectedPoint.y, boundsCenter.y - halfExtents.y, boundsCenter.y + halfExtents.y),
         std::clamp(projectedPoint.z, boundsCenter.z - halfExtents.z, boundsCenter.z + halfExtents.z)
+    };
+    // Never let the point fully follow the camera ray: that makes aim error collapse
+    // to zero inside the hitbox and then jump when the ray exits its edge. Blending
+    // from the stable center preserves a steering signal while allowing visible slide.
+    constexpr float kHitboxSlideBlend = 0.65f;
+    const Vec3 slidePoint{
+        centerAimPoint.x + (clampedSlidePoint.x - centerAimPoint.x) * kHitboxSlideBlend,
+        centerAimPoint.y + (clampedSlidePoint.y - centerAimPoint.y) * kHitboxSlideBlend,
+        centerAimPoint.z + (clampedSlidePoint.z - centerAimPoint.z) * kHitboxSlideBlend
     };
 
     float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
         deltaSeconds = std::clamp(
             std::chrono::duration<float>(now - m_lastRotationUpdate).count(),
-            0.001f, 0.033f);
+            0.005f, 0.08f);
     }
     m_lastRotationUpdate = now;
 
@@ -562,10 +657,20 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
+    m_weaponSword = j.value("m_weaponSword", m_weaponSword);
+    m_weaponAxe = j.value("m_weaponAxe", m_weaponAxe);
+    m_weaponMace = j.value("m_weaponMace", m_weaponMace);
+    m_weaponBow = j.value("m_weaponBow", m_weaponBow);
+    m_weaponCrossbow = j.value("m_weaponCrossbow", m_weaponCrossbow);
+    m_weaponTrident = j.value("m_weaponTrident", m_weaponTrident);
+    m_weaponSpear = j.value("m_weaponSpear", m_weaponSpear);
+    m_weaponOtherMelee = j.value("m_weaponOtherMelee", m_weaponOtherMelee);
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 5.0f);
+    m_meleePredict = std::clamp(j.value("m_meleePredict", m_meleePredict), 0.10f, 1.0f);
+    m_rangedPredict = std::clamp(j.value("m_rangedPredict", m_rangedPredict), 0.10f, 1.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
 
@@ -575,9 +680,19 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_targetPlayers"] = m_targetPlayers;
     j["m_targetMobs"] = m_targetMobs;
     j["m_weaponOnly"] = m_weaponOnly;
+    j["m_weaponSword"] = m_weaponSword;
+    j["m_weaponAxe"] = m_weaponAxe;
+    j["m_weaponMace"] = m_weaponMace;
+    j["m_weaponBow"] = m_weaponBow;
+    j["m_weaponCrossbow"] = m_weaponCrossbow;
+    j["m_weaponTrident"] = m_weaponTrident;
+    j["m_weaponSpear"] = m_weaponSpear;
+    j["m_weaponOtherMelee"] = m_weaponOtherMelee;
     j["m_range"] = m_range;
     j["m_fov"] = m_fov;
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_strength"] = m_strength;
+    j["m_meleePredict"] = m_meleePredict;
+    j["m_rangedPredict"] = m_rangedPredict;
     j["m_whitelistNames"] = m_whitelistNames;
 }

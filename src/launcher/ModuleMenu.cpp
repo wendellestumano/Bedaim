@@ -175,7 +175,11 @@ void registerModulesWithLauncher() {
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
 
-                if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
+                if (mod->moduleId == "bedrocktools.Aim Assist" &&
+                    (kLower == "m_meleepredict" || kLower == "m_rangedpredict")) {
+                    minVal = 0.10f;
+                    maxVal = 1.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
                     minVal = 0.5f;
                     maxVal = 1.0f;
                 } else if (kLower.find("opacity") != std::string::npos ||
