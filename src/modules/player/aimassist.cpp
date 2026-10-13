@@ -464,7 +464,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             (targetBounds.min.z + targetBounds.max.z) * 0.5f
         };
 
-        if (m_cantSeeThroughBlocks && blockSource && g_isSolidBlockingBlock &&
+        // Fail closed when the visibility signature or block source is unavailable.
+        // hasClearLineOfSight() returns false if it cannot safely perform the check.
+        if (m_cantSeeThroughBlocks &&
             !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
