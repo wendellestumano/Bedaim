@@ -367,6 +367,9 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     void* bestTarget = nullptr;
     AABB bestTargetBounds{};
     float bestScore = std::numeric_limits<float>::max();
+    void* retainedTarget = nullptr;
+    AABB retainedTargetBounds{};
+    float retainedTargetScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = range * range;
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
     // remain required even when the angular limit is set to 360 degrees.
@@ -424,6 +427,11 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
         // Deterministically select the nearest eligible entity.
         const float score = d2;
+        if (candidate == m_lastTarget) {
+            retainedTarget = candidate;
+            retainedTargetBounds = targetBounds;
+            retainedTargetScore = score;
+        }
         if (score < bestScore) {
             bestScore = score;
             bestTarget = candidate;
@@ -431,6 +439,11 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
     }
 
+    // Retain the previous target if still valid and within 15% of the closest target.
+    if (retainedTarget && retainedTargetScore <= bestScore * 1.15f) {
+        bestTarget = retainedTarget;
+        bestTargetBounds = retainedTargetBounds;
+    }
 
     if (!bestTarget) {
         resetTrackingState();
@@ -536,7 +549,7 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
         deltaSeconds = std::clamp(
             std::chrono::duration<float>(now - m_lastRotationUpdate).count(),
-            0.005f, 0.08f);
+            0.005f, 1.0f / 30.0f);
     }
     m_lastRotationUpdate = now;
 
@@ -544,7 +557,7 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
         m_lastAimPoint = centerAimPoint;
         m_hasAimPoint = true;
     }
-    const float slideAlpha = 1.0f - std::exp(-30.0f * deltaSeconds);
+    const float slideAlpha = 1.0f - std::exp(-22.0f * deltaSeconds);
     m_lastAimPoint.x += (slidePoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (slidePoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (slidePoint.z - m_lastAimPoint.z) * slideAlpha;
@@ -561,32 +574,32 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
 
     const float speed = std::clamp(m_strength, 0.05f, 5.0f);
     const float speedScale = std::sqrt(speed);
-    const float maxTurnRate = 110.0f + 280.0f * speedScale;
+    const float baseTurnRate = 180.0f + 320.0f * speedScale;
     float yawDelta = 0.0f;
     float pitchDelta = 0.0f;
 
     if (m_aimMode == "Robotic") {
-        // Constant angular speed until the remaining error is smaller than one tick step.
-        const float maxStep = maxTurnRate * deltaSeconds;
+        // Direct constant-rate correction, with no easing tail.
+        const float maxStep = baseTurnRate * 1.25f * deltaSeconds;
         yawDelta = std::clamp(yawError, -maxStep, maxStep);
         pitchDelta = std::clamp(pitchError, -maxStep, maxStep);
     } else if (m_aimMode == "Human") {
-        // Deliberately imperfect mode: persistent small tremor and only 30% of the
-        // measured angular error is followed, to keep the motion visibly human-like.
+        // Slower eased response; tiny offsets avoid the previous multi-degree tremor.
         const float time = std::chrono::duration<float>(now.time_since_epoch()).count();
-        const float noisyYawError = yawError * 0.30f
-            + std::sin(time * 15.0f) * 2.2f + std::sin(time * 29.0f) * 0.9f;
-        const float noisyPitchError = pitchError * 0.30f
-            + std::cos(time * 13.0f) * 1.4f + std::sin(time * 23.0f) * 0.5f;
-        const float alpha = 1.0f - std::exp(-5.0f * deltaSeconds);
-        const float maxStep = maxTurnRate * deltaSeconds * 0.30f;
+        const float noisyYawError = yawError
+            + std::sin(time * 4.3f) * 0.045f + std::sin(time * 7.1f) * 0.018f;
+        const float noisyPitchError = pitchError
+            + std::cos(time * 3.7f) * 0.035f + std::sin(time * 6.2f) * 0.014f;
+        const float response = 4.0f + 3.0f * speedScale;
+        const float alpha = 1.0f - std::exp(-response * deltaSeconds);
+        const float maxStep = baseTurnRate * 0.62f * deltaSeconds;
         yawDelta = std::clamp(noisyYawError * alpha, -maxStep, maxStep);
         pitchDelta = std::clamp(noisyPitchError * alpha, -maxStep, maxStep);
     } else {
-        // Classic: responsive exponential convergence with a time-based turn-rate cap.
-        const float response = 2.5f + 8.0f * speedScale;
+        // Classic: quicker exponential convergence with a smooth rate cap.
+        const float response = 6.0f + 10.0f * speedScale;
         const float alpha = 1.0f - std::exp(-response * deltaSeconds);
-        const float maxStep = maxTurnRate * deltaSeconds;
+        const float maxStep = baseTurnRate * deltaSeconds;
         yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
         pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
     }

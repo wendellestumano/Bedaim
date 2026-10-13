@@ -127,10 +127,26 @@ void registerModulesWithLauncher() {
                 }
             }
 
-            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_strength") displayName = "Aim Speed";
-            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_hitboxScale") displayName = "Hitbox Area";
-            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_cantSeeThroughBlocks") displayName = "Can't See Through Blocks";
-            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") displayName = "Aim Mode";
+            if (mod->moduleId == "bedrocktools.Aim Assist") {
+                if (k == "m_weaponOnly") displayName = "Weapon only";
+                else if (k == "m_weaponSword") displayName = "Weapon only > Sword";
+                else if (k == "m_weaponAxe") displayName = "Weapon only > Axe";
+                else if (k == "m_weaponMace") displayName = "Weapon only > Mace";
+                else if (k == "m_weaponBow") displayName = "Weapon only > Bow";
+                else if (k == "m_weaponCrossbow") displayName = "Weapon only > Crossbow";
+                else if (k == "m_weaponTrident") displayName = "Weapon only > Trident";
+                else if (k == "m_weaponSpear") displayName = "Weapon only > Spear";
+                else if (k == "m_weaponOtherMelee") displayName = "Weapon only > Other melee";
+                else if (k == "m_targetPlayers") displayName = "Targeting > Players";
+                else if (k == "m_targetMobs") displayName = "Targeting > Mobs";
+                else if (k == "m_cantSeeThroughBlocks") displayName = "Targeting > Can't See Through Blocks";
+                else if (k == "m_aimMode") displayName = "Aim behavior > Mode";
+                else if (k == "m_strength") displayName = "Aim settings > Aim Speed";
+                else if (k == "m_range") displayName = "Aim settings > Range";
+                else if (k == "m_fov") displayName = "Aim settings > FOV";
+                else if (k == "m_hitboxScale") displayName = "Aim settings > Hitbox Area";
+                else if (k == "m_whitelistNames") displayName = "Targeting > Ignore names";
+            }
 
             TmpConfigEntry entry;
             entry.key = k;
@@ -245,8 +261,14 @@ void registerModulesWithLauncher() {
             configs.push_back(entry);
         }
 
-                for (auto& entry : configs) {
+        for (auto& entry : configs) {
             std::string k = entry.key;
+            if (mod->moduleId == "bedrocktools.Aim Assist" &&
+                (k == "m_weaponSword" || k == "m_weaponAxe" || k == "m_weaponMace" ||
+                 k == "m_weaponBow" || k == "m_weaponCrossbow" || k == "m_weaponTrident" ||
+                 k == "m_weaponSpear" || k == "m_weaponOtherMelee")) {
+                entry.depends_on = "m_weaponOnly";
+            }
             if (entry.type != pl::modmenu::ConfigType::Toggle) {
                 std::string bestParent = "";
                 for (const auto& parentCandidate : configs) {
@@ -259,7 +281,7 @@ void registerModulesWithLauncher() {
                         }
                     }
                 }
-                if (!bestParent.empty()) entry.depends_on = bestParent;
+                if (!bestParent.empty() && entry.depends_on.empty()) entry.depends_on = bestParent;
             }
             builder.config(entry.key, entry.displayName, entry.type, entry.default_value, entry.min_value, entry.max_value, entry.depends_on);
         }
