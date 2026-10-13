@@ -4,7 +4,6 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/events/FrameEvent.hpp>
-#include <bedrocktools/sdk/client/ClientInstance.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
@@ -220,6 +219,7 @@ AimAssistModule::~AimAssistModule() {
 }
 
 void AimAssistModule::resetTrackingState() {
+    m_lastPlayer = nullptr;
     m_lastTarget = nullptr;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
@@ -282,6 +282,10 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         resetTrackingState();
         return;
     }
+
+    // Cache the known-good player pointer delivered by the game tick event.
+    // The render-frame path must not depend on a second signature/API lookup.
+    m_lastPlayer = player;
 
     auto* rotationComponent = player->rotationComponent();
     auto* level = player->level();
@@ -435,8 +439,10 @@ void AimAssistModule::processPlayerFrame() {
         return;
     }
 
-    auto* client = ClientInstance::current();
-    auto* player = client ? client->localPlayer() : nullptr;
+    // Reuse the player instance passed by LocalPlayerTickEvent. Looking up a
+    // second player through ClientInstance can fail on some runtime/API versions;
+    // resetting tracking on each failed lookup made the Aim Assist appear inactive.
+    auto* player = m_lastPlayer;
     if (!player) {
         resetTrackingState();
         return;

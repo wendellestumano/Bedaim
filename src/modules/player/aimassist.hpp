@@ -32,6 +32,7 @@ public:
 private:
     void resetTrackingState();
     std::mutex m_stateMutex;
+    bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
