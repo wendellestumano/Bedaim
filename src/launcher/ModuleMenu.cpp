@@ -129,6 +129,8 @@ void registerModulesWithLauncher() {
 
             if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_strength") displayName = "Aim Speed";
             if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_hitboxScale") displayName = "Hitbox Area";
+            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_cantSeeThroughBlocks") displayName = "Can't See Through Blocks";
+            if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") displayName = "Aim Mode";
 
             TmpConfigEntry entry;
             entry.key = k;
@@ -175,11 +177,7 @@ void registerModulesWithLauncher() {
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
 
-                if (mod->moduleId == "bedrocktools.Aim Assist" &&
-                    (kLower == "m_meleepredict" || kLower == "m_rangedpredict")) {
-                    minVal = 0.10f;
-                    maxVal = 1.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
+                if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
                     minVal = 0.5f;
                     maxVal = 1.0f;
                 } else if (kLower.find("opacity") != std::string::npos ||
@@ -224,7 +222,12 @@ void registerModulesWithLauncher() {
                 entry.max_value = std::to_string(maxVal);
             } else if (v.is_string()) {
                 std::string str = v.get<std::string>();
-                if (str.find(',') != std::string::npos) {
+                if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") {
+                    entry.type = pl::modmenu::ConfigType::Radio;
+                    entry.default_value = str.empty() ? "Classic" : str;
+                    entry.min_value = "Robotic,Classic,Human";
+
+                } else if (str.find(',') != std::string::npos) {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     size_t firstComma = str.find(',');
                     entry.default_value = str.substr(0, firstComma);

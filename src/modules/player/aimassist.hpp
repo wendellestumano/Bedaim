@@ -21,6 +21,8 @@ public:
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
+    bool m_cantSeeThroughBlocks = true;
+    std::string m_aimMode = "Classic";
     bool m_weaponOnly = false;
     bool m_weaponSword = true;
     bool m_weaponAxe = true;
@@ -34,8 +36,6 @@ public:
     float m_fov = 35.0f;
     float m_hitboxScale = 1.0f;
     float m_strength = 0.12f;
-    float m_meleePredict = 0.10f;
-    float m_rangedPredict = 0.10f;
     std::string m_whitelistNames = "";
 
 private:
@@ -45,12 +45,6 @@ private:
     void* m_lastTarget = nullptr;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
-    bedrocktools::sdk::Vec3 m_previousTargetPosition{};
-    bedrocktools::sdk::Vec3 m_targetVelocity{};
     bool m_hasAimPoint = false;
-    float m_yawVelocity = 0.0f;
-    float m_pitchVelocity = 0.0f;
-    std::chrono::steady_clock::time_point m_previousTargetSample{};
-    std::chrono::steady_clock::time_point m_lastTargetUpdate{};
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
 };

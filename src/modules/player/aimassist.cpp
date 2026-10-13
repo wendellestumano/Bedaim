@@ -20,6 +20,7 @@ namespace {
 using ActorIsPlayerFn = bool (*)(void*);
 using ActorIsInvisibleFn = bool (*)(void*);
 using ActorGetNameTagFn = std::string (*)(void*);
+using BlockSourceIsSolidBlockingBlockFn = bool (*)(void*, const bedrocktools::sdk::BlockPos*);
 using LocalPlayerApplyTurnDeltaFn = void (*)(void*, bedrocktools::sdk::Vec2*);
 
 struct DistanceSortedActor {
@@ -42,6 +43,7 @@ ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
+BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadToDeg = 180.0f / kPi;
@@ -74,56 +76,60 @@ float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk:
     return dx * dx + dy * dy + dz * dz;
 }
 
+bool hasClearLineOfSight(void* blockSource,
+                         const bedrocktools::sdk::Vec3& from,
+                         const bedrocktools::sdk::Vec3& to) {
+    if (!blockSource || !g_isSolidBlockingBlock || !finiteVec3(from) || !finiteVec3(to)) return false;
 
-float smoothDampedAxisStep(float error, float deltaSeconds,
-                           float maxTurnRate, float smoothTime, float& velocity) {
-    if (!std::isfinite(error) || !std::isfinite(deltaSeconds) ||
-        !std::isfinite(maxTurnRate) || !std::isfinite(smoothTime) ||
-        deltaSeconds <= 0.0f || maxTurnRate <= 0.0f) {
-        velocity = 0.0f;
-        return 0.0f;
-    }
-    if (std::abs(error) < 0.015f) {
-        velocity = 0.0f;
-        return 0.0f;
-    }
+    const float dx = to.x - from.x;
+    const float dy = to.y - from.y;
+    const float dz = to.z - from.z;
+    int x = static_cast<int>(std::floor(from.x));
+    int y = static_cast<int>(std::floor(from.y));
+    int z = static_cast<int>(std::floor(from.z));
+    const int targetX = static_cast<int>(std::floor(to.x));
+    const int targetY = static_cast<int>(std::floor(to.y));
+    const int targetZ = static_cast<int>(std::floor(to.z));
 
-    const float dt = std::clamp(deltaSeconds, 0.001f, 0.1f);
-    smoothTime = std::clamp(smoothTime, 0.05f, 1.0f);
-    if (!std::isfinite(velocity) ||
-        (error > 0.0f && velocity < 0.0f) ||
-        (error < 0.0f && velocity > 0.0f)) {
-        velocity = 0.0f;
-    }
+    const int stepX = (dx > 0.0f) - (dx < 0.0f);
+    const int stepY = (dy > 0.0f) - (dy < 0.0f);
+    const int stepZ = (dz > 0.0f) - (dz < 0.0f);
+    const float inf = std::numeric_limits<float>::infinity();
+    const float deltaX = stepX == 0 ? inf : std::abs(1.0f / dx);
+    const float deltaY = stepY == 0 ? inf : std::abs(1.0f / dy);
+    const float deltaZ = stepZ == 0 ? inf : std::abs(1.0f / dz);
+    float maxX = stepX > 0 ? (std::floor(from.x) + 1.0f - from.x) * deltaX
+                          : stepX < 0 ? (from.x - std::floor(from.x)) * deltaX : inf;
+    float maxY = stepY > 0 ? (std::floor(from.y) + 1.0f - from.y) * deltaY
+                          : stepY < 0 ? (from.y - std::floor(from.y)) * deltaY : inf;
+    float maxZ = stepZ > 0 ? (std::floor(from.z) + 1.0f - from.z) * deltaZ
+                          : stepZ < 0 ? (from.z - std::floor(from.z)) * deltaZ : inf;
 
-    // Critically damped SmoothDamp-style step: time-based, with a hard turn-rate
-    // cap. Resetting opposing velocity prevents stale momentum from pushing away.
-    const float omega = 2.0f / smoothTime;
-    const float x = omega * dt;
-    const float decay = 1.0f / (1.0f + x + 0.48f * x * x + 0.235f * x * x * x);
-    float change = -error;
-    const float maxChange = maxTurnRate * smoothTime;
-    change = std::clamp(change, -maxChange, maxChange);
-    const float target = -change;
-    const float temp = (velocity + omega * change) * dt;
-    velocity = (velocity - omega * temp) * decay;
+    const int maxSteps = std::min(1024,
+        std::abs(targetX - x) + std::abs(targetY - y) + std::abs(targetZ - z) + 4);
+    for (int i = 0; i < maxSteps; ++i) {
+        if (x == targetX && y == targetY && z == targetZ) return true;
 
-    float step = target + (change + temp) * decay;
-    const float maxStep = std::min(maxTurnRate * dt, 10.0f);
-    const float limitedStep = std::clamp(step, -maxStep, maxStep);
-    if (limitedStep != step) velocity = limitedStep / dt;
-    step = limitedStep;
+        if (maxX <= maxY && maxX <= maxZ) {
+            x += stepX;
+            maxX += deltaX;
+        } else if (maxY <= maxZ) {
+            y += stepY;
+            maxY += deltaY;
+        } else {
+            z += stepZ;
+            maxZ += deltaZ;
+        }
 
-    if ((error > 0.0f && step > error) || (error < 0.0f && step < error)) {
-        step = error;
-        velocity = 0.0f;
+        // Do not test the target's own voxel; the endpoint may lie inside its hitbox.
+        if (x == targetX && y == targetY && z == targetZ) return true;
+        const bedrocktools::sdk::BlockPos cell{x, y, z};
+        if (g_isSolidBlockingBlock(blockSource, &cell)) return false;
     }
-    if (!std::isfinite(velocity)) {
-        velocity = 0.0f;
-        return 0.0f;
-    }
-    return step;
+    return x == targetX && y == targetY && z == targetZ;
 }
+
+
 
 bool categoryHasMobBit(void* actor) {
     if (!actor) return false;
@@ -244,18 +250,14 @@ void AimAssistModule::resetTrackingState() {
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
-    m_yawVelocity = 0.0f;
-    m_pitchVelocity = 0.0f;
-    m_previousTargetPosition = {};
-    m_targetVelocity = {};
-    m_previousTargetSample = {};
-    m_lastTargetUpdate = {};
     m_lastRotationUpdate = {};
 }
 
 void AimAssistModule::onInit() {
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
+    g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
@@ -313,6 +315,12 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    void* blockSource = nullptr;
+    if (m_cantSeeThroughBlocks) {
+        auto* dimension = player->dimension();
+        blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
+    }
+
     Vec2 currentRotation = field<Vec2>(rotationComponent, 0);
     if (!std::isfinite(currentRotation.x) || !std::isfinite(currentRotation.y)) {
         resetTrackingState();
@@ -358,8 +366,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     void* bestTarget = nullptr;
     AABB bestTargetBounds{};
-    void* retainedTarget = nullptr;
-    AABB retainedTargetBounds{};
     float bestScore = std::numeric_limits<float>::max();
     const float maxDistanceSq = range * range;
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
@@ -393,6 +399,9 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             (targetBounds.min.z + targetBounds.max.z) * 0.5f
         };
 
+        if (m_cantSeeThroughBlocks && blockSource && g_isSolidBlockingBlock &&
+            !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
+
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
 
@@ -413,13 +422,8 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
 
-        // Keep selection independent from the moving in-hitbox point to avoid target orbiting.
-        if (candidate == m_lastTarget) {
-            retainedTarget = candidate;
-            retainedTargetBounds = targetBounds;
-        }
-
-        const float score = angleScore + targetDistance * 0.0001f;
+        // Deterministically select the nearest eligible entity.
+        const float score = d2;
         if (score < bestScore) {
             bestScore = score;
             bestTarget = candidate;
@@ -437,53 +441,13 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    const auto sampleNow = std::chrono::steady_clock::now();
     const bool targetChanged = bestTarget != m_lastTarget;
-    const Vec3 targetCenter{
-        (bestTargetBounds.min.x + bestTargetBounds.max.x) * 0.5f,
-        (bestTargetBounds.min.y + bestTargetBounds.max.y) * 0.5f,
-        (bestTargetBounds.min.z + bestTargetBounds.max.z) * 0.5f
-    };
-
     if (targetChanged) {
-        m_yawVelocity = 0.0f;
-        m_pitchVelocity = 0.0f;
-        m_targetVelocity = {};
-        m_previousTargetSample = {};
         m_hasAimPoint = false;
         m_lastRotationUpdate = {};
-    } else if (m_previousTargetSample.time_since_epoch().count() != 0) {
-        const float sampleDt = std::chrono::duration<float>(sampleNow - m_previousTargetSample).count();
-        if (std::isfinite(sampleDt) && sampleDt >= 0.01f && sampleDt <= 0.25f) {
-            Vec3 measuredVelocity{
-                (targetCenter.x - m_previousTargetPosition.x) / sampleDt,
-                (targetCenter.y - m_previousTargetPosition.y) / sampleDt,
-                (targetCenter.z - m_previousTargetPosition.z) / sampleDt
-            };
-            const float measuredSpeed = std::sqrt(measuredVelocity.x * measuredVelocity.x +
-                measuredVelocity.y * measuredVelocity.y + measuredVelocity.z * measuredVelocity.z);
-            if (!finiteVec3(measuredVelocity)) {
-                measuredVelocity = {};
-            } else if (measuredSpeed > 8.0f) {
-                const float scale = 8.0f / measuredSpeed;
-                measuredVelocity.x *= scale;
-                measuredVelocity.y *= scale;
-                measuredVelocity.z *= scale;
-            }
-            const float velocityAlpha = 1.0f - std::exp(-10.0f * sampleDt);
-            m_targetVelocity.x += (measuredVelocity.x - m_targetVelocity.x) * velocityAlpha;
-            m_targetVelocity.y += (measuredVelocity.y - m_targetVelocity.y) * velocityAlpha;
-            m_targetVelocity.z += (measuredVelocity.z - m_targetVelocity.z) * velocityAlpha;
-        } else {
-            m_targetVelocity = {};
-        }
     }
-
-    m_previousTargetPosition = targetCenter;
-    m_previousTargetSample = sampleNow;
     m_lastTarget = bestTarget;
     m_lastTargetBounds = bestTargetBounds;
-    m_lastTargetUpdate = sampleNow;
 
     // Apply the camera delta on the same game tick that supplied the valid player pointer.
     // Avoid calling game-owned camera code from the EGL/render-frame callback; the crash log
@@ -519,41 +483,6 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     }
 
     AABB bounds = m_lastTargetBounds;
-    const HeldWeapon predictionWeapon = heldWeaponInMainHand(player);
-    float predictionSeconds = 0.0f;
-    switch (predictionWeapon) {
-        case HeldWeapon::Sword:
-        case HeldWeapon::Axe:
-        case HeldWeapon::Mace:
-        case HeldWeapon::Spear:
-        case HeldWeapon::OtherMelee:
-            predictionSeconds = std::clamp(m_meleePredict, 0.10f, 1.0f);
-            break;
-        case HeldWeapon::Bow:
-        case HeldWeapon::Crossbow:
-        case HeldWeapon::Trident:
-            predictionSeconds = std::clamp(m_rangedPredict, 0.10f, 1.0f);
-            break;
-        case HeldWeapon::None: default:
-            predictionSeconds = 0.0f;
-            break;
-    }
-    Vec3 predictedOffset{
-        m_targetVelocity.x * predictionSeconds,
-        m_targetVelocity.y * predictionSeconds,
-        m_targetVelocity.z * predictionSeconds
-    };
-    const float predictedDistance = std::sqrt(predictedOffset.x * predictedOffset.x +
-        predictedOffset.y * predictedOffset.y + predictedOffset.z * predictedOffset.z);
-    if (std::isfinite(predictedDistance) && predictedDistance > 2.5f) {
-        const float predictionScale = 2.5f / predictedDistance;
-        predictedOffset.x *= predictionScale;
-        predictedOffset.y *= predictionScale;
-        predictedOffset.z *= predictionScale;
-    }
-    bounds.min.x += predictedOffset.x; bounds.max.x += predictedOffset.x;
-    bounds.min.y += predictedOffset.y; bounds.max.y += predictedOffset.y;
-    bounds.min.z += predictedOffset.z; bounds.max.z += predictedOffset.z;
 
     const Vec3 boundsCenter{
         (bounds.min.x + bounds.max.x) * 0.5f,
@@ -600,7 +529,7 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     // Never let the point fully follow the camera ray: that makes aim error collapse
     // to zero inside the hitbox and then jump when the ray exits its edge. Blending
     // from the stable center preserves a steering signal while allowing visible slide.
-    constexpr float kHitboxSlideBlend = 0.65f;
+    constexpr float kHitboxSlideBlend = 0.82f;
     const Vec3 slidePoint{
         centerAimPoint.x + (clampedSlidePoint.x - centerAimPoint.x) * kHitboxSlideBlend,
         centerAimPoint.y + (clampedSlidePoint.y - centerAimPoint.y) * kHitboxSlideBlend,
@@ -619,7 +548,7 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
         m_lastAimPoint = centerAimPoint;
         m_hasAimPoint = true;
     }
-    const float slideAlpha = 1.0f - std::exp(-18.0f * deltaSeconds);
+    const float slideAlpha = 1.0f - std::exp(-30.0f * deltaSeconds);
     m_lastAimPoint.x += (slidePoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (slidePoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (slidePoint.z - m_lastAimPoint.z) * slideAlpha;
@@ -634,16 +563,38 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     const float pitchError = desiredPitch - currentRotation.x;
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
-    // A stronger speed curve makes the full 0.05..5.0 range perceptible.
-    // The per-frame cap limits visible jumps when FPS drops.
     const float speed = std::clamp(m_strength, 0.05f, 5.0f);
     const float speedScale = std::sqrt(speed);
-    const float maxTurnRate = 100.0f + 280.0f * speedScale;
-    const float smoothTime = std::clamp(0.12f / (0.6f + 0.7f * speedScale), 0.035f, 0.15f);
-    const float yawDelta = smoothDampedAxisStep(
-        yawError, deltaSeconds, maxTurnRate, smoothTime, m_yawVelocity);
-    const float pitchDelta = smoothDampedAxisStep(
-        pitchError, deltaSeconds, maxTurnRate, smoothTime, m_pitchVelocity);
+    const float maxTurnRate = 110.0f + 280.0f * speedScale;
+    float yawDelta = 0.0f;
+    float pitchDelta = 0.0f;
+
+    if (m_aimMode == "Robotic") {
+        // Constant angular speed until the remaining error is smaller than one tick step.
+        const float maxStep = maxTurnRate * deltaSeconds;
+        yawDelta = std::clamp(yawError, -maxStep, maxStep);
+        pitchDelta = std::clamp(pitchError, -maxStep, maxStep);
+    } else if (m_aimMode == "Human") {
+        // Deliberately imperfect mode: persistent small tremor and only 30% of the
+        // measured angular error is followed, to keep the motion visibly human-like.
+        const float time = std::chrono::duration<float>(now.time_since_epoch()).count();
+        const float noisyYawError = yawError * 0.30f
+            + std::sin(time * 15.0f) * 2.2f + std::sin(time * 29.0f) * 0.9f;
+        const float noisyPitchError = pitchError * 0.30f
+            + std::cos(time * 13.0f) * 1.4f + std::sin(time * 23.0f) * 0.5f;
+        const float alpha = 1.0f - std::exp(-5.0f * deltaSeconds);
+        const float maxStep = maxTurnRate * deltaSeconds * 0.30f;
+        yawDelta = std::clamp(noisyYawError * alpha, -maxStep, maxStep);
+        pitchDelta = std::clamp(noisyPitchError * alpha, -maxStep, maxStep);
+    } else {
+        // Classic: responsive exponential convergence with a time-based turn-rate cap.
+        const float response = 2.5f + 8.0f * speedScale;
+        const float alpha = 1.0f - std::exp(-response * deltaSeconds);
+        const float maxStep = maxTurnRate * deltaSeconds;
+        yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
+        pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+    }
+
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
@@ -656,6 +607,9 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
+    m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
+    m_aimMode = j.value("m_aimMode", m_aimMode);
+    if (m_aimMode != "Robotic" && m_aimMode != "Classic" && m_aimMode != "Human") m_aimMode = "Classic";
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_weaponSword = j.value("m_weaponSword", m_weaponSword);
     m_weaponAxe = j.value("m_weaponAxe", m_weaponAxe);
@@ -669,8 +623,6 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 5.0f);
-    m_meleePredict = std::clamp(j.value("m_meleePredict", m_meleePredict), 0.10f, 1.0f);
-    m_rangedPredict = std::clamp(j.value("m_rangedPredict", m_rangedPredict), 0.10f, 1.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
 
@@ -679,6 +631,8 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     j["m_targetPlayers"] = m_targetPlayers;
     j["m_targetMobs"] = m_targetMobs;
+    j["m_cantSeeThroughBlocks"] = m_cantSeeThroughBlocks;
+    j["m_aimMode"] = m_aimMode;
     j["m_weaponOnly"] = m_weaponOnly;
     j["m_weaponSword"] = m_weaponSword;
     j["m_weaponAxe"] = m_weaponAxe;
@@ -692,7 +646,5 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_fov"] = m_fov;
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_strength"] = m_strength;
-    j["m_meleePredict"] = m_meleePredict;
-    j["m_rangedPredict"] = m_rangedPredict;
     j["m_whitelistNames"] = m_whitelistNames;
 }
