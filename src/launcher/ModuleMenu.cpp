@@ -141,7 +141,8 @@ void registerModulesWithLauncher() {
                 else if (k == "m_targetMobs") displayName = "Targeting > Mobs";
                 else if (k == "m_cantSeeThroughBlocks") displayName = "Targeting > Can't See Through Blocks";
                 else if (k == "m_aimMode") displayName = "Aim behavior > Mode";
-                else if (k == "m_strength") displayName = "Aim settings > Aim Speed";
+                else if (k == "m_elytraMode") displayName = "Aim behavior > Elytra Mode";
+                else if (k == "m_strength") displayName = "Aim settings > Strongness";
                 else if (k == "m_range") displayName = "Aim settings > Range";
                 else if (k == "m_fov") displayName = "Aim settings > FOV";
                 else if (k == "m_hitboxScale") displayName = "Aim settings > Hitbox Area";
@@ -193,7 +194,10 @@ void registerModulesWithLauncher() {
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
 
-                if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
+                if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") {
+                    minVal = 0.0f;
+                    maxVal = 1.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
                     minVal = 0.5f;
                     maxVal = 1.0f;
                 } else if (kLower.find("opacity") != std::string::npos ||
@@ -229,7 +233,6 @@ void registerModulesWithLauncher() {
                 } else if (kLower.find("speed") != std::string::npos || kLower.find("strength") != std::string::npos) {
                     minVal = 0.05f;
                     maxVal = 1.0f;
-                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") maxVal = 5.0f;
                 } else if (kLower.find("thick") != std::string::npos) {
                     maxVal = 20.0f;
                 }

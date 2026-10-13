@@ -23,6 +23,7 @@ public:
     bool m_targetMobs = true;
     bool m_cantSeeThroughBlocks = true;
     std::string m_aimMode = "Classic";
+    bool m_elytraMode = false;
     bool m_weaponOnly = false;
     bool m_weaponSword = true;
     bool m_weaponAxe = true;
@@ -35,7 +36,7 @@ public:
     float m_range = 5.5f;
     float m_fov = 35.0f;
     float m_hitboxScale = 1.0f;
-    float m_strength = 0.12f;
+    float m_strength = 0.35f;
     std::string m_whitelistNames = "";
 
 private:
@@ -46,5 +47,10 @@ private:
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
     bool m_hasAimPoint = false;
+    bool m_localPlayerGliding = false;
+    bedrocktools::sdk::Vec2 m_lastObservedRotation{};
+    bool m_hasObservedRotation = false;
+    float m_lastAssistYawDelta = 0.0f;
+    float m_lastAssistPitchDelta = 0.0f;
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
 };

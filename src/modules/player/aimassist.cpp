@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
 #include <cctype>
 #include <string>
 #include <limits>
@@ -58,6 +59,42 @@ float wrapDegrees(float angle) {
 
 bool finiteVec3(const bedrocktools::sdk::Vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
+bool actorIsGliding(void* actor) {
+    using namespace bedrocktools::sdk;
+    if (!actor) return false;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    void* dataWrapper = reinterpret_cast<void*>(actorAddress + offsets::Actor::mEntityData);
+    if (!dataWrapper) return false;
+
+    void* component = *reinterpret_cast<void**>(dataWrapper);
+    if (!component) return false;
+
+    auto** begin = *reinterpret_cast<void***>(component);
+    auto** end = *reinterpret_cast<void***>(reinterpret_cast<std::uintptr_t>(component) + sizeof(void*));
+    if (!begin || !end) return false;
+
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
+    if (endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(void*) != 0 ||
+        (endAddress - beginAddress) / sizeof(void*) > 192) return false;
+    if (begin == end) return false;
+
+    void* item = begin[0];
+    if (!item) return false;
+
+    const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
+    const auto type = *reinterpret_cast<const std::uint8_t*>(itemAddress + offsets::DataItem::mType);
+    const auto id = *reinterpret_cast<const std::uint16_t*>(itemAddress + offsets::DataItem::mId);
+    if (type != 7 || id != 0) return false;
+
+    std::uint64_t flags = 0;
+    std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue), sizeof(flags));
+    constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
+    return (flags & kGlidingFlag) != 0;
 }
 
 bool validBounds(const bedrocktools::sdk::AABB& bounds) {
@@ -250,6 +287,11 @@ void AimAssistModule::resetTrackingState() {
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
+    m_localPlayerGliding = false;
+    m_lastObservedRotation = {};
+    m_hasObservedRotation = false;
+    m_lastAssistYawDelta = 0.0f;
+    m_lastAssistPitchDelta = 0.0f;
     m_lastRotationUpdate = {};
 }
 
@@ -300,6 +342,8 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         resetTrackingState();
         return;
     }
+
+    m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
 
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
     if (m_weaponOnly && !weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
@@ -479,6 +523,18 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     currentRotation.x = std::clamp(currentRotation.x, -89.0f, 89.0f);
     currentRotation.y = wrapDegrees(currentRotation.y);
 
+    float manualYawDelta = 0.0f;
+    float manualPitchDelta = 0.0f;
+    if (m_hasObservedRotation) {
+        manualYawDelta = wrapDegrees(
+            wrapDegrees(currentRotation.y - m_lastObservedRotation.y) - m_lastAssistYawDelta);
+        manualPitchDelta = (currentRotation.x - m_lastObservedRotation.x) - m_lastAssistPitchDelta;
+    }
+    m_lastObservedRotation = currentRotation;
+    m_hasObservedRotation = true;
+    m_lastAssistYawDelta = 0.0f;
+    m_lastAssistPitchDelta = 0.0f;
+
     const Vec3 playerPosition = player->position();
     if (!finiteVec3(playerPosition)) return;
     const AABB playerBounds = player->bounds();
@@ -538,18 +594,25 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     // Never let the point fully follow the camera ray: that makes aim error collapse
     // to zero inside the hitbox and then jump when the ray exits its edge. Blending
     // from the stable center preserves a steering signal while allowing visible slide.
-    constexpr float kHitboxSlideBlend = 0.82f;
-    const Vec3 slidePoint{
+    constexpr float kHitboxSlideBlend = 0.62f;
+    Vec3 slidePoint{
         centerAimPoint.x + (clampedSlidePoint.x - centerAimPoint.x) * kHitboxSlideBlend,
         centerAimPoint.y + (clampedSlidePoint.y - centerAimPoint.y) * kHitboxSlideBlend,
         centerAimPoint.z + (clampedSlidePoint.z - centerAimPoint.z) * kHitboxSlideBlend
     };
 
+    const float targetDistance = std::sqrt(distanceSquared(eyePosition, centerAimPoint));
+    if (m_elytraMode && m_localPlayerGliding && std::isfinite(targetDistance) &&
+        targetDistance >= 7.0f && targetDistance <= 8.0f) {
+        const float targetHeight = bounds.max.y - bounds.min.y;
+        slidePoint.y -= std::clamp(targetHeight * 0.10f, 0.08f, 0.18f);
+    }
+
     float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
         deltaSeconds = std::clamp(
             std::chrono::duration<float>(now - m_lastRotationUpdate).count(),
-            0.005f, 1.0f / 30.0f);
+            0.005f, 0.05f);
     }
     m_lastRotationUpdate = now;
 
@@ -557,7 +620,7 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
         m_lastAimPoint = centerAimPoint;
         m_hasAimPoint = true;
     }
-    const float slideAlpha = 1.0f - std::exp(-22.0f * deltaSeconds);
+    const float slideAlpha = 1.0f - std::exp(-10.0f * deltaSeconds);
     m_lastAimPoint.x += (slidePoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (slidePoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (slidePoint.z - m_lastAimPoint.z) * slideAlpha;
@@ -572,36 +635,36 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
     const float pitchError = desiredPitch - currentRotation.x;
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
-    const float speed = std::clamp(m_strength, 0.05f, 5.0f);
-    const float speedScale = std::sqrt(speed);
-    const float baseTurnRate = 180.0f + 320.0f * speedScale;
-    float yawDelta = 0.0f;
-    float pitchDelta = 0.0f;
-
+    float response = 7.0f;
+    float maxTurnRate = 170.0f;
     if (m_aimMode == "Robotic") {
-        // Direct constant-rate correction, with no easing tail.
-        const float maxStep = baseTurnRate * 1.25f * deltaSeconds;
-        yawDelta = std::clamp(yawError, -maxStep, maxStep);
-        pitchDelta = std::clamp(pitchError, -maxStep, maxStep);
+        response = 11.0f;
+        maxTurnRate = 230.0f;
     } else if (m_aimMode == "Human") {
-        // Slower eased response; tiny offsets avoid the previous multi-degree tremor.
-        const float time = std::chrono::duration<float>(now.time_since_epoch()).count();
-        const float noisyYawError = yawError
-            + std::sin(time * 4.3f) * 0.045f + std::sin(time * 7.1f) * 0.018f;
-        const float noisyPitchError = pitchError
-            + std::cos(time * 3.7f) * 0.035f + std::sin(time * 6.2f) * 0.014f;
-        const float response = 4.0f + 3.0f * speedScale;
-        const float alpha = 1.0f - std::exp(-response * deltaSeconds);
-        const float maxStep = baseTurnRate * 0.62f * deltaSeconds;
-        yawDelta = std::clamp(noisyYawError * alpha, -maxStep, maxStep);
-        pitchDelta = std::clamp(noisyPitchError * alpha, -maxStep, maxStep);
-    } else {
-        // Classic: quicker exponential convergence with a smooth rate cap.
-        const float response = 6.0f + 10.0f * speedScale;
-        const float alpha = 1.0f - std::exp(-response * deltaSeconds);
-        const float maxStep = baseTurnRate * deltaSeconds;
-        yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
-        pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+        response = 4.5f;
+        maxTurnRate = 105.0f;
+    }
+
+    // All modes use exponential easing and a degrees-per-second cap. The difference
+    // between modes is their response profile, not abrupt steps or artificial camera noise.
+    const float alpha = 1.0f - std::exp(-response * deltaSeconds);
+    const float maxStep = maxTurnRate * deltaSeconds;
+    float yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
+    float pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+
+    const float manualMagnitude = std::sqrt(
+        manualYawDelta * manualYawDelta + manualPitchDelta * manualPitchDelta);
+    const float errorMagnitude = std::sqrt(yawError * yawError + pitchError * pitchError);
+    if (manualMagnitude > 0.20f && errorMagnitude > 0.01f &&
+        std::isfinite(manualMagnitude) && std::isfinite(errorMagnitude)) {
+        const float alignment = (manualYawDelta * yawError + manualPitchDelta * pitchError)
+            / (manualMagnitude * errorMagnitude);
+        const float opposingInput = std::clamp(-alignment, 0.0f, 1.0f);
+        const float inputConfidence = std::clamp((manualMagnitude - 0.20f) / 1.25f, 0.0f, 1.0f);
+        const float strength = std::clamp(m_strength, 0.0f, 1.0f);
+        const float dragScale = 1.0f - opposingInput * inputConfidence * (1.0f - strength) * 0.95f;
+        yawDelta *= dragScale;
+        pitchDelta *= dragScale;
     }
 
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
@@ -609,6 +672,8 @@ void AimAssistModule::applyAimStep(bedrocktools::sdk::Player* player) {
 
     Vec2 turnDelta{-pitchDelta, yawDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
+    m_lastAssistYawDelta = yawDelta;
+    m_lastAssistPitchDelta = pitchDelta;
 }
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
@@ -618,6 +683,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
     m_aimMode = j.value("m_aimMode", m_aimMode);
+    m_elytraMode = j.value("m_elytraMode", m_elytraMode);
     if (m_aimMode != "Robotic" && m_aimMode != "Classic" && m_aimMode != "Human") m_aimMode = "Classic";
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_weaponSword = j.value("m_weaponSword", m_weaponSword);
@@ -631,7 +697,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
-    m_strength = std::clamp(j.value("m_strength", m_strength), 0.05f, 5.0f);
+    m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
 }
 
@@ -642,6 +708,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_targetMobs"] = m_targetMobs;
     j["m_cantSeeThroughBlocks"] = m_cantSeeThroughBlocks;
     j["m_aimMode"] = m_aimMode;
+    j["m_elytraMode"] = m_elytraMode;
     j["m_weaponOnly"] = m_weaponOnly;
     j["m_weaponSword"] = m_weaponSword;
     j["m_weaponAxe"] = m_weaponAxe;
