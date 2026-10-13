@@ -299,6 +299,19 @@ bool weaponAllowed(HeldWeapon weapon, bool sword, bool axe, bool mace,
     }
 }
 
+bool naturalizationAppliesToWeapon(const std::string& setting, HeldWeapon weapon) {
+    if (setting == "All") return true;
+    if (setting == "Sword") return weapon == HeldWeapon::Sword;
+    if (setting == "Axe") return weapon == HeldWeapon::Axe;
+    if (setting == "Mace") return weapon == HeldWeapon::Mace;
+    if (setting == "Bow") return weapon == HeldWeapon::Bow;
+    if (setting == "Crossbow") return weapon == HeldWeapon::Crossbow;
+    if (setting == "Trident") return weapon == HeldWeapon::Trident;
+    if (setting == "Spear") return weapon == HeldWeapon::Spear;
+    if (setting == "Other melee") return weapon == HeldWeapon::OtherMelee;
+    return false;
+}
+
 }
 
 AimAssistModule::AimAssistModule()
@@ -431,7 +444,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     // Detect the start of an upward jump from consecutive local-player positions.
     // Hold pitch steady briefly so the assist can keep tracking horizontally
     // without pulling the camera toward the target's lower/central hitbox mid-jump.
-    if (m_naturalization) {
+    const bool naturalizationForWeapon =
+        m_naturalization && naturalizationAppliesToWeapon(m_naturalizationWeapon, heldWeapon);
+    if (naturalizationForWeapon) {
         if (m_hasLastPlayerY) {
             const float verticalDelta = playerPosition.y - m_lastPlayerY;
             if (std::isfinite(verticalDelta) && verticalDelta > 0.035f &&
@@ -702,6 +717,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     };
 
     const bool stickyMode = (m_trackingMode == "Grudado");
+    const bool adaptiveMode = (m_trackingMode == "Adaptativo");
     const AABB scaledAimBounds{
         {boundsCenter.x - halfExtents.x, boundsCenter.y - halfExtents.y,
          boundsCenter.z - halfExtents.z},
@@ -789,8 +805,14 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
             modeResponse = 0.68f;
             modeRate = 0.78f;
         }
-        const float response = (3.0f + 2.6f * aimSpeed) * modeResponse;
-        const float maxTurnRate = baseTurnRate * modeRate;
+        // Adaptive is error-aware smoothing, not target prediction: it responds
+        // more decisively to large angular errors and eases down near alignment.
+        const float errorMagnitude = std::sqrt(yawError * yawError + pitchError * pitchError);
+        const float normalizedError = std::clamp(errorMagnitude / 12.0f, 0.0f, 1.0f);
+        const float adaptiveResponse = adaptiveMode ? (0.45f + 0.55f * normalizedError) : 1.0f;
+        const float adaptiveRate = adaptiveMode ? (0.65f + 0.35f * normalizedError) : 1.0f;
+        const float response = (3.0f + 2.6f * aimSpeed) * modeResponse * adaptiveResponse;
+        const float maxTurnRate = baseTurnRate * modeRate * adaptiveRate;
         const float alpha = 1.0f - std::exp(-response * deltaSeconds);
         const float maxStep = maxTurnRate * deltaSeconds;
         yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
@@ -817,7 +839,10 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     // Naturalization suppresses vertical correction during the jump hold, but
     // keeps horizontal tracking active.
-    if (m_naturalization && now < m_pitchHoldUntil) pitchDelta = 0.0f;
+    const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
+    const bool naturalizationForWeapon =
+        m_naturalization && naturalizationAppliesToWeapon(m_naturalizationWeapon, heldWeapon);
+    if (naturalizationForWeapon && now < m_pitchHoldUntil) pitchDelta = 0.0f;
 
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
@@ -838,6 +863,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_trackingMode = j.value("m_trackingMode", m_trackingMode);
     m_elytraMode = j.value("m_elytraMode", m_elytraMode);
     m_naturalization = j.value("m_naturalization", m_naturalization);
+    m_naturalizationWeapon = j.value("m_naturalizationWeapon", m_naturalizationWeapon);
 
     // LeviLauncher Radio callbacks send the selected option index ("0", "1", ...),
     // not necessarily the displayed label. Accept both the index and legacy label
@@ -849,7 +875,24 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
 
     if (m_trackingMode == "0") m_trackingMode = "Grudado";
     else if (m_trackingMode == "1") m_trackingMode = "Smooth";
-    if (m_trackingMode != "Grudado" && m_trackingMode != "Smooth") m_trackingMode = "Smooth";
+    else if (m_trackingMode == "2") m_trackingMode = "Adaptativo";
+    if (m_trackingMode != "Grudado" && m_trackingMode != "Smooth" &&
+        m_trackingMode != "Adaptativo") m_trackingMode = "Smooth";
+
+    if (m_naturalizationWeapon == "0") m_naturalizationWeapon = "All";
+    else if (m_naturalizationWeapon == "1") m_naturalizationWeapon = "Sword";
+    else if (m_naturalizationWeapon == "2") m_naturalizationWeapon = "Axe";
+    else if (m_naturalizationWeapon == "3") m_naturalizationWeapon = "Mace";
+    else if (m_naturalizationWeapon == "4") m_naturalizationWeapon = "Bow";
+    else if (m_naturalizationWeapon == "5") m_naturalizationWeapon = "Crossbow";
+    else if (m_naturalizationWeapon == "6") m_naturalizationWeapon = "Trident";
+    else if (m_naturalizationWeapon == "7") m_naturalizationWeapon = "Spear";
+    else if (m_naturalizationWeapon == "8") m_naturalizationWeapon = "Other melee";
+    if (m_naturalizationWeapon != "All" && m_naturalizationWeapon != "Sword" &&
+        m_naturalizationWeapon != "Axe" && m_naturalizationWeapon != "Mace" &&
+        m_naturalizationWeapon != "Bow" && m_naturalizationWeapon != "Crossbow" &&
+        m_naturalizationWeapon != "Trident" && m_naturalizationWeapon != "Spear" &&
+        m_naturalizationWeapon != "Other melee") m_naturalizationWeapon = "All";
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_weaponSword = j.value("m_weaponSword", m_weaponSword);
     m_weaponAxe = j.value("m_weaponAxe", m_weaponAxe);
@@ -877,6 +920,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_trackingMode"] = m_trackingMode;
     j["m_elytraMode"] = m_elytraMode;
     j["m_naturalization"] = m_naturalization;
+    j["m_naturalizationWeapon"] = m_naturalizationWeapon;
     j["m_weaponOnly"] = m_weaponOnly;
     j["m_weaponSword"] = m_weaponSword;
     j["m_weaponAxe"] = m_weaponAxe;
