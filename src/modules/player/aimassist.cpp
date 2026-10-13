@@ -431,10 +431,6 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
     }
 
-    if (retainedTarget) {
-        bestTarget = retainedTarget;
-        bestTargetBounds = retainedTargetBounds;
-    }
 
     if (!bestTarget) {
         resetTrackingState();
