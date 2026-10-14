@@ -363,11 +363,14 @@ void* gameMode() {
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    if (!gameMode || !target || !gameModeAttackOriginal) return false;
-    // Reuse the same native attack path and cancellable event flow as a normal hit,
-    // but call the detour directly so we never enter the patched function address
-    // and depend on inline-hook trampoline behavior from a module callback.
-    return gameModeAttackDetour(gameMode, target, playPredictiveSound, hitPosition);
+    if (!gameMode || !target) return false;
+
+    // Invoke the virtual GameMode::attack slot. Calling the base internal function
+    // directly bypasses SurvivalMode's override, including its combat/cooldown logic.
+    auto** vtable = *reinterpret_cast<void***>(gameMode);
+    if (!vtable || !vtable[16]) return false;
+    const auto nativeAttack = reinterpret_cast<AttackFn>(vtable[16]);
+    return nativeAttack(gameMode, target, playPredictiveSound, hitPosition);
 }
 
 }
