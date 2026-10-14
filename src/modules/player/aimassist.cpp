@@ -340,6 +340,7 @@ void AimAssistModule::resetTrackingState() {
     m_lastAssistYawDelta = 0.0f;
     m_lastAssistPitchDelta = 0.0f;
     m_lastRotationUpdate = {};
+    m_lastTargetSeen = {};
 }
 
 void AimAssistModule::onInit() {
@@ -690,6 +691,20 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     if (!bestTarget) {
+        // Keep the last target briefly while it crosses the player's immediate
+        // area or the native nearby-actor list skips one tick. Do not dereference
+        // the cached entity or auto-hit it while it is missing from the list.
+        const auto now = std::chrono::steady_clock::now();
+        if (m_lastTarget && validBounds(m_lastTargetBounds) &&
+            m_lastTargetSeen.time_since_epoch().count() != 0 &&
+            now - m_lastTargetSeen <= std::chrono::milliseconds(250)) {
+            const Vec3 nearestOnPreviousTarget{
+                std::clamp(playerCenter.x, m_lastTargetBounds.min.x, m_lastTargetBounds.max.x),
+                std::clamp(playerCenter.y, m_lastTargetBounds.min.y, m_lastTargetBounds.max.y),
+                std::clamp(playerCenter.z, m_lastTargetBounds.min.z, m_lastTargetBounds.max.z)
+            };
+            if (distanceSquared(playerCenter, nearestOnPreviousTarget) <= retentionRadiusSq) return;
+        }
         resetTrackingState();
         return;
     }
@@ -701,6 +716,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
     m_lastTarget = bestTarget;
     m_lastTargetBounds = bestTargetBounds;
+    m_lastTargetSeen = std::chrono::steady_clock::now();
+    // Also check Auto Hit here so it is independent of the client-frame render hook.
+    processAutoHitLocked(player);
 }
 
 
@@ -724,7 +742,7 @@ void AimAssistModule::processPlayerFrame() {
     if (!actors.begin || !actors.end || endAddress < beginAddress ||
         (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
         (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        resetTrackingState();
+        // A malformed frame snapshot is not proof that the tracked entity despawned.
         return;
     }
 
@@ -732,16 +750,15 @@ void AimAssistModule::processPlayerFrame() {
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         if (entry->actor != m_lastTarget) continue;
         const AABB currentBounds = reinterpret_cast<Actor*>(entry->actor)->bounds();
-        if (!validBounds(currentBounds)) {
-            resetTrackingState();
-            return;
-        }
+        if (!validBounds(currentBounds)) return;
         m_lastTargetBounds = currentBounds;
+        m_lastTargetSeen = std::chrono::steady_clock::now();
         targetFound = true;
         break;
     }
     if (!targetFound) {
-        resetTrackingState();
+        // LocalPlayerTickEvent performs the authoritative candidate refresh. A
+        // transient miss in this frame-level list should not erase a close lock.
         return;
     }
 
@@ -784,28 +801,22 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     };
     const float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
     const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
-    if (!std::isfinite(hitDistanceSq) || hitDistanceSq < 0.01f ||
-        hitDistanceSq > autoHitRange * autoHitRange) return;
+    // Zero distance is valid when the target hitbox overlaps the player's eye point.
+    if (!std::isfinite(hitDistanceSq) || hitDistanceSq > autoHitRange * autoHitRange) return;
 
     // Auto Hit is range-gated against the AimAssist's already-filtered target.
-    // Requiring an exact client-side ray/AABB intersection here made it fail while
-    // smoothing or mobile touch input still left a few pixels of aim error.
-
+    // Keep visibility independent of the exact crosshair ray so touch smoothing
+    // cannot block an otherwise valid close-range attack.
     if (m_cantSeeThroughBlocks) {
         auto* dimension = player->dimension();
         void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
-        const Vec3 center{
-            (bounds.min.x + bounds.max.x) * 0.5f,
-            (bounds.min.y + bounds.max.y) * 0.5f,
-            (bounds.min.z + bounds.max.z) * 0.5f
-        };
         if (!hasClearLineOfSight(blockSource, eyePosition, hitPoint)) return;
     }
 
-    // A short configurable cadence avoids invoking the native attack every frame.
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
-    m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(delayMs));
-    bedrocktools::core::gamehooks::attack(gameMode, m_lastTarget, true, &hitPoint);
+    if (bedrocktools::core::gamehooks::attack(gameMode, m_lastTarget, true, &hitPoint)) {
+        m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(delayMs));
+    }
 }
 
 void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
