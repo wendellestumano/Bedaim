@@ -372,15 +372,20 @@ void* gameMode() {
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
 
-    // Only dispatch the same native entry that GameHooks has already resolved and
-    // installed the matching four-argument detour for. Calling vtable[16] with an
-    // inferred ABI was unsafe and caused crashes on ARM64.
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
 
+    // This pointer must have been observed from a real engine callback in the
+    // current session. Never synthesize an attack against an unverified GameMode.
+    if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
+
+    auto** vtable = *reinterpret_cast<void***>(gameMode);
+    if (!vtable || !vtable[16]) return false;
+    const auto virtualEntry = reinterpret_cast<std::uintptr_t>(vtable[16]);
+    const auto publicGameModeAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+    const auto publicSurvivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
     const auto internalAddress = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
     if (!internalAddress) return false;
-    if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
     struct AttackGuard {
         bool& active;
@@ -388,8 +393,22 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    const auto nativeAttack = reinterpret_cast<AttackFn>(internalAddress);
-    return nativeAttack(gameMode, target, playPredictiveSound, hitPosition);
+    // GameMode::attack's public virtual entry forwards (this, target, hitPosition)
+    // into the internal four-argument method. Use the public ABI only when its
+    // vtable entry matches a resolved public implementation; otherwise fall back
+    // to the separately resolved internal function with its exact hooked ABI.
+    using AttackVirtualFn = bool(*)(void*, void*, const void*);
+    if ((publicGameModeAttack && virtualEntry == publicGameModeAttack) ||
+        (publicSurvivalAttack && virtualEntry == publicSurvivalAttack)) {
+        auto* nativeVirtualAttack = reinterpret_cast<AttackVirtualFn>(vtable[16]);
+        return nativeVirtualAttack(gameMode, target, hitPosition);
+    }
+
+    // The public wrapper's observed constant is build-specific; use false rather
+    // than requesting a speculative predictive/sound path. The internal function
+    // itself has the four-argument signature mirrored by gameModeAttackDetour.
+    const auto nativeInternalAttack = reinterpret_cast<AttackFn>(internalAddress);
+    return nativeInternalAttack(gameMode, target, false, hitPosition);
 }
 
 }
