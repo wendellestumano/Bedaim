@@ -326,16 +326,29 @@ bool survivalModeInteractDetour(void* gameMode, void* target, const void* locati
 }
 
 bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
+    static std::atomic_bool loggedNativeAttack{false};
+    if (!loggedNativeAttack.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("Native attack detour received its first call (target={}, hitPosition={}, trampoline={}).",
+            target != nullptr, hitPosition != nullptr, gameModeAttackOriginal != nullptr);
+
     const AttackKind kind = attackKindFor(gameMode);
     const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
     GameModeActionScope scope{modeKind, gameMode};
     scope.publish(GameModeAction::Attack);
     AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target), reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), const_cast<void*>(hitPosition)};
     bus().publish(event);
-    if (event.cancelled()) return false;
+    if (event.cancelled()) {
+        static std::atomic_bool loggedCancelled{false};
+        if (!loggedCancelled.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().warn("The first native attack was cancelled by an AttackEvent listener.");
+        return false;
+    }
     const bool result = gameModeAttackOriginal
         ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition)
         : false;
+    static std::atomic_bool loggedNativeResult{false};
+    if (!loggedNativeResult.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("First native attack trampoline result: {}.", result);
     // Publish after native processing so the HUD can react to the actual attack result.
     AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
     bus().publish(resultEvent);
@@ -444,7 +457,8 @@ bool install() {
     hookSignature(SignatureId::ChatScreenOpen, reinterpret_cast<void*>(chatOpenDetour), &chatOpenOriginal);
     hookSignature(SignatureId::ChatScreenDtor, reinterpret_cast<void*>(chatCloseDetour), &chatCloseOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOnContainerSlotSelected, reinterpret_cast<void*>(containerSlotSelectedDetour), &containerSlotSelectedOriginal);
-    hookEgl();
+    const bool eglHooked = hookEgl();
+    autoHitLogger().info("HUD frame-swap hook installed={}. Hit-stop is visual-only and requires this hook.", eglHooked);
     installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
     return installed;
 }
