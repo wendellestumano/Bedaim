@@ -403,7 +403,12 @@ EGLBoolean swapBuffersDetour(EGLDisplay display, EGLSurface surface) {
         bus().publish(event);
         // A cancellable FrameEvent can hold the last presented image for a couple
         // of frames on confirmed impacts, without pausing the game simulation.
-        if (event.cancelled()) return EGL_TRUE;
+        if (event.cancelled()) {
+            static std::atomic_bool loggedHeldFrame{false};
+            if (!loggedHeldFrame.exchange(true, std::memory_order_acq_rel))
+                autoHitLogger().info("The HUD requested its first held frame; visual hit-stop is reaching eglSwapBuffers.");
+            return EGL_TRUE;
+        }
     }
     return swapBuffersOriginal ? swapBuffersOriginal(display, surface) : EGL_FALSE;
 }
