@@ -63,7 +63,47 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
     return total;
 }
 
-int InventoryAccess::countStack(const void* stack, std::string_view identifierPart) const {
+int InventoryAccess::countStack(const void* stack, std::string_view identifierPart) const {int InventoryAccess::findHotbarSlot(const sdk::Player* player, std::string_view identifierPart) const {
+    if (!player || identifierPart.empty()) return -1;
+    std::uintptr_t begin = 0;
+    std::size_t size = 0;
+    if (!inventorySlots(player, begin, size) || !begin || size < 9) return -1;
+
+    // Player inventory slots 0..8 are the hotbar. Avoid picking a mace from the
+    // lower inventory because the swapper must be able to equip it immediately.
+    for (std::size_t slot = 0; slot < 9; ++slot) {
+        const void* stack = reinterpret_cast<const void*>(begin + slot * ItemStackSize);
+        if (countStack(stack, identifierPart) > 0) return static_cast<int>(slot);
+    }
+    return -1;
+}
+
+int InventoryAccess::selectedHotbarSlot(const sdk::Player* player) const {
+    if (!player) return -1;
+    const void* inventory = read<const void*>(player, PlayerInventory);
+    if (!inventory) return -1;
+    const int slot = read<int>(inventory, PlayerInventorySelectedSlot);
+    return slot >= 0 && slot < 9 ? slot : -1;
+}
+
+bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
+    if (!player || slot < 0 || slot > 8) return false;
+
+    std::uintptr_t begin = 0;
+    std::size_t size = 0;
+    if (!inventorySlots(player, begin, size) || !begin || size < 9) return false;
+    void* inventory = const_cast<void*>(read<const void*>(player, PlayerInventory));
+    if (!inventory) return false;
+
+    // The selected-slot member follows the two listener vptrs in PlayerInventory.
+    // Keep the write confined to the verified int field and confirm it read back.
+    auto* selected = reinterpret_cast<int*>(
+        static_cast<std::byte*>(inventory) + PlayerInventorySelectedSlot);
+    *selected = slot;
+    return selectedHotbarSlot(player) == slot;
+}
+
+
     if (!stack || identifierPart.empty() || !read<std::uint8_t>(stack, ItemStackValid)) return 0;
     const auto count = read<std::uint8_t>(stack, ItemStackCount);
     if (count == 0) return 0;
