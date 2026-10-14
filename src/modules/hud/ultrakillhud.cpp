@@ -47,6 +47,9 @@ std::string itemLabel(std::string identifier) {
     if (identifier.empty()) return "EMPTY HAND";
     const auto colon = identifier.find(':');
     if (colon != std::string::npos) identifier.erase(0, colon + 1);
+    // Remove prefixes used by item description/translation keys before rendering.
+    if (identifier.rfind("item.", 0) == 0) identifier.erase(0, 5);
+    else if (identifier.rfind("tile.", 0) == 0) identifier.erase(0, 5);
     for (char& c : identifier) {
         if (c == '_') c = ' ';
         else c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -78,6 +81,18 @@ RankInfo rankFor(std::uint64_t score) {
 
 float clamp01(float value) {
     return std::clamp(value, 0.0f, 1.0f);
+}
+
+float rankProgress(std::uint64_t score) {
+    // Progress is based on score within the current rank, not hit freshness.
+    if (score < 650) return clamp01(static_cast<float>(score) / 650.0f);
+    if (score < 1800) return clamp01(static_cast<float>(score - 650) / 1150.0f);
+    if (score < 3500) return clamp01(static_cast<float>(score - 1800) / 1700.0f);
+    if (score < 6000) return clamp01(static_cast<float>(score - 3500) / 2500.0f);
+    if (score < 9500) return clamp01(static_cast<float>(score - 6000) / 3500.0f);
+    if (score < 14000) return clamp01(static_cast<float>(score - 9500) / 4500.0f);
+    if (score < 18000) return clamp01(static_cast<float>(score - 14000) / 4000.0f);
+    return 1.0f;
 }
 
 std::uint32_t withAlpha(std::uint32_t rgb, int alpha) {
@@ -155,21 +170,28 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
 void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
     if (!enabled || !target || !result) return;
     Player* player = m_localPlayer.load(std::memory_order_acquire);
-    if (!player || !isMaceEquipped(player)) return;
+    if (!player) return;
 
+    const std::string itemId = bedrocktools::core::InventoryAccess::get().stackIdentifier(
+        carriedItemStack(player));
     const auto now = Clock::now();
     std::lock_guard lock(m_stateMutex);
+    m_selectedItemId = itemId;
     if (m_lastConfirmedHit.time_since_epoch().count() != 0 &&
         now - m_lastConfirmedHit < std::chrono::milliseconds(1500)) {
         ++m_combo;
     } else {
         m_combo = 1;
     }
-    m_styleScore = std::min<std::uint64_t>(999999ULL, m_styleScore + (250ULL * m_combo));
-    m_lastConfirmedHit = now;
-    m_flashStarted = now;
     m_impactFallSpeedBps = std::max(
         0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
+    // All confirmed weapon hits build style; mace ground-slams receive a bonus.
+    const bool maceGroundSlam = itemId.find("mace") != std::string::npos &&
+        m_impactFallSpeedBps >= 4.0f;
+    const std::uint64_t baseAward = maceGroundSlam ? 750ULL : 250ULL;
+    m_styleScore = std::min<std::uint64_t>(999999ULL, m_styleScore + (baseAward * m_combo));
+    m_lastConfirmedHit = now;
+    m_flashStarted = now;
     m_flashActive = true;
 
     // Present one flash frame, then hold it briefly for the visual hit-stop.
@@ -408,8 +430,9 @@ void UltrakillHudModule::onFrame() {
                 line(12, 28, 15, -15); line(27, 13, 15, 15); line(42, 28, -15, 15); line(27, 43, -15, -15); line(27, 13, 0, 30);
             }
         };
-        drawItemGlyph(2.0f * scale, 1.0f * scale, kShadow, 5.0f);
-        drawItemGlyph(0.0f, 0.0f, accent, 1.8f);
+        // Place the shadow and glyph in the icon slot, not at the screen origin.
+        drawItemGlyph(iconX + 2.0f * scale, iconY + 1.0f * scale, kShadow, 5.0f);
+        drawItemGlyph(iconX, iconY, accent, 1.8f);
     }
 
     // Upper-right style meter: rank, white progress, and gold FRESH tag.
@@ -423,7 +446,7 @@ void UltrakillHudModule::onFrame() {
         const float age = lastHit.time_since_epoch().count() == 0
             ? 99.0f : std::chrono::duration<float>(now - lastHit).count();
         const float freshness = age < 2.4f ? clamp01(1.0f - age / 2.4f) : 0.0f;
-        const float meter = score == 0 ? 0.12f : 0.20f + freshness * 0.80f;
+        const float meter = rankProgress(score);
         const float multiplier = 1.0f + 0.5f * freshness;
 
         addRect(cardX, cardY, cardW, cardH, kBlack, 1.0f * scale);
