@@ -449,11 +449,9 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // instead, while publishing equivalent events around the original invocation.
     // This also allows attack dispatch when the public wrapper signature is absent
     // for a build but the internal hook was successfully installed.
-    const auto internalAddress = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
     AttackFn nativeInternalAttack = gameModeAttackOriginal;
-    if (!nativeInternalAttack && internalAddress) {
-        nativeInternalAttack = reinterpret_cast<AttackFn>(internalAddress);
-    }
+    // If the hook did not produce a callable trampoline, fail closed rather than
+    // invoke an address that may already route back into our detour.
     if (!nativeInternalAttack) return false;
 
     const AttackKind kind = attackKindFor(gameMode);
