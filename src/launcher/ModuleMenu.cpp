@@ -136,6 +136,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_targetSwitchHysteresis") displayName = "TARGETING > Crosshair switch stability";
                 else if (k == "m_targetSwitchDistanceMargin") displayName = "TARGETING > Distance switch margin";
                 else if (k == "m_targetSelectionMode") displayName = "TARGETING > Target selection mode";
+                else if (k == "m_targetRetentionRadius") displayName = "TARGETING > Around-player lock radius (blocks)";
                 else if (k == "m_autoHit") displayName = "AUTO HIT > Enable";
                 else if (k == "m_autoHitRange") displayName = "AUTO HIT > Range (blocks)";
                 else if (k == "m_autoHitDelayMs") displayName = "AUTO HIT > Attack interval (ms)";
@@ -217,6 +218,9 @@ void registerModulesWithLauncher() {
                     maxVal = 12.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchdistancemargin") {
                     minVal = 0.0f;
+                    maxVal = 5.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetretentionradius") {
+                    minVal = 0.5f;
                     maxVal = 5.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_autohitrange") {
                     minVal = 2.0f;
@@ -319,7 +323,7 @@ void registerModulesWithLauncher() {
                 "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
                 "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
-                "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
+                "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
                 "m_weaponOtherMelee", "m_elytraMode"
