@@ -6,6 +6,8 @@
 #include <bedrocktools/events/AttackResultEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
+#include <bedrocktools/sdk/offsets/World.hpp>
+#include <dlfcn.h>
 #include <EGL/egl.h>
 #include <array>
 #include <atomic>
@@ -13,6 +15,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 namespace bedrocktools::core::gamehooks {
 namespace {
@@ -367,6 +370,30 @@ void* clientInstance() {
 
 void* gameMode() {
     return currentGameMode.load(std::memory_order_acquire);
+}
+
+void* gameModeForPlayer(void* player) {
+    if (!player) return nullptr;
+
+    // World.hpp defines this field from the Player layout used by this build.
+    // The vtable's attack entry must resolve inside libminecraftpe.so before the
+    // candidate is accepted, so an unexpected/null field fails closed.
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    void* candidate = *reinterpret_cast<void**>(
+        playerAddress + bedrocktools::sdk::offsets::Player::mGameMode);
+    if (!candidate) return currentGameMode.load(std::memory_order_acquire);
+
+    auto** vtable = *reinterpret_cast<void***>(candidate);
+    if (!vtable || !vtable[16]) return nullptr;
+
+    Dl_info info{};
+    if (!dladdr(vtable[16], &info) || !info.dli_fname ||
+        std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
+        return nullptr;
+    }
+
+    currentGameMode.store(candidate, std::memory_order_release);
+    return candidate;
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
