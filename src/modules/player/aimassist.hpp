@@ -52,9 +52,11 @@ public:
     float m_autoHitDelayMs = 150.0f;
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
-    float m_hitboxDistanceGrowth = 100.0f;
+    float m_hitboxDistanceGrowth = 1.0f;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
+    // Independent yaw/pitch turn-rate multiplier for large rotations behind the player.
+    float m_rotationSpeed = 1.0f;
     std::string m_whitelistNames = "";
 
 private:
