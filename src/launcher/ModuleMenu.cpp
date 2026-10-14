@@ -128,11 +128,14 @@ void registerModulesWithLauncher() {
             }
 
             if (mod->moduleId == "bedrocktools.Mace Swapper") {
-                if (k == "m_enableMaceSwapper") displayName = "WEAPON SWAPPER > Enable Mace Swapper";
-                else if (k == "m_enableSwordSwapper") displayName = "WEAPON SWAPPER > Enable Sword Swapper";
-                else if (k == "m_attackRange") displayName = "WEAPON SWAPPER > Range";
-                else if (k == "m_attackIntervalMs") displayName = "WEAPON SWAPPER > Attack interval (ms)";
-                else if (k == "m_restoreSlot") displayName = "WEAPON SWAPPER > Restore previous slot";
+                if (k == "m_enableMaceSwapper") displayName = "MACE SWAPPER > Enable";
+                else if (k == "m_attackRange") displayName = "MACE SWAPPER > Attack range";
+                else if (k == "m_attackIntervalMs") displayName = "MACE SWAPPER > Attack interval (ms)";
+                else if (k == "m_restoreSlot") displayName = "MACE SWAPPER > Restore previous slot";
+            }
+            if (mod->moduleId == "bedrocktools.Sword Swapper") {
+                if (k == "m_attackRange") displayName = "SWORD SWAPPER > Attack range";
+                else if (k == "m_restoreSlot") displayName = "SWORD SWAPPER > Restore previous slot";
             }
 
             if (mod->moduleId == "bedrocktools.Aim Assist") {
@@ -214,7 +217,8 @@ void registerModulesWithLauncher() {
 
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
-                if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackrange") {
+                if ((mod->moduleId == "bedrocktools.Mace Swapper" ||
+                     mod->moduleId == "bedrocktools.Sword Swapper") && kLower == "m_attackrange") {
                     minVal = 2.0f;
                     maxVal = 6.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackintervalms") {
@@ -335,6 +339,30 @@ void registerModulesWithLauncher() {
             configs.push_back(entry);
         }
 
+        if (mod->moduleId == "bedrocktools.Mace Swapper") {
+            const std::vector<std::string> priority = {
+                "m_enableMaceSwapper", "m_attackRange", "m_attackIntervalMs", "m_restoreSlot"
+            };
+            const auto rank = [&priority](const std::string& key) {
+                const auto it = std::find(priority.begin(), priority.end(), key);
+                return static_cast<std::size_t>(std::distance(priority.begin(), it));
+            };
+            std::stable_sort(configs.begin(), configs.end(),
+                [&rank](const TmpConfigEntry& a, const TmpConfigEntry& b) {
+                    return rank(a.key) < rank(b.key);
+                });
+        } else if (mod->moduleId == "bedrocktools.Sword Swapper") {
+            const std::vector<std::string> priority = {"m_attackRange", "m_restoreSlot"};
+            const auto rank = [&priority](const std::string& key) {
+                const auto it = std::find(priority.begin(), priority.end(), key);
+                return static_cast<std::size_t>(std::distance(priority.begin(), it));
+            };
+            std::stable_sort(configs.begin(), configs.end(),
+                [&rank](const TmpConfigEntry& a, const TmpConfigEntry& b) {
+                    return rank(a.key) < rank(b.key);
+                });
+        }
+
         if (mod->moduleId == "bedrocktools.Aim Assist") {
             // Keep the flat launcher menu visually grouped by consistent prefixes
             // and a deliberate order; the current public menu API has no section header.
@@ -366,10 +394,8 @@ void registerModulesWithLauncher() {
                  k == "m_weaponSpear" || k == "m_weaponOtherMelee")) {
                 entry.depends_on = "m_weaponOnly";
             }
-            if (mod->moduleId == "bedrocktools.Aim Assist" &&
-                k == "m_hitboxDistanceGrowth") {
-                entry.depends_on = "m_distanceDependentHitbox";
-            }
+            // Keep the growth slider present at all times; disabling dynamic hitboxes
+            // changes its effect, not whether the user can see/configure the value.
             if (entry.type != pl::modmenu::ConfigType::Toggle) {
                 std::string bestParent = "";
                 for (const auto& parentCandidate : configs) {
