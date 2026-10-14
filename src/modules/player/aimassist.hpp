@@ -20,6 +20,7 @@ public:
     void processPlayerTick(bedrocktools::sdk::Player* player);
     void processPlayerFrame();
     bool currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range);
+    bool targetBoundsSnapshot(void* desiredTarget, bedrocktools::sdk::AABB& bounds, float& range);
     bool currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target);
     void deferAutoHitFor(float delayMs);
 
