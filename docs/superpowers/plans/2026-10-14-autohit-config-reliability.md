@@ -202,7 +202,7 @@
 - Update: the existing draft PR description with exact validation evidence; keep the PR in draft.
 
 - [ ] **Step 1: Run all host tests**
-  - Run: cd tests && xmake f -p linux -a x86_64 -m debug && xmake && xmake run menu_config_value_test && xmake run config_persistence_test && xmake run auto_hit_dispatch_policy_test
+  - Run: cd tests && xmake -P . f -y -p linux -a x86_64 -m debug && xmake -P . -y && xmake -P . run menu_config_value_test && xmake -P . run config_persistence_test && xmake -P . run auto_hit_dispatch_policy_test
   - Expected: all three test executables compile and run with zero failures.
 
 - [ ] **Step 2: Run the Android ARM64 build**
@@ -224,6 +224,7 @@
 
 ## Execution notes
 
+- Ruling: xmake host commands explicitly use `-P .` from `tests/` — the first CI attempt discovered the repository-root xmake project and tried to resolve Android-only `preloader` for Linux before compiling tests; cost if wrong: CI still selects the root project and requires another small command adjustment.
 - Tasks 1 and 2 are related by configuration state but should retain independent test cycles.
 - Task 3 must complete before Task 4 can connect AutoHit to an input source.
 - Do not begin the later inventory, AimAssist overhaul, Hitbox Expander, or HUD/hit-stop stages until Stage 1 is reviewed and its acceptance criteria are met.

@@ -18,9 +18,9 @@ jobs:
       - name: Run host regression tests
         working-directory: tests
         run: |
-          xmake f -y -p linux -a x86_64 -m debug
-          xmake -y
-          xmake run menu_config_value_test
+          xmake -P . f -y -p linux -a x86_64 -m debug
+          xmake -P . -y
+          xmake -P . run menu_config_value_test
 
       - uses: nttld/setup-ndk@v1
         id: ndk
