@@ -27,4 +27,9 @@ private:
     float m_lastPlayerY = 0.0f;
     bool m_hasLastPlayerY = false;
     std::chrono::steady_clock::time_point m_nextAttack{};
+    bool m_pendingAttack = false;
+    int m_pendingMaceSlot = -1;
+    int m_pendingPreviousSlot = -1;
+    void* m_pendingTarget = nullptr;
+    bedrocktools::sdk::Player* m_pendingPlayer = nullptr;
 };
