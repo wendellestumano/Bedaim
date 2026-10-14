@@ -42,6 +42,9 @@ public:
     float m_targetSwitchHysteresis = 4.0f;
     float m_targetSwitchDistanceMargin = 0.75f;
     std::string m_targetSelectionMode = "Crosshair";
+    bool m_autoHit = false;
+    float m_autoHitRange = 3.0f;
+    float m_autoHitDelayMs = 150.0f;
     float m_hitboxScale = 1.0f;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
@@ -51,6 +54,7 @@ private:
     void resetTrackingState();
     void processPlayerTickLocked(bedrocktools::sdk::Player* player);
     void applyAimStepLocked(bedrocktools::sdk::Player* player);
+    void processAutoHitLocked(bedrocktools::sdk::Player* player);
     std::mutex m_stateMutex;
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
@@ -66,4 +70,5 @@ private:
     float m_lastAssistYawDelta = 0.0f;
     float m_lastAssistPitchDelta = 0.0f;
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
+    std::chrono::steady_clock::time_point m_nextAutoHit{};
 };
