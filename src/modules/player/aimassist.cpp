@@ -495,8 +495,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     auto* rotationComponent = player->rotationComponent();
-    auto* level = player->level();
-    if (!rotationComponent || !level) {
+    if (!rotationComponent) {
         resetTrackingState();
         return;
     }
@@ -555,12 +554,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
     const float range = std::clamp(m_range, 2.0f, 80.0f);
     Vec3 extent{range, range, range};
-    void* actorManager = field<void*>(level, offsets::Level::mActorManager);
-    if (!actorManager) {
-        resetTrackingState();
-        return;
-    }
-
+    // The native nearby-actors function returns the actual candidate snapshot;
+    // don't gate it on Level::mActorManager, an unused offset that can vary by build.
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto actorsBeginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto actorsEndAddress = reinterpret_cast<std::uintptr_t>(actors.end);
