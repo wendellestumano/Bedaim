@@ -47,6 +47,11 @@ std::string itemLabel(std::string identifier) {
     if (identifier.empty()) return "EMPTY HAND";
     const auto colon = identifier.find(':');
     if (colon != std::string::npos) identifier.erase(0, colon + 1);
+    // Bedrock description ids can be "item.minecraft.mace", "tile.stone", or
+    // "minecraft:mace". Strip engine prefixes before presenting the label.
+    if (identifier.rfind("item.", 0) == 0) identifier.erase(0, 5);
+    if (identifier.rfind("tile.", 0) == 0) identifier.erase(0, 5);
+    if (identifier.rfind("minecraft.", 0) == 0) identifier.erase(0, 10);
     for (char& c : identifier) {
         if (c == '_') c = ' ';
         else c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -74,6 +79,19 @@ RankInfo rankFor(std::uint64_t score) {
     if (score >= 1800) return {"B", "BRUTAL", kRed};
     if (score >= 650) return {"C", "CHAOTIC", kCyan};
     return {"D", "DESTRUCTIVE", kWhite};
+}
+
+float rankProgressFor(std::uint64_t score) {
+    constexpr std::uint64_t thresholds[] = {0, 650, 1800, 3500, 6000, 9500, 14000, 18000};
+    for (std::size_t i = 1; i < std::size(thresholds); ++i) {
+        if (score < thresholds[i]) {
+            const auto lower = thresholds[i - 1];
+            const auto upper = thresholds[i];
+            return std::clamp(static_cast<float>(score - lower) /
+                              static_cast<float>(upper - lower), 0.0f, 1.0f);
+        }
+    }
+    return 1.0f;
 }
 
 float clamp01(float value) {
@@ -155,7 +173,9 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
 void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
     if (!enabled || !target || !result) return;
     Player* player = m_localPlayer.load(std::memory_order_acquire);
-    if (!player || !isMaceEquipped(player)) return;
+    if (!player) return;
+    // Style score tracks every confirmed hit, not only mace attacks. Restricting
+    // this handler to a mace made the meter appear frozen while other items were used.
 
     const auto now = Clock::now();
     std::lock_guard lock(m_stateMutex);
@@ -408,8 +428,9 @@ void UltrakillHudModule::onFrame() {
                 line(12, 28, 15, -15); line(27, 13, 15, 15); line(42, 28, -15, 15); line(27, 43, -15, -15); line(27, 13, 0, 30);
             }
         };
-        drawItemGlyph(2.0f * scale, 1.0f * scale, kShadow, 5.0f);
-        drawItemGlyph(0.0f, 0.0f, accent, 1.8f);
+        // Offset, thicker glyph gives the live item emblem a readable drop shadow.
+        drawItemGlyph(3.0f * scale, 3.0f * scale, 0xCC000000u, 5.0f);
+        drawItemGlyph(0.0f, 0.0f, accent, 2.0f);
     }
 
     // Upper-right style meter: rank, white progress, and gold FRESH tag.
@@ -423,7 +444,7 @@ void UltrakillHudModule::onFrame() {
         const float age = lastHit.time_since_epoch().count() == 0
             ? 99.0f : std::chrono::duration<float>(now - lastHit).count();
         const float freshness = age < 2.4f ? clamp01(1.0f - age / 2.4f) : 0.0f;
-        const float meter = score == 0 ? 0.12f : 0.20f + freshness * 0.80f;
+        const float meter = rankProgressFor(score);
         const float multiplier = 1.0f + 0.5f * freshness;
 
         addRect(cardX, cardY, cardW, cardH, kBlack, 1.0f * scale);
