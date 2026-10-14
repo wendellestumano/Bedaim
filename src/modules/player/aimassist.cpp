@@ -1344,9 +1344,14 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     // Existing values used 0..1000 percent; convert them to the new 0.1..10
     // strength scale. Legacy normalized values (0..1) are interpreted directly.
     const float savedHitboxGrowth = j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth);
-    const float migratedHitboxGrowth = savedHitboxGrowth > 10.0f
+    float migratedHitboxGrowth = savedHitboxGrowth > 10.0f
         ? savedHitboxGrowth / 100.0f
         : savedHitboxGrowth;
+    // 100 was the old built-in default. Migrate that exact legacy default to
+    // the new visible midpoint so existing profiles don't reopen with nearly
+    // no long-range growth after the new curve is applied.
+    if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
+        migratedHitboxGrowth = 5.0f;
     m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 10.0f);
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 10.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
