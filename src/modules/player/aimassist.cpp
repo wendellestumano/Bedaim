@@ -766,21 +766,24 @@ void AimAssistModule::processPlayerFrame() {
     }
 
     applyAimStepLocked(player);
-    processAutoHitLocked(player);
 }
 
 void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
-    if (!m_autoHit || !enabled || !player || !m_lastTarget ||
-        !validBounds(m_lastTargetBounds)) return;
+
+    // Auto Hit runs only from LocalPlayerTickEvent. Never invoke native combat code
+    // during ClientInstanceUpdate/frame processing, when entity state may be in flux.
+    if (!m_autoHit || !enabled || !player || player != m_lastPlayer ||
+        !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return;
 
     const auto now = std::chrono::steady_clock::now();
+    if (m_lastTargetSeen.time_since_epoch().count() == 0 ||
+        now - m_lastTargetSeen > std::chrono::milliseconds(150)) return;
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    // Prefer the live per-player GameMode pointer so Auto Hit can work before any
-    // manual click. The hook-captured pointer remains a fallback during transitions.
-    void* gameMode = field<void*>(player, offsets::Player::mGameMode);
-    if (!gameMode) gameMode = bedrocktools::core::gamehooks::gameMode();
+    // Only use a GameMode pointer captured from an actual engine callback. The
+    // guessed Player::mGameMode offset is version-sensitive and unsafe to dereference.
+    void* gameMode = bedrocktools::core::gamehooks::gameMode();
     if (!gameMode) return;
 
     const Vec3 playerPosition = player->position();
@@ -796,20 +799,42 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         eyePosition.y += 1.5f;
     }
 
+    auto* rotationComponent = player->rotationComponent();
+    if (!rotationComponent) return;
+    Vec2 rotation = field<Vec2>(rotationComponent, 0);
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return;
+    rotation.x = std::clamp(rotation.x, -89.0f, 89.0f);
+    rotation.y = wrapDegrees(rotation.y);
+
     const AABB bounds = m_lastTargetBounds;
+    const float yaw = rotation.y / kRadToDeg;
+    const float pitch = rotation.x / kRadToDeg;
+    const float cosPitch = std::cos(pitch);
+    const Vec3 viewDirection{
+        -std::sin(yaw) * cosPitch,
+        -std::sin(pitch),
+        std::cos(yaw) * cosPitch
+    };
+
+    // Small mobile touch tolerance, but never attack a retained target behind the
+    // camera or an entity that is merely close to the player's body.
+    constexpr float crosshairTolerance = 0.18f;
+    const AABB crosshairBounds{
+        {bounds.min.x - crosshairTolerance, bounds.min.y - crosshairTolerance, bounds.min.z - crosshairTolerance},
+        {bounds.max.x + crosshairTolerance, bounds.max.y + crosshairTolerance, bounds.max.z + crosshairTolerance}
+    };
+    if (!rayIntersectsAABB(eyePosition, viewDirection, crosshairBounds)) return;
+
     const Vec3 hitPoint{
-        std::clamp(eyePosition.x, bounds.min.x, bounds.max.x),
-        std::clamp(eyePosition.y, bounds.min.y, bounds.max.y),
-        std::clamp(eyePosition.z, bounds.min.z, bounds.max.z)
+        (bounds.min.x + bounds.max.x) * 0.5f,
+        bounds.min.y + (bounds.max.y - bounds.min.y) * 0.55f,
+        (bounds.min.z + bounds.max.z) * 0.5f
     };
     const float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
     const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
-    // Zero distance is valid when the target hitbox overlaps the player's eye point.
-    if (!std::isfinite(hitDistanceSq) || hitDistanceSq > autoHitRange * autoHitRange) return;
+    if (!std::isfinite(hitDistanceSq) || hitDistanceSq < 0.01f ||
+        hitDistanceSq > autoHitRange * autoHitRange) return;
 
-    // Auto Hit is range-gated against the AimAssist's already-filtered target.
-    // Keep visibility independent of the exact crosshair ray so touch smoothing
-    // cannot block an otherwise valid close-range attack.
     if (m_cantSeeThroughBlocks) {
         auto* dimension = player->dimension();
         void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
@@ -818,9 +843,9 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     }
 
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
-    if (bedrocktools::core::gamehooks::attack(gameMode, m_lastTarget, true, &hitPoint)) {
-        m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(delayMs));
-    }
+    // Rate-limit even if vanilla rejects an attempt, instead of retrying every tick.
+    m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(delayMs));
+    bedrocktools::core::gamehooks::attack(gameMode, m_lastTarget, true, &hitPoint);
 }
 
 void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
