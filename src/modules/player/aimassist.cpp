@@ -413,7 +413,7 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     if (!enabled || !player || player != m_lastPlayer || !target ||
-        target != m_lastTarget || !validBounds(m_lastTargetBounds)) return false;
+        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
 
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent) return false;
