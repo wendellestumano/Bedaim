@@ -462,7 +462,8 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
             (m_lastTargetBounds.min.y + m_lastTargetBounds.max.y) * 0.5f,
             (m_lastTargetBounds.min.z + m_lastTargetBounds.max.z) * 0.5f
         };
-        if (!hasClearLineOfSight(blockSource, eyePosition, center)) return false;
+        if (blockSource && g_isSolidBlockingBlock &&
+            !hasClearLineOfSight(blockSource, eyePosition, center)) return false;
     }
     return true;
 }
@@ -619,7 +620,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
         // Fail closed when the visibility signature or block source is unavailable.
         // hasClearLineOfSight() returns false if it cannot safely perform the check.
-        if (m_cantSeeThroughBlocks &&
+        // If the LOS signature is unavailable for this Minecraft build, don't
+        // silently discard every candidate. Enforce LOS only when the checker is live.
+        if (m_cantSeeThroughBlocks && blockSource && g_isSolidBlockingBlock &&
             !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
@@ -810,7 +813,8 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     if (m_cantSeeThroughBlocks) {
         auto* dimension = player->dimension();
         void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
-        if (!hasClearLineOfSight(blockSource, eyePosition, hitPoint)) return;
+        if (blockSource && g_isSolidBlockingBlock &&
+            !hasClearLineOfSight(blockSource, eyePosition, hitPoint)) return;
     }
 
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
