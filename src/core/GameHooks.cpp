@@ -161,40 +161,55 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
 bool plausibleGameMode(void* gameMode) {
     if (!gameMode) return false;
     static std::atomic<void*> lastValidatedGameMode{nullptr};
+    static std::atomic<void*> lastRejectedGameMode{nullptr};
     if (lastValidatedGameMode.load(std::memory_order_acquire) == gameMode) return true;
+    // A bad field value can remain unchanged for thousands of ticks. Cache the
+    // rejection as well, so validation never re-opens /proc/self/maps each tick.
+    if (lastRejectedGameMode.load(std::memory_order_acquire) == gameMode) return false;
 
-    constexpr std::size_t kMaxGameModeVtableEntries = 48;
-    if (!isReadableMemory(gameMode, sizeof(void*))) return false;
+    constexpr std::size_t kKnownAttackSlot = 16;
+    if (!isReadableMemory(gameMode, sizeof(void*))) {
+        lastRejectedGameMode.store(gameMode, std::memory_order_release);
+        return false;
+    }
     auto** vtable = *reinterpret_cast<void***>(gameMode);
-    if (!vtable || !isReadableMemory(vtable, kMaxGameModeVtableEntries * sizeof(void*))) return false;
-    if (!vtable[16]) return false;
+    if (!vtable || !isReadableMemory(vtable, (kKnownAttackSlot + 1) * sizeof(void*)) ||
+        !vtable[kKnownAttackSlot]) {
+        lastRejectedGameMode.store(gameMode, std::memory_order_release);
+        return false;
+    }
 
     Dl_info info{};
-    if (!dladdr(vtable[16], &info) || !info.dli_fname ||
-        std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) return false;
+    if (!dladdr(vtable[kKnownAttackSlot], &info) || !info.dli_fname ||
+        std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
+        lastRejectedGameMode.store(gameMode, std::memory_order_release);
+        return false;
+    }
 
     lastValidatedGameMode.store(gameMode, std::memory_order_release);
+    lastRejectedGameMode.store(nullptr, std::memory_order_release);
     return true;
 }
 
-// Locate the attack override by its validated signature instead of assuming a
-// fixed vtable index. The bounds are checked before any virtual entry is read.
+// GameMode::attack is the public wrapper at vtable slot 16. Its validated
+// signature is a 3-argument wrapper (this, target, hit-position) which prepares
+// the internal 4-argument call itself. Never call the internal body directly:
+// doing so bypasses that setup and previously caused the game to stall.
 std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr) {
     if (!plausibleGameMode(gameMode)) return 0;
     auto** vtable = *reinterpret_cast<void***>(gameMode);
-
+    constexpr std::size_t kKnownAttackSlot = 16;
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable[kKnownAttackSlot]);
     const auto publicGameModeAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
     const auto publicSurvivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-    constexpr std::size_t kMaxGameModeVtableEntries = 48;
-    for (std::size_t i = 0; i < kMaxGameModeVtableEntries; ++i) {
-        if (publicSurvivalAttack && vtable[i] == reinterpret_cast<void*>(publicSurvivalAttack)) {
-            if (kind) *kind = AttackKind::SurvivalMode;
-            return reinterpret_cast<std::uintptr_t>(vtable[i]);
-        }
-        if (publicGameModeAttack && vtable[i] == reinterpret_cast<void*>(publicGameModeAttack)) {
-            if (kind) *kind = AttackKind::GameMode;
-            return reinterpret_cast<std::uintptr_t>(vtable[i]);
-        }
+
+    if (publicSurvivalAttack && slotAddress == publicSurvivalAttack) {
+        if (kind) *kind = AttackKind::SurvivalMode;
+        return slotAddress;
+    }
+    if (publicGameModeAttack && slotAddress == publicGameModeAttack) {
+        if (kind) *kind = AttackKind::GameMode;
+        return slotAddress;
     }
     return 0;
 }
@@ -488,22 +503,19 @@ void* gameModeForPlayer(void* player) {
     return plausibleGameMode(observed) ? observed : nullptr;
 }
 
-bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
+bool attack(void* gameMode, void* target, bool /*playPredictiveSound*/, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
 
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
     if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
-    // Use only the hooked internal function's trampoline, whose four-argument ABI
-    // is the same one exercised by gameModeAttackDetour. Calling a guessed public
-    // vtable ABI here is unsafe: signature presence alone doesn't prove argument
-    // count/return semantics for this Bedrock build.
-    AttackFn nativeInternalAttack = gameModeAttackOriginal;
-    if (!nativeInternalAttack) {
+    AttackKind kind = AttackKind::GameMode;
+    const auto virtualEntry = publicAttackVirtualEntry(gameMode, &kind);
+    if (!virtualEntry) {
         static std::atomic_bool loggedUnavailable{false};
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().error("AutoHit has no internal attack trampoline; signature/hook setup must be verified for this Bedrock build.");
+            autoHitLogger().error("Attack skipped safely: vtable slot 16 did not match this build's public GameMode::attack signature. No native attack body was called.");
         return false;
     }
 
@@ -513,26 +525,15 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    static std::atomic_bool loggedTrampolineRoute{false};
-    if (!loggedTrampolineRoute.exchange(true, std::memory_order_acq_rel))
-        autoHitLogger().info("AutoHit dispatch selected the validated four-argument internal attack trampoline.");
+    static std::atomic_bool loggedPublicRoute{false};
+    if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("Combat dispatch uses the signature-validated public GameMode::attack wrapper.");
 
-    const AttackKind kind = attackKindFor(gameMode);
-    const GameModeType modeKind = kind == AttackKind::SurvivalMode
-        ? GameModeType::SurvivalMode : GameModeType::GameMode;
-    GameModeActionScope scope{modeKind, gameMode};
-    scope.publish(GameModeAction::Attack);
-
-    AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
-        reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)),
-        const_cast<void*>(hitPosition)};
-    bus().publish(event);
-    if (event.cancelled()) return false;
-
-    const bool result = nativeInternalAttack(gameMode, target, playPredictiveSound, hitPosition);
-    AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
-    bus().publish(resultEvent);
-    return result;
+    // This public wrapper establishes Bedrock's internal attack flags and then
+    // routes through the hooked native implementation. That is the same entry
+    // point vanilla uses; do not manually replay the internal 4-argument ABI.
+    using PublicAttackFn = bool(*)(void*, void*, const void*);
+    return reinterpret_cast<PublicAttackFn>(virtualEntry)(gameMode, target, hitPosition);
 }
 
 }
