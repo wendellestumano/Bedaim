@@ -746,7 +746,10 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     const auto now = std::chrono::steady_clock::now();
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    void* gameMode = bedrocktools::core::gamehooks::gameMode();
+    // Prefer the live per-player GameMode pointer so Auto Hit can work before any
+    // manual click. The hook-captured pointer remains a fallback during transitions.
+    void* gameMode = field<void*>(player, offsets::Player::mGameMode);
+    if (!gameMode) gameMode = bedrocktools::core::gamehooks::gameMode();
     if (!gameMode) return;
 
     const Vec3 playerPosition = player->position();
