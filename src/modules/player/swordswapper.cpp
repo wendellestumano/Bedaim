@@ -127,13 +127,13 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_lastPlayerY = position.y;
     m_hasLastPlayerY = true;
 
-    // Require five consecutive near-stationary vertical ticks, so the jump apex
-    // is less likely to be mistaken for the ground.
-    if (std::fabs(dy) <= 0.0025f)
-        m_groundedTicks = std::min(m_groundedTicks + 1, 6);
+    // Don't wait 5 ticks to consider a stable landing. On mobile this delayed
+    // the sword swap by roughly a quarter second and often missed short hit windows.
+    if (std::fabs(dy) <= 0.01f)
+        m_groundedTicks = std::min(m_groundedTicks + 1, 3);
     else
         m_groundedTicks = 0;
-    const bool grounded = m_groundedTicks >= 5 && dy >= -0.0025f;
+    const bool grounded = m_groundedTicks >= 1 && dy >= -0.01f;
 
     // Do not mistake the jump apex for ground, and never let Sword Swapper
     // override the mace while the latter owns a confirmed downward slam.
@@ -171,7 +171,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         shouldUseSword =
             aim->currentTargetSnapshot(target, bounds, aimRange) &&
             targetWithinRange(player, bounds, std::min(m_attackRange, aimRange)) &&
-            aim->currentTargetInCrosshair(player, target);
+            aim->currentTargetInCrosshair(player, target, 0.42f);
     }
 
     if (!shouldUseSword) {
