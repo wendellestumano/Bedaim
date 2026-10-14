@@ -83,7 +83,7 @@ RankInfo rankFor(std::uint64_t score) {
 
 float rankProgressFor(std::uint64_t score) {
     constexpr std::uint64_t thresholds[] = {0, 650, 1800, 3500, 6000, 9500, 14000, 18000};
-    for (std::size_t i = 1; i < std::size(thresholds); ++i) {
+    for (std::size_t i = 1; i < 8; ++i) {
         if (score < thresholds[i]) {
             const auto lower = thresholds[i - 1];
             const auto upper = thresholds[i];
