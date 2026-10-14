@@ -61,8 +61,8 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
     };
     const float distanceSq = distanceSquared(eye, hitPoint);
     const float safeRange = std::clamp(range, 2.0f, 6.0f);
-    return std::isfinite(distanceSq) && distanceSq >= 0.01f &&
-        distanceSq <= safeRange * safeRange;
+    // Overlap with the player's eye still counts as in range.
+    return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
 }
 }
 
@@ -160,7 +160,6 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         float aimRange = 0.0f;
         if (!aim->currentTargetSnapshot(currentTarget, targetBounds, aimRange) ||
             currentTarget != m_pendingTarget ||
-            !aim->currentTargetInCrosshair(player, currentTarget) ||
             !targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) {
             restoreIfStillSwapped();
             return;
@@ -173,17 +172,20 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             return;
         }
 
+        const Vec3 eye = eyePositionFor(player);
         const Vec3 hitPoint{
-            std::clamp(eyePositionFor(player).x, targetBounds.min.x, targetBounds.max.x),
-            std::clamp(eyePositionFor(player).y, targetBounds.min.y, targetBounds.max.y),
-            std::clamp(eyePositionFor(player).z, targetBounds.min.z, targetBounds.max.z)
+            std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
+            std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
+            std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
         };
         const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
-        bedrocktools::core::gamehooks::attack(gameMode, currentTarget, true, &hitPoint);
+        const bool attacked = bedrocktools::core::gamehooks::attack(gameMode, currentTarget, true, &hitPoint);
         restoreIfStillSwapped();
-        m_nextAttack = std::chrono::steady_clock::now() +
-            std::chrono::milliseconds(static_cast<int>(intervalMs));
-        aim->deferAutoHitFor(intervalMs);
+        if (attacked) {
+            m_nextAttack = std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(static_cast<int>(intervalMs));
+            aim->deferAutoHitFor(intervalMs);
+        }
         return;
     }
 
