@@ -381,7 +381,7 @@ void* gameModeForPlayer(void* player) {
     const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
     void* candidate = *reinterpret_cast<void**>(
         playerAddress + bedrocktools::sdk::offsets::Player::mGameMode);
-    if (!candidate) return currentGameMode.load(std::memory_order_acquire);
+    if (!candidate) return nullptr;
 
     auto** vtable = *reinterpret_cast<void***>(candidate);
     if (!vtable || !vtable[16]) return nullptr;
@@ -397,7 +397,6 @@ void* gameModeForPlayer(void* player) {
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    static_cast<void>(playPredictiveSound);
     if (!gameMode || !target || !hitPosition) return false;
 
     static thread_local bool inSyntheticAttack = false;
@@ -436,7 +435,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // than requesting a speculative predictive/sound path. The internal function
     // itself has the four-argument signature mirrored by gameModeAttackDetour.
     const auto nativeInternalAttack = reinterpret_cast<AttackFn>(internalAddress);
-    return nativeInternalAttack(gameMode, target, false, hitPosition);
+    return nativeInternalAttack(gameMode, target, playPredictiveSound, hitPosition);
 }
 
 }
