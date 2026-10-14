@@ -82,8 +82,14 @@ void ConfigManager::save() {
 
 void ConfigManager::flush() {
     std::unique_lock<std::mutex> lock(m_mutex);
-    if (!m_worker.joinable() || !m_hasPending) return;
+    if (!m_worker.joinable()) return;
+
+    // m_hasPending becomes false when the worker takes a payload, before the
+    // actual disk write finishes. Do not return during that window: wait for the
+    // generation queued before flush() to finish, whether still queued or writing.
     const std::uint64_t targetGeneration = m_queuedGeneration;
+    if (m_completedGeneration >= targetGeneration && !m_hasPending) return;
+
     m_deadline = std::chrono::steady_clock::now();
     m_condition.notify_all();
     m_condition.wait(lock, [&] {
