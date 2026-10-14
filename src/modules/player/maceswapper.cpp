@@ -220,7 +220,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         };
         const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
         const bool dispatched = bedrocktools::core::gamehooks::attack(
-            gameMode, m_pendingTarget, true, &hitPoint);
+            gameMode, m_pendingTarget, &hitPoint);
         restoreMaceIfOwned();
         if (dispatched) {
             m_nextAttack = std::chrono::steady_clock::now() +
