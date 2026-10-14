@@ -74,5 +74,6 @@ private:
     float m_lastAssistYawDelta = 0.0f;
     float m_lastAssistPitchDelta = 0.0f;
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
+    std::chrono::steady_clock::time_point m_lastTargetSeen{};
     std::chrono::steady_clock::time_point m_nextAutoHit{};
 };
