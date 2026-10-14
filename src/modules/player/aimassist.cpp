@@ -874,7 +874,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
 
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
     const bool dispatched = bedrocktools::core::gamehooks::attack(
-        gameMode, m_lastTarget, true, &hitPoint);
+        gameMode, m_lastTarget, &hitPoint);
     // Even a native rejection is rate-limited; use a short retry so a transient
     // false return doesn't permanently disable attacks for the selected target.
     const float nextDelayMs = dispatched ? delayMs : std::min(delayMs, 120.0f);
