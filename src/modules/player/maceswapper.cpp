@@ -16,6 +16,15 @@ bool finiteVec(const bedrocktools::sdk::Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
 
+bool validBounds(const bedrocktools::sdk::AABB& bounds) {
+    if (!finiteVec(bounds.min) || !finiteVec(bounds.max)) return false;
+    const float height = bounds.max.y - bounds.min.y;
+    const float width = bounds.max.x - bounds.min.x;
+    const float depth = bounds.max.z - bounds.min.z;
+    return height >= 0.25f && height <= 8.0f && width > 0.0f && width <= 5.0f
+        && depth > 0.0f && depth <= 5.0f;
+}
+
 float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk::Vec3& b) {
     const float dx = a.x - b.x;
     const float dy = a.y - b.y;
