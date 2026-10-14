@@ -491,35 +491,18 @@ void* gameMode() {
 void* gameModeForPlayer(void* player) {
     if (!player) return nullptr;
 
-    // Cache only the player field address after confirming it is mapped readable.
-    // The value can still change (e.g. after respawn), so re-read the pointer each tick.
-    static std::atomic<void*> cachedPlayer{nullptr};
-    static std::atomic<void*> cachedField{nullptr};
-    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
-    const auto fieldAddress = reinterpret_cast<const void*>(
-        playerAddress + bedrocktools::sdk::offsets::Player::mGameMode);
-    void* candidate = nullptr;
-    if (cachedPlayer.load(std::memory_order_acquire) == player &&
-        cachedField.load(std::memory_order_acquire) == fieldAddress) {
-        candidate = *reinterpret_cast<void* const*>(fieldAddress);
-    } else if (isReadableMemory(fieldAddress, sizeof(void*))) {
-        candidate = *reinterpret_cast<void* const*>(fieldAddress);
-        cachedField.store(const_cast<void*>(fieldAddress), std::memory_order_release);
-        cachedPlayer.store(player, std::memory_order_release);
-    } else {
-        cachedField.store(nullptr, std::memory_order_release);
-        cachedPlayer.store(player, std::memory_order_release);
-    }
-
-    if (plausibleGameMode(candidate)) {
-        currentGameMode.store(candidate, std::memory_order_release);
-        return candidate;
-    }
-
-    // A GameMode captured from a real engine callback is preferred over an
-    // unverified layout guess. Validate it as well before allowing a native call.
+    // Only trust a GameMode pointer captured as the receiver ("this") of a real
+    // engine callback. The previous Player::mGameMode offset read could mistake a
+    // neighboring field for a GameMode; a plausible-looking vtable was not enough
+    // to prove the pointer referred to the local player's actual GameMode object.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    return plausibleGameMode(observed) ? observed : nullptr;
+    if (!observed || !plausibleGameMode(observed)) {
+        static std::atomic_bool loggedNoObservedGameMode{false};
+        if (!loggedNoObservedGameMode.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().warn("AutoHit is waiting for a GameMode pointer captured from a real engine callback; unsafe Player-offset fallback is disabled.");
+        return nullptr;
+    }
+    return observed;
 }
 
 bool attack(void* gameMode, void* target, bool /*playPredictiveSound*/, const void* hitPosition) {
