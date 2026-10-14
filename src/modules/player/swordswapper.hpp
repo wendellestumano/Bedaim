@@ -26,6 +26,7 @@ private:
     bool m_hasLastPlayerY = false;
     int m_groundedTicks = 0;
     bool m_ownsSwap = false;
+    bool m_userOverrodeSwap = false;
     int m_swordSlot = -1;
     int m_previousSlot = -1;
 };
