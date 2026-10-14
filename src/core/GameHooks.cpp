@@ -353,4 +353,12 @@ void* clientInstance() {
     return currentClientInstance.load(std::memory_order_acquire);
 }
 
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
+    if (!gameMode || !target || !gameModeAttackOriginal) return false;
+    // Reuse the same native attack path and cancellable event flow as a normal hit,
+    // but call the detour directly so we never enter the patched function address
+    // and depend on inline-hook trampoline behavior from a module callback.
+    return gameModeAttackDetour(gameMode, target, playPredictiveSound, hitPosition);
+}
+
 }
