@@ -61,6 +61,7 @@ ScreenFn chatOpenOriginal = nullptr;
 ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
+std::atomic<void*> currentGameMode = nullptr;
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
 std::mutex installMutex;
@@ -81,7 +82,9 @@ bool hookSignature(SignatureId id, void* detour, Function** original) {
 class GameModeActionScope {
 public:
     GameModeActionScope(GameModeType modeKind, void* gameMode)
-        : mModeKind(modeKind), mGameMode(gameMode), mOuter(gameModeActionDepth++ == 0) {}
+        : mModeKind(modeKind), mGameMode(gameMode), mOuter(gameModeActionDepth++ == 0) {
+        if (gameMode) currentGameMode.store(gameMode, std::memory_order_release);
+    }
 
     ~GameModeActionScope() {
         --gameModeActionDepth;
@@ -154,6 +157,7 @@ bool survivalModeStartDestroyBlockDetour(void* gameMode, const void* position, s
 }
 
 void gameModeStopDestroyBlockDetour(void* gameMode, const void* position) {
+    if (gameMode) currentGameMode.store(gameMode, std::memory_order_release);
     const auto modeKind = attackKindFor(gameMode) == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
     if (gameModeStopDestroyBlockOriginal) gameModeStopDestroyBlockOriginal(gameMode, position);
     GameModeActionEvent event{modeKind, GameModeAction::StopDestroyBlock, gameMode};
@@ -347,10 +351,15 @@ void uninstall() {
     handleCount = 0;
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
+    currentGameMode.store(nullptr, std::memory_order_release);
 }
 
 void* clientInstance() {
     return currentClientInstance.load(std::memory_order_acquire);
+}
+
+void* gameMode() {
+    return currentGameMode.load(std::memory_order_acquire);
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
