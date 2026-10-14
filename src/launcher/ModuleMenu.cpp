@@ -5,16 +5,34 @@
 #include <pl/ModMenuConfig.hpp>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include <string_view>
 #include <vector>
 
+static void registerAimAssistConfigSchema(std::string_view moduleId, const nlohmann::json& config);
+
+static void persistModuleConfig() {
+    auto& config = bedrocktools::config::ConfigManager::get();
+    config.save();
+    // Flush the queued write before a menu close/activity transition can discard
+    // the process. This makes a successful callback an actual on-disk save.
+    config.flush();
+}
+
+static void refreshConfigSchemaIfNeeded(Module* mod) {
+    if (!mod || mod->moduleId != "bedrocktools.Aim Assist") return;
+    nlohmann::json current;
+    mod->saveConfig(current);
+    registerAimAssistConfigSchema(mod->moduleId, current);
+}
+
 static void onModuleToggle(std::string_view module_id, bool enabled) {
     auto* mod = ModuleRegistry::get().find(module_id);
     if (!mod) return;
     mod->setMasterEnabled(enabled);
-    bedrocktools::config::ConfigManager::get().save();
+    persistModuleConfig();
 }
 
 static void onModuleKeybind(std::string_view module_id, std::string_view key, bool isDown) {
@@ -27,44 +45,52 @@ static void onModuleKeybind(std::string_view module_id, std::string_view key, bo
 static void onModuleConfigChanged(std::string_view module_id, std::string_view key, std::string_view value) {
     auto* mod = ModuleRegistry::get().find(module_id);
     if (!mod) return;
+
     if (mod->onMenuConfigChanged(key, value)) {
-        bedrocktools::config::ConfigManager::get().save();
+        refreshConfigSchemaIfNeeded(mod);
+        persistModuleConfig();
         return;
     }
 
     nlohmann::json j;
     mod->saveConfig(j);
 
-    std::string safeValue(value);
-    std::string safeKey(key);
+    const std::string safeValue(value);
+    const std::string safeKey(key);
     try {
-        if (j.contains(safeKey)) {
-            if (j[safeKey].is_boolean()) {
-                if (safeValue == "true") j[safeKey] = true;
-                else if (safeValue == "false") j[safeKey] = false;
-            } else if (j[safeKey].is_number_integer()) {
-                if (!safeValue.empty()) {
-                    char* end;
-                    int val = std::strtol(safeValue.c_str(), &end, 10);
-                    if (end != safeValue.c_str()) j[safeKey] = val;
-                }
-            } else if (j[safeKey].is_number_float()) {
-                if (!safeValue.empty()) {
-                    char* end;
-                    float val = std::strtof(safeValue.c_str(), &end);
-                    if (end != safeValue.c_str()) j[safeKey] = val;
-                }
-            } else {
-                j[safeKey] = safeValue;
-            }
+        const auto it = j.find(safeKey);
+        if (it == j.end() || it->is_null()) {
+            j[safeKey] = safeValue;
+        } else if (it->is_boolean()) {
+            std::string normalized = safeValue;
+            std::transform(normalized.begin(), normalized.end(), normalized.begin(),
+                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            if (normalized == "true" || normalized == "1" || normalized == "on" || normalized == "yes")
+                j[safeKey] = true;
+            else if (normalized == "false" || normalized == "0" || normalized == "off" || normalized == "no")
+                j[safeKey] = false;
+            // Preserve the current value if a malformed toggle payload is received.
+        } else if (it->is_number_integer()) {
+            char* end = nullptr;
+            const long parsed = std::strtol(safeValue.c_str(), &end, 10);
+            if (end != safeValue.c_str() && end && *end == '\0') j[safeKey] = parsed;
+        } else if (it->is_number_float()) {
+            char* end = nullptr;
+            const float parsed = std::strtof(safeValue.c_str(), &end);
+            if (end != safeValue.c_str() && end && *end == '\0' && std::isfinite(parsed))
+                j[safeKey] = parsed;
         } else {
             j[safeKey] = safeValue;
         }
     } catch (...) {
-        j[safeKey] = safeValue;
+        return;
     }
+
+    // loadConfig normalizes radio indices and clamps sliders. Serialize the
+    // module again afterward so both disk config and V2 controls see that normalized value.
     mod->loadConfig(j);
-    bedrocktools::config::ConfigManager::get().save();
+    refreshConfigSchemaIfNeeded(mod);
+    persistModuleConfig();
 }
 
 static std::string schemaCurrentValue(const nlohmann::json& config,
