@@ -177,6 +177,12 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Base angular turn rate.");
     slider("m_rotationSpeed", "Rotation speed", "aim", "0.1", "10", "0.1", "x",
            "Independent multiplier for large rotations and targets behind you.");
+    choice("m_predictionMode", "Target prediction", "aim",
+           "Predict motion for ranged weapons, or for all weapons.",
+           {{"Off","Off"},{"Ranged","Ranged weapons"},{"All","All weapons"}},
+           ConfigChoiceStyleV2::Segmented);
+    slider("m_predictionLeadMs", "Prediction lead", "aim", "0", "300", "10", "ms",
+           "How far ahead to estimate a moving target.");
     slider("m_strength", "Strongness", "aim", "0", "1", "0.05", "",
            "How much the assist resists opposing manual drag.");
     slider("m_fov", "FOV", "aim", "1", "360", "1", "deg",
@@ -315,6 +321,12 @@ void registerModulesWithLauncher() {
                 if (k == "m_attackRange") displayName = "SWORD SWAPPER > Attack range";
                 else if (k == "m_restoreSlot") displayName = "SWORD SWAPPER > Restore previous slot";
             }
+            if (mod->moduleId == "bedrocktools.Hitbox Expander") {
+                if (k == "m_hitboxSize") displayName = "EXPANDER > Virtual size (0.6-10)";
+                else if (k == "m_expandPlayers") displayName = "EXPANDER > Players";
+                else if (k == "m_expandMobs") displayName = "EXPANDER > Mobs";
+                else if (k == "m_requireLineOfSight") displayName = "EXPANDER > Require line of sight";
+            }
 
             if (mod->moduleId == "bedrocktools.Aim Assist") {
                 if (k == "m_aimMode") displayName = "AIM OPTIONS > Profile";
@@ -396,7 +408,10 @@ void registerModulesWithLauncher() {
 
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
-                if ((mod->moduleId == "bedrocktools.Mace Swapper" ||
+                if (mod->moduleId == "bedrocktools.Hitbox Expander" && kLower == "m_hitboxsize") {
+                    minVal = 0.6f;
+                    maxVal = 10.0f;
+                } else if ((mod->moduleId == "bedrocktools.Mace Swapper" ||
                      mod->moduleId == "bedrocktools.Sword Swapper") && kLower == "m_attackrange") {
                     minVal = 2.0f;
                     maxVal = 6.0f;
@@ -550,7 +565,8 @@ void registerModulesWithLauncher() {
             // and a deliberate order; the current public menu API has no section header.
             const std::vector<std::string> priority = {
                 "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
-                "m_fov", "m_range", "m_aimSpeed", "m_rotationSpeed", "m_strength", "m_hitboxScale",
+                "m_fov", "m_range", "m_aimSpeed", "m_rotationSpeed", "m_predictionMode", "m_predictionLeadMs",
+                "m_strength", "m_hitboxScale",
                 "m_distanceDependentHitbox", "m_hitboxDistanceGrowth",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
                 "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
