@@ -1,5 +1,6 @@
 #include "aimassist.hpp"
 #include "core/InventoryAccess.hpp"
+#include "core/GameHooks.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
@@ -41,11 +42,9 @@ struct ActorVector {
 };
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
-using GameModeAttackFn = bool (*)(void*, void*, bool, const void*);
 
 AimAssistModule* g_aimAssist = nullptr;
 std::atomic<void*> g_lastGameMode{nullptr};
-GameModeAttackFn g_gameModeAttack = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
@@ -359,8 +358,6 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
     g_applyLocalPlayerTurnDelta = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
-    g_gameModeAttack = reinterpret_cast<GameModeAttackFn>(
-        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::GameModeAttackInternal));
 
     // Learn the active GameMode from native user actions instead of guessing its offset.
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
@@ -510,6 +507,15 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     void* retainedTarget = nullptr;
     AABB retainedTargetBounds{};
     float retainedTargetScore = std::numeric_limits<float>::max();
+    bool retainedTargetInsideBubble = false;
+    Vec3 playerCenter = playerPosition;
+    if (validBounds(playerBounds)) {
+        playerCenter.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        playerCenter.y = (playerBounds.min.y + playerBounds.max.y) * 0.5f;
+        playerCenter.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    }
+    const float retentionRadius = std::clamp(m_targetRetentionRadius, 0.5f, 5.0f);
+    const float retentionRadiusSq = retentionRadius * retentionRadius;
     const float maxDistanceSq = range * range;
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
     // remain required even when the angular limit is set to 360 degrees.
@@ -550,6 +556,19 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
 
+        // If the current target is right beside/around the player, keep it locked
+        // while it crosses behind the camera. Measure distance to the target AABB,
+        // not its center, so large hitboxes don't cause a sudden lock drop.
+        bool insideRetentionBubble = false;
+        if (candidate == m_lastTarget) {
+            const Vec3 nearestOnTarget{
+                std::clamp(playerCenter.x, targetBounds.min.x, targetBounds.max.x),
+                std::clamp(playerCenter.y, targetBounds.min.y, targetBounds.max.y),
+                std::clamp(playerCenter.z, targetBounds.min.z, targetBounds.max.z)
+            };
+            insideRetentionBubble = distanceSquared(playerCenter, nearestOnTarget) <= retentionRadiusSq;
+        }
+
         const float dx = centerAimPoint.x - eyePosition.x;
         const float dy = centerAimPoint.y - eyePosition.y;
         const float dz = centerAimPoint.z - eyePosition.z;
@@ -565,8 +584,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore)) continue;
 
-        // Keep the existing FOV as the eligibility boundary in both modes.
-        if (angleScore > maxFov) continue;
+        // The last target gets a small 3D lock bubble around the player. Inside it,
+        // FOV is temporarily ignored so a target that passes behind doesn't get
+        // replaced by an unrelated entity in front. Visibility and normal range
+        // checks above still apply.
+        if (angleScore > maxFov && !insideRetentionBubble) continue;
 
         // Player mode ranks eligible targets by world distance. Crosshair mode
         // ranks by angular distance to the view, with world distance only breaking ties.
@@ -578,6 +600,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
             retainedTargetScore = score;
+            retainedTargetInsideBubble = insideRetentionBubble;
         }
         if (score < bestScore) {
             bestScore = score;
@@ -593,7 +616,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     const float switchMargin = playerDistanceMode
         ? std::clamp(m_targetSwitchDistanceMargin, 0.0f, 5.0f)
         : std::clamp(m_targetSwitchHysteresis, 0.0f, 12.0f);
-    if (retainedTarget && retainedTargetScore <= bestScore + switchMargin) {
+    if (retainedTarget && (retainedTargetInsideBubble || retainedTargetScore <= bestScore + switchMargin)) {
         bestTarget = retainedTarget;
         bestTargetBounds = retainedTargetBounds;
     }
@@ -660,7 +683,7 @@ void AimAssistModule::processPlayerFrame() {
 
 void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
-    if (!m_autoHit || !enabled || !player || !m_lastTarget || !g_gameModeAttack ||
+    if (!m_autoHit || !enabled || !player || !m_lastTarget ||
         !validBounds(m_lastTargetBounds)) return;
 
     const auto now = std::chrono::steady_clock::now();
@@ -669,7 +692,6 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     void* gameMode = g_lastGameMode.load(std::memory_order_acquire);
     if (!gameMode) return;
 
-    const auto* target = reinterpret_cast<const Actor*>(m_lastTarget);
     const Vec3 playerPosition = player->position();
     const AABB playerBounds = player->bounds();
     if (!finiteVec3(playerPosition)) return;
@@ -694,24 +716,9 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(hitDistanceSq) || hitDistanceSq < 0.01f ||
         hitDistanceSq > autoHitRange * autoHitRange) return;
 
-    auto* rotationComponent = player->rotationComponent();
-    if (!rotationComponent) return;
-    Vec2 rotation = field<Vec2>(rotationComponent, 0);
-    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return;
-    rotation.x = std::clamp(rotation.x, -89.0f, 89.0f);
-    rotation.y = wrapDegrees(rotation.y);
-
-    const float yaw = rotation.y / kRadToDeg;
-    const float pitch = rotation.x / kRadToDeg;
-    const float cosPitch = std::cos(pitch);
-    const Vec3 viewDirection{
-        -std::sin(yaw) * cosPitch,
-        -std::sin(pitch),
-        std::cos(yaw) * cosPitch
-    };
-    // Require the actual view ray to cross the selected target hitbox. This prevents
-    // Auto Hit from attacking a nearby entity merely because AimAssist selected it.
-    if (!rayIntersectsAABB(eyePosition, viewDirection, bounds)) return;
+    // Auto Hit is range-gated against the AimAssist's already-filtered target.
+    // Requiring an exact client-side ray/AABB intersection here made it fail while
+    // smoothing or mobile touch input still left a few pixels of aim error.
 
     if (m_cantSeeThroughBlocks) {
         auto* dimension = player->dimension();
@@ -721,13 +728,13 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
             (bounds.min.y + bounds.max.y) * 0.5f,
             (bounds.min.z + bounds.max.z) * 0.5f
         };
-        if (!hasClearLineOfSight(blockSource, eyePosition, center)) return;
+        if (!hasClearLineOfSight(blockSource, eyePosition, hitPoint)) return;
     }
 
     // A short configurable cadence avoids invoking the native attack every frame.
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
     m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(delayMs));
-    g_gameModeAttack(gameMode, m_lastTarget, true, &hitPoint);
+    bedrocktools::core::gamehooks::attack(gameMode, m_lastTarget, true, &hitPoint);
 }
 
 void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
@@ -1006,6 +1013,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_targetSwitchHysteresis = std::clamp(j.value("m_targetSwitchHysteresis", m_targetSwitchHysteresis), 0.0f, 12.0f);
     m_targetSwitchDistanceMargin = std::clamp(j.value("m_targetSwitchDistanceMargin", m_targetSwitchDistanceMargin), 0.0f, 5.0f);
+    m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
@@ -1039,6 +1047,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_fov"] = m_fov;
     j["m_targetSwitchHysteresis"] = m_targetSwitchHysteresis;
     j["m_targetSwitchDistanceMargin"] = m_targetSwitchDistanceMargin;
+    j["m_targetRetentionRadius"] = m_targetRetentionRadius;
     j["m_targetSelectionMode"] = m_targetSelectionMode;
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_strength"] = m_strength;
