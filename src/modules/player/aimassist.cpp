@@ -409,6 +409,39 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     return true;
 }
 
+bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
+                                                   bedrocktools::sdk::AABB& bounds,
+                                                   float& range) {
+    using namespace bedrocktools::sdk;
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    bounds = {};
+    range = std::clamp(m_range, 2.0f, 80.0f);
+    auto* player = m_lastPlayer;
+    if (!enabled || !player || !desiredTarget || !g_fetchNearbyActors) return false;
+
+    // Resolve the desired actor against a fresh engine-owned actor snapshot before
+    // dereferencing it. This lets short multi-tick actions (such as a mace swap)
+    // keep their original target without trusting a cached raw pointer.
+    Vec3 extent{range, range, range};
+    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (!actors.begin || !actors.end || endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
+        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) return false;
+
+    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        if (entry->actor != desiredTarget) continue;
+        auto* actor = reinterpret_cast<Actor*>(desiredTarget);
+        const Vec3 position = actor->position();
+        const AABB candidateBounds = actor->bounds();
+        if (!finiteVec3(position) || !validBounds(candidateBounds)) return false;
+        bounds = candidateBounds;
+        return true;
+    }
+    return false;
+}
+
 bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
@@ -771,8 +804,8 @@ void AimAssistModule::processPlayerFrame() {
 void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
-    // Auto Hit runs only from LocalPlayerTickEvent. Never invoke native combat code
-    // during ClientInstanceUpdate/frame processing, when entity state may be in flux.
+    // Keep combat calls on the player-tick path only. The target must have been
+    // present in the latest native actor snapshot; never attack a retained/stale pointer.
     if (!m_autoHit || !enabled || !player || player != m_lastPlayer ||
         !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return;
 
@@ -781,8 +814,8 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         now - m_lastTargetSeen > std::chrono::milliseconds(150)) return;
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    // Only use a GameMode pointer captured from an actual engine callback. The
-    // guessed Player::mGameMode offset is version-sensitive and unsafe to dereference.
+    // Only use a GameMode pointer captured by a real engine callback. Do not guess
+    // a version-sensitive offset from Player, which caused crashes in earlier builds.
     void* gameMode = bedrocktools::core::gamehooks::gameMode();
     if (!gameMode) return;
 
@@ -807,6 +840,18 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     rotation.y = wrapDegrees(rotation.y);
 
     const AABB bounds = m_lastTargetBounds;
+    const Vec3 targetCenter{
+        (bounds.min.x + bounds.max.x) * 0.5f,
+        bounds.min.y + (bounds.max.y - bounds.min.y) * 0.55f,
+        (bounds.min.z + bounds.max.z) * 0.5f
+    };
+    const float centerDistanceSq = distanceSquared(eyePosition, targetCenter);
+    if (!std::isfinite(centerDistanceSq) || centerDistanceSq < 0.01f) return;
+
+    // Do not require a perfect ray/AABB intersection: that made AutoHit behave like
+    // ordinary manual clicking and was the main gate blocking nearby selected targets.
+    // Still bound it to the configured aim cone so a target retained behind the player
+    // can never be attacked just because it remained in the tracking bubble.
     const float yaw = rotation.y / kRadToDeg;
     const float pitch = rotation.x / kRadToDeg;
     const float cosPitch = std::cos(pitch);
@@ -815,20 +860,25 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         -std::sin(pitch),
         std::cos(yaw) * cosPitch
     };
-
-    // Small mobile touch tolerance, but never attack a retained target behind the
-    // camera or an entity that is merely close to the player's body.
-    constexpr float crosshairTolerance = 0.18f;
-    const AABB crosshairBounds{
-        {bounds.min.x - crosshairTolerance, bounds.min.y - crosshairTolerance, bounds.min.z - crosshairTolerance},
-        {bounds.max.x + crosshairTolerance, bounds.max.y + crosshairTolerance, bounds.max.z + crosshairTolerance}
+    const Vec3 toTarget{
+        targetCenter.x - eyePosition.x,
+        targetCenter.y - eyePosition.y,
+        targetCenter.z - eyePosition.z
     };
-    if (!rayIntersectsAABB(eyePosition, viewDirection, crosshairBounds)) return;
+    const float centerDistance = std::sqrt(centerDistanceSq);
+    const float facingDot = (viewDirection.x * toTarget.x +
+                             viewDirection.y * toTarget.y +
+                             viewDirection.z * toTarget.z) / centerDistance;
+    const float maxAimAngle = std::clamp(m_fov, 1.0f, 120.0f) / kRadToDeg;
+    if (!std::isfinite(facingDot) ||
+        facingDot < std::cos(maxAimAngle)) return;
 
+    // Aim at the closest point on the target's live bounds. This is less error-prone
+    // than always passing the geometric center, especially for tall mobs and edge hits.
     const Vec3 hitPoint{
-        (bounds.min.x + bounds.max.x) * 0.5f,
-        bounds.min.y + (bounds.max.y - bounds.min.y) * 0.55f,
-        (bounds.min.z + bounds.max.z) * 0.5f
+        std::clamp(eyePosition.x, bounds.min.x, bounds.max.x),
+        std::clamp(eyePosition.y, bounds.min.y, bounds.max.y),
+        std::clamp(eyePosition.z, bounds.min.z, bounds.max.z)
     };
     const float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
     const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
@@ -843,9 +893,12 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     }
 
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
-    // Rate-limit even if vanilla rejects an attempt, instead of retrying every tick.
-    m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(delayMs));
-    bedrocktools::core::gamehooks::attack(gameMode, m_lastTarget, true, &hitPoint);
+    const bool accepted = bedrocktools::core::gamehooks::attack(
+        gameMode, m_lastTarget, true, &hitPoint);
+    // Avoid hammering the native entry if the engine rejects an attack, while allowing
+    // the next tick to recover quickly after a transient false return.
+    const float nextDelayMs = accepted ? delayMs : std::min(delayMs, 120.0f);
+    m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(nextDelayMs));
 }
 
 void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
