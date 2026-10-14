@@ -7,6 +7,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/sdk/Offsets.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -31,6 +32,38 @@ float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk:
     const float dz = a.z - b.z;
     return dx * dx + dy * dy + dz * dz;
 }
+
+bedrocktools::sdk::Vec3 eyePositionFor(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    const Vec3 position = player->position();
+    const AABB bounds = player->bounds();
+    Vec3 eyePosition = position;
+    if (validBounds(bounds)) {
+        eyePosition.x = (bounds.min.x + bounds.max.x) * 0.5f;
+        eyePosition.y = bounds.min.y + (bounds.max.y - bounds.min.y) * 0.85f;
+        eyePosition.z = (bounds.min.z + bounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+    return eyePosition;
+}
+
+bool targetWithinRange(bedrocktools::sdk::Player* player,
+                       const bedrocktools::sdk::AABB& targetBounds,
+                       float range) {
+    if (!player || !validBounds(targetBounds)) return false;
+    const auto eye = eyePositionFor(player);
+    if (!finiteVec(eye)) return false;
+    const bedrocktools::sdk::Vec3 hitPoint{
+        std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
+        std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
+        std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
+    };
+    const float distanceSq = distanceSquared(eye, hitPoint);
+    const float safeRange = std::clamp(range, 2.0f, 6.0f);
+    return std::isfinite(distanceSq) && distanceSq >= 0.01f &&
+        distanceSq <= safeRange * safeRange;
+}
 }
 
 MaceSwapperModule::MaceSwapperModule()
@@ -50,10 +83,17 @@ void MaceSwapperModule::onEnable() {
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
     m_nextAttack = {};
+    m_pendingAttack = false;
+    m_pendingMaceSlot = -1;
+    m_pendingPreviousSlot = -1;
+    m_pendingTarget = nullptr;
+    m_pendingPlayer = nullptr;
 }
 
 void MaceSwapperModule::onDisable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    // If we were between the hotbar change and the hit, leave restoration pending
+    // for the next player tick; it can safely restore only if the mace is still selected.
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
     m_nextAttack = {};
@@ -63,8 +103,11 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> lock(m_stateMutex);
 
-    if (!enabled || !player) {
+    if (!player) {
         m_hasLastPlayerY = false;
+        m_pendingAttack = false;
+        m_pendingTarget = nullptr;
+        m_pendingPlayer = nullptr;
         return;
     }
 
@@ -78,8 +121,73 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_lastPlayerY = playerPosition.y;
     m_hasLastPlayerY = true;
 
-    // Require actual downward movement; rising jumps and standing still do not trigger.
-    if (verticalDelta >= -0.025f) return;
+    auto& inventory = bedrocktools::core::InventoryAccess::get();
+
+    // Finish a swap on the following tick. This gives vanilla a tick to observe
+    // the selected mace before attack and slot restoration, rather than changing
+    // the selected slot twice in the same callback where no equip update can occur.
+    if (m_pendingAttack) {
+        const int selectedSlot = inventory.selectedHotbarSlot(player);
+        const bool stillHoldingMace = selectedSlot == m_pendingMaceSlot;
+        auto restoreIfStillSwapped = [&]() {
+            if (m_restoreSlot && stillHoldingMace && m_pendingPreviousSlot >= 0) {
+                inventory.selectHotbarSlot(player, m_pendingPreviousSlot);
+            }
+            m_pendingAttack = false;
+            m_pendingMaceSlot = -1;
+            m_pendingPreviousSlot = -1;
+            m_pendingTarget = nullptr;
+            m_pendingPlayer = nullptr;
+        };
+
+        if (!enabled) {
+            restoreIfStillSwapped();
+            return;
+        }
+        if (player != m_pendingPlayer || !stillHoldingMace || verticalDelta >= -0.025f) {
+            restoreIfStillSwapped();
+            return;
+        }
+
+        auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+        if (!aimModuleBase || !aimModuleBase->enabled) {
+            restoreIfStillSwapped();
+            return;
+        }
+        auto* aim = static_cast<AimAssistModule*>(aimModuleBase);
+        void* currentTarget = nullptr;
+        AABB targetBounds{};
+        float aimRange = 0.0f;
+        if (!aim->currentTargetSnapshot(currentTarget, targetBounds, aimRange) ||
+            currentTarget != m_pendingTarget ||
+            !aim->currentTargetInCrosshair(player, currentTarget) ||
+            !targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) {
+            restoreIfStillSwapped();
+            return;
+        }
+
+        void* gameMode = field<void*>(player, offsets::Player::mGameMode);
+        if (!gameMode) gameMode = bedrocktools::core::gamehooks::gameMode();
+        if (!gameMode) {
+            restoreIfStillSwapped();
+            return;
+        }
+
+        const Vec3 hitPoint{
+            std::clamp(eyePositionFor(player).x, targetBounds.min.x, targetBounds.max.x),
+            std::clamp(eyePositionFor(player).y, targetBounds.min.y, targetBounds.max.y),
+            std::clamp(eyePositionFor(player).z, targetBounds.min.z, targetBounds.max.z)
+        };
+        const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
+        bedrocktools::core::gamehooks::attack(gameMode, currentTarget, true, &hitPoint);
+        restoreIfStillSwapped();
+        m_nextAttack = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds(static_cast<int>(intervalMs));
+        aim->deferAutoHitFor(intervalMs);
+        return;
+    }
+
+    if (!enabled || verticalDelta >= -0.025f) return;
 
     const auto now = std::chrono::steady_clock::now();
     if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) return;
@@ -93,51 +201,24 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange)) return;
     if (!aim->currentTargetInCrosshair(player, target)) return;
+    if (!targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) return;
 
     void* gameMode = field<void*>(player, offsets::Player::mGameMode);
     if (!gameMode) gameMode = bedrocktools::core::gamehooks::gameMode();
-    if (!gameMode || !validBounds(targetBounds)) return;
+    if (!gameMode) return;
 
-    const AABB playerBounds = player->bounds();
-    Vec3 eyePosition = playerPosition;
-    if (validBounds(playerBounds)) {
-        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
-        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
-        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
-    } else {
-        eyePosition.y += 1.5f;
-    }
-
-    const Vec3 hitPoint{
-        std::clamp(eyePosition.x, targetBounds.min.x, targetBounds.max.x),
-        std::clamp(eyePosition.y, targetBounds.min.y, targetBounds.max.y),
-        std::clamp(eyePosition.z, targetBounds.min.z, targetBounds.max.z)
-    };
-    const float effectiveRange = std::min(
-        std::clamp(m_attackRange, 2.0f, 6.0f),
-        std::clamp(aimRange, 2.0f, 80.0f));
-    const float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
-    if (!std::isfinite(hitDistanceSq) || hitDistanceSq < 0.01f ||
-        hitDistanceSq > effectiveRange * effectiveRange) return;
-
-    auto& inventory = bedrocktools::core::InventoryAccess::get();
     const int maceSlot = inventory.findHotbarSlot(player, "mace");
     const int previousSlot = inventory.selectedHotbarSlot(player);
     if (maceSlot < 0 || previousSlot < 0) return;
 
+    if (previousSlot != maceSlot && !inventory.selectHotbarSlot(player, maceSlot)) return;
+    m_pendingMaceSlot = maceSlot;
+    m_pendingPreviousSlot = previousSlot;
+    m_pendingTarget = target;
+    m_pendingPlayer = player;
+    m_pendingAttack = true;
+
     const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
-    bool switched = false;
-    if (previousSlot != maceSlot) {
-        if (!inventory.selectHotbarSlot(player, maceSlot)) return;
-        switched = true;
-    }
-
-    // The GameMode call consumes the selected hotbar item synchronously. Restore
-    // the previous selection immediately after the native attack path returns.
-    bedrocktools::core::gamehooks::attack(gameMode, target, true, &hitPoint);
-    if (switched && m_restoreSlot) inventory.selectHotbarSlot(player, previousSlot);
-
-    m_nextAttack = now + std::chrono::milliseconds(static_cast<int>(intervalMs));
     aim->deferAutoHitFor(intervalMs);
 }
 
