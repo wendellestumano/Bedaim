@@ -232,6 +232,22 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
     toggle("m_weaponTrident", "Trident", "weapons", "Allow tridents when the filter is enabled.");
     toggle("m_weaponSpear", "Spear", "weapons", "Allow spears when the filter is enabled.");
     toggle("m_weaponOtherMelee", "Other melee", "weapons", "Allow other melee weapons.");
+    slider("m_swordAimMultiplier", "Sword aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while a sword is held.");
+    slider("m_axeAimMultiplier", "Axe aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while an axe is held.");
+    slider("m_maceAimMultiplier", "Mace aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while the mace is held.");
+    slider("m_bowAimMultiplier", "Bow aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while a bow is held.");
+    slider("m_crossbowAimMultiplier", "Crossbow aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while a crossbow is held.");
+    slider("m_tridentAimMultiplier", "Trident aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while a trident is held.");
+    slider("m_spearAimMultiplier", "Spear aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while a spear is held.");
+    slider("m_otherMeleeAimMultiplier", "Other melee aim profile", "weapons", "0.2", "2", "0.05", "x",
+           "Aim-speed multiplier while another melee weapon is held.");
 
     toggle("m_naturalization", "Naturalize jumps", "special",
            "Temporarily reduce pitch correction during a jump.");
