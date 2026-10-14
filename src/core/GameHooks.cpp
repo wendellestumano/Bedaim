@@ -400,16 +400,14 @@ EGLBoolean swapBuffersDetour(EGLDisplay display, EGLSurface surface) {
     if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
         FrameEvent event;
         bus().publish(event);
-        // Do not skip eglSwapBuffers: mobile EGL does not guarantee preservation
-        // of the front/back buffer when a swap is omitted. Instead, briefly delay
-        // presentation of this already-rendered frame, then perform the real swap.
-        // This creates a short visual hit-stop pulse without risking an undefined
-        // surface or starving the renderer.
+        // Keep the previously presented frame visible for this swap. The HUD
+        // limits this to two frames for an attack-attempt fallback or four frames
+        // for a positive native result; do not hold the render thread indefinitely.
         if (event.cancelled()) {
             static std::atomic_bool loggedHeldFrame{false};
             if (!loggedHeldFrame.exchange(true, std::memory_order_acq_rel))
-                autoHitLogger().info("ULTRAKILL HUD hit-stop pulse reached eglSwapBuffers; delaying presentation by 18 ms.");
-            std::this_thread::sleep_for(std::chrono::milliseconds(18));
+                autoHitLogger().info("ULTRAKILL HUD hit-stop reached eglSwapBuffers; holding the presented frame for a few swaps.");
+            return EGL_TRUE;
         }
     }
     return swapBuffersOriginal ? swapBuffersOriginal(display, surface) : EGL_FALSE;
