@@ -155,15 +155,17 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             return;
         }
         auto* aim = static_cast<AimAssistModule*>(aimModuleBase);
-        void* currentTarget = nullptr;
         AABB targetBounds{};
         float aimRange = 0.0f;
-        if (!aim->currentTargetSnapshot(currentTarget, targetBounds, aimRange) ||
-            currentTarget != m_pendingTarget ||
+        if (!aim->targetBoundsSnapshot(m_pendingTarget, targetBounds, aimRange) ||
             !targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) {
             restoreIfStillSwapped();
             return;
         }
+        // Preserve the target chosen before slot switching. Aim Assist is allowed
+        // to re-rank its current target between ticks; that must not cancel a valid
+        // pending mace hit or redirect it to a different entity.
+        void* currentTarget = m_pendingTarget;
 
         void* gameMode = bedrocktools::core::gamehooks::gameMode();
         if (!gameMode) {
