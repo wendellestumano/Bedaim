@@ -5,6 +5,7 @@
 namespace bedrocktools::sdk::offsets::Inventory {
 
 inline constexpr std::size_t PlayerInventory = 0x570;
+inline constexpr std::size_t PlayerInventorySelectedSlot = 0x10;
 inline constexpr std::size_t PlayerInventoryContainer = 0xB8;
 inline constexpr std::size_t ItemStackItemCounter = 0x8;
 inline constexpr std::size_t ItemStackCount = 0x22;
