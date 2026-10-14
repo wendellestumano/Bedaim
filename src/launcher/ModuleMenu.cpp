@@ -2,6 +2,7 @@
 #include "modules/ModuleRegistry.hpp"
 #include "config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
+#include <pl/ModMenuConfig.hpp>
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -64,6 +65,157 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     }
     mod->loadConfig(j);
     bedrocktools::config::ConfigManager::get().save();
+}
+
+static std::string schemaCurrentValue(const nlohmann::json& config,
+                                     const std::string& key,
+                                     const std::string& fallback) {
+    const auto it = config.find(key);
+    if (it == config.end() || it->is_null()) return fallback;
+    if (it->is_string()) return it->get<std::string>();
+    if (it->is_boolean()) return it->get<bool>() ? "true" : "false";
+    if (it->is_number()) return it->dump();
+    return fallback;
+}
+
+static void registerAimAssistConfigSchema(std::string_view moduleId,
+                                          const nlohmann::json& config) {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    schema.defaultCategory("aim")
+        .category("aim", "Aim", "Rotation, behavior and tracking profile")
+        .category("targeting", "Targeting", "Target selection and visibility")
+        .category("hitbox", "Hitbox", "Virtual hitbox area used for steering")
+        .category("auto_hit", "Auto Hit", "Attack distance and cooldown")
+        .category("weapons", "Weapons", "Item filters")
+        .category("special", "Special", "Elytra and jump behavior");
+
+    auto addNode = [&](const std::string& key, const std::string& title,
+                       const std::string& category, ConfigControlTypeV2 type,
+                       const std::string& minValue, const std::string& maxValue,
+                       const std::string& step, const std::string& unit,
+                       const std::string& description, bool advanced,
+                       const std::vector<std::pair<std::string, std::string>>& choices,
+                       ConfigChoiceStyleV2 choiceStyle) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.category = category;
+        node.title = title;
+        node.description = description;
+        node.type = type;
+        node.choiceStyle = choiceStyle;
+        node.defaultValue = schemaCurrentValue(config, key, "");
+        node.currentValue = node.defaultValue;
+        node.hasCurrentValue = config.contains(key);
+        node.minValue = minValue;
+        node.maxValue = maxValue;
+        node.step = step;
+        node.unit = unit;
+        node.advanced = advanced;
+        for (const auto& choice : choices) {
+            ConfigOptionV2 option;
+            option.value = choice.first;
+            option.label = choice.second;
+            node.options.push_back(std::move(option));
+        }
+        schema.node(std::move(node));
+    };
+
+    auto toggle = [&](const char* key, const char* title, const char* category,
+                      const char* description, bool advanced = false) {
+        addNode(key, title, category, ConfigControlTypeV2::Toggle, "", "", "", "",
+                description, advanced, {}, ConfigChoiceStyleV2::Auto);
+    };
+    auto slider = [&](const char* key, const char* title, const char* category,
+                      const char* minValue, const char* maxValue, const char* step,
+                      const char* unit, const char* description, bool advanced = false) {
+        addNode(key, title, category, ConfigControlTypeV2::SliderFloat, minValue, maxValue,
+                step, unit, description, advanced, {}, ConfigChoiceStyleV2::Auto);
+    };
+    auto choice = [&](const char* key, const char* title, const char* category,
+                      const char* description,
+                      const std::vector<std::pair<std::string, std::string>>& options,
+                      ConfigChoiceStyleV2 style, bool advanced = false) {
+        addNode(key, title, category, ConfigControlTypeV2::Choice, "", "", "", "",
+                description, advanced, options, style);
+    };
+
+    choice("m_aimMode", "Aim profile", "aim", "Select the overall aim response.",
+           {{"Robotic","Robotic"},{"Classic","Classic"},{"Human","Human"}},
+           ConfigChoiceStyleV2::Segmented);
+    choice("m_trackingMode", "Tracking", "aim", "How the assist follows the selected hitbox.",
+           {{"Grudado","Sticky"},{"Smooth","Smooth"},{"Adaptativo","Adaptive"}},
+           ConfigChoiceStyleV2::Segmented);
+    slider("m_aimSpeed", "Aim speed", "aim", "0.1", "10", "0.1", "x",
+           "Base angular turn rate.");
+    slider("m_rotationSpeed", "Rotation speed", "aim", "0.1", "10", "0.1", "x",
+           "Independent multiplier for large rotations and targets behind you.");
+    slider("m_strength", "Strongness", "aim", "0", "1", "0.05", "",
+           "How much the assist resists opposing manual drag.");
+    slider("m_fov", "FOV", "aim", "1", "360", "1", "deg",
+           "Maximum angular search region.");
+    slider("m_range", "Detection range", "aim", "2", "80", "0.5", "blocks",
+           "How far the target scanner searches.");
+
+    toggle("m_targetPlayers", "Target players", "targeting", "Include player entities.");
+    toggle("m_targetMobs", "Target mobs", "targeting", "Include supported mob entities.");
+    toggle("m_cantSeeThroughBlocks", "Require line of sight", "targeting",
+           "Reject targets obstructed by solid blocks.");
+    choice("m_targetSelectionMode", "Target priority", "targeting",
+           "Choose the nearest entity or the entity closest to the crosshair.",
+           {{"Player","Closest to player"},{"Crosshair","Closest to crosshair"}},
+           ConfigChoiceStyleV2::Segmented);
+    slider("m_targetSwitchHysteresis", "Crosshair switch stability", "targeting",
+           "0", "12", "0.25", "deg", "Reduce target changes while tracking.", true);
+    slider("m_targetSwitchDistanceMargin", "Distance switch margin", "targeting",
+           "0", "5", "0.1", "blocks", "Keep the current target unless a challenger is clearly closer.", true);
+    slider("m_targetRetentionRadius", "Around-player lock radius", "targeting",
+           "0.5", "5", "0.1", "blocks", "Keep a nearby target during fast camera movement.");
+    addNode("m_whitelistNames", "Ignore names", "targeting", ConfigControlTypeV2::Text,
+            "", "", "", "", "Comma-separated names to exclude.", true, {},
+            ConfigChoiceStyleV2::Auto);
+
+    slider("m_hitboxScale", "Base hitbox area", "hitbox", "0.5", "1", "0.05", "x",
+           "Base size of the virtual steering region.");
+    toggle("m_distanceDependentHitbox", "Distance-dependent hitbox", "hitbox",
+           "Tighten near targets and expand the virtual aim region with distance.");
+    slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox", "0.1", "10",
+           "0.1", "x", "Higher values expand steering coverage more at long range.");
+
+    toggle("m_autoHit", "Enable Auto Hit", "auto_hit",
+           "Attempt an attack on a valid target within range.");
+    slider("m_autoHitRange", "Attack range", "auto_hit", "2", "6", "0.1", "blocks",
+           "Maximum native attack distance.");
+    slider("m_autoHitDelayMs", "Attack interval", "auto_hit", "80", "1000", "10", "ms",
+           "Minimum time between native attack attempts.");
+
+    toggle("m_weaponOnly", "Enable weapon filter", "weapons",
+           "Run Aim Assist only while a selected weapon type is held.");
+    toggle("m_weaponSword", "Sword", "weapons", "Allow swords when the filter is enabled.");
+    toggle("m_weaponAxe", "Axe", "weapons", "Allow axes when the filter is enabled.");
+    toggle("m_weaponMace", "Mace", "weapons", "Allow the mace when the filter is enabled.");
+    toggle("m_weaponBow", "Bow", "weapons", "Allow bows when the filter is enabled.");
+    toggle("m_weaponCrossbow", "Crossbow", "weapons", "Allow crossbows when the filter is enabled.");
+    toggle("m_weaponTrident", "Trident", "weapons", "Allow tridents when the filter is enabled.");
+    toggle("m_weaponSpear", "Spear", "weapons", "Allow spears when the filter is enabled.");
+    toggle("m_weaponOtherMelee", "Other melee", "weapons", "Allow other melee weapons.");
+
+    toggle("m_naturalization", "Naturalize jumps", "special",
+           "Temporarily reduce pitch correction during a jump.");
+    choice("m_naturalizationWeapon", "Naturalization weapon", "special",
+           "Choose when jump naturalization applies.",
+           {{"All","All"},{"Sword","Sword"},{"Axe","Axe"},{"Mace","Mace"},
+            {"Bow","Bow"},{"Crossbow","Crossbow"},{"Trident","Trident"},
+            {"Spear","Spear"},{"Other melee","Other melee"}},
+           ConfigChoiceStyleV2::Dropdown);
+    toggle("m_elytraMode", "Elytra mode", "special",
+           "Enable small aim-point corrections while gliding.");
+
+    if (!setConfigSchemaJson(moduleId, schema.toJson())) {
+        // Legacy controls remain registered as a fallback when a loader version
+        // does not accept the V2 schema.
+    }
 }
 
 void registerModulesWithLauncher() {
@@ -417,6 +569,11 @@ void registerModulesWithLauncher() {
             builder.config(entry.key, entry.displayName, entry.type, entry.default_value, entry.min_value, entry.max_value, entry.depends_on);
         }
 
-        if (builder.registerModule()) mod->onMenuRegistered();
+        if (builder.registerModule()) {
+            mod->onMenuRegistered();
+            if (mod->moduleId == "bedrocktools.Aim Assist") {
+                registerAimAssistConfigSchema(mod->moduleId, j);
+            }
+        }
     }
 }
