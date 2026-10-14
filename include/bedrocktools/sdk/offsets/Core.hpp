@@ -22,6 +22,8 @@ inline constexpr std::size_t HudMobEffectsRendererRender = 17;
 inline constexpr std::size_t ClientInstanceGetMinecraftGame = 83;
 inline constexpr std::size_t ClientInstanceGetLocalPlayer = 32;
 inline constexpr std::size_t PlayerGetCarriedItem = 78;
+// Derived from the current Actor/Mob/Player virtual-function layout used by BedrockTools.
+inline constexpr std::size_t PlayerSendInventory = 164;
 inline constexpr std::size_t ItemGetMaxDamage = 37;
 inline constexpr std::size_t ItemGetAnimationFrameFor = 120;
 }
