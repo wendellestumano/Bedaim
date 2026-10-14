@@ -397,22 +397,28 @@ void* gameMode() {
 void* gameModeForPlayer(void* player) {
     if (!player) return nullptr;
 
-    // This field offset comes from the SDK layout and is still version-sensitive.
-    // Accept the candidate only if its vtable contains a signature-verified
-    // GameMode/SurvivalMode attack implementation (not merely any game function).
+    // The field offset comes from the SDK Player layout, but remains build-specific.
     const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
     void* candidate = *reinterpret_cast<void**>(
         playerAddress + bedrocktools::sdk::offsets::Player::mGameMode);
-    if (candidate && publicAttackVirtualEntry(candidate)) {
-        currentGameMode.store(candidate, std::memory_order_release);
-        return candidate;
+    if (candidate) {
+        auto** vtable = *reinterpret_cast<void***>(candidate);
+        if (vtable && vtable[16]) {
+            Dl_info info{};
+            if (dladdr(vtable[16], &info) && info.dli_fname &&
+                std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos) {
+                // This is a live game-owned object. Public attack signature matching
+                // is performed separately; if it is absent, attack() can use the
+                // hooked internal function's original trampoline.
+                currentGameMode.store(candidate, std::memory_order_release);
+                return candidate;
+            }
+        }
     }
 
-    // Some builds expose the member differently. A GameMode captured from a real
-    // engine callback is safer than treating an unverified field as a live object.
-    void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (observed && publicAttackVirtualEntry(observed)) return observed;
-    return nullptr;
+    // A GameMode captured from a real engine callback is also a valid fallback.
+    // Do not reject it merely because this build's public wrapper signature changed.
+    return currentGameMode.load(std::memory_order_acquire);
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
