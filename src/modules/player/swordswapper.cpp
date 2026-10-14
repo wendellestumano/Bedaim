@@ -127,10 +127,10 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_lastPlayerY = position.y;
     m_hasLastPlayerY = true;
 
-    // Require two consecutive near-stationary vertical ticks, so the jump apex
+    // Require five consecutive near-stationary vertical ticks, so the jump apex
     // is less likely to be mistaken for the ground.
     if (std::fabs(dy) <= 0.0025f)
-        m_groundedTicks = std::min(m_groundedTicks + 1, 4);
+        m_groundedTicks = std::min(m_groundedTicks + 1, 6);
     else
         m_groundedTicks = 0;
     const bool grounded = m_groundedTicks >= 5 && dy >= -0.0025f;
