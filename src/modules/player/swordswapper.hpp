@@ -1,0 +1,31 @@
+#pragma once
+
+#include "../Module.hpp"
+#include <chrono>
+#include <mutex>
+
+namespace bedrocktools::sdk { class Player; }
+
+class SwordSwapperModule final : public Module {
+public:
+    SwordSwapperModule();
+    void onInit() override;
+    void onEnable() override;
+    void onDisable() override;
+    void loadConfig(const nlohmann::json& j) override;
+    void saveConfig(nlohmann::json& j) override;
+
+    float m_attackRange = 3.0f;
+    bool m_restoreSlot = true;
+
+private:
+    void processPlayerTick(bedrocktools::sdk::Player* player);
+
+    std::mutex m_stateMutex;
+    float m_lastPlayerY = 0.0f;
+    bool m_hasLastPlayerY = false;
+    int m_groundedTicks = 0;
+    bool m_ownsSwap = false;
+    int m_swordSlot = -1;
+    int m_previousSlot = -1;
+};
