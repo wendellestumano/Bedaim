@@ -4,7 +4,6 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
-#include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -12,7 +11,6 @@
 #include <bedrocktools/sdk/client/ClientInstance.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
@@ -44,7 +42,6 @@ struct ActorVector {
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
 
 AimAssistModule* g_aimAssist = nullptr;
-std::atomic<void*> g_lastGameMode{nullptr};
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
@@ -359,12 +356,6 @@ void AimAssistModule::onInit() {
     g_applyLocalPlayerTurnDelta = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
 
-    // Learn the active GameMode from native user actions instead of guessing its offset.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
-        [](auto& event) {
-            if (event.gameMode) g_lastGameMode.store(event.gameMode, std::memory_order_release);
-        });
-
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
             if (g_aimAssist && g_aimAssist->enabled) {
@@ -403,6 +394,72 @@ void AimAssistModule::onDisable() {
 void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     processPlayerTickLocked(player);
+}
+
+bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range) {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    target = nullptr;
+    bounds = {};
+    range = std::clamp(m_range, 2.0f, 80.0f);
+    if (!enabled || !m_lastPlayer || !m_lastTarget || !validBounds(m_lastTargetBounds)) return false;
+    target = m_lastTarget;
+    bounds = m_lastTargetBounds;
+    return true;
+}
+
+bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target) {
+    using namespace bedrocktools::sdk;
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    if (!enabled || !player || player != m_lastPlayer || !target ||
+        target != m_lastTarget || !validBounds(m_lastTargetBounds)) return false;
+
+    auto* rotationComponent = player->rotationComponent();
+    if (!rotationComponent) return false;
+    Vec2 rotation = field<Vec2>(rotationComponent, 0);
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return false;
+    rotation.x = std::clamp(rotation.x, -89.0f, 89.0f);
+    rotation.y = wrapDegrees(rotation.y);
+
+    const Vec3 playerPosition = player->position();
+    const AABB playerBounds = player->bounds();
+    if (!finiteVec3(playerPosition)) return false;
+    Vec3 eyePosition = playerPosition;
+    if (validBounds(playerBounds)) {
+        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
+        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+
+    const float yaw = rotation.y / kRadToDeg;
+    const float pitch = rotation.x / kRadToDeg;
+    const float cosPitch = std::cos(pitch);
+    const Vec3 viewDirection{
+        -std::sin(yaw) * cosPitch,
+        -std::sin(pitch),
+        std::cos(yaw) * cosPitch
+    };
+    if (!rayIntersectsAABB(eyePosition, viewDirection, m_lastTargetBounds)) return false;
+
+    if (m_cantSeeThroughBlocks) {
+        auto* dimension = player->dimension();
+        void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
+        const Vec3 center{
+            (m_lastTargetBounds.min.x + m_lastTargetBounds.max.x) * 0.5f,
+            (m_lastTargetBounds.min.y + m_lastTargetBounds.max.y) * 0.5f,
+            (m_lastTargetBounds.min.z + m_lastTargetBounds.max.z) * 0.5f
+        };
+        if (!hasClearLineOfSight(blockSource, eyePosition, center)) return false;
+    }
+    return true;
+}
+
+void AimAssistModule::deferAutoHitFor(float delayMs) {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    const auto requested = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(static_cast<int>(std::clamp(delayMs, 80.0f, 1000.0f)));
+    if (m_nextAutoHit < requested) m_nextAutoHit = requested;
 }
 
 void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player) {
@@ -689,7 +746,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     const auto now = std::chrono::steady_clock::now();
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    void* gameMode = g_lastGameMode.load(std::memory_order_acquire);
+    void* gameMode = bedrocktools::core::gamehooks::gameMode();
     if (!gameMode) return;
 
     const Vec3 playerPosition = player->position();
