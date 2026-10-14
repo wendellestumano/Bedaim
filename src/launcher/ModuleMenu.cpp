@@ -127,6 +127,12 @@ void registerModulesWithLauncher() {
                 }
             }
 
+            if (mod->moduleId == "bedrocktools.Mace Swapper") {
+                if (k == "m_attackRange") displayName = "MACE SWAPPER > Range";
+                else if (k == "m_attackIntervalMs") displayName = "MACE SWAPPER > Attack interval (ms)";
+                else if (k == "m_restoreSlot") displayName = "MACE SWAPPER > Restore previous slot";
+            }
+
             if (mod->moduleId == "bedrocktools.Aim Assist") {
                 if (k == "m_aimMode") displayName = "AIM OPTIONS > Profile";
                 else if (k == "m_trackingMode") displayName = "AIM OPTIONS > Tracking mode";
@@ -204,7 +210,13 @@ void registerModulesWithLauncher() {
 
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
-                if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") {
+                if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackrange") {
+                    minVal = 2.0f;
+                    maxVal = 6.0f;
+                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackintervalms") {
+                    minVal = 80.0f;
+                    maxVal = 1000.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") {
                     minVal = 0.0f;
                     maxVal = 1.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_aimspeed") {
