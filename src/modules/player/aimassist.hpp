@@ -62,6 +62,7 @@ private:
     std::mutex m_stateMutex;
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
+    bool m_targetPresent = false;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
     bool m_hasAimPoint = false;
