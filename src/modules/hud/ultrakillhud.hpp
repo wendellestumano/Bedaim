@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 class UltrakillHudModule : public Module {
 public:
@@ -21,7 +22,7 @@ public:
 
 private:
     void onLocalPlayerTick(bedrocktools::sdk::Player* player);
-    void onAttack(bedrocktools::sdk::Actor* target);
+    void onAttackResult(bedrocktools::sdk::Actor* target, bool result);
     bool isMaceEquipped(bedrocktools::sdk::Player* player) const;
 
     std::atomic<bedrocktools::sdk::Player*> m_localPlayer{nullptr};
@@ -32,10 +33,7 @@ private:
     bool m_hasLastY = false;
     float m_lastY = 0.0f;
 
-    bedrocktools::sdk::Actor* m_pendingTarget = nullptr;
-    int m_pendingHurtTime = 0;
-    std::chrono::steady_clock::time_point m_pendingDeadline{};
-    bool m_hasPendingTarget = false;
+    std::string m_selectedItemId;
 
     std::uint64_t m_styleScore = 0;
     unsigned int m_combo = 0;

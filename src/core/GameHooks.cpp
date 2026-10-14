@@ -3,6 +3,7 @@
 
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/AttackResultEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
 #include <EGL/egl.h>
@@ -240,7 +241,13 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target), reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), const_cast<void*>(hitPosition)};
     bus().publish(event);
     if (event.cancelled()) return false;
-    return gameModeAttackOriginal ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition) : false;
+    const bool result = gameModeAttackOriginal
+        ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition)
+        : false;
+    // Publish after native processing so the HUD can react to the actual attack result.
+    AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
+    bus().publish(resultEvent);
+    return result;
 }
 
 void* clientUpdateDetour(void* clientInstance, bool value) {

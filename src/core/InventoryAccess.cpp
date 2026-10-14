@@ -66,18 +66,26 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
     return total;
 }
 
-int InventoryAccess::countStack(const void* stack, std::string_view identifierPart) const {
-    if (!stack || identifierPart.empty() || !read<std::uint8_t>(stack, ItemStackValid)) return 0;
-    const auto count = read<std::uint8_t>(stack, ItemStackCount);
-    if (count == 0) return 0;
+std::string InventoryAccess::stackIdentifier(const void* stack) const {
+    if (!stack || !read<std::uint8_t>(stack, ItemStackValid)) return {};
+    if (read<std::uint8_t>(stack, ItemStackCount) == 0) return {};
     const void* counter = read<const void*>(stack, ItemStackItemCounter);
     const void* item = counter ? read<const void*>(counter, 0) : nullptr;
-    if (!item) return 0;
+    if (!item) return {};
     const auto* vtable = read<const std::uintptr_t*>(item, 0);
-    if (!vtable || !vtable[ItemGetDescriptionIdVtableIndex]) return 0;
+    if (!vtable || !vtable[ItemGetDescriptionIdVtableIndex]) return {};
     using GetDescriptionIdFn = const std::string& (*)(const void*);
     const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(vtable[ItemGetDescriptionIdVtableIndex])(item);
-    return identifier.size() <= 128 && identifier.find(identifierPart) != std::string::npos ? count : 0;
+    if (identifier.empty() || identifier.size() > 128) return {};
+    return identifier;
+}
+
+int InventoryAccess::countStack(const void* stack, std::string_view identifierPart) const {
+    if (identifierPart.empty()) return 0;
+    const auto identifier = stackIdentifier(stack);
+    if (identifier.empty()) return 0;
+    return identifier.find(identifierPart) != std::string::npos
+        ? static_cast<int>(read<std::uint8_t>(stack, ItemStackCount)) : 0;
 }
 
 int InventoryAccess::findHotbarSlot(const sdk::Player* player, std::string_view identifierPart) const {

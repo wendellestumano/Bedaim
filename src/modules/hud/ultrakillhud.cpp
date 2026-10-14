@@ -4,11 +4,13 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/AttackEvent.hpp>
+#include <bedrocktools/events/AttackResultEvent.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -30,6 +32,32 @@ constexpr std::uint32_t kGold      = 0xFFFFD34E;
 constexpr std::uint32_t kBlack     = 0xD908090B;
 constexpr std::uint32_t kDeepBlack = 0xF20B0B0C;
 constexpr std::uint32_t kTrack     = 0xFF252529;
+constexpr std::uint32_t kShadow    = 0xFF050507;
+
+const void* carriedItemStack(Player* player) {
+    if (!player) return nullptr;
+    auto** vtable = *reinterpret_cast<void***>(player);
+    constexpr std::size_t index = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
+    if (!vtable || !vtable[index]) return nullptr;
+    using GetCarriedItemFn = const void* (*)(void*);
+    return reinterpret_cast<GetCarriedItemFn>(vtable[index])(player);
+}
+
+std::string itemLabel(std::string identifier) {
+    if (identifier.empty()) return "EMPTY HAND";
+    const auto colon = identifier.find(':');
+    if (colon != std::string::npos) identifier.erase(0, colon + 1);
+    for (char& c : identifier) {
+        if (c == '_') c = ' ';
+        else c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    }
+    constexpr std::size_t maxChars = 18;
+    if (identifier.size() > maxChars) {
+        identifier.resize(maxChars - 3);
+        identifier += "...";
+    }
+    return identifier;
+}
 
 struct RankInfo {
     const char* letter;
@@ -38,11 +66,13 @@ struct RankInfo {
 };
 
 RankInfo rankFor(std::uint64_t score) {
-    if (score >= 18000) return {"SS", "ULTRAKILL", kRed};
-    if (score >= 10000) return {"S", "SUPREME", kGold};
-    if (score >= 5500) return {"A", "ANARCHIC", kRed};
-    if (score >= 2800) return {"B", "BRUTAL", kRed};
-    if (score >= 1200) return {"C", "CHAOTIC", kRed};
+    if (score >= 18000) return {"ULTRA", "ULTRAKILL", kRed};
+    if (score >= 14000) return {"SSS", "HOMICIDAL", kRed};
+    if (score >= 9500) return {"SS", "SADISTIC", kRed};
+    if (score >= 6000) return {"S", "SUPREME", kGold};
+    if (score >= 3500) return {"A", "ANARCHIC", kRed};
+    if (score >= 1800) return {"B", "BRUTAL", kRed};
+    if (score >= 650) return {"C", "CHAOTIC", kCyan};
     return {"D", "DESTRUCTIVE", kWhite};
 }
 
@@ -62,22 +92,16 @@ UltrakillHudModule::UltrakillHudModule()
 }
 
 bool UltrakillHudModule::isMaceEquipped(Player* player) const {
-    if (!player) return false;
-
-    auto** vtable = *reinterpret_cast<void***>(player);
-    constexpr std::size_t index = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
-    if (!vtable || !vtable[index]) return false;
-
-    using GetCarriedItemFn = const void* (*)(void*);
-    const void* stack = reinterpret_cast<GetCarriedItemFn>(vtable[index])(player);
-    return stack && bedrocktools::core::InventoryAccess::get().countStack(stack, "mace") > 0;
+    const auto identifier = bedrocktools::core::InventoryAccess::get().stackIdentifier(
+        carriedItemStack(player));
+    return identifier.find("mace") != std::string::npos;
 }
 
 void UltrakillHudModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onLocalPlayerTick(event.player); });
-    bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>(
-        [this](auto& event) { onAttack(event.target); });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
+        [this](auto& event) { onAttackResult(event.target, event.result); });
 
     // Runtime calls ModuleRegistry::onFrame() before this last-priority listener.
     // The impact frame itself is presented, then the next two swaps are held.
@@ -106,11 +130,13 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     m_localPlayer.store(player, std::memory_order_release);
     if (!enabled) return;
 
-    const bool hasMace = isMaceEquipped(player);
+    const std::string itemId = bedrocktools::core::InventoryAccess::get().stackIdentifier(
+        carriedItemStack(player));
     const float currentY = player->position().y;
-    m_maceEquipped.store(hasMace, std::memory_order_relaxed);
+    m_maceEquipped.store(itemId.find("mace") != std::string::npos, std::memory_order_relaxed);
 
     std::lock_guard lock(m_stateMutex);
+    m_selectedItemId = itemId;
     if (m_hasLastY) {
         // Estimate blocks/second from local-player tick positions. This is an estimate,
         // not a native velocity attribute exposed by the SDK.
@@ -126,22 +152,34 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     m_lastY = currentY;
 }
 
-void UltrakillHudModule::onAttack(Actor* target) {
-    if (!enabled || !target) return;
-
+void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
+    if (!enabled || !target || !result) return;
     Player* player = m_localPlayer.load(std::memory_order_acquire);
     if (!player || !isMaceEquipped(player)) return;
 
-    // AttackEvent is emitted just before the native attack. Keep a short-lived candidate,
-    // then require the target's hurtTime to increase before counting/rendering an impact.
-    const int hurtBefore = target->hurtTime();
     const auto now = Clock::now();
-
     std::lock_guard lock(m_stateMutex);
-    m_pendingTarget = target;
-    m_pendingHurtTime = hurtBefore;
-    m_pendingDeadline = now + std::chrono::milliseconds(240);
-    m_hasPendingTarget = true;
+    if (m_lastConfirmedHit.time_since_epoch().count() != 0 &&
+        now - m_lastConfirmedHit < std::chrono::milliseconds(1500)) {
+        ++m_combo;
+    } else {
+        m_combo = 1;
+    }
+    m_styleScore = std::min<std::uint64_t>(999999ULL, m_styleScore + (250ULL * m_combo));
+    m_lastConfirmedHit = now;
+    m_flashStarted = now;
+    m_impactFallSpeedBps = std::max(
+        0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
+    m_flashActive = true;
+
+    // Present one flash frame, then hold it briefly for the visual hit-stop.
+    if (m_enableHitStop) {
+        m_hitStopFrames = 4;
+        m_hitStopPending = true;
+    } else {
+        m_hitStopFrames = 0;
+        m_hitStopPending = false;
+    }
 }
 
 void UltrakillHudModule::onEnable() {
@@ -152,8 +190,6 @@ void UltrakillHudModule::onEnable() {
     m_flashStarted = {};
     m_impactFallSpeedBps = 0.0f;
     m_flashActive = false;
-    m_hasPendingTarget = false;
-    m_pendingTarget = nullptr;
     m_hitStopFrames = 0;
     m_hitStopPending = false;
     m_hasLastY = false;
@@ -164,8 +200,6 @@ void UltrakillHudModule::onDisable() {
     {
         std::lock_guard lock(m_stateMutex);
         m_flashActive = false;
-        m_hasPendingTarget = false;
-        m_pendingTarget = nullptr;
         m_hitStopFrames = 0;
         m_hitStopPending = false;
     }
@@ -183,43 +217,11 @@ void UltrakillHudModule::onFrame() {
     Clock::time_point flashStarted{};
     float impactFallSpeed = 0.0f;
     bool flashActive = false;
+    std::string selectedItemId;
 
     {
         std::lock_guard lock(m_stateMutex);
-
-        if (m_hasPendingTarget) {
-            if (now > m_pendingDeadline) {
-                m_hasPendingTarget = false;
-                m_pendingTarget = nullptr;
-            } else if (m_pendingTarget) {
-                const int hurtAfter = m_pendingTarget->hurtTime();
-                if (hurtAfter > 0 && hurtAfter > m_pendingHurtTime) {
-                    m_hasPendingTarget = false;
-                    m_pendingTarget = nullptr;
-
-                    if (m_lastConfirmedHit.time_since_epoch().count() != 0 &&
-                        now - m_lastConfirmedHit < std::chrono::milliseconds(1500)) {
-                        ++m_combo;
-                    } else {
-                        m_combo = 1;
-                    }
-                    m_styleScore = std::min<std::uint64_t>(
-                        999999ULL, m_styleScore + (250ULL * m_combo));
-                    m_lastConfirmedHit = now;
-                    m_flashStarted = now;
-                    m_impactFallSpeedBps =
-                        std::max(0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
-                    m_flashActive = true;
-                    if (m_enableHitStop) {
-                        m_hitStopFrames = 2;
-                        m_hitStopPending = true;
-                    } else {
-                        m_hitStopFrames = 0;
-                        m_hitStopPending = false;
-                    }
-                }
-            }
-        }
+        selectedItemId = m_selectedItemId;
 
         if (m_flashActive && now - m_flashStarted >= std::chrono::milliseconds(250)) {
             m_flashActive = false;
@@ -247,7 +249,7 @@ void UltrakillHudModule::onFrame() {
     }
 
     const float scale = std::clamp(screenW / 1500.0f, 0.70f, 1.15f);
-    const bool hasMace = m_maceEquipped.load(std::memory_order_relaxed);
+    const bool hasSelectedItem = !selectedItemId.empty();
     const float signedFallSpeed = m_fallSpeedBps.load(std::memory_order_relaxed);
     const float downwardSpeed = std::max(0.0f, -signedFallSpeed);
     const float hitAge = flashActive
@@ -318,7 +320,7 @@ void UltrakillHudModule::onFrame() {
     // the game simulation is not paused and no artificial frame drops are introduced.
     if (m_enableParryFlash && impactVisible) {
         const float fade = std::exp(-std::max(0.0f, hitAge) / 0.052f);
-        const int baseAlpha = impactFallSpeed >= 4.0f ? 228 : 190;
+        const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
         const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
         if (alpha >= 5) addRect(0.0f, 0.0f, screenW, screenH, withAlpha(kWhite, alpha));
 
@@ -336,54 +338,86 @@ void UltrakillHudModule::onFrame() {
                 2.0f * scale, withAlpha(kWhite, spokeAlpha));
     }
 
-    // Lower-left weapon/status widget. The fall-speed meter is live (sampled from
-    // player position); unlike the old mockup, it does not claim to show fake HP.
+    // Lower-left weapon panel: live held-item identifier and a horizontal outline glyph.
     if (m_showMaceStatus) {
-        const float panelW = 244.0f * scale;
-        const float panelH = 78.0f * scale;
-        const float panelX = 18.0f * scale + shakeX;
-        const float panelY = std::max(8.0f * scale, screenH - panelH - 18.0f * scale) + shakeY;
-
+        const float panelW = 286.0f * scale;
+        const float panelH = 82.0f * scale;
+        const float panelX = 16.0f * scale + shakeX;
+        const float panelY = std::max(8.0f * scale, screenH - panelH - 16.0f * scale) + shakeY;
+        const auto accent = hasSelectedItem ? kCyan : kRed;
         addRect(panelX, panelY, panelW, panelH, kBlack, 1.0f * scale);
-        addRect(panelX, panelY, 3.0f * scale, panelH, hasMace ? kCyan : kRed);
-        addText(panelX + 12.0f * scale, panelY + 7.0f * scale,
-                "MACE / PRIMARY", 9.5f * scale, kMuted);
-        addText(panelX + 12.0f * scale, panelY + 20.0f * scale,
-                hasMace ? "EQUIPPED" : "NOT EQUIPPED",
-                15.0f * scale, hasMace ? kCyan : kWhite);
-
-        const float iconX = panelX + panelW - 38.0f * scale;
-        const float iconY = panelY + 13.0f * scale;
-        addLine(iconX - 7.0f * scale, iconY + 25.0f * scale,
-                21.0f * scale, -21.0f * scale, 4.0f * scale, kMuted);
-        addRect(iconX + 6.0f * scale, iconY - 2.0f * scale,
-                15.0f * scale, 15.0f * scale, kRed, 1.0f * scale);
-        addLine(iconX + 8.0f * scale, iconY - 3.0f * scale,
-                11.0f * scale, 0.0f, 1.0f * scale, kWhite);
-
-        addText(panelX + 12.0f * scale, panelY + 42.0f * scale,
-                "FALL SPEED", 7.5f * scale, kMuted);
+        addRect(panelX, panelY, 3.0f * scale, panelH, accent);
+        addText(panelX + 11.0f * scale, panelY + 6.0f * scale,
+                "WEAPON / ITEM", 8.0f * scale, kMuted);
+        addText(panelX + 11.0f * scale, panelY + 19.0f * scale,
+                itemLabel(selectedItemId), 12.0f * scale, hasSelectedItem ? kWhite : kMuted);
+        addText(panelX + 11.0f * scale, panelY + 43.0f * scale,
+                "FALL SPEED", 7.0f * scale, kMuted);
         std::ostringstream speedStream;
-        speedStream << std::fixed << std::setprecision(1) << downwardSpeed << " b/s";
-        addText(panelX + 78.0f * scale, panelY + 40.0f * scale,
-                speedStream.str(), 9.0f * scale, kWhite);
-
-        const float barX = panelX + 12.0f * scale;
-        const float barY = panelY + 59.0f * scale;
-        const float barW = panelW - 24.0f * scale;
-        const float barH = 5.0f * scale;
+        speedStream << std::fixed << std::setprecision(1) << downwardSpeed << " B/S";
+        addText(panelX + 77.0f * scale, panelY + 41.0f * scale,
+                speedStream.str(), 8.5f * scale, kWhite);
+        const float barX = panelX + 11.0f * scale;
+        const float barY = panelY + 63.0f * scale;
+        const float barW = panelW - 22.0f * scale;
+        const float barH = 4.0f * scale;
         addRect(barX, barY, barW, barH, kTrack);
         addRect(barX, barY, barW * clamp01(downwardSpeed / 12.0f), barH,
                 downwardSpeed >= 4.0f ? kRed : kCyan);
+
+        const float iconX = panelX + 190.0f * scale;
+        const float iconY = panelY + 13.0f * scale;
+        auto drawItemGlyph = [&](float ox, float oy, std::uint32_t color, float thickness) {
+            auto line = [&](float x, float y, float dx, float dy) {
+                addLine(ox + x * scale, oy + y * scale, dx * scale, dy * scale,
+                        thickness * scale, color);
+            };
+            const auto& id = selectedItemId;
+            if (id.find("sword") != std::string::npos || id.find("katana") != std::string::npos) {
+                line(10, 34, 35, -22); line(38, 10, 13, -2); line(16, 29, 9, 8);
+                line(8, 34, 8, 8); line(5, 42, 8, -8);
+            } else if (id.find("pickaxe") != std::string::npos) {
+                line(12, 41, 30, -30); line(28, 10, 24, -4); line(34, 7, 4, 7); line(52, 6, -3, 8);
+            } else if (id.find("axe") != std::string::npos) {
+                line(12, 41, 31, -31); line(37, 9, 15, -3); line(52, 6, -4, 17); line(48, 23, -12, -2);
+            } else if (id.find("shovel") != std::string::npos || id.find("hoe") != std::string::npos) {
+                line(11, 41, 32, -31); line(38, 8, 13, 0); line(51, 8, -2, 10); line(36, 18, 15, 0);
+            } else if (id.find("mace") != std::string::npos || id.find("hammer") != std::string::npos) {
+                line(9, 40, 34, -23); line(37, 8, 15, 0); line(52, 8, 0, 14); line(52, 22, -15, 0); line(37, 22, 0, -14);
+            } else if (id.find("trident") != std::string::npos) {
+                line(8, 37, 42, -17); line(42, 23, 10, -4); line(52, 19, -1, -9); line(51, 10, -6, 8);
+                line(45, 18, -4, -7); line(41, 11, -5, 7);
+            } else if (id.find("bow") != std::string::npos || id.find("crossbow") != std::string::npos) {
+                line(12, 9, 9, 8); line(21, 17, 0, 13); line(21, 30, -9, 9); line(12, 9, 0, 30); line(5, 24, 48, -2);
+                if (id.find("crossbow") != std::string::npos) { line(22, 18, 15, 0); line(37, 18, 0, 9); line(28, 27, 9, 0); }
+            } else if (id.find("shield") != std::string::npos) {
+                line(12, 9, 34, 0); line(46, 9, -3, 22); line(43, 31, -14, 11); line(29, 42, -14, -11); line(15, 31, -3, -22);
+            } else if (id.find("potion") != std::string::npos || id.find("bottle") != std::string::npos) {
+                line(24, 8, 12, 0); line(26, 8, 0, 8); line(34, 8, 0, 8); line(26, 16, -7, 7); line(34, 16, 7, 7);
+                line(19, 23, 0, 13); line(41, 23, 0, 13); line(19, 36, 22, 0);
+            } else if (id.find("apple") != std::string::npos || id.find("bread") != std::string::npos ||
+                       id.find("carrot") != std::string::npos || id.find("potato") != std::string::npos ||
+                       id.find("meat") != std::string::npos || id.find("food") != std::string::npos) {
+                line(15, 18, 8, -8); line(23, 10, 13, 0); line(36, 10, 10, 8); line(46, 18, -2, 14);
+                line(44, 32, -12, 8); line(32, 40, -13, -4); line(19, 36, -4, -10);
+            } else if (id.find("block") != std::string::npos || id.find("planks") != std::string::npos ||
+                       id.find("stone") != std::string::npos || id.find("dirt") != std::string::npos) {
+                line(14, 13, 17, -7); line(31, 6, 19, 7); line(50, 13, -17, 8); line(33, 21, -19, -8);
+                line(14, 13, 0, 20); line(14, 33, 19, 9); line(33, 42, 17, -9); line(50, 33, 0, -20); line(33, 21, 0, 21);
+            } else {
+                line(12, 28, 15, -15); line(27, 13, 15, 15); line(42, 28, -15, 15); line(27, 43, -15, -15); line(27, 13, 0, 30);
+            }
+        };
+        drawItemGlyph(2.0f * scale, 1.0f * scale, kShadow, 5.0f);
+        drawItemGlyph(0.0f, 0.0f, accent, 1.8f);
     }
 
     // Upper-right style meter: rank, white progress, and gold FRESH tag.
     if (m_showStyleCounter) {
-        const float cardW = 226.0f * scale;
-        const float cardH = 76.0f * scale;
-        const float cardX = std::max(8.0f * scale, screenW - cardW - 18.0f * scale) + shakeX;
-        const float cardY = std::clamp(screenH * 0.20f, 18.0f * scale,
-                                       std::max(18.0f * scale, screenH - cardH - 18.0f * scale)) + shakeY;
+        const float cardW = 244.0f * scale;
+        const float cardH = 70.0f * scale;
+        const float cardX = std::max(8.0f * scale, screenW - cardW - 16.0f * scale) + shakeX;
+        const float cardY = std::max(14.0f * scale, screenH * 0.055f) + shakeY;
 
         const RankInfo rank = rankFor(score);
         const float age = lastHit.time_since_epoch().count() == 0
@@ -393,22 +427,23 @@ void UltrakillHudModule::onFrame() {
         const float multiplier = 1.0f + 0.5f * freshness;
 
         addRect(cardX, cardY, cardW, cardH, kBlack, 1.0f * scale);
-        addText(cardX + 8.0f * scale, cardY - 2.0f * scale,
-                rank.letter, 34.0f * scale, rank.color);
-        addText(cardX + 55.0f * scale, cardY + 7.0f * scale,
-                rank.name, 13.0f * scale, rank.color);
-        addText(cardX + 55.0f * scale, cardY + 25.0f * scale,
+        addRect(cardX, cardY, cardW, 2.0f * scale, rank.color);
+        addText(cardX + 8.0f * scale, cardY + 3.0f * scale,
+                rank.letter, 28.0f * scale, rank.color);
+        addText(cardX + 82.0f * scale, cardY + 6.0f * scale,
+                rank.name, 13.0f * scale, kWhite);
+        addText(cardX + 82.0f * scale, cardY + 24.0f * scale,
                 std::to_string(score) + "  /  COMBO " + std::to_string(combo),
                 7.8f * scale, kMuted);
 
-        const float barX = cardX + 55.0f * scale;
+        const float barX = cardX + 82.0f * scale;
         const float barY = cardY + 40.0f * scale;
-        const float barW = cardW - 66.0f * scale;
-        const float barH = 6.0f * scale;
+        const float barW = cardW - 94.0f * scale;
+        const float barH = 5.0f * scale;
         addRect(barX, barY, barW, barH, kTrack);
         addRect(barX, barY, barW * meter, barH, kWhite);
 
-        const float tagY = cardY + 53.0f * scale;
+        const float tagY = cardY + 52.0f * scale;
         const float tagW = 80.0f * scale;
         addRect(barX, tagY, tagW, 14.0f * scale, kGold);
         const int hundredths = static_cast<int>(std::round(multiplier * 100.0f));
@@ -439,7 +474,7 @@ void UltrakillHudModule::onFrame() {
     if (m_showImpactText && impactVisible) {
         const float cx = screenW * 0.5f;
         const float cy = screenH * 0.5f;
-        const char* label = impactFallSpeed >= 4.0f ? "MACE IMPACT" : "MACE HIT";
+        const char* label = impactFallSpeed >= 4.0f ? "GROUND SLAM" : "MACE HIT";
         addText(cx + 19.0f * scale, cy - 28.0f * scale,
                 label, 12.0f * scale,
                 withAlpha(impactFallSpeed >= 4.0f ? kRed : kWhite,
