@@ -960,13 +960,14 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
     const float distanceFraction = std::clamp(hitboxDistance / configuredRange, 0.0f, 1.0f);
-    // Growth is a percentage: 100 doubles the virtual aim region at full range,
-    // 1000 expands it up to 11x. Keep the multiplier bounded even with corrupt config.
-    const float growthPercent = std::clamp(m_hitboxDistanceGrowth, 0.0f, 1000.0f);
+    // Distance strength 0.1..10 controls how much the virtual aim area grows
+    // far away and tightens up close. Clamp to the configured base hitbox area:
+    // distance never expands beyond 3x or shrinks below 0.65x of that area.
+    const float distanceStrength = std::clamp(m_hitboxDistanceGrowth, 0.1f, 10.0f);
     const float distanceFactor = m_distanceDependentHitbox
-        ? 1.0f + (growthPercent / 100.0f) * distanceFraction
+        ? std::clamp(0.85f + 0.215f * distanceStrength * distanceFraction, 0.65f, 3.0f)
         : 1.0f;
-    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 11.0f);
+    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 3.0f);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1042,9 +1043,10 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
     const float aimSpeed = std::clamp(m_aimSpeed, 0.1f, 10.0f);
+    const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 10.0f);
     float yawDelta = 0.0f;
     float pitchDelta = 0.0f;
-    const float baseTurnRate = 70.0f + 58.0f * aimSpeed;
+    const float baseTurnRate = (70.0f + 58.0f * aimSpeed) * rotationSpeed;
 
     if (stickyMode) {
         // No easing tail: react directly to the current error, while respecting AimSpeed.
@@ -1175,13 +1177,14 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
-    // Migrate configs from the original normalized 0..1 slider to the new percentage
-    // range. Otherwise an old saved 0.75 would mean just 0.75% and still barely grow.
+    // Existing values used 0..1000 percent; convert them to the new 0.1..10
+    // strength scale. Legacy normalized values (0..1) are interpreted directly.
     const float savedHitboxGrowth = j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth);
-    const float migratedHitboxGrowth = (savedHitboxGrowth > 0.0f && savedHitboxGrowth < 1.0f)
-        ? savedHitboxGrowth * 100.0f
+    const float migratedHitboxGrowth = savedHitboxGrowth > 10.0f
+        ? savedHitboxGrowth / 100.0f
         : savedHitboxGrowth;
-    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.0f, 1000.0f);
+    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 10.0f);
+    m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 10.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
@@ -1221,6 +1224,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_hitboxDistanceGrowth"] = m_hitboxDistanceGrowth;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
+    j["m_rotationSpeed"] = m_rotationSpeed;
     j["m_whitelistNames"] = m_whitelistNames;
     j["m_autoHit"] = m_autoHit;
     j["m_autoHitRange"] = m_autoHitRange;
