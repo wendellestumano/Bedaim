@@ -1,6 +1,7 @@
 #include "aimassist.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
+#include "../ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
@@ -363,6 +364,11 @@ void AimAssistModule::resetTrackingState() {
     m_lastAssistPitchDelta = 0.0f;
     m_lastRotationUpdate = {};
     m_lastTargetSeen = {};
+    m_motionTrackedTarget = nullptr;
+    m_lastMotionPosition = {};
+    m_targetVelocity = {};
+    m_hasMotionSample = false;
+    m_lastMotionSample = {};
 }
 
 void AimAssistModule::onInit() {
@@ -463,7 +469,7 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
     return false;
 }
 
-bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target) {
+bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     if (!enabled || !player || player != m_lastPlayer || !target ||
@@ -498,7 +504,7 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
     };
     // Small tolerance for mobile touch/camera quantization. This still requires
     // the view ray to pass through the target's immediate hitbox area.
-    constexpr float crosshairTolerance = 0.12f;
+    const float crosshairTolerance = std::clamp(tolerance, 0.05f, 0.8f);
     const AABB crosshairBounds{
         {m_lastTargetBounds.min.x - crosshairTolerance,
          m_lastTargetBounds.min.y - crosshairTolerance,
@@ -641,6 +647,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     // remain required even when the angular limit is set to 360 degrees.
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
 
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expander = (expanderBase && expanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
+    const bool expanderRequiresLineOfSight = expander && expander->requiresLineOfSight();
+
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* candidate = entry->actor;
         if (!candidate || candidate == player) continue;
@@ -672,8 +683,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // hasClearLineOfSight() returns false if it cannot safely perform the check.
         // If the LOS signature is unavailable for this Minecraft build, don't
         // silently discard every candidate. Enforce LOS only when the checker is live.
-        if (m_cantSeeThroughBlocks && blockSource && g_isSolidBlockingBlock &&
-            !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
+        if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
+            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
         if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
@@ -772,6 +783,35 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     const bool targetChanged = bestTarget != m_lastTarget;
+    const auto motionSampleTime = std::chrono::steady_clock::now();
+    const Vec3 targetPosition = reinterpret_cast<Actor*>(bestTarget)->position();
+    if (targetChanged || m_motionTrackedTarget != bestTarget || !m_hasMotionSample ||
+        !finiteVec3(targetPosition)) {
+        m_targetVelocity = {};
+    } else {
+        const float dt = std::chrono::duration<float>(motionSampleTime - m_lastMotionSample).count();
+        if (std::isfinite(dt) && dt >= 0.01f && dt <= 0.25f) {
+            Vec3 velocity{
+                (targetPosition.x - m_lastMotionPosition.x) / dt,
+                (targetPosition.y - m_lastMotionPosition.y) / dt,
+                (targetPosition.z - m_lastMotionPosition.z) / dt
+            };
+            const float speedSq = distanceSquared(velocity, Vec3{});
+            if (std::isfinite(speedSq) && speedSq <= 225.0f) {
+                m_targetVelocity.x = m_targetVelocity.x * 0.35f + velocity.x * 0.65f;
+                m_targetVelocity.y = m_targetVelocity.y * 0.35f + velocity.y * 0.65f;
+                m_targetVelocity.z = m_targetVelocity.z * 0.35f + velocity.z * 0.65f;
+            } else {
+                m_targetVelocity = {};
+            }
+        } else {
+            m_targetVelocity = {};
+        }
+    }
+    m_motionTrackedTarget = bestTarget;
+    m_lastMotionPosition = finiteVec3(targetPosition) ? targetPosition : Vec3{};
+    m_hasMotionSample = finiteVec3(targetPosition);
+    m_lastMotionSample = motionSampleTime;
     if (targetChanged) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = {};
@@ -779,7 +819,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     m_lastTarget = bestTarget;
     m_targetPresent = true;
     m_lastTargetBounds = bestTargetBounds;
-    m_lastTargetSeen = std::chrono::steady_clock::now();
+    m_lastTargetSeen = motionSampleTime;
     // Also check Auto Hit here so it is independent of the client-frame render hook.
     processAutoHitLocked(player);
 }
@@ -977,7 +1017,41 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         eyePosition.y += 1.5f;
     }
 
-    AABB bounds = m_lastTargetBounds;
+    const AABB nativeBounds = m_lastTargetBounds;
+    const HeldWeapon weaponForPrediction = heldWeaponInMainHand(player);
+    const bool rangedWeapon = weaponForPrediction == HeldWeapon::Bow ||
+        weaponForPrediction == HeldWeapon::Crossbow ||
+        weaponForPrediction == HeldWeapon::Trident ||
+        weaponForPrediction == HeldWeapon::Spear;
+    const bool usePrediction = m_predictionMode == "All" ||
+        (m_predictionMode == "Ranged" && rangedWeapon);
+
+    Vec3 predictionOffset{};
+    if (usePrediction && m_hasMotionSample && m_motionTrackedTarget == m_lastTarget) {
+        const float leadSeconds = std::clamp(m_predictionLeadMs, 0.0f, 300.0f) / 1000.0f;
+        predictionOffset = {
+            std::clamp(m_targetVelocity.x * leadSeconds, -3.0f, 3.0f),
+            std::clamp(m_targetVelocity.y * leadSeconds, -2.0f, 2.0f),
+            std::clamp(m_targetVelocity.z * leadSeconds, -3.0f, 3.0f)
+        };
+    }
+
+    // Prediction translates the point we aim toward; it does not modify the
+    // target's stored/native bounds used by AutoHit range checks.
+    AABB targetAimBounds{
+        {nativeBounds.min.x + predictionOffset.x, nativeBounds.min.y + predictionOffset.y,
+         nativeBounds.min.z + predictionOffset.z},
+        {nativeBounds.max.x + predictionOffset.x, nativeBounds.max.y + predictionOffset.y,
+         nativeBounds.max.z + predictionOffset.z}
+    };
+    AABB bounds = nativeBounds;
+    if (expander && expander->enabled) {
+        const bool targetIsPlayer = g_actorIsPlayer && g_actorIsPlayer(m_lastTarget);
+        bounds = expander->expandedSteeringBounds(targetIsPlayer, nativeBounds);
+    }
+    bounds.min.x += predictionOffset.x; bounds.max.x += predictionOffset.x;
+    bounds.min.y += predictionOffset.y; bounds.max.y += predictionOffset.y;
+    bounds.min.z += predictionOffset.z; bounds.max.z += predictionOffset.z;
 
     const Vec3 boundsCenter{
         (bounds.min.x + bounds.max.x) * 0.5f,
@@ -986,7 +1060,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     };
     const Vec3 centerAimPoint{
         boundsCenter.x,
-        bounds.min.y + (bounds.max.y - bounds.min.y) * 0.55f,
+        targetAimBounds.min.y + (targetAimBounds.max.y - targetAimBounds.min.y) * 0.55f,
         boundsCenter.z
     };
 
@@ -1015,11 +1089,14 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float baseHitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
-    const float distanceFraction = std::clamp(hitboxDistance / configuredRange, 0.0f, 1.0f);
+    // Decouple the size curve from the global actor scan range. Using an 80-block
+    // search range made the slider visually inert for most ordinary encounters.
+    const float scaleDistanceRange = std::clamp(configuredRange, 8.0f, 30.0f);
+    const float distanceFraction = std::clamp(hitboxDistance / scaleDistanceRange, 0.0f, 1.0f);
     const float distanceStrength = std::clamp(m_hitboxDistanceGrowth, 0.1f, 10.0f);
-    // Normalize 0.1..10 to 0.01..1 so every strength value has an effect;
-    // at full configured range, strength 10 can reach 3x the native bounds.
-    const float growth = distanceStrength / 10.0f;
+    // A square-root response makes even the old default (1) visible, while still
+    // reserving the widest virtual region for strength 10.
+    const float growth = std::sqrt(distanceStrength / 10.0f);
     const float distanceFactor = m_distanceDependentHitbox
         ? std::clamp(0.65f + 2.35f * growth * distanceFraction, 0.65f, 3.0f)
         : 1.0f;
@@ -1066,14 +1143,14 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float targetDistance = std::sqrt(distanceSquared(eyePosition, centerAimPoint));
     if (m_elytraMode && m_localPlayerGliding && std::isfinite(targetDistance) &&
         targetDistance >= 7.0f && targetDistance <= 8.0f) {
-        const float targetHeight = bounds.max.y - bounds.min.y;
+        const float targetHeight = targetAimBounds.max.y - targetAimBounds.min.y;
         slidePoint.y -= std::clamp(targetHeight * 0.15f, 0.12f, 0.28f);
     }
     // The scaled AABB controls the soft-lock/sliding region, but the actual aim
     // point must remain inside Bedrock's real bounds or a hit can miss entirely.
-    slidePoint.x = std::clamp(slidePoint.x, bounds.min.x, bounds.max.x);
-    slidePoint.y = std::clamp(slidePoint.y, bounds.min.y, bounds.max.y);
-    slidePoint.z = std::clamp(slidePoint.z, bounds.min.z, bounds.max.z);
+    slidePoint.x = std::clamp(slidePoint.x, targetAimBounds.min.x, targetAimBounds.max.x);
+    slidePoint.y = std::clamp(slidePoint.y, targetAimBounds.min.y, targetAimBounds.max.y);
+    slidePoint.z = std::clamp(slidePoint.z, targetAimBounds.min.z, targetAimBounds.max.z);
 
     float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
@@ -1092,9 +1169,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
-    m_lastAimPoint.x = std::clamp(m_lastAimPoint.x, bounds.min.x, bounds.max.x);
-    m_lastAimPoint.y = std::clamp(m_lastAimPoint.y, bounds.min.y, bounds.max.y);
-    m_lastAimPoint.z = std::clamp(m_lastAimPoint.z, bounds.min.z, bounds.max.z);
+    m_lastAimPoint.x = std::clamp(m_lastAimPoint.x, targetAimBounds.min.x, targetAimBounds.max.x);
+    m_lastAimPoint.y = std::clamp(m_lastAimPoint.y, targetAimBounds.min.y, targetAimBounds.max.y);
+    m_lastAimPoint.z = std::clamp(m_lastAimPoint.z, targetAimBounds.min.z, targetAimBounds.max.z);
 
     const float aimDx = m_lastAimPoint.x - eyePosition.x;
     const float aimDy = m_lastAimPoint.y - eyePosition.y;
@@ -1163,7 +1240,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // Naturalization normally suppresses vertical correction briefly after a jump,
     // but must not block tracking when the selected target is below the player's eyes.
     // This is common during mace Wind Burst/ground-slam arcs.
-    const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
+    const HeldWeapon heldWeapon = weaponForPrediction;
     const bool naturalizationForWeapon =
         m_naturalization && naturalizationAppliesToWeapon(m_naturalizationWeapon, heldWeapon);
     const bool targetBelowView = boundsCenter.y < eyePosition.y - 0.35f;
@@ -1249,6 +1326,13 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         : savedHitboxGrowth;
     m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 10.0f);
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 10.0f);
+    m_predictionMode = j.value("m_predictionMode", m_predictionMode);
+    if (m_predictionMode == "0") m_predictionMode = "Off";
+    else if (m_predictionMode == "1") m_predictionMode = "Ranged";
+    else if (m_predictionMode == "2") m_predictionMode = "All";
+    if (m_predictionMode != "Off" && m_predictionMode != "Ranged" && m_predictionMode != "All")
+        m_predictionMode = "Ranged";
+    m_predictionLeadMs = std::clamp(j.value("m_predictionLeadMs", m_predictionLeadMs), 0.0f, 300.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
@@ -1289,8 +1373,74 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
     j["m_rotationSpeed"] = m_rotationSpeed;
+    j["m_predictionMode"] = m_predictionMode;
+    j["m_predictionLeadMs"] = m_predictionLeadMs;
     j["m_whitelistNames"] = m_whitelistNames;
     j["m_autoHit"] = m_autoHit;
     j["m_autoHitRange"] = m_autoHitRange;
     j["m_autoHitDelayMs"] = m_autoHitDelayMs;
+}
+
+ 
+HitboxExpanderModule::HitboxExpanderModule()
+    : Module("Hitbox Expander",
+             "Expands the local Aim Assist steering region only; it does not change server-side collision bounds.") {
+    keybind = 0;
+}
+
+bedrocktools::sdk::AABB HitboxExpanderModule::expandedSteeringBounds(
+    bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const {
+    using namespace bedrocktools::sdk;
+    if (!enabled) return nativeBounds;
+
+    float configuredSize = 0.6f;
+    bool selectedTypeEnabled = false;
+    {
+        std::lock_guard<std::mutex> lock(m_expandMutex);
+        configuredSize = std::clamp(m_hitboxSize, 0.6f, 10.0f);
+        selectedTypeEnabled = isPlayer ? m_expandPlayers : m_expandMobs;
+    }
+    if (!selectedTypeEnabled || configuredSize <= 0.6001f ||
+        !validBounds(nativeBounds)) return nativeBounds;
+
+    // 0.6 = native-size reference (1x); 10 = up to 16.67x the native dimensions.
+    // The enlarged AABB is virtual and only affects Aim Assist's soft-lock volume.
+    const float scale = std::clamp(configuredSize / 0.6f, 1.0f, 16.6667f);
+    const Vec3 center{
+        (nativeBounds.min.x + nativeBounds.max.x) * 0.5f,
+        (nativeBounds.min.y + nativeBounds.max.y) * 0.5f,
+        (nativeBounds.min.z + nativeBounds.max.z) * 0.5f
+    };
+    const Vec3 half{
+        (nativeBounds.max.x - nativeBounds.min.x) * 0.5f * scale,
+        (nativeBounds.max.y - nativeBounds.min.y) * 0.5f * scale,
+        (nativeBounds.max.z - nativeBounds.min.z) * 0.5f * scale
+    };
+    return {
+        {center.x - half.x, center.y - half.y, center.z - half.z},
+        {center.x + half.x, center.y + half.y, center.z + half.z}
+    };
+}
+
+bool HitboxExpanderModule::requiresLineOfSight() const {
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    return enabled && m_requireLineOfSight;
+}
+
+void HitboxExpanderModule::loadConfig(const nlohmann::json& j) {
+    Module::loadConfig(j);
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    m_hitboxSize = std::clamp(j.value("m_hitboxSize", m_hitboxSize), 0.6f, 10.0f);
+    m_expandPlayers = j.value("m_expandPlayers", m_expandPlayers);
+    m_expandMobs = j.value("m_expandMobs", m_expandMobs);
+    m_requireLineOfSight = j.value("m_requireLineOfSight", m_requireLineOfSight);
+}
+
+void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
+    Module::saveConfig(j);
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    j["m_hitboxSize"] = m_hitboxSize;
+    j["m_expandPlayers"] = m_expandPlayers;
+    j["m_expandMobs"] = m_expandMobs;
+    j["m_requireLineOfSight"] = m_requireLineOfSight;
 }
