@@ -3,6 +3,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
+#include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -10,6 +11,7 @@
 #include <bedrocktools/sdk/client/ClientInstance.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
@@ -39,8 +41,11 @@ struct ActorVector {
 };
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
+using GameModeAttackFn = bool (*)(void*, void*, bool, const void*);
 
 AimAssistModule* g_aimAssist = nullptr;
+std::atomic<void*> g_lastGameMode{nullptr};
+GameModeAttackFn g_gameModeAttack = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
@@ -354,6 +359,14 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
     g_applyLocalPlayerTurnDelta = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
+    g_gameModeAttack = reinterpret_cast<GameModeAttackFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::GameModeAttackInternal));
+
+    // Learn the active GameMode from native user actions instead of guessing its offset.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
+        [](auto& event) {
+            if (event.gameMode) g_lastGameMode.store(event.gameMode, std::memory_order_release);
+        });
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
@@ -606,7 +619,7 @@ void AimAssistModule::processPlayerFrame() {
 
     auto* player = m_lastPlayer;
     if (!enabled || !player || !m_lastTarget || !g_fetchNearbyActors ||
-        !g_applyLocalPlayerTurnDelta) return;
+        (!g_applyLocalPlayerTurnDelta && !m_autoHit)) return;
 
     // Refresh target bounds at the client-update cadence, rather than following
     // a hitbox sampled only on LocalPlayerTickEvent. Match the pointer in the
@@ -642,6 +655,79 @@ void AimAssistModule::processPlayerFrame() {
     }
 
     applyAimStepLocked(player);
+    processAutoHitLocked(player);
+}
+
+void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    if (!m_autoHit || !enabled || !player || !m_lastTarget || !g_gameModeAttack ||
+        !validBounds(m_lastTargetBounds)) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
+
+    void* gameMode = g_lastGameMode.load(std::memory_order_acquire);
+    if (!gameMode) return;
+
+    const auto* target = reinterpret_cast<const Actor*>(m_lastTarget);
+    const Vec3 playerPosition = player->position();
+    const AABB playerBounds = player->bounds();
+    if (!finiteVec3(playerPosition)) return;
+
+    Vec3 eyePosition = playerPosition;
+    if (validBounds(playerBounds)) {
+        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
+        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+
+    const AABB bounds = m_lastTargetBounds;
+    const Vec3 hitPoint{
+        std::clamp(eyePosition.x, bounds.min.x, bounds.max.x),
+        std::clamp(eyePosition.y, bounds.min.y, bounds.max.y),
+        std::clamp(eyePosition.z, bounds.min.z, bounds.max.z)
+    };
+    const float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
+    const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
+    if (!std::isfinite(hitDistanceSq) || hitDistanceSq < 0.01f ||
+        hitDistanceSq > autoHitRange * autoHitRange) return;
+
+    auto* rotationComponent = player->rotationComponent();
+    if (!rotationComponent) return;
+    Vec2 rotation = field<Vec2>(rotationComponent, 0);
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return;
+    rotation.x = std::clamp(rotation.x, -89.0f, 89.0f);
+    rotation.y = wrapDegrees(rotation.y);
+
+    const float yaw = rotation.y / kRadToDeg;
+    const float pitch = rotation.x / kRadToDeg;
+    const float cosPitch = std::cos(pitch);
+    const Vec3 viewDirection{
+        -std::sin(yaw) * cosPitch,
+        -std::sin(pitch),
+        std::cos(yaw) * cosPitch
+    };
+    // Require the actual view ray to cross the selected target hitbox. This prevents
+    // Auto Hit from attacking a nearby entity merely because AimAssist selected it.
+    if (!rayIntersectsAABB(eyePosition, viewDirection, bounds)) return;
+
+    if (m_cantSeeThroughBlocks) {
+        auto* dimension = player->dimension();
+        void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
+        const Vec3 center{
+            (bounds.min.x + bounds.max.x) * 0.5f,
+            (bounds.min.y + bounds.max.y) * 0.5f,
+            (bounds.min.z + bounds.max.z) * 0.5f
+        };
+        if (!hasClearLineOfSight(blockSource, eyePosition, center)) return;
+    }
+
+    // A short configurable cadence avoids invoking the native attack every frame.
+    const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
+    m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(delayMs));
+    g_gameModeAttack(gameMode, m_lastTarget, true, &hitPoint);
 }
 
 void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
@@ -924,6 +1010,9 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
+    m_autoHit = j.value("m_autoHit", m_autoHit);
+    m_autoHitRange = std::clamp(j.value("m_autoHitRange", m_autoHitRange), 2.0f, 6.0f);
+    m_autoHitDelayMs = std::clamp(j.value("m_autoHitDelayMs", m_autoHitDelayMs), 80.0f, 1000.0f);
 }
 
 void AimAssistModule::saveConfig(nlohmann::json& j) {
@@ -955,4 +1044,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
     j["m_whitelistNames"] = m_whitelistNames;
+    j["m_autoHit"] = m_autoHit;
+    j["m_autoHitRange"] = m_autoHitRange;
+    j["m_autoHitDelayMs"] = m_autoHitDelayMs;
 }
