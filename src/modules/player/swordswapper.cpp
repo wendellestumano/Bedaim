@@ -75,9 +75,8 @@ void SwordSwapperModule::onEnable() {
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
     m_groundedTicks = 0;
-    m_ownsSwap = false;
-    m_swordSlot = -1;
-    m_previousSlot = -1;
+    // Preserve ownership if the user re-enables the module before the next game
+    // tick has had a chance to restore the temporarily selected sword.
 }
 
 void SwordSwapperModule::onDisable() {
