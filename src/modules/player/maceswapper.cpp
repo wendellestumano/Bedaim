@@ -94,7 +94,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange)) return;
     if (!aim->currentTargetInCrosshair(player, target)) return;
 
-    void* gameMode = bedrocktools::core::gamehooks::gameMode();
+    void* gameMode = field<void*>(player, offsets::Player::mGameMode);
+    if (!gameMode) gameMode = bedrocktools::core::gamehooks::gameMode();
     if (!gameMode || !validBounds(targetBounds)) return;
 
     const AABB playerBounds = player->bounds();
