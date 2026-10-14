@@ -151,6 +151,15 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_userOverrodeSwap = true;
     }
 
+    const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
+    if (heldIdentifier.find("wind_charge") != std::string::npos) {
+        // Explicit user selection beats the automatic sword swap. Keep the
+        // override until the target leaves the crosshair/grounded condition.
+        restoreIfOwned();
+        m_userOverrodeSwap = true;
+        return;
+    }
+
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     auto* aim = (aimBase && aimBase->enabled) ? static_cast<AimAssistModule*>(aimBase) : nullptr;
     bool shouldUseSword = false;
