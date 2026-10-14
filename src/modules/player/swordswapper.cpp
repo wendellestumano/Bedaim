@@ -1,4 +1,5 @@
 #include "swordswapper.hpp"
+#include "swapperstate.hpp"
 
 #include "aimassist.hpp"
 #include "core/InventoryAccess.hpp"
@@ -132,7 +133,14 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_groundedTicks = std::min(m_groundedTicks + 1, 4);
     else
         m_groundedTicks = 0;
-    const bool grounded = m_groundedTicks >= 2 && dy >= -0.0025f;
+    const bool grounded = m_groundedTicks >= 5 && dy >= -0.0025f;
+
+    // Do not mistake the jump apex for ground, and never let Sword Swapper
+    // override the mace while the latter owns a confirmed downward slam.
+    if (swapperstate::maceFallPriority.load(std::memory_order_acquire)) {
+        restoreIfOwned();
+        return;
+    }
 
     if (m_ownsSwap && inventory.selectedHotbarSlot(player) != m_swordSlot) {
         // User changed the slot manually. Stop owning the slot and honor the override
