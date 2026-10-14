@@ -560,8 +560,13 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         return;
     }
 
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expander = (expanderBase && expanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
+    const bool expanderRequiresLineOfSight = expander && expander->requiresLineOfSight();
+
     void* blockSource = nullptr;
-    if (m_cantSeeThroughBlocks) {
+    if (m_cantSeeThroughBlocks || expanderRequiresLineOfSight) {
         auto* dimension = player->dimension();
         blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
     }
@@ -646,11 +651,6 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
     // remain required even when the angular limit is set to 360 degrees.
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
-
-    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
-    auto* expander = (expanderBase && expanderBase->enabled)
-        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
-    const bool expanderRequiresLineOfSight = expander && expander->requiresLineOfSight();
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* candidate = entry->actor;
