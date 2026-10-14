@@ -493,45 +493,30 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
-
     if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
-    const auto virtualEntry = publicAttackVirtualEntry(gameMode);
+    // Use only the hooked internal function's trampoline, whose four-argument ABI
+    // is the same one exercised by gameModeAttackDetour. Calling a guessed public
+    // vtable ABI here is unsafe: signature presence alone doesn't prove argument
+    // count/return semantics for this Bedrock build.
+    AttackFn nativeInternalAttack = gameModeAttackOriginal;
+    if (!nativeInternalAttack) {
+        static std::atomic_bool loggedUnavailable{false};
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().error("AutoHit has no internal attack trampoline; signature/hook setup must be verified for this Bedrock build.");
+        return false;
+    }
+
     struct AttackGuard {
         bool& active;
         explicit AttackGuard(bool& value) : active(value) { active = true; }
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    // Prefer the actual public virtual wrapper when its entry is identified by a
-    // resolved signature. It preserves Bedrock's own attack-mode policy and lets
-    // the normal internal detour publish events exactly once.
-    using AttackVirtualFn = bool(*)(void*, void*, const void*);
-    static std::atomic_bool loggedVirtualRoute{false};
-    if (virtualEntry) {
-        if (!loggedVirtualRoute.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().info("AutoHit dispatch selected the signature-matched public virtual attack entry.");
-        return reinterpret_cast<AttackVirtualFn>(virtualEntry)(gameMode, target, hitPosition);
-    }
-
-    // Do not call the resolved internal address directly here: when the hook is
-    // installed, that address points back to our detour. Call its trampoline
-    // instead, while publishing equivalent events around the original invocation.
-    // This also allows attack dispatch when the public wrapper signature is absent
-    // for a build but the internal hook was successfully installed.
-    AttackFn nativeInternalAttack = gameModeAttackOriginal;
-    // If the hook did not produce a callable trampoline, fail closed rather than
-    // invoke an address that may already route back into our detour.
-    if (!nativeInternalAttack) {
-        static std::atomic_bool loggedUnavailable{false};
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().error("AutoHit has no validated public attack entry and no internal trampoline; signature offsets must be verified for this Bedrock build.");
-        return false;
-    }
-
     static std::atomic_bool loggedTrampolineRoute{false};
     if (!loggedTrampolineRoute.exchange(true, std::memory_order_acq_rel))
-        autoHitLogger().info("AutoHit dispatch selected the hooked internal attack trampoline.");
+        autoHitLogger().info("AutoHit dispatch selected the validated four-argument internal attack trampoline.");
+
     const AttackKind kind = attackKindFor(gameMode);
     const GameModeType modeKind = kind == AttackKind::SurvivalMode
         ? GameModeType::SurvivalMode : GameModeType::GameMode;
