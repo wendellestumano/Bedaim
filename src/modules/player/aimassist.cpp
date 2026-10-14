@@ -18,6 +18,9 @@
 #include <cctype>
 #include <string>
 #include <limits>
+#include <atomic>
+#include <string_view>
+#include <pl/Logger.hpp>
 
 
 namespace {
@@ -48,6 +51,24 @@ ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
+
+pl::log::Logger& autoHitLogger() {
+    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AutoHit");
+    return logger;
+}
+
+void logAutoHitOnce(std::atomic_bool& alreadyLogged, std::string_view message) {
+    if (!alreadyLogged.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("{}", message);
+}
+
+std::atomic_bool g_loggedAutoHitNoTarget{false};
+std::atomic_bool g_loggedAutoHitStaleTarget{false};
+std::atomic_bool g_loggedAutoHitNoGameMode{false};
+std::atomic_bool g_loggedAutoHitOutOfRange{false};
+std::atomic_bool g_loggedAutoHitBlocked{false};
+std::atomic_bool g_loggedAutoHitInvalidPosition{false};
+std::atomic_bool g_loggedAutoHitResult{false};
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadToDeg = 180.0f / kPi;
@@ -813,22 +834,38 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     // Attack only the target chosen from this tick's native actor snapshot. Do not
     // require a second camera-angle/crosshair test here: that duplicate gate caused
     // AutoHit to stop during camera convergence and when targets moved below the player.
-    if (!m_autoHit || !enabled || !player || player != m_lastPlayer ||
-        !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return;
+    if (!m_autoHit || !enabled || !player || player != m_lastPlayer) return;
+    if (!m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) {
+        logAutoHitOnce(g_loggedAutoHitNoTarget,
+            "AutoHit is enabled but Aim Assist has no valid target snapshot. Check target filters and detection range.");
+        return;
+    }
 
     const auto now = std::chrono::steady_clock::now();
     if (m_lastTargetSeen.time_since_epoch().count() == 0 ||
-        now - m_lastTargetSeen > std::chrono::milliseconds(150)) return;
+        now - m_lastTargetSeen > std::chrono::milliseconds(150)) {
+        logAutoHitOnce(g_loggedAutoHitStaleTarget,
+            "AutoHit skipped an expired target snapshot (>150 ms old).");
+        return;
+    }
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
     // Resolve and validate the SDK's version-specific Player::mGameMode field;
     // the accessor falls back to a GameMode observed in a real engine callback.
     void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) return;
+    if (!gameMode) {
+        logAutoHitOnce(g_loggedAutoHitNoGameMode,
+            "AutoHit has a target but could not validate GameMode. Check the Bedrock-version offsets/signatures.");
+        return;
+    }
 
     const Vec3 playerPosition = player->position();
     const AABB playerBounds = player->bounds();
-    if (!finiteVec3(playerPosition)) return;
+    if (!finiteVec3(playerPosition)) {
+        logAutoHitOnce(g_loggedAutoHitInvalidPosition,
+            "AutoHit skipped a non-finite local-player position.");
+        return;
+    }
 
     Vec3 eyePosition = playerPosition;
     if (validBounds(playerBounds)) {
@@ -846,7 +883,11 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         (bounds.min.z + bounds.max.z) * 0.5f
     };
     const float centerDistanceSq = distanceSquared(eyePosition, targetCenter);
-    if (!std::isfinite(centerDistanceSq) || centerDistanceSq < 0.01f) return;
+    if (!std::isfinite(centerDistanceSq) || centerDistanceSq < 0.01f) {
+        logAutoHitOnce(g_loggedAutoHitInvalidPosition,
+            "AutoHit skipped invalid/overlapping eye and target coordinates.");
+        return;
+    }
 
     // Choose the nearest point on the target bounds. If the player's eye happens to
     // overlap the AABB, use the target center rather than producing a zero-length hit.
@@ -856,25 +897,40 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         std::clamp(eyePosition.z, bounds.min.z, bounds.max.z)
     };
     float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
-    if (!std::isfinite(hitDistanceSq)) return;
+    if (!std::isfinite(hitDistanceSq)) {
+        logAutoHitOnce(g_loggedAutoHitInvalidPosition,
+            "AutoHit skipped non-finite hit-point coordinates.");
+        return;
+    }
     if (hitDistanceSq < 0.01f) {
         hitPoint = targetCenter;
         hitDistanceSq = centerDistanceSq;
     }
 
     const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
-    if (hitDistanceSq > autoHitRange * autoHitRange) return;
+    if (hitDistanceSq > autoHitRange * autoHitRange) {
+        logAutoHitOnce(g_loggedAutoHitOutOfRange,
+            "AutoHit found a target, but its hitbox is beyond the configured AutoHit range.");
+        return;
+    }
 
     if (m_cantSeeThroughBlocks) {
         auto* dimension = player->dimension();
         void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
         if (blockSource && g_isSolidBlockingBlock &&
-            !hasClearLineOfSight(blockSource, eyePosition, hitPoint)) return;
+            !hasClearLineOfSight(blockSource, eyePosition, hitPoint)) {
+            logAutoHitOnce(g_loggedAutoHitBlocked,
+                "AutoHit is blocked by the line-of-sight setting.");
+            return;
+        }
     }
 
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
     const bool dispatched = bedrocktools::core::gamehooks::attack(
         gameMode, m_lastTarget, true, &hitPoint);
+    if (!g_loggedAutoHitResult.exchange(true, std::memory_order_acq_rel)) {
+        autoHitLogger().info("First AutoHit native attack attempt returned {}.", dispatched);
+    }
     // Even a native rejection is rate-limited; use a short retry so a transient
     // false return doesn't permanently disable attacks for the selected target.
     const float nextDelayMs = dispatched ? delayMs : std::min(delayMs, 120.0f);
