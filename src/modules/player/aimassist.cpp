@@ -838,13 +838,6 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         eyePosition.y += 1.5f;
     }
 
-    auto* rotationComponent = player->rotationComponent();
-    if (!rotationComponent) return;
-    Vec2 rotation = field<Vec2>(rotationComponent, 0);
-    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return;
-    rotation.x = std::clamp(rotation.x, -89.0f, 89.0f);
-    rotation.y = wrapDegrees(rotation.y);
-
     const AABB bounds = m_lastTargetBounds;
     const Vec3 targetCenter{
         (bounds.min.x + bounds.max.x) * 0.5f,
@@ -854,31 +847,10 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     const float centerDistanceSq = distanceSquared(eyePosition, targetCenter);
     if (!std::isfinite(centerDistanceSq) || centerDistanceSq < 0.01f) return;
 
-    // Do not require a perfect ray/AABB intersection: that made AutoHit behave like
-    // ordinary manual clicking and was the main gate blocking nearby selected targets.
-    // Still bound it to the configured aim cone so a target retained behind the player
-    // can never be attacked just because it remained in the tracking bubble.
-    const float yaw = rotation.y / kRadToDeg;
-    const float pitch = rotation.x / kRadToDeg;
-    const float cosPitch = std::cos(pitch);
-    const Vec3 viewDirection{
-        -std::sin(yaw) * cosPitch,
-        -std::sin(pitch),
-        std::cos(yaw) * cosPitch
-    };
-    const Vec3 toTarget{
-        targetCenter.x - eyePosition.x,
-        targetCenter.y - eyePosition.y,
-        targetCenter.z - eyePosition.z
-    };
-    const float centerDistance = std::sqrt(centerDistanceSq);
-    const float facingDot = (viewDirection.x * toTarget.x +
-                             viewDirection.y * toTarget.y +
-                             viewDirection.z * toTarget.z) / centerDistance;
-    const float maxAimAngle = std::clamp(m_fov, 1.0f, 120.0f) / kRadToDeg;
-    if (!std::isfinite(facingDot) ||
-        facingDot < std::cos(maxAimAngle)) return;
-
+    // AutoHit operates on the current Aim Assist target, not on the camera ray.
+    // Target selection already applies FOV, visibility and target filters; a second
+    // facing-angle gate here prevented attacks while the camera was still converging
+    // and made killaura fail on targets moving beneath the player.
     // Aim at the closest point on the target's live bounds. This is less error-prone
     // than always passing the geometric center, especially for tall mobs and edge hits.
     const Vec3 hitPoint{
