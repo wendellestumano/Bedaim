@@ -1069,11 +1069,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         const float targetHeight = bounds.max.y - bounds.min.y;
         slidePoint.y -= std::clamp(targetHeight * 0.15f, 0.12f, 0.28f);
     }
-    // Keep the slide point inside the distance-scaled steering volume, not the
-    // native AABB. Clamping to the original box here silently cancelled all growth.
-    slidePoint.x = std::clamp(slidePoint.x, scaledAimBounds.min.x, scaledAimBounds.max.x);
-    slidePoint.y = std::clamp(slidePoint.y, scaledAimBounds.min.y, scaledAimBounds.max.y);
-    slidePoint.z = std::clamp(slidePoint.z, scaledAimBounds.min.z, scaledAimBounds.max.z);
+    // The scaled AABB controls the soft-lock/sliding region, but the actual aim
+    // point must remain inside Bedrock's real bounds or a hit can miss entirely.
+    slidePoint.x = std::clamp(slidePoint.x, bounds.min.x, bounds.max.x);
+    slidePoint.y = std::clamp(slidePoint.y, bounds.min.y, bounds.max.y);
+    slidePoint.z = std::clamp(slidePoint.z, bounds.min.z, bounds.max.z);
 
     float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
@@ -1092,9 +1092,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
-    m_lastAimPoint.x = std::clamp(m_lastAimPoint.x, scaledAimBounds.min.x, scaledAimBounds.max.x);
-    m_lastAimPoint.y = std::clamp(m_lastAimPoint.y, scaledAimBounds.min.y, scaledAimBounds.max.y);
-    m_lastAimPoint.z = std::clamp(m_lastAimPoint.z, scaledAimBounds.min.z, scaledAimBounds.max.z);
+    m_lastAimPoint.x = std::clamp(m_lastAimPoint.x, bounds.min.x, bounds.max.x);
+    m_lastAimPoint.y = std::clamp(m_lastAimPoint.y, bounds.min.y, bounds.max.y);
+    m_lastAimPoint.z = std::clamp(m_lastAimPoint.z, bounds.min.z, bounds.max.z);
 
     const float aimDx = m_lastAimPoint.x - eyePosition.x;
     const float aimDy = m_lastAimPoint.y - eyePosition.y;
