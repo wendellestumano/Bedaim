@@ -1009,21 +1009,20 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         eyePosition.z + viewDirection.z * alongView
     };
 
-    // Distance-dependent Hitbox Area: keep the tracking region tighter nearby and
-    // expand it smoothly with distance. This only affects the assist's virtual aim
-    // region; it does not mutate Minecraft's native collision boxes.
+    // Distance-dependent Hitbox Area: the virtual steering region starts smaller
+    // near the player and expands with distance/strength, but never exceeds the
+    // target's actual collision AABB. It does not modify native hit detection.
     const float baseHitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
     const float distanceFraction = std::clamp(hitboxDistance / configuredRange, 0.0f, 1.0f);
-    // Distance strength 0.1..10 controls how much the virtual aim area grows
-    // far away and tightens up close. Clamp to the configured base hitbox area:
-    // distance never expands beyond 3x or shrinks below 0.65x of that area.
+    // Strength 0.1..10 changes how fast the virtual region approaches the real
+    // hitbox at distance. It is intentionally capped at 1x the native AABB.
     const float distanceStrength = std::clamp(m_hitboxDistanceGrowth, 0.1f, 10.0f);
     const float distanceFactor = m_distanceDependentHitbox
         ? std::clamp(0.85f + 0.215f * distanceStrength * distanceFraction, 0.65f, 3.0f)
         : 1.0f;
-    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 3.0f);
+    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 1.0f);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1069,6 +1068,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         const float targetHeight = bounds.max.y - bounds.min.y;
         slidePoint.y -= std::clamp(targetHeight * 0.15f, 0.12f, 0.28f);
     }
+    // All tracking adjustments, including the Elytra correction, must remain
+    // inside the physical hitbox rather than aiming at a virtual point outside it.
+    slidePoint.x = std::clamp(slidePoint.x, bounds.min.x, bounds.max.x);
+    slidePoint.y = std::clamp(slidePoint.y, bounds.min.y, bounds.max.y);
+    slidePoint.z = std::clamp(slidePoint.z, bounds.min.z, bounds.max.z);
 
     float deltaSeconds = 1.0f / 60.0f;
     if (m_lastRotationUpdate.time_since_epoch().count() != 0) {
@@ -1087,6 +1091,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
+    m_lastAimPoint.x = std::clamp(m_lastAimPoint.x, bounds.min.x, bounds.max.x);
+    m_lastAimPoint.y = std::clamp(m_lastAimPoint.y, bounds.min.y, bounds.max.y);
+    m_lastAimPoint.z = std::clamp(m_lastAimPoint.z, bounds.min.z, bounds.max.z);
 
     const float aimDx = m_lastAimPoint.x - eyePosition.x;
     const float aimDy = m_lastAimPoint.y - eyePosition.y;
