@@ -1170,7 +1170,12 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         m_hasAimPoint = true;
     }
     const float slideAlpha = stickyMode ? 1.0f : (1.0f - std::exp(-12.0f * deltaSeconds));
-    const Vec3 effectiveAimPoint = stickyMode ? centerAimPoint : slidePoint;
+    // Sticky tracking previously ignored the calculated hitbox point entirely,
+    // making Distance-dependent Hitbox look inert in that mode. Keep immediate
+    // tracking, but let the configured virtual region choose a point inside the
+    // native AABB; disable the distance toggle to restore exact center-lock.
+    const Vec3 effectiveAimPoint =
+        (stickyMode && !m_distanceDependentHitbox) ? centerAimPoint : slidePoint;
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
