@@ -33,9 +33,6 @@ using UseItemAsAttackFn = bool(*)(void*, void*, const void*);
 using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::uint8_t, const void*, const void*, bool);
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
-// The GameMode virtual thunk takes only (this, target, hitPosition); it supplies
-// the internal predictive flag itself before forwarding to GameModeAttackInternal.
-
 using ClientInstanceUpdateFn = void*(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
@@ -393,7 +390,6 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
     const auto nativeAttack = reinterpret_cast<AttackFn>(internalAddress);
     return nativeAttack(gameMode, target, playPredictiveSound, hitPosition);
-}
 }
 
 }
