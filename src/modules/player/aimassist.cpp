@@ -810,8 +810,9 @@ void AimAssistModule::processPlayerFrame() {
 void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
-    // Keep combat calls on the player-tick path only. The target must have been
-    // present in the latest native actor snapshot; never attack a retained/stale pointer.
+    // Attack only the target chosen from this tick's native actor snapshot. Do not
+    // require a second camera-angle/crosshair test here: that duplicate gate caused
+    // AutoHit to stop during camera convergence and when targets moved below the player.
     if (!m_autoHit || !enabled || !player || player != m_lastPlayer ||
         !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return;
 
@@ -820,8 +821,8 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         now - m_lastTargetSeen > std::chrono::milliseconds(150)) return;
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    // Only use a GameMode pointer captured by a real engine callback. Do not guess
-    // a version-sensitive offset from Player, which caused crashes in earlier builds.
+    // Use a GameMode instance observed in a real engine callback. Never reintroduce
+    // the old guessed Player::mGameMode offset; it was version-sensitive and crash-prone.
     void* gameMode = bedrocktools::core::gamehooks::gameMode();
     if (!gameMode) return;
 
@@ -847,21 +848,22 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     const float centerDistanceSq = distanceSquared(eyePosition, targetCenter);
     if (!std::isfinite(centerDistanceSq) || centerDistanceSq < 0.01f) return;
 
-    // AutoHit operates on the current Aim Assist target, not on the camera ray.
-    // Target selection already applies FOV, visibility and target filters; a second
-    // facing-angle gate here prevented attacks while the camera was still converging
-    // and made killaura fail on targets moving beneath the player.
-    // Aim at the closest point on the target's live bounds. This is less error-prone
-    // than always passing the geometric center, especially for tall mobs and edge hits.
-    const Vec3 hitPoint{
+    // Choose the nearest point on the target bounds. If the player's eye happens to
+    // overlap the AABB, use the target center rather than producing a zero-length hit.
+    Vec3 hitPoint{
         std::clamp(eyePosition.x, bounds.min.x, bounds.max.x),
         std::clamp(eyePosition.y, bounds.min.y, bounds.max.y),
         std::clamp(eyePosition.z, bounds.min.z, bounds.max.z)
     };
-    const float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
+    float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
+    if (!std::isfinite(hitDistanceSq)) return;
+    if (hitDistanceSq < 0.01f) {
+        hitPoint = targetCenter;
+        hitDistanceSq = centerDistanceSq;
+    }
+
     const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
-    if (!std::isfinite(hitDistanceSq) || hitDistanceSq < 0.01f ||
-        hitDistanceSq > autoHitRange * autoHitRange) return;
+    if (hitDistanceSq > autoHitRange * autoHitRange) return;
 
     if (m_cantSeeThroughBlocks) {
         auto* dimension = player->dimension();
@@ -871,11 +873,11 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     }
 
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
-    const bool accepted = bedrocktools::core::gamehooks::attack(
+    const bool dispatched = bedrocktools::core::gamehooks::attack(
         gameMode, m_lastTarget, true, &hitPoint);
-    // Avoid hammering the native entry if the engine rejects an attack, while allowing
-    // the next tick to recover quickly after a transient false return.
-    const float nextDelayMs = accepted ? delayMs : std::min(delayMs, 120.0f);
+    // Even a native rejection is rate-limited; use a short retry so a transient
+    // false return doesn't permanently disable attacks for the selected target.
+    const float nextDelayMs = dispatched ? delayMs : std::min(delayMs, 120.0f);
     m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(nextDelayMs));
 }
 
