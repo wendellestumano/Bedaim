@@ -57,6 +57,15 @@ public:
     float m_aimSpeed = 5.0f;
     // Independent yaw/pitch turn-rate multiplier for large rotations behind the player.
     float m_rotationSpeed = 1.0f;
+    // Per-weapon multipliers let ranged tracking stay deliberate while melee can respond faster.
+    float m_swordAimMultiplier = 1.0f;
+    float m_axeAimMultiplier = 1.0f;
+    float m_maceAimMultiplier = 1.0f;
+    float m_bowAimMultiplier = 0.85f;
+    float m_crossbowAimMultiplier = 0.75f;
+    float m_tridentAimMultiplier = 0.9f;
+    float m_spearAimMultiplier = 1.0f;
+    float m_otherMeleeAimMultiplier = 1.0f;
     std::string m_predictionMode = "Ranged";
     float m_predictionLeadMs = 120.0f;
     std::string m_whitelistNames = "";
