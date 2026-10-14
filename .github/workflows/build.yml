@@ -18,6 +18,7 @@ jobs:
       - name: Run host regression tests
         working-directory: tests
         run: |
+          pwd
           xmake -P . f -y -p linux -a x86_64 -m debug
           xmake -P . -y
           xmake -P . run menu_config_value_test
