@@ -118,6 +118,8 @@ bool UltrakillHudModule::isMaceEquipped(Player* player) const {
 void UltrakillHudModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onLocalPlayerTick(event.player); });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>(
+        [this](auto& event) { onAttackAttempt(event.target); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
@@ -190,6 +192,25 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
         m_hasLastY = true;
     }
     m_lastY = currentY;
+}
+
+void UltrakillHudModule::onAttackAttempt(Actor* target) {
+    if (!enabled || !target || !m_maceEquipped.load(std::memory_order_relaxed)) return;
+    const float signedFallSpeed = m_fallSpeedBps.load(std::memory_order_relaxed);
+    // The engine's attack-result bool is not consistently a "damage confirmed"
+    // flag across modes. During a fast mace descent, use the native attack attempt
+    // as a brief visual fallback; a positive result below upgrades it to full feedback.
+    if (!std::isfinite(signedFallSpeed) || signedFallSpeed > -1.0f) return;
+
+    const auto now = Clock::now();
+    std::lock_guard lock(m_stateMutex);
+    m_flashStarted = now;
+    m_impactFallSpeedBps = -signedFallSpeed;
+    m_flashActive = true;
+    if (m_enableHitStop) {
+        m_hitStopFrames = std::max(m_hitStopFrames, 2);
+        m_hitStopPending = true;
+    }
 }
 
 void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
