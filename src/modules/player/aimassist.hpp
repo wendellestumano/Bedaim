@@ -51,6 +51,8 @@ public:
     float m_autoHitRange = 3.0f;
     float m_autoHitDelayMs = 150.0f;
     float m_hitboxScale = 1.0f;
+    bool m_distanceDependentHitbox = true;
+    float m_hitboxDistanceGrowth = 0.75f;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
     std::string m_whitelistNames = "";
