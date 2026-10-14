@@ -1094,12 +1094,15 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         pitchDelta *= dragScale;
     }
 
-    // Naturalization suppresses vertical correction during the jump hold, but
-    // keeps horizontal tracking active.
+    // Naturalization normally suppresses vertical correction briefly after a jump,
+    // but must not block tracking when the selected target is below the player's eyes.
+    // This is common during mace Wind Burst/ground-slam arcs.
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
     const bool naturalizationForWeapon =
         m_naturalization && naturalizationAppliesToWeapon(m_naturalizationWeapon, heldWeapon);
-    if (naturalizationForWeapon && now < m_pitchHoldUntil) pitchDelta = 0.0f;
+    const bool targetBelowView = boundsCenter.y < eyePosition.y - 0.35f;
+    if (naturalizationForWeapon && now < m_pitchHoldUntil && !targetBelowView)
+        pitchDelta = 0.0f;
 
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
