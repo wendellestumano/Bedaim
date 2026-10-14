@@ -144,7 +144,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             restoreIfStillSwapped();
             return;
         }
-        if (player != m_pendingPlayer || !stillHoldingMace || verticalDelta >= -0.025f) {
+        if (player != m_pendingPlayer || !stillHoldingMace) {
             restoreIfStillSwapped();
             return;
         }
