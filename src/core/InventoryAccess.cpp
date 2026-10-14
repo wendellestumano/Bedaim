@@ -115,7 +115,7 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     // Prefer the engine's native PlayerInventory::selectSlot method if this build exports it.
     using SelectSlotFn = bool (*)(void*, int, int);
     static SelectSlotFn nativeSelectSlot = []() -> SelectSlotFn {
-        constexpr const char* symbol = "_ZN15PlayerInventory10selectSlotEi10ContainerID";
+        constexpr const char* symbol = "_ZN15PlayerInventory10selectSlotEi11ContainerID";
         void* address = dlsym(RTLD_DEFAULT, symbol);
         if (!address) {
             void* library = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
