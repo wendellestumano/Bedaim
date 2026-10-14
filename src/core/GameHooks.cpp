@@ -33,6 +33,9 @@ using UseItemAsAttackFn = bool(*)(void*, void*, const void*);
 using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::uint8_t, const void*, const void*, bool);
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
+// The GameMode virtual thunk takes only (this, target, hitPosition); it supplies
+// the internal predictive flag itself before forwarding to GameModeAttackInternal.
+using NativeAttackVirtualFn = bool(*)(void*, void*, const void*);
 using ClientInstanceUpdateFn = void*(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
@@ -369,7 +372,7 @@ void* gameMode() {
     return currentGameMode.load(std::memory_order_acquire);
 }
 
-bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
+bool attack(void* gameMode, void* target, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
 
     // Guard against nested synthetic attacks coming from an event callback.
@@ -393,8 +396,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    const auto nativeAttack = reinterpret_cast<AttackFn>(vtable[16]);
-    return nativeAttack(gameMode, target, playPredictiveSound, hitPosition);
+    const auto nativeAttack = reinterpret_cast<NativeAttackVirtualFn>(vtable[16]);
+    return nativeAttack(gameMode, target, hitPosition);
 }
 
 }
