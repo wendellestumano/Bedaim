@@ -310,7 +310,7 @@ void registerModulesWithLauncher() {
                 "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
                 "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
-                "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
+                "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
                 "m_weaponOtherMelee", "m_elytraMode"
