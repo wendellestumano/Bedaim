@@ -2,8 +2,11 @@
 
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
+#include <bedrocktools/sdk/Offsets.hpp>
+#include <bedrocktools/sdk/Memory.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <dlfcn.h>
 #include <string>
 
 namespace bedrocktools::core {
@@ -109,9 +112,34 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     void* inventory = const_cast<void*>(read<const void*>(player, PlayerInventory));
     if (!inventory) return false;
 
+    // Prefer the engine's native PlayerInventory::selectSlot method if this build exports it.
+    using SelectSlotFn = bool (*)(void*, int, int);
+    static SelectSlotFn nativeSelectSlot = []() -> SelectSlotFn {
+        constexpr const char* symbol = "_ZN15PlayerInventory10selectSlotEi10ContainerID";
+        void* address = dlsym(RTLD_DEFAULT, symbol);
+        if (!address) {
+            void* library = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+            if (library) {
+                address = dlsym(library, symbol);
+                dlclose(library);
+            }
+        }
+        return reinterpret_cast<SelectSlotFn>(address);
+    }();
+
+    if (nativeSelectSlot) {
+        const bool result = nativeSelectSlot(inventory, slot, 0); // ContainerID::Inventory
+        return result && selectedHotbarSlot(player) == slot;
+    }
+
+    // Some Android builds strip the native method's symbol. Fall back to the verified
+    // selected-slot field, then ask the native player to publish the updated selection.
     auto* selected = reinterpret_cast<int*>(
         static_cast<std::byte*>(inventory) + PlayerInventorySelectedSlot);
     *selected = slot;
+    if (selectedHotbarSlot(player) != slot) return false;
+    bedrocktools::sdk::virtualCall<void>(
+        player, bedrocktools::sdk::offsets::VTable::PlayerSendInventory, true);
     return selectedHotbarSlot(player) == slot;
 }
 
