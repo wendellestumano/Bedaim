@@ -407,6 +407,28 @@ void UltrakillHudModule::onFrame() {
             } else if (id.find("trident") != std::string::npos) {
                 line(8, 37, 42, -17); line(42, 23, 10, -4); line(52, 19, -1, -9); line(51, 10, -6, 8);
                 line(45, 18, -4, -7); line(41, 11, -5, 7);
+            } else if (id.find("spear") != std::string::npos) {
+                line(8, 42, 37, -34); line(40, 8, 12, -4); line(52, 4, -3, 13);
+                line(49, 17, -10, -1); line(18, 33, 7, 7); line(13, 37, 8, 2);
+            } else if (id.find("wind_charge") != std::string::npos) {
+                line(13, 25, 9, -11); line(22, 14, 13, 0); line(35, 14, 9, 10);
+                line(44, 24, -6, 12); line(38, 36, -13, 3); line(25, 39, -10, -7);
+                line(15, 32, 1, -7); line(27, 22, 9, 1); line(36, 23, -2, 7);
+            } else if (id.find("ender_pearl") != std::string::npos || id.find("snowball") != std::string::npos) {
+                line(20, 12, 15, -4); line(35, 8, 10, 7); line(45, 15, 4, 14);
+                line(49, 29, -8, 11); line(41, 40, -15, 1); line(26, 41, -11, -8);
+                line(15, 33, 5, -14); line(20, 19, 11, -6); line(31, 13, 10, 7);
+            } else if (id.find("totem") != std::string::npos) {
+                line(17, 8, 25, 0); line(42, 8, 0, 28); line(42, 36, -25, 0);
+                line(17, 36, 0, -28); line(17, 8, 8, 8); line(25, 16, 9, 0);
+                line(34, 16, 8, -8); line(25, 16, 0, 12); line(25, 28, 9, 0);
+            } else if (id.find("firework") != std::string::npos || id.find("rocket") != std::string::npos) {
+                line(25, 41, 0, -18); line(25, 23, -7, 7); line(25, 23, 7, 7);
+                line(18, 30, 0, -12); line(18, 18, 7, -8); line(25, 10, 7, 8);
+                line(32, 18, 0, 12); line(22, 41, -4, 5); line(28, 41, 4, 5);
+            } else if (id.find("arrow") != std::string::npos) {
+                line(8, 40, 40, -29); line(36, 10, 12, -2); line(48, 8, -3, 12);
+                line(8, 40, 3, -10); line(8, 40, 10, 3);
             } else if (id.find("bow") != std::string::npos || id.find("crossbow") != std::string::npos) {
                 line(12, 9, 9, 8); line(21, 17, 0, 13); line(21, 30, -9, 9); line(12, 9, 0, 30); line(5, 24, 48, -2);
                 if (id.find("crossbow") != std::string::npos) { line(22, 18, 15, 0); line(37, 18, 0, 9); line(28, 27, 9, 0); }
@@ -495,7 +517,9 @@ void UltrakillHudModule::onFrame() {
     if (m_showImpactText && impactVisible) {
         const float cx = screenW * 0.5f;
         const float cy = screenH * 0.5f;
-        const char* label = impactFallSpeed >= 4.0f ? "GROUND SLAM" : "MACE HIT";
+        const bool selectedMace = selectedItemId.find("mace") != std::string::npos;
+        const char* label = impactFallSpeed >= 4.0f
+            ? "GROUND SLAM" : (selectedMace ? "MACE HIT" : "HIT CONFIRMED");
         addText(cx + 19.0f * scale, cy - 28.0f * scale,
                 label, 12.0f * scale,
                 withAlpha(impactFallSpeed >= 4.0f ? kRed : kWhite,
