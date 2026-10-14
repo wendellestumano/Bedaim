@@ -163,24 +163,19 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
 bool plausibleGameMode(void* gameMode) {
     if (!gameMode) return false;
     static std::atomic<void*> lastValidatedGameMode{nullptr};
-    static std::atomic<void*> lastRejectedGameMode{nullptr};
 
     // A pointer validated once is not guaranteed to remain alive after respawn,
-    // world unload, or GameMode replacement. Cache only rejection for a repeated
-    // invalid candidate; re-check mappings and its vtable before every native call.
-    if (lastRejectedGameMode.load(std::memory_order_acquire) == gameMode) return false;
-
+    // world unload, or GameMode replacement. Re-check mappings and its vtable
+    // before every native call; neither success nor failure is cached as truth.
     constexpr std::size_t kKnownAttackSlot = 16;
     if (!isReadableMemory(gameMode, sizeof(void*))) {
         lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        lastRejectedGameMode.store(gameMode, std::memory_order_release);
         return false;
     }
     auto** vtable = *reinterpret_cast<void***>(gameMode);
     if (!vtable || !isReadableMemory(vtable, (kKnownAttackSlot + 1) * sizeof(void*)) ||
         !vtable[kKnownAttackSlot]) {
         lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        lastRejectedGameMode.store(gameMode, std::memory_order_release);
         return false;
     }
 
@@ -188,12 +183,10 @@ bool plausibleGameMode(void* gameMode) {
     if (!dladdr(vtable[kKnownAttackSlot], &info) || !info.dli_fname ||
         std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
         lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        lastRejectedGameMode.store(gameMode, std::memory_order_release);
         return false;
     }
 
     lastValidatedGameMode.store(gameMode, std::memory_order_release);
-    lastRejectedGameMode.store(nullptr, std::memory_order_release);
     return true;
 }
 
