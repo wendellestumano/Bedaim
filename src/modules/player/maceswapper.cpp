@@ -206,6 +206,15 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_hasPeakY = true;
         return;
     }
+
+    // Rebase the peak whenever vertical motion has been stable and no slam owns
+    // priority, so an old elevation cannot make a later tiny hop look like a fall.
+    if (!m_fallPriorityActive && m_stableTicks >= 4) {
+        m_peakY = position.y;
+        m_hasPeakY = true;
+        m_descentTicks = 0;
+    }
+
     if (!m_fallPriorityActive || !aim) return;
 
     const int selected = inventory.selectedHotbarSlot(player);
