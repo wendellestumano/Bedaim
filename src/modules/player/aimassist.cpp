@@ -823,7 +823,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
 
     // Use a GameMode instance observed in a real engine callback. Never reintroduce
     // the old guessed Player::mGameMode offset; it was version-sensitive and crash-prone.
-    void* gameMode = bedrocktools::core::gamehooks::gameMode();
+    void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
     if (!gameMode) return;
 
     const Vec3 playerPosition = player->position();
