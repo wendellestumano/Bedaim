@@ -328,6 +328,7 @@ AimAssistModule::~AimAssistModule() {
 void AimAssistModule::resetTrackingState() {
     m_lastPlayer = nullptr;
     m_lastTarget = nullptr;
+    m_targetPresent = false;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
@@ -402,7 +403,7 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     target = nullptr;
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
-    if (!enabled || !m_lastPlayer || !m_lastTarget || !validBounds(m_lastTargetBounds)) return false;
+    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
     target = m_lastTarget;
     bounds = m_lastTargetBounds;
     return true;
@@ -706,7 +707,10 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                 std::clamp(playerCenter.y, m_lastTargetBounds.min.y, m_lastTargetBounds.max.y),
                 std::clamp(playerCenter.z, m_lastTargetBounds.min.z, m_lastTargetBounds.max.z)
             };
-            if (distanceSquared(playerCenter, nearestOnPreviousTarget) <= retentionRadiusSq) return;
+            if (distanceSquared(playerCenter, nearestOnPreviousTarget) <= retentionRadiusSq) {
+                m_targetPresent = false;
+                return;
+            }
         }
         resetTrackingState();
         return;
@@ -718,6 +722,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         m_lastRotationUpdate = {};
     }
     m_lastTarget = bestTarget;
+    m_targetPresent = true;
     m_lastTargetBounds = bestTargetBounds;
     m_lastTargetSeen = std::chrono::steady_clock::now();
     // Also check Auto Hit here so it is independent of the client-frame render hook.
