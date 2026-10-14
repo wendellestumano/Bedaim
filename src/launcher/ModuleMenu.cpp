@@ -133,7 +133,9 @@ void registerModulesWithLauncher() {
                 else if (k == "m_naturalization") displayName = "AIM OPTIONS > Naturalization during jumps";
                 else if (k == "m_naturalizationWeapon") displayName = "AIM OPTIONS > Naturalization weapon";
                 else if (k == "m_fov") displayName = "BEHAVIOR > FOV";
-                else if (k == "m_targetSwitchHysteresis") displayName = "TARGETING > Target switch stability";
+                else if (k == "m_targetSwitchHysteresis") displayName = "TARGETING > Crosshair switch stability";
+                else if (k == "m_targetSwitchDistanceMargin") displayName = "TARGETING > Distance switch margin";
+                else if (k == "m_targetSelectionMode") displayName = "TARGETING > Target selection mode";
                 else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
                 else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
@@ -210,6 +212,9 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchhysteresis") {
                     minVal = 0.0f;
                     maxVal = 12.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchdistancemargin") {
+                    minVal = 0.0f;
+                    maxVal = 5.0f;
                 } else if (kLower.find("opacity") != std::string::npos ||
                     kLower.find("color") != std::string::npos ||
                     kLower.find("alpha") != std::string::npos) {
@@ -258,6 +263,11 @@ void registerModulesWithLauncher() {
                     else entry.default_value = "1";
                     entry.min_value = "Grudado,Smooth,Adaptativo";
 
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_targetSelectionMode") {
+                    entry.type = pl::modmenu::ConfigType::Radio;
+                    entry.default_value = (str == "Player") ? "0" : "1";
+                    entry.min_value = "Closest to player,Closest to crosshair";
+
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_naturalizationWeapon") {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     const std::vector<std::string> weapons = {
@@ -299,7 +309,7 @@ void registerModulesWithLauncher() {
             const std::vector<std::string> priority = {
                 "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
                 "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
-                "m_targetSwitchHysteresis",
+                "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
                 "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
