@@ -41,6 +41,7 @@ public:
     float m_fov = 35.0f;
     float m_targetSwitchHysteresis = 4.0f;
     float m_targetSwitchDistanceMargin = 0.75f;
+    float m_targetRetentionRadius = 2.75f;
     std::string m_targetSelectionMode = "Crosshair";
     bool m_autoHit = false;
     float m_autoHitRange = 3.0f;
