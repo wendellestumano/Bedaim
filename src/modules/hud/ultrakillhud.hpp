@@ -22,6 +22,7 @@ public:
 
 private:
     void onLocalPlayerTick(bedrocktools::sdk::Player* player);
+    void onAttackAttempt(bedrocktools::sdk::Actor* target);
     void onAttackResult(bedrocktools::sdk::Actor* target, bool result);
     bool isMaceEquipped(bedrocktools::sdk::Player* player) const;
 
