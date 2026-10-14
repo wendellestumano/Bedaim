@@ -70,8 +70,8 @@
 
 - [ ] **Step 5: Add the host test to CI**
   - Add a Linux host-test step to the existing workflow before the Android ARM64 build step.
-  - Run the Android build/package job unchanged afterward.
-  - Expected: CI reports host tests and Android package build as separate steps.
+  - Initially run the menu parser target; extend the same step in Tasks 2 and 4 to run config-writer and AutoHit-policy targets when they exist.
+  - Run the Android build/package job unchanged afterward. Expected: CI reports host tests and Android package build as separate steps.
 
 - [ ] **Step 6: Commit the isolated parser**
   - Commit message: test: isolate and verify menu config value parsing
@@ -79,39 +79,43 @@
 ### Task 2: Make configuration persistence observable and test the round trip
 
 **Files:**
+- Create: src/config/ConfigFileWriter.hpp
+- Create: src/config/ConfigFileWriter.cpp
 - Modify: src/config/ConfigManager.hpp
 - Modify: src/config/ConfigManager.cpp
 - Modify: src/launcher/ModuleMenu.cpp
 - Create: tests/config/config_persistence_test.cpp
 - Modify: tests/xmake.lua
+- Modify: .github/workflows/build.yml
 
 **Interfaces:**
-- Change ConfigManager::flush from void to bool. It returns true only when writes queued before the call have completed successfully; on a write error it returns false.
-- Change the private writePayload helper to return bool and preserve the existing temporary-file/rename strategy.
-- Menu callbacks use the returned result to log a concise failure without writing the full config or sensitive values to logs.
+- Provide bedrocktools::config::writeAtomically(const std::string& path, const std::string& payload) -> bool in ConfigFileWriter.hpp/.cpp. It owns the temporary-file/rename operation and is testable without ModuleRegistry or Minecraft objects.
+- Change ConfigManager::flush from void to bool. It returns true only when the latest effective snapshot queued before the call has been written successfully; on a write error it returns false. Audit all existing call sites after changing the return type.
+- Menu callbacks use the returned result to log a concise failure. Log the module id, key, JSON type, parse result and write outcome only; never log raw values or the full config.
 
 - [ ] **Step 1: Write failing persistence tests**
   - Use a temporary directory and temporary JSON path, never the live Android config path.
-  - Test successful write, flush completion, JSON parse, overwrite/rename behavior, and the failure result for an unusable destination.
-  - Test that a failed write is not reported as a successful flush.
+  - Test the new writeAtomically function directly for successful write, valid JSON bytes, overwrite/rename behavior, and the false result for an unusable destination.
+  - Add ConfigManager-level integration coverage only if it can run with a lightweight test seam; do not link or mock the complete Minecraft module registry just to test file writing.
 
 - [ ] **Step 2: Run the persistence tests and confirm failure**
   - Run: cd tests && xmake f -p linux -a x86_64 -m debug && xmake && xmake run config_persistence_test
-  - Expected: the initial test fails because flush has no success result or because the testable write seam is not present.
+  - Expected: the initial test fails to compile or assert because ConfigFileWriter does not yet exist.
 
 - [ ] **Step 3: Implement truthful write status**
-  - Propagate the result from writePayload through the worker to the generation observed by flush.
-  - Preserve the existing asynchronous debounce and wait-for-completion behavior.
-  - Ensure destructor/shutdown paths safely ignore or record the result without throwing.
+  - Implement writeAtomically using the existing temporary-file/rename strategy and explicit error reporting.
+  - Propagate its result through the worker to the completed generation observed by flush.
+  - Preserve asynchronous debounce and wait-for-completion behavior; ensure shutdown paths safely ignore or record the result without throwing.
 
 - [ ] **Step 4: Verify save/flush/reload**
-  - Test a temporary config round trip with typed toggle, integer, float, and radio/select values.
-  - Confirm failed writes are observable and a successful write reloads to the same normalized JSON value.
+  - Test a temporary JSON round trip using the writer and the parser from Task 1 with typed toggle, integer, float, and radio/select values.
+  - Confirm failed writes are observable and a successful write reloads to the same JSON value.
+  - Treat module normalization and the full Mod Menu close/reopen/restart path as explicit in-game integration checks in Task 5, not as already-covered unit tests.
 
 - [ ] **Step 5: Add minimal runtime diagnostics**
-  - In ModuleMenu, log only the changed module id, setting key, normalized type/value where non-sensitive, and whether the write completed.
-  - Ensure the diagnostic is emitted on menu change, not every player tick or render frame.
-  - Do not report a disk write as successful when flush returns false.
+  - In ModuleMenu, log only the module id, setting key, JSON type, accepted/rejected parse status and whether the write completed.
+  - Never log raw values, whitelist text, the entire JSON document, or account data.
+  - Ensure diagnostics are emitted on menu change, not every player tick or render frame. Do not report success when flush returns false.
 
 - [ ] **Step 6: Run tests and commit**
   - Run both host test targets and the Android build.
@@ -198,8 +202,8 @@
 - Update: the existing draft PR description with exact validation evidence; keep the PR in draft.
 
 - [ ] **Step 1: Run all host tests**
-  - Run: cd tests && xmake f -p linux -a x86_64 -m debug && xmake
-  - Expected: all test executables compile and run with zero failures.
+  - Run: cd tests && xmake f -p linux -a x86_64 -m debug && xmake && xmake run menu_config_value_test && xmake run config_persistence_test && xmake run auto_hit_dispatch_policy_test
+  - Expected: all three test executables compile and run with zero failures.
 
 - [ ] **Step 2: Run the Android ARM64 build**
   - Run the current repository workflow, using Android NDK r28c.
