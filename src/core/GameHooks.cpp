@@ -122,13 +122,35 @@ bool itemStackHasItem(const void* itemStack) {
     return *reinterpret_cast<void* const*>(counter) != nullptr;
 }
 
-AttackKind attackKindFor(void* gameMode) {
-    if (!gameMode) return AttackKind::GameMode;
-    const auto survivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-    if (!survivalAttack) return AttackKind::GameMode;
+// Locate the attack override by its validated signature instead of assuming a
+// fixed vtable index. Virtual table layouts can differ between Bedrock builds.
+std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr) {
+    if (!gameMode) return 0;
     auto** vtable = *reinterpret_cast<void***>(gameMode);
-    if (!vtable) return AttackKind::GameMode;
-    return reinterpret_cast<std::uintptr_t>(vtable[16]) == survivalAttack ? AttackKind::SurvivalMode : AttackKind::GameMode;
+    if (!vtable) return 0;
+
+    const auto publicGameModeAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+    const auto publicSurvivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
+    // GameMode has a compact vtable; bound the scan so a malformed pointer can
+    // never turn this check into an unbounded walk.
+    constexpr std::size_t kMaxGameModeVtableEntries = 48;
+    for (std::size_t i = 0; i < kMaxGameModeVtableEntries; ++i) {
+        if (publicSurvivalAttack && vtable[i] == reinterpret_cast<void*>(publicSurvivalAttack)) {
+            if (kind) *kind = AttackKind::SurvivalMode;
+            return reinterpret_cast<std::uintptr_t>(vtable[i]);
+        }
+        if (publicGameModeAttack && vtable[i] == reinterpret_cast<void*>(publicGameModeAttack)) {
+            if (kind) *kind = AttackKind::GameMode;
+            return reinterpret_cast<std::uintptr_t>(vtable[i]);
+        }
+    }
+    return 0;
+}
+
+AttackKind attackKindFor(void* gameMode) {
+    AttackKind kind = AttackKind::GameMode;
+    publicAttackVirtualEntry(gameMode, &kind);
+    return kind;
 }
 
 std::string versionDetour(void* self) {
@@ -375,25 +397,22 @@ void* gameMode() {
 void* gameModeForPlayer(void* player) {
     if (!player) return nullptr;
 
-    // World.hpp defines this field from the Player layout used by this build.
-    // The vtable's attack entry must resolve inside libminecraftpe.so before the
-    // candidate is accepted, so an unexpected/null field fails closed.
+    // This field offset comes from the SDK layout and is still version-sensitive.
+    // Accept the candidate only if its vtable contains a signature-verified
+    // GameMode/SurvivalMode attack implementation (not merely any game function).
     const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
     void* candidate = *reinterpret_cast<void**>(
         playerAddress + bedrocktools::sdk::offsets::Player::mGameMode);
-    if (!candidate) return nullptr;
-
-    auto** vtable = *reinterpret_cast<void***>(candidate);
-    if (!vtable || !vtable[16]) return nullptr;
-
-    Dl_info info{};
-    if (!dladdr(vtable[16], &info) || !info.dli_fname ||
-        std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
-        return nullptr;
+    if (candidate && publicAttackVirtualEntry(candidate)) {
+        currentGameMode.store(candidate, std::memory_order_release);
+        return candidate;
     }
 
-    currentGameMode.store(candidate, std::memory_order_release);
-    return candidate;
+    // Some builds expose the member differently. A GameMode captured from a real
+    // engine callback is safer than treating an unverified field as a live object.
+    void* observed = currentGameMode.load(std::memory_order_acquire);
+    if (observed && publicAttackVirtualEntry(observed)) return observed;
+    return nullptr;
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
@@ -402,40 +421,51 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
 
-    // This pointer must have been observed from a real engine callback in the
-    // current session. Never synthesize an attack against an unverified GameMode.
     if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    if (!vtable || !vtable[16]) return false;
-    const auto virtualEntry = reinterpret_cast<std::uintptr_t>(vtable[16]);
-    const auto publicGameModeAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-    const auto publicSurvivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-    const auto internalAddress = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
-    if (!internalAddress) return false;
-
+    const auto virtualEntry = publicAttackVirtualEntry(gameMode);
     struct AttackGuard {
         bool& active;
         explicit AttackGuard(bool& value) : active(value) { active = true; }
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    // GameMode::attack's public virtual entry forwards (this, target, hitPosition)
-    // into the internal four-argument method. Use the public ABI only when its
-    // vtable entry matches a resolved public implementation; otherwise fall back
-    // to the separately resolved internal function with its exact hooked ABI.
+    // Prefer the actual public virtual wrapper when its entry is identified by a
+    // resolved signature. It preserves Bedrock's own attack-mode policy and lets
+    // the normal internal detour publish events exactly once.
     using AttackVirtualFn = bool(*)(void*, void*, const void*);
-    if ((publicGameModeAttack && virtualEntry == publicGameModeAttack) ||
-        (publicSurvivalAttack && virtualEntry == publicSurvivalAttack)) {
-        auto* nativeVirtualAttack = reinterpret_cast<AttackVirtualFn>(vtable[16]);
-        return nativeVirtualAttack(gameMode, target, hitPosition);
+    if (virtualEntry) {
+        return reinterpret_cast<AttackVirtualFn>(virtualEntry)(gameMode, target, hitPosition);
     }
 
-    // The public wrapper's observed constant is build-specific; use false rather
-    // than requesting a speculative predictive/sound path. The internal function
-    // itself has the four-argument signature mirrored by gameModeAttackDetour.
-    const auto nativeInternalAttack = reinterpret_cast<AttackFn>(internalAddress);
-    return nativeInternalAttack(gameMode, target, playPredictiveSound, hitPosition);
+    // Do not call the resolved internal address directly here: when the hook is
+    // installed, that address points back to our detour. Call its trampoline
+    // instead, while publishing equivalent events around the original invocation.
+    // This also allows attack dispatch when the public wrapper signature is absent
+    // for a build but the internal hook was successfully installed.
+    const auto internalAddress = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
+    AttackFn nativeInternalAttack = gameModeAttackOriginal;
+    if (!nativeInternalAttack && internalAddress) {
+        nativeInternalAttack = reinterpret_cast<AttackFn>(internalAddress);
+    }
+    if (!nativeInternalAttack) return false;
+
+    const AttackKind kind = attackKindFor(gameMode);
+    const GameModeType modeKind = kind == AttackKind::SurvivalMode
+        ? GameModeType::SurvivalMode : GameModeType::GameMode;
+    GameModeActionScope scope{modeKind, gameMode};
+    scope.publish(GameModeAction::Attack);
+
+    AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
+        reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)),
+        const_cast<void*>(hitPosition)};
+    bus().publish(event);
+    if (event.cancelled()) return false;
+
+    const bool result = nativeInternalAttack(gameMode, target, playPredictiveSound, hitPosition);
+    AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
+    bus().publish(resultEvent);
+    return result;
 }
 
 }
