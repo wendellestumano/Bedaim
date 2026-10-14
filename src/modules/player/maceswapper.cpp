@@ -254,7 +254,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    void* gameMode = bedrocktools::core::gamehooks::gameMode();
+    void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
     if (!gameMode) {
         m_nextAttack = now + std::chrono::milliseconds(100);
         return;
