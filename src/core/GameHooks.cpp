@@ -370,6 +370,7 @@ void* gameMode() {
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
+    static_cast<void>(playPredictiveSound);
     if (!gameMode || !target || !hitPosition) return false;
 
     static thread_local bool inSyntheticAttack = false;
