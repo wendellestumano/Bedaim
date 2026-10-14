@@ -370,12 +370,31 @@ void* gameMode() {
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    if (!gameMode || !target) return false;
+    if (!gameMode || !target || !hitPosition) return false;
 
-    // Invoke the virtual GameMode::attack slot. Calling the base internal function
-    // directly bypasses SurvivalMode's override, including its combat/cooldown logic.
+    // Guard against nested synthetic attacks coming from an event callback.
+    static thread_local bool inSyntheticAttack = false;
+    if (inSyntheticAttack) return false;
+
     auto** vtable = *reinterpret_cast<void***>(gameMode);
     if (!vtable || !vtable[16]) return false;
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable[16]);
+    const auto baseAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+    const auto internalAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
+    const auto survivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
+
+    // Only dispatch known GameMode::attack implementations from the loaded build.
+    // This rejects a stale or unrelated vtable instead of executing an arbitrary slot.
+    if (!slotAddress || (slotAddress != baseAttack &&
+                         slotAddress != internalAttack &&
+                         slotAddress != survivalAttack)) return false;
+
+    struct AttackGuard {
+        bool& active;
+        explicit AttackGuard(bool& value) : active(value) { active = true; }
+        ~AttackGuard() { active = false; }
+    } guard{inSyntheticAttack};
+
     const auto nativeAttack = reinterpret_cast<AttackFn>(vtable[16]);
     return nativeAttack(gameMode, target, playPredictiveSound, hitPosition);
 }
