@@ -973,8 +973,17 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         eyePosition.z + viewDirection.z * alongView
     };
 
-    // Hitbox Area scales the actual region in which the aim point can slide.
-    const float hitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
+    // Distance-dependent Hitbox Area: keep the tracking region tighter nearby and
+    // expand it smoothly with distance. This only affects the assist's virtual aim
+    // region; it does not mutate Minecraft's native collision boxes.
+    const float baseHitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
+    const float targetDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
+    const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
+    const float distanceFraction = std::clamp(targetDistance / configuredRange, 0.0f, 1.0f);
+    const float distanceFactor = m_distanceDependentHitbox
+        ? 0.65f + std::clamp(m_hitboxDistanceGrowth, 0.0f, 1.0f) * distanceFraction
+        : 1.0f;
+    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 1.5f);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1179,6 +1188,8 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetSwitchDistanceMargin = std::clamp(j.value("m_targetSwitchDistanceMargin", m_targetSwitchDistanceMargin), 0.0f, 5.0f);
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
+    m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
+    m_hitboxDistanceGrowth = std::clamp(j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth), 0.0f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
@@ -1214,6 +1225,8 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_targetRetentionRadius"] = m_targetRetentionRadius;
     j["m_targetSelectionMode"] = m_targetSelectionMode;
     j["m_hitboxScale"] = m_hitboxScale;
+    j["m_distanceDependentHitbox"] = m_distanceDependentHitbox;
+    j["m_hitboxDistanceGrowth"] = m_hitboxDistanceGrowth;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
     j["m_whitelistNames"] = m_whitelistNames;
