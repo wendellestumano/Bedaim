@@ -128,9 +128,11 @@ void registerModulesWithLauncher() {
             }
 
             if (mod->moduleId == "bedrocktools.Mace Swapper") {
-                if (k == "m_attackRange") displayName = "MACE SWAPPER > Range";
-                else if (k == "m_attackIntervalMs") displayName = "MACE SWAPPER > Attack interval (ms)";
-                else if (k == "m_restoreSlot") displayName = "MACE SWAPPER > Restore previous slot";
+                if (k == "m_enableMaceSwapper") displayName = "WEAPON SWAPPER > Enable Mace Swapper";
+                else if (k == "m_enableSwordSwapper") displayName = "WEAPON SWAPPER > Enable Sword Swapper";
+                else if (k == "m_attackRange") displayName = "WEAPON SWAPPER > Range";
+                else if (k == "m_attackIntervalMs") displayName = "WEAPON SWAPPER > Attack interval (ms)";
+                else if (k == "m_restoreSlot") displayName = "WEAPON SWAPPER > Restore previous slot";
             }
 
             if (mod->moduleId == "bedrocktools.Aim Assist") {
@@ -150,6 +152,8 @@ void registerModulesWithLauncher() {
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
                 else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
                 else if (k == "m_hitboxScale") displayName = "BEHAVIOR > Hitbox area";
+                else if (k == "m_distanceDependentHitbox") displayName = "BEHAVIOR > Distance-dependent hitbox";
+                else if (k == "m_hitboxDistanceGrowth") displayName = "BEHAVIOR > Hitbox growth with distance (0-1000%)";
                 else if (k == "m_targetPlayers") displayName = "TARGETING > Players";
                 else if (k == "m_targetMobs") displayName = "TARGETING > Mobs";
                 else if (k == "m_cantSeeThroughBlocks") displayName = "TARGETING > Require line of sight";
@@ -225,6 +229,9 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
                     minVal = 0.5f;
                     maxVal = 1.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxdistancegrowth") {
+                    minVal = 0.0f;
+                    maxVal = 1000.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchhysteresis") {
                     minVal = 0.0f;
                     maxVal = 12.0f;
@@ -334,6 +341,7 @@ void registerModulesWithLauncher() {
             const std::vector<std::string> priority = {
                 "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
                 "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
+                "m_distanceDependentHitbox", "m_hitboxDistanceGrowth",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
                 "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
@@ -357,6 +365,10 @@ void registerModulesWithLauncher() {
                  k == "m_weaponBow" || k == "m_weaponCrossbow" || k == "m_weaponTrident" ||
                  k == "m_weaponSpear" || k == "m_weaponOtherMelee")) {
                 entry.depends_on = "m_weaponOnly";
+            }
+            if (mod->moduleId == "bedrocktools.Aim Assist" &&
+                k == "m_hitboxDistanceGrowth") {
+                entry.depends_on = "m_distanceDependentHitbox";
             }
             if (entry.type != pl::modmenu::ConfigType::Toggle) {
                 std::string bestParent = "";
