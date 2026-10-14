@@ -16,6 +16,9 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <cstdio>
+#include <limits>
+#include <pl/Logger.hpp>
 
 namespace bedrocktools::core::gamehooks {
 namespace {
@@ -122,17 +125,66 @@ bool itemStackHasItem(const void* itemStack) {
     return *reinterpret_cast<void* const*>(counter) != nullptr;
 }
 
-// Locate the attack override by its validated signature instead of assuming a
-// fixed vtable index. Virtual table layouts can differ between Bedrock builds.
-std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr) {
-    if (!gameMode) return 0;
+pl::log::Logger& autoHitLogger() {
+    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AutoHit");
+    return logger;
+}
+
+// Check a pointer against the process's readable mappings before dereferencing
+// memory obtained from a version-sensitive native object layout.
+bool isReadableMemory(const void* pointer, std::size_t size) {
+    if (!pointer || size == 0) return false;
+    const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
+    if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
+    const auto end = begin + size;
+
+    std::FILE* maps = std::fopen("/proc/self/maps", "r");
+    if (!maps) return false;
+    char line[512]{};
+    bool readable = false;
+    while (std::fgets(line, sizeof(line), maps)) {
+        unsigned long long regionBegin = 0;
+        unsigned long long regionEnd = 0;
+        char permissions[5]{};
+        if (std::sscanf(line, "%llx-%llx %4s", &regionBegin, &regionEnd, permissions) == 3 &&
+            permissions[0] == 'r' &&
+            begin >= static_cast<std::uintptr_t>(regionBegin) &&
+            end <= static_cast<std::uintptr_t>(regionEnd)) {
+            readable = true;
+            break;
+        }
+    }
+    std::fclose(maps);
+    return readable;
+}
+
+bool plausibleGameMode(void* gameMode) {
+    if (!gameMode) return false;
+    static std::atomic<void*> lastValidatedGameMode{nullptr};
+    if (lastValidatedGameMode.load(std::memory_order_acquire) == gameMode) return true;
+
+    constexpr std::size_t kMaxGameModeVtableEntries = 48;
+    if (!isReadableMemory(gameMode, sizeof(void*))) return false;
     auto** vtable = *reinterpret_cast<void***>(gameMode);
-    if (!vtable) return 0;
+    if (!vtable || !isReadableMemory(vtable, kMaxGameModeVtableEntries * sizeof(void*))) return false;
+    if (!vtable[16]) return false;
+
+    Dl_info info{};
+    if (!dladdr(vtable[16], &info) || !info.dli_fname ||
+        std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) return false;
+
+    lastValidatedGameMode.store(gameMode, std::memory_order_release);
+    return true;
+}
+
+// Locate the attack override by its validated signature instead of assuming a
+// fixed vtable index. The bounds are checked before any virtual entry is read.
+std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr) {
+    if (!plausibleGameMode(gameMode)) return 0;
+    auto** vtable = *reinterpret_cast<void***>(gameMode);
 
     const auto publicGameModeAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
     const auto publicSurvivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-    // GameMode has a compact vtable; bound the scan so a malformed pointer can
-    // never turn this check into an unbounded walk.
     constexpr std::size_t kMaxGameModeVtableEntries = 48;
     for (std::size_t i = 0; i < kMaxGameModeVtableEntries; ++i) {
         if (publicSurvivalAttack && vtable[i] == reinterpret_cast<void*>(publicSurvivalAttack)) {
@@ -362,7 +414,15 @@ bool install() {
     hookSignature(SignatureId::SurvivalModeUseItemOn, reinterpret_cast<void*>(survivalModeUseItemOnDetour), &survivalModeUseItemOnOriginal);
     hookSignature(SignatureId::GameModeInteract, reinterpret_cast<void*>(gameModeInteractDetour), &gameModeInteractOriginal);
     hookSignature(SignatureId::SurvivalModeInteract, reinterpret_cast<void*>(survivalModeInteractDetour), &survivalModeInteractOriginal);
-    hookSignature(SignatureId::GameModeAttackInternal, reinterpret_cast<void*>(gameModeAttackDetour), &gameModeAttackOriginal);
+    const bool internalAttackHooked = hookSignature(
+        SignatureId::GameModeAttackInternal, reinterpret_cast<void*>(gameModeAttackDetour), &gameModeAttackOriginal);
+    autoHitLogger().info(
+        "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
+        bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0,
+        bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0,
+        bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0,
+        internalAttackHooked,
+        gameModeAttackOriginal != nullptr);
     hookSignature(SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
@@ -397,28 +457,35 @@ void* gameMode() {
 void* gameModeForPlayer(void* player) {
     if (!player) return nullptr;
 
-    // The field offset comes from the SDK Player layout, but remains build-specific.
+    // Cache only the player field address after confirming it is mapped readable.
+    // The value can still change (e.g. after respawn), so re-read the pointer each tick.
+    static std::atomic<void*> cachedPlayer{nullptr};
+    static std::atomic<void*> cachedField{nullptr};
     const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
-    void* candidate = *reinterpret_cast<void**>(
+    const auto fieldAddress = reinterpret_cast<const void*>(
         playerAddress + bedrocktools::sdk::offsets::Player::mGameMode);
-    if (candidate) {
-        auto** vtable = *reinterpret_cast<void***>(candidate);
-        if (vtable && vtable[16]) {
-            Dl_info info{};
-            if (dladdr(vtable[16], &info) && info.dli_fname &&
-                std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos) {
-                // This is a live game-owned object. Public attack signature matching
-                // is performed separately; if it is absent, attack() can use the
-                // hooked internal function's original trampoline.
-                currentGameMode.store(candidate, std::memory_order_release);
-                return candidate;
-            }
-        }
+    void* candidate = nullptr;
+    if (cachedPlayer.load(std::memory_order_acquire) == player &&
+        cachedField.load(std::memory_order_acquire) == fieldAddress) {
+        candidate = *reinterpret_cast<void* const*>(fieldAddress);
+    } else if (isReadableMemory(fieldAddress, sizeof(void*))) {
+        candidate = *reinterpret_cast<void* const*>(fieldAddress);
+        cachedField.store(const_cast<void*>(fieldAddress), std::memory_order_release);
+        cachedPlayer.store(player, std::memory_order_release);
+    } else {
+        cachedField.store(nullptr, std::memory_order_release);
+        cachedPlayer.store(player, std::memory_order_release);
     }
 
-    // A GameMode captured from a real engine callback is also a valid fallback.
-    // Do not reject it merely because this build's public wrapper signature changed.
-    return currentGameMode.load(std::memory_order_acquire);
+    if (plausibleGameMode(candidate)) {
+        currentGameMode.store(candidate, std::memory_order_release);
+        return candidate;
+    }
+
+    // A GameMode captured from a real engine callback is preferred over an
+    // unverified layout guess. Validate it as well before allowing a native call.
+    void* observed = currentGameMode.load(std::memory_order_acquire);
+    return plausibleGameMode(observed) ? observed : nullptr;
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
@@ -440,7 +507,10 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // resolved signature. It preserves Bedrock's own attack-mode policy and lets
     // the normal internal detour publish events exactly once.
     using AttackVirtualFn = bool(*)(void*, void*, const void*);
+    static std::atomic_bool loggedVirtualRoute{false};
     if (virtualEntry) {
+        if (!loggedVirtualRoute.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().info("AutoHit dispatch selected the signature-matched public virtual attack entry.");
         return reinterpret_cast<AttackVirtualFn>(virtualEntry)(gameMode, target, hitPosition);
     }
 
@@ -452,8 +522,16 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     AttackFn nativeInternalAttack = gameModeAttackOriginal;
     // If the hook did not produce a callable trampoline, fail closed rather than
     // invoke an address that may already route back into our detour.
-    if (!nativeInternalAttack) return false;
+    if (!nativeInternalAttack) {
+        static std::atomic_bool loggedUnavailable{false};
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().error("AutoHit has no validated public attack entry and no internal trampoline; signature offsets must be verified for this Bedrock build.");
+        return false;
+    }
 
+    static std::atomic_bool loggedTrampolineRoute{false};
+    if (!loggedTrampolineRoute.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("AutoHit dispatch selected the hooked internal attack trampoline.");
     const AttackKind kind = attackKindFor(gameMode);
     const GameModeType modeKind = kind == AttackKind::SurvivalMode
         ? GameModeType::SurvivalMode : GameModeType::GameMode;
