@@ -35,6 +35,7 @@
 #include "visual/thirdpersonnametag.hpp"
 #include "hud/tablist.hpp"
 #include "hud/combocounter.hpp"
+#include "hud/ultrakillhud.hpp"
 #include "visual/chunkborder.hpp"
 #include "visual/hitbox.hpp"
 #include "visual/zoom.hpp"
@@ -98,6 +99,7 @@ void registerAllModules() {
     registry.emplace<PingCounterModule>();
     registry.emplace<ReachCounterModule>();
     registry.emplace<ComboDisplay>();
+    registry.emplace<UltrakillHudModule>();
     registry.emplace<BreakIndicatorModule>();
     registry.emplace<PlayerCoordsModule>();
     registry.emplace<CompassModule>();
