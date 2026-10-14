@@ -685,11 +685,17 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
         if (!std::isfinite(angleScore)) continue;
 
-        // The last target gets a small 3D lock bubble around the player. Inside it,
-        // FOV is temporarily ignored so a target that passes behind doesn't get
-        // replaced by an unrelated entity in front. Visibility and normal range
-        // checks above still apply.
-        if (angleScore > maxFov && !insideRetentionBubble) continue;
+        // Keep targets directly below the player's feet eligible during a mace
+        // wind-burst/ground-slam arc. The range check above still limits this to
+        // nearby actors, while the normal FOV remains enforced for other targets.
+        const float playerFeetY = validBounds(playerBounds) ? playerBounds.min.y : playerPosition.y;
+        const bool candidateBelowPlayer =
+            targetBounds.max.y <= playerFeetY + 0.12f;
+
+        // The last target also gets a small 3D retention bubble, including when it
+        // passes below the player or behind the camera. This prevents target loss
+        // during the fast vertical movement of a slam.
+        if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer) continue;
 
         // Player mode ranks eligible targets by world distance. Crosshair mode
         // ranks by angular distance to the view, with world distance only breaking ties.
@@ -701,7 +707,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
             retainedTargetScore = score;
-            retainedTargetInsideBubble = insideRetentionBubble;
+            retainedTargetInsideBubble = insideRetentionBubble || candidateBelowPlayer;
         }
         if (score < bestScore) {
             bestScore = score;
@@ -980,10 +986,13 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
     const float distanceFraction = std::clamp(hitboxDistance / configuredRange, 0.0f, 1.0f);
+    // Growth is a percentage: 100 doubles the virtual aim region at full range,
+    // 1000 expands it up to 11x. Keep the multiplier bounded even with corrupt config.
+    const float growthPercent = std::clamp(m_hitboxDistanceGrowth, 0.0f, 1000.0f);
     const float distanceFactor = m_distanceDependentHitbox
-        ? 0.65f + std::clamp(m_hitboxDistanceGrowth, 0.0f, 1.0f) * distanceFraction
+        ? 1.0f + (growthPercent / 100.0f) * distanceFraction
         : 1.0f;
-    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 1.5f);
+    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 11.0f);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1189,7 +1198,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
-    m_hitboxDistanceGrowth = std::clamp(j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth), 0.0f, 1.0f);
+    m_hitboxDistanceGrowth = std::clamp(j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth), 0.0f, 1000.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
