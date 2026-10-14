@@ -16,6 +16,7 @@ public:
     std::string stackIdentifier(const void* stack) const;
     int findHotbarSlot(const sdk::Player* player, std::string_view identifierPart) const;
     int selectedHotbarSlot(const sdk::Player* player) const;
+    std::string selectedHotbarIdentifier(const sdk::Player* player) const;
     bool selectHotbarSlot(sdk::Player* player, int slot) const;
 
 private:
