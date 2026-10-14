@@ -1175,7 +1175,13 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
-    m_hitboxDistanceGrowth = std::clamp(j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth), 0.0f, 1000.0f);
+    // Migrate configs from the original normalized 0..1 slider to the new percentage
+    // range. Otherwise an old saved 0.75 would mean just 0.75% and still barely grow.
+    const float savedHitboxGrowth = j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth);
+    const float migratedHitboxGrowth = (savedHitboxGrowth > 0.0f && savedHitboxGrowth < 1.0f)
+        ? savedHitboxGrowth * 100.0f
+        : savedHitboxGrowth;
+    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.0f, 1000.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
