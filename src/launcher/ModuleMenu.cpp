@@ -136,6 +136,9 @@ void registerModulesWithLauncher() {
                 else if (k == "m_targetSwitchHysteresis") displayName = "TARGETING > Crosshair switch stability";
                 else if (k == "m_targetSwitchDistanceMargin") displayName = "TARGETING > Distance switch margin";
                 else if (k == "m_targetSelectionMode") displayName = "TARGETING > Target selection mode";
+                else if (k == "m_autoHit") displayName = "AUTO HIT > Enable";
+                else if (k == "m_autoHitRange") displayName = "AUTO HIT > Range (blocks)";
+                else if (k == "m_autoHitDelayMs") displayName = "AUTO HIT > Attack interval (ms)";
                 else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
                 else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
@@ -215,6 +218,12 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchdistancemargin") {
                     minVal = 0.0f;
                     maxVal = 5.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_autohitrange") {
+                    minVal = 2.0f;
+                    maxVal = 6.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_autohitdelayms") {
+                    minVal = 80.0f;
+                    maxVal = 1000.0f;
                 } else if (kLower.find("opacity") != std::string::npos ||
                     kLower.find("color") != std::string::npos ||
                     kLower.find("alpha") != std::string::npos) {
