@@ -890,15 +890,6 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     }
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    // Resolve and validate the SDK's version-specific Player::mGameMode field;
-    // the accessor falls back to a GameMode observed in a real engine callback.
-    void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) {
-        logAutoHitOnce(g_loggedAutoHitNoGameMode,
-            "AutoHit has a target but could not validate GameMode. Check the Bedrock-version offsets/signatures.");
-        return;
-    }
-
     const Vec3 playerPosition = player->position();
     const AABB playerBounds = player->bounds();
     if (!finiteVec3(playerPosition)) {
@@ -963,6 +954,17 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
                 "AutoHit is blocked by the line-of-sight setting.");
             return;
         }
+    }
+
+    // Resolve the native receiver only after cheap geometry and visibility gates
+    // pass. When no engine-owned GameMode has been observed yet, throttle this
+    // lookup instead of checking mappings on every player tick.
+    void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
+    if (!gameMode) {
+        logAutoHitOnce(g_loggedAutoHitNoGameMode,
+            "AutoHit has a target but no valid GameMode pointer has been observed from a real engine callback yet.");
+        m_nextAutoHit = now + std::chrono::milliseconds(250);
+        return;
     }
 
     const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
