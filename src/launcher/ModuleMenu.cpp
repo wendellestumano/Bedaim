@@ -372,7 +372,7 @@ void registerModulesWithLauncher() {
             // and a deliberate order; the current public menu API has no section header.
             const std::vector<std::string> priority = {
                 "m_aimMode", "m_trackingMode", "m_naturalization", "m_naturalizationWeapon",
-                "m_fov", "m_range", "m_aimSpeed", "m_strength", "m_hitboxScale",
+                "m_fov", "m_range", "m_aimSpeed", "m_rotationSpeed", "m_strength", "m_hitboxScale",
                 "m_distanceDependentHitbox", "m_hitboxDistanceGrowth",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
                 "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
