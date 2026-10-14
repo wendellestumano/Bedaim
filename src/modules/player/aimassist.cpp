@@ -821,8 +821,8 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         now - m_lastTargetSeen > std::chrono::milliseconds(150)) return;
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    // Use a GameMode instance observed in a real engine callback. Never reintroduce
-    // the old guessed Player::mGameMode offset; it was version-sensitive and crash-prone.
+    // Resolve and validate the SDK's version-specific Player::mGameMode field;
+    // the accessor falls back to a GameMode observed in a real engine callback.
     void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
     if (!gameMode) return;
 
