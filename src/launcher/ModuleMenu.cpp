@@ -153,10 +153,11 @@ void registerModulesWithLauncher() {
                 else if (k == "m_autoHitDelayMs") displayName = "AUTO HIT > Attack interval (ms)";
                 else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
+                else if (k == "m_rotationSpeed") displayName = "BEHAVIOR > Rotation speed";
                 else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
                 else if (k == "m_hitboxScale") displayName = "BEHAVIOR > Hitbox area";
                 else if (k == "m_distanceDependentHitbox") displayName = "BEHAVIOR > Distance-dependent hitbox";
-                else if (k == "m_hitboxDistanceGrowth") displayName = "BEHAVIOR > Hitbox growth with distance (0-1000%)";
+                else if (k == "m_hitboxDistanceGrowth") displayName = "BEHAVIOR > Distance hitbox strength (0.1-10)";
                 else if (k == "m_targetPlayers") displayName = "TARGETING > Players";
                 else if (k == "m_targetMobs") displayName = "TARGETING > Mobs";
                 else if (k == "m_cantSeeThroughBlocks") displayName = "TARGETING > Require line of sight";
@@ -234,8 +235,11 @@ void registerModulesWithLauncher() {
                     minVal = 0.5f;
                     maxVal = 1.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxdistancegrowth") {
-                    minVal = 0.0f;
-                    maxVal = 1000.0f;
+                    minVal = 0.1f;
+                    maxVal = 10.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_rotationspeed") {
+                    minVal = 0.1f;
+                    maxVal = 10.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchhysteresis") {
                     minVal = 0.0f;
                     maxVal = 12.0f;
