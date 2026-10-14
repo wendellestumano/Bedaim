@@ -547,15 +547,20 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const float targetDistance = std::sqrt(d2);
         if (!std::isfinite(targetDistance) || targetDistance <= 0.001f) continue;
 
-        // Prioritize the candidate closest to the crosshair by angular error.
-        // Unlike nearest-player priority, distance is only a tiny tie breaker.
         const float yawError = wrapDegrees(desiredYaw - currentRotation.y);
         const float pitchError = desiredPitch - currentRotation.x;
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
-        if (!std::isfinite(angleScore) || angleScore > maxFov) continue;
+        if (!std::isfinite(angleScore)) continue;
 
-        // Minimize angular error first; use distance only as a tiny tie-breaker.
-        const float score = angleScore + targetDistance * 0.0001f;
+        // Keep the existing FOV as the eligibility boundary in both modes.
+        if (angleScore > maxFov) continue;
+
+        // Player mode ranks eligible targets by world distance. Crosshair mode
+        // ranks by angular distance to the view, with world distance only breaking ties.
+        const bool playerDistanceMode = (m_targetSelectionMode == "Player");
+        const float score = playerDistanceMode
+            ? targetDistance
+            : angleScore + targetDistance * 0.0001f;
         if (candidate == m_lastTarget) {
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
@@ -569,10 +574,13 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     // Prefer the current target when a challenger is only marginally better.
-    // Make the angular margin configurable to reduce alternation between
-    // nearby entities without forcing the same lock strength on every player.
-    const float targetSwitchHysteresis = std::clamp(m_targetSwitchHysteresis, 0.0f, 12.0f);
-    if (retainedTarget && retainedTargetScore <= bestScore + targetSwitchHysteresis) {
+    // Angular mode uses degrees; player-distance mode uses blocks, so their
+    // margins stay independent and physically meaningful.
+    const bool playerDistanceMode = (m_targetSelectionMode == "Player");
+    const float switchMargin = playerDistanceMode
+        ? std::clamp(m_targetSwitchDistanceMargin, 0.0f, 5.0f)
+        : std::clamp(m_targetSwitchHysteresis, 0.0f, 12.0f);
+    if (retainedTarget && retainedTargetScore <= bestScore + switchMargin) {
         bestTarget = retainedTarget;
         bestTargetBounds = retainedTargetBounds;
     }
@@ -864,6 +872,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_elytraMode = j.value("m_elytraMode", m_elytraMode);
     m_naturalization = j.value("m_naturalization", m_naturalization);
     m_naturalizationWeapon = j.value("m_naturalizationWeapon", m_naturalizationWeapon);
+    m_targetSelectionMode = j.value("m_targetSelectionMode", m_targetSelectionMode);
 
     // LeviLauncher Radio callbacks send the selected option index ("0", "1", ...),
     // not necessarily the displayed label. Accept both the index and legacy label
@@ -878,6 +887,11 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     else if (m_trackingMode == "2") m_trackingMode = "Adaptativo";
     if (m_trackingMode != "Grudado" && m_trackingMode != "Smooth" &&
         m_trackingMode != "Adaptativo") m_trackingMode = "Smooth";
+
+    if (m_targetSelectionMode == "0") m_targetSelectionMode = "Player";
+    else if (m_targetSelectionMode == "1") m_targetSelectionMode = "Crosshair";
+    if (m_targetSelectionMode != "Player" && m_targetSelectionMode != "Crosshair")
+        m_targetSelectionMode = "Crosshair";
 
     if (m_naturalizationWeapon == "0") m_naturalizationWeapon = "All";
     else if (m_naturalizationWeapon == "1") m_naturalizationWeapon = "Sword";
@@ -905,6 +919,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_range = std::clamp(j.value("m_range", m_range), 2.0f, 80.0f);
     m_fov = std::clamp(j.value("m_fov", m_fov), 1.0f, 360.0f);
     m_targetSwitchHysteresis = std::clamp(j.value("m_targetSwitchHysteresis", m_targetSwitchHysteresis), 0.0f, 12.0f);
+    m_targetSwitchDistanceMargin = std::clamp(j.value("m_targetSwitchDistanceMargin", m_targetSwitchDistanceMargin), 0.0f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
@@ -934,6 +949,8 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_range"] = m_range;
     j["m_fov"] = m_fov;
     j["m_targetSwitchHysteresis"] = m_targetSwitchHysteresis;
+    j["m_targetSwitchDistanceMargin"] = m_targetSwitchDistanceMargin;
+    j["m_targetSelectionMode"] = m_targetSelectionMode;
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
