@@ -977,9 +977,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // expand it smoothly with distance. This only affects the assist's virtual aim
     // region; it does not mutate Minecraft's native collision boxes.
     const float baseHitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
-    const float targetDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
+    const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
-    const float distanceFraction = std::clamp(targetDistance / configuredRange, 0.0f, 1.0f);
+    const float distanceFraction = std::clamp(hitboxDistance / configuredRange, 0.0f, 1.0f);
     const float distanceFactor = m_distanceDependentHitbox
         ? 0.65f + std::clamp(m_hitboxDistanceGrowth, 0.0f, 1.0f) * distanceFraction
         : 1.0f;
