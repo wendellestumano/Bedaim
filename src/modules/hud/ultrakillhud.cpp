@@ -150,14 +150,36 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
 
     const std::string itemId = bedrocktools::core::InventoryAccess::get().stackIdentifier(
         carriedItemStack(player));
-    const float currentY = player->position().y;
+    const auto currentPosition = player->position();
+    const float currentY = currentPosition.y;
     m_maceEquipped.store(itemId.find("mace") != std::string::npos, std::memory_order_relaxed);
 
     std::lock_guard lock(m_stateMutex);
     m_selectedItemId = itemId;
+    if (std::isfinite(currentPosition.x) && std::isfinite(currentPosition.y) &&
+        std::isfinite(currentPosition.z)) {
+        if (m_hasLastPosition) {
+            const float dx = currentPosition.x - m_lastPosition.x;
+            const float dy = currentPosition.y - m_lastPosition.y;
+            const float dz = currentPosition.z - m_lastPosition.z;
+            const float instantMoveSpeed = std::sqrt(dx * dx + dy * dy + dz * dz) * 20.0f;
+            if (std::isfinite(instantMoveSpeed) && instantMoveSpeed < 120.0f) {
+                const float previous = m_movementSpeedBps.load(std::memory_order_relaxed);
+                m_movementSpeedBps.store(previous * 0.35f + instantMoveSpeed * 0.65f,
+                                          std::memory_order_relaxed);
+            }
+        } else {
+            m_hasLastPosition = true;
+        }
+        m_lastPosition = currentPosition;
+    } else {
+        m_hasLastPosition = false;
+        m_movementSpeedBps.store(0.0f, std::memory_order_relaxed);
+    }
+
     if (m_hasLastY) {
-        // Estimate blocks/second from local-player tick positions. This is an estimate,
-        // not a native velocity attribute exposed by the SDK.
+        // Estimate vertical blocks/second from ticks. This is an estimate rather
+        // than a native velocity attribute exposed by the SDK.
         const float instantSpeed = (currentY - m_lastY) * 20.0f;
         if (std::isfinite(instantSpeed) && std::fabs(instantSpeed) < 80.0f) {
             const float previous = m_fallSpeedBps.load(std::memory_order_relaxed);
@@ -213,7 +235,10 @@ void UltrakillHudModule::onEnable() {
     m_hitStopFrames = 0;
     m_hitStopPending = false;
     m_hasLastY = false;
+    m_hasLastPosition = false;
+    m_lastPosition = {};
     m_fallSpeedBps.store(0.0f, std::memory_order_relaxed);
+    m_movementSpeedBps.store(0.0f, std::memory_order_relaxed);
 }
 
 void UltrakillHudModule::onDisable() {
@@ -272,6 +297,7 @@ void UltrakillHudModule::onFrame() {
     const bool hasSelectedItem = !selectedItemId.empty();
     const float signedFallSpeed = m_fallSpeedBps.load(std::memory_order_relaxed);
     const float downwardSpeed = std::max(0.0f, -signedFallSpeed);
+    const float movementSpeed = m_movementSpeedBps.load(std::memory_order_relaxed);
     const float hitAge = flashActive
         ? std::chrono::duration<float>(now - flashStarted).count()
         : 100.0f;
@@ -361,7 +387,7 @@ void UltrakillHudModule::onFrame() {
     // Lower-left weapon panel: live held-item identifier and a horizontal outline glyph.
     if (m_showMaceStatus) {
         const float panelW = 286.0f * scale;
-        const float panelH = 82.0f * scale;
+        const float panelH = 104.0f * scale;
         const float panelX = 16.0f * scale + shakeX;
         const float panelY = std::max(8.0f * scale, screenH - panelH - 16.0f * scale) + shakeY;
         const auto accent = hasSelectedItem ? kCyan : kRed;
@@ -371,19 +397,32 @@ void UltrakillHudModule::onFrame() {
                 "WEAPON / ITEM", 8.0f * scale, kMuted);
         addText(panelX + 11.0f * scale, panelY + 19.0f * scale,
                 itemLabel(selectedItemId), 12.0f * scale, hasSelectedItem ? kWhite : kMuted);
-        addText(panelX + 11.0f * scale, panelY + 43.0f * scale,
+        addText(panelX + 11.0f * scale, panelY + 42.0f * scale,
                 "FALL SPEED", 7.0f * scale, kMuted);
-        std::ostringstream speedStream;
-        speedStream << std::fixed << std::setprecision(1) << downwardSpeed << " B/S";
-        addText(panelX + 77.0f * scale, panelY + 41.0f * scale,
-                speedStream.str(), 8.5f * scale, kWhite);
+        std::ostringstream fallSpeedStream;
+        fallSpeedStream << std::fixed << std::setprecision(1) << downwardSpeed << " B/S";
+        addText(panelX + 77.0f * scale, panelY + 40.0f * scale,
+                fallSpeedStream.str(), 8.5f * scale, kWhite);
+        addText(panelX + 11.0f * scale, panelY + 58.0f * scale,
+                "MOVE SPEED", 7.0f * scale, kMuted);
+        std::ostringstream movementSpeedStream;
+        movementSpeedStream << std::fixed << std::setprecision(1) << movementSpeed << " B/S";
+        addText(panelX + 77.0f * scale, panelY + 56.0f * scale,
+                movementSpeedStream.str(), 8.5f * scale, kCyan);
         const float barX = panelX + 11.0f * scale;
-        const float barY = panelY + 63.0f * scale;
+        const float barY = panelY + 78.0f * scale;
         const float barW = panelW - 22.0f * scale;
         const float barH = 4.0f * scale;
         addRect(barX, barY, barW, barH, kTrack);
         addRect(barX, barY, barW * clamp01(downwardSpeed / 12.0f), barH,
                 downwardSpeed >= 4.0f ? kRed : kCyan);
+        // Pixel-scan texture gives the panel a subtle game-interface finish without
+        // requiring image assets or introducing draw commands unsupported by Levi.
+        for (int stripe = 0; stripe < 10; ++stripe) {
+            const float stripeX = panelX + panelW - (static_cast<float>(stripe) * 13.0f + 9.0f) * scale;
+            addRect(stripeX, panelY + 3.0f * scale, 5.0f * scale,
+                    1.0f * scale, withAlpha(stripe % 2 ? kCyan : kRed, 110));
+        }
 
         const float iconX = panelX + 190.0f * scale;
         const float iconY = panelY + 13.0f * scale;
