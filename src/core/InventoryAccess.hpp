@@ -12,6 +12,9 @@ public:
     void initialize();
     int countItems(const sdk::Player* player, std::string_view identifierPart) const;
     int countStack(const void* stack, std::string_view identifierPart) const;
+    int findHotbarSlot(const sdk::Player* player, std::string_view identifierPart) const;
+    int selectedHotbarSlot(const sdk::Player* player) const;
+    bool selectHotbarSlot(sdk::Player* player, int slot) const;
 
 private:
     using GetOffhandSlotFn = const void* (*)(const void*);
