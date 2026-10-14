@@ -285,6 +285,9 @@ EGLBoolean swapBuffersDetour(EGLDisplay display, EGLSurface surface) {
     if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
         FrameEvent event;
         bus().publish(event);
+        // A cancellable FrameEvent can hold the last presented image for a couple
+        // of frames on confirmed impacts, without pausing the game simulation.
+        if (event.cancelled()) return EGL_TRUE;
     }
     return swapBuffersOriginal ? swapBuffersOriginal(display, surface) : EGL_FALSE;
 }

@@ -78,6 +78,27 @@ void UltrakillHudModule::onInit() {
         [this](auto& event) { onLocalPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>(
         [this](auto& event) { onAttack(event.target); });
+
+    // Runtime calls ModuleRegistry::onFrame() before this last-priority listener.
+    // The impact frame itself is presented, then the next two swaps are held.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
+        [this](auto& event) {
+            if (!enabled) return;
+            std::lock_guard lock(m_stateMutex);
+            if (!m_enableHitStop) {
+                m_hitStopPending = false;
+                m_hitStopFrames = 0;
+                return;
+            }
+            if (m_hitStopPending) {
+                m_hitStopPending = false;
+                return;
+            }
+            if (m_hitStopFrames > 0) {
+                --m_hitStopFrames;
+                event.cancel();
+            }
+        }, bedrocktools::events::EventPriority::Last);
 }
 
 void UltrakillHudModule::onLocalPlayerTick(Player* player) {
@@ -133,6 +154,8 @@ void UltrakillHudModule::onEnable() {
     m_flashActive = false;
     m_hasPendingTarget = false;
     m_pendingTarget = nullptr;
+    m_hitStopFrames = 0;
+    m_hitStopPending = false;
     m_hasLastY = false;
     m_fallSpeedBps.store(0.0f, std::memory_order_relaxed);
 }
@@ -143,6 +166,8 @@ void UltrakillHudModule::onDisable() {
         m_flashActive = false;
         m_hasPendingTarget = false;
         m_pendingTarget = nullptr;
+        m_hitStopFrames = 0;
+        m_hitStopPending = false;
     }
     const std::vector<PLModMenu_DrawCommand> empty;
     submitDrawCommands(moduleId, empty);
@@ -185,6 +210,13 @@ void UltrakillHudModule::onFrame() {
                     m_impactFallSpeedBps =
                         std::max(0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
                     m_flashActive = true;
+                    if (m_enableHitStop) {
+                        m_hitStopFrames = 2;
+                        m_hitStopPending = true;
+                    } else {
+                        m_hitStopFrames = 0;
+                        m_hitStopPending = false;
+                    }
                 }
             }
         }
@@ -430,6 +462,7 @@ void UltrakillHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_showReticle")) m_showReticle = j["m_showReticle"].get<bool>();
     if (j.contains("m_enableParryFlash")) m_enableParryFlash = j["m_enableParryFlash"].get<bool>();
     if (j.contains("m_enableImpactShake")) m_enableImpactShake = j["m_enableImpactShake"].get<bool>();
+    if (j.contains("m_enableHitStop")) m_enableHitStop = j["m_enableHitStop"].get<bool>();
     if (j.contains("m_showImpactText")) m_showImpactText = j["m_showImpactText"].get<bool>();
 }
 
@@ -443,5 +476,6 @@ void UltrakillHudModule::saveConfig(nlohmann::json& j) {
     j["m_showReticle"] = m_showReticle;
     j["m_enableParryFlash"] = m_enableParryFlash;
     j["m_enableImpactShake"] = m_enableImpactShake;
+    j["m_enableHitStop"] = m_enableHitStop;
     j["m_showImpactText"] = m_showImpactText;
 }
