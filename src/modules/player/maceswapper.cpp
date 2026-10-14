@@ -13,6 +13,8 @@
 #include <cmath>
 
 namespace {
+constexpr float kMinimumMaceSmashFallDistance = 1.55f;
+
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
@@ -159,9 +161,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const float fallDistance = std::max(0.0f, m_peakY - position.y);
     // A tiny hop is not a mace slam. Require both a meaningful drop and multiple
     // consecutive downward ticks before acquiring the hotbar slot.
-    if (verticalDelta < -0.08f && fallDistance >= 1.25f) {
+    if (verticalDelta < -0.08f && fallDistance >= kMinimumMaceSmashFallDistance) {
         m_descentTicks = std::min(m_descentTicks + 1, 8);
-    } else if (verticalDelta >= -0.02f || fallDistance < 1.25f) {
+    } else if (verticalDelta >= -0.02f || fallDistance < kMinimumMaceSmashFallDistance) {
         m_descentTicks = 0;
     }
 
@@ -178,10 +180,18 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
+    const bool holdingWindCharge = heldIdentifier.find("wind_charge") != std::string::npos;
+
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     auto* aim = (aimBase && aimBase->enabled) ? static_cast<AimAssistModule*>(aimBase) : nullptr;
 
-    if (!m_fallPriorityActive && m_descentTicks >= 2 && fallDistance >= 1.25f && aim) {
+    // A normal jump should not trigger a mace swap before a real smash fall.
+    // Do not acquire the main hand while a Wind Charge is selected: its use and
+    // the swapper would otherwise compete for the same slot on mobile.
+    if (holdingWindCharge && !m_fallPriorityActive) m_descentTicks = 0;
+    if (!m_fallPriorityActive && !holdingWindCharge &&
+        m_descentTicks >= 2 && fallDistance >= kMinimumMaceSmashFallDistance && aim) {
         void* target = nullptr;
         AABB targetBounds{};
         float aimRange = 0.0f;
