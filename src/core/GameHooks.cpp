@@ -19,6 +19,8 @@
 #include <cstdio>
 #include <limits>
 #include <pl/Logger.hpp>
+#include <chrono>
+#include <thread>
 
 namespace bedrocktools::core::gamehooks {
 namespace {
@@ -401,13 +403,16 @@ EGLBoolean swapBuffersDetour(EGLDisplay display, EGLSurface surface) {
     if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
         FrameEvent event;
         bus().publish(event);
-        // A cancellable FrameEvent can hold the last presented image for a couple
-        // of frames on confirmed impacts, without pausing the game simulation.
+        // Do not skip eglSwapBuffers: mobile EGL does not guarantee preservation
+        // of the front/back buffer when a swap is omitted. Instead, briefly delay
+        // presentation of this already-rendered frame, then perform the real swap.
+        // This creates a short visual hit-stop pulse without risking an undefined
+        // surface or starving the renderer.
         if (event.cancelled()) {
             static std::atomic_bool loggedHeldFrame{false};
             if (!loggedHeldFrame.exchange(true, std::memory_order_acq_rel))
-                autoHitLogger().info("The HUD requested its first held frame; visual hit-stop is reaching eglSwapBuffers.");
-            return EGL_TRUE;
+                autoHitLogger().info("ULTRAKILL HUD hit-stop pulse reached eglSwapBuffers; delaying presentation by 18 ms.");
+            std::this_thread::sleep_for(std::chrono::milliseconds(18));
         }
     }
     return swapBuffersOriginal ? swapBuffersOriginal(display, surface) : EGL_FALSE;
