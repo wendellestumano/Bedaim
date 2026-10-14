@@ -8,6 +8,8 @@ namespace bedrocktools::sdk::offsets {
 namespace Player {
 inline constexpr std::size_t mName = 2824;
 inline constexpr std::size_t mSkin = 2552;
+// Player stores GameMode and spawn-randomizer unique_ptrs immediately before mSkin.
+inline constexpr std::size_t mGameMode = mSkin - 2 * sizeof(void*);
 }
 
 namespace Actor {
