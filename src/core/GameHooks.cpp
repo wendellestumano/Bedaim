@@ -35,7 +35,7 @@ using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
 // The GameMode virtual thunk takes only (this, target, hitPosition); it supplies
 // the internal predictive flag itself before forwarding to GameModeAttackInternal.
-using NativeAttackVirtualFn = bool(*)(void*, void*, const void*);
+
 using ClientInstanceUpdateFn = void*(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
@@ -372,23 +372,18 @@ void* gameMode() {
     return currentGameMode.load(std::memory_order_acquire);
 }
 
-bool attack(void* gameMode, void* target, const void* hitPosition) {
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
 
-    // Guard against nested synthetic attacks coming from an event callback.
+    // Only dispatch the same native entry that GameHooks has already resolved and
+    // installed the matching four-argument detour for. Calling vtable[16] with an
+    // inferred ABI was unsafe and caused crashes on ARM64.
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
 
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    if (!vtable || !vtable[16]) return false;
-    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable[16]);
-
-    // This object is captured from a real GameMode engine callback. On some Bedrock
-    // versions the virtual slot is a thunk rather than the exact address returned by
-    // signature scanning, so equality against the scanned function starts can reject
-    // a valid attack entry and silently disable every synthetic attack. Only dispatch
-    // the non-null virtual method on this live, engine-observed GameMode instance.
-    if (!slotAddress) return false;
+    const auto internalAddress = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
+    if (!internalAddress) return false;
+    if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
     struct AttackGuard {
         bool& active;
@@ -396,8 +391,9 @@ bool attack(void* gameMode, void* target, const void* hitPosition) {
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    const auto nativeAttack = reinterpret_cast<NativeAttackVirtualFn>(vtable[16]);
-    return nativeAttack(gameMode, target, hitPosition);
+    const auto nativeAttack = reinterpret_cast<AttackFn>(internalAddress);
+    return nativeAttack(gameMode, target, playPredictiveSound, hitPosition);
+}
 }
 
 }
