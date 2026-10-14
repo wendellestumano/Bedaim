@@ -440,7 +440,18 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
         -std::sin(pitch),
         std::cos(yaw) * cosPitch
     };
-    if (!rayIntersectsAABB(eyePosition, viewDirection, m_lastTargetBounds)) return false;
+    // Small tolerance for mobile touch/camera quantization. This still requires
+    // the view ray to pass through the target's immediate hitbox area.
+    constexpr float crosshairTolerance = 0.12f;
+    const AABB crosshairBounds{
+        {m_lastTargetBounds.min.x - crosshairTolerance,
+         m_lastTargetBounds.min.y - crosshairTolerance,
+         m_lastTargetBounds.min.z - crosshairTolerance},
+        {m_lastTargetBounds.max.x + crosshairTolerance,
+         m_lastTargetBounds.max.y + crosshairTolerance,
+         m_lastTargetBounds.max.z + crosshairTolerance}
+    };
+    if (!rayIntersectsAABB(eyePosition, viewDirection, crosshairBounds)) return false;
 
     if (m_cantSeeThroughBlocks) {
         auto* dimension = player->dimension();
