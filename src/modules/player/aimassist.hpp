@@ -21,7 +21,7 @@ public:
     void processPlayerFrame();
     bool currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range);
     bool targetBoundsSnapshot(void* desiredTarget, bedrocktools::sdk::AABB& bounds, float& range);
-    bool currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target);
+    bool currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance = 0.12f);
     void deferAutoHitFor(float delayMs);
 
     bool m_targetPlayers = true;
