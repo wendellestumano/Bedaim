@@ -52,11 +52,13 @@ public:
     float m_autoHitDelayMs = 150.0f;
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
-    float m_hitboxDistanceGrowth = 1.0f;
+    float m_hitboxDistanceGrowth = 5.0f;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
     // Independent yaw/pitch turn-rate multiplier for large rotations behind the player.
     float m_rotationSpeed = 1.0f;
+    std::string m_predictionMode = "Ranged";
+    float m_predictionLeadMs = 120.0f;
     std::string m_whitelistNames = "";
 
 private:
@@ -82,4 +84,28 @@ private:
     std::chrono::steady_clock::time_point m_lastRotationUpdate{};
     std::chrono::steady_clock::time_point m_lastTargetSeen{};
     std::chrono::steady_clock::time_point m_nextAutoHit{};
+    void* m_motionTrackedTarget = nullptr;
+    bedrocktools::sdk::Vec3 m_lastMotionPosition{};
+    bedrocktools::sdk::Vec3 m_targetVelocity{};
+    bool m_hasMotionSample = false;
+    std::chrono::steady_clock::time_point m_lastMotionSample{};
+};
+
+// Client-side virtual hitbox expander for Aim Assist. It widens the steering
+// region only; it does not rewrite the server-authoritative collision AABB.
+class HitboxExpanderModule final : public Module {
+public:
+    HitboxExpanderModule();
+    bedrocktools::sdk::AABB expandedSteeringBounds(bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const;
+    bool requiresLineOfSight() const;
+    void loadConfig(const nlohmann::json& j) override;
+    void saveConfig(nlohmann::json& j) override;
+
+    float m_hitboxSize = 0.6f;
+    bool m_expandPlayers = true;
+    bool m_expandMobs = false;
+    bool m_requireLineOfSight = true;
+
+private:
+    mutable std::mutex m_expandMutex;
 };
