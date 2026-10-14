@@ -191,7 +191,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // the swapper would otherwise compete for the same slot on mobile.
     if (holdingWindCharge && !m_fallPriorityActive) m_descentTicks = 0;
     if (!m_fallPriorityActive && !holdingWindCharge &&
-        m_descentTicks >= 2 && fallDistance >= kMinimumMaceSmashFallDistance && aim) {
+        m_descentTicks >= 2 && fallDistance >= kMinimumMaceSmashFallDistance && aim &&
+        inventory.findHotbarSlot(player, "mace") >= 0) {
         void* target = nullptr;
         AABB targetBounds{};
         float aimRange = 0.0f;
