@@ -76,12 +76,15 @@ void MaceSwapperModule::onEnable() {
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
     m_nextAttack = {};
-    m_pendingAttack = false;
-    m_pendingMaceSlot = -1;
-    m_pendingPreviousSlot = -1;
-    m_pendingTicks = 0;
-    m_pendingTarget = nullptr;
-    m_pendingPlayer = nullptr;
+    // If it was disabled and immediately re-enabled before the next game tick,
+    // retain pending slot ownership so the mace can still be attacked/restored safely.
+    if (!m_pendingAttack) {
+        m_pendingMaceSlot = -1;
+        m_pendingPreviousSlot = -1;
+        m_pendingTicks = 0;
+        m_pendingTarget = nullptr;
+        m_pendingPlayer = nullptr;
+    }
 }
 
 void MaceSwapperModule::onDisable() {
