@@ -410,12 +410,25 @@ void UltrakillHudModule::onFrame() {
         addText(panelX + 77.0f * scale, panelY + 56.0f * scale,
                 movementSpeedStream.str(), 8.5f * scale, kCyan);
         const float barX = panelX + 11.0f * scale;
-        const float barY = panelY + 78.0f * scale;
         const float barW = panelW - 22.0f * scale;
         const float barH = 4.0f * scale;
-        addRect(barX, barY, barW, barH, kTrack);
-        addRect(barX, barY, barW * clamp01(downwardSpeed / 12.0f), barH,
+
+        // Separate live meters for fall velocity and total movement velocity.
+        const float fallBarY = panelY + 77.0f * scale;
+        addRect(barX, fallBarY, barW, barH, kTrack);
+        addRect(barX, fallBarY, barW * clamp01(downwardSpeed / 12.0f), barH,
                 downwardSpeed >= 4.0f ? kRed : kCyan);
+
+        const float moveBarY = panelY + 88.0f * scale;
+        addRect(barX, moveBarY, barW, barH, kTrack);
+        addRect(barX, moveBarY, barW * clamp01(movementSpeed / 12.0f), barH,
+                movementSpeed >= 8.0f ? kGold : kCyan);
+        // Scanline and tick marks add a compact retro HUD texture without image assets.
+        for (int tick = 1; tick < 12; ++tick) {
+            const float tickX = barX + barW * static_cast<float>(tick) / 12.0f;
+            addRect(tickX, fallBarY, 1.0f * scale, barH, withAlpha(kDeepBlack, 180));
+            addRect(tickX, moveBarY, 1.0f * scale, barH, withAlpha(kDeepBlack, 180));
+        }
         // Pixel-scan texture gives the panel a subtle game-interface finish without
         // requiring image assets or introducing draw commands unsupported by Levi.
         for (int stripe = 0; stripe < 10; ++stripe) {
