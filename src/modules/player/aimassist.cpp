@@ -1044,10 +1044,13 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         {nativeBounds.max.x + predictionOffset.x, nativeBounds.max.y + predictionOffset.y,
          nativeBounds.max.z + predictionOffset.z}
     };
+    auto* steeringExpanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* steeringExpander = (steeringExpanderBase && steeringExpanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(steeringExpanderBase) : nullptr;
     AABB bounds = nativeBounds;
-    if (expander && expander->enabled) {
+    if (steeringExpander) {
         const bool targetIsPlayer = g_actorIsPlayer && g_actorIsPlayer(m_lastTarget);
-        bounds = expander->expandedSteeringBounds(targetIsPlayer, nativeBounds);
+        bounds = steeringExpander->expandedSteeringBounds(targetIsPlayer, nativeBounds);
     }
     bounds.min.x += predictionOffset.x; bounds.max.x += predictionOffset.x;
     bounds.min.y += predictionOffset.y; bounds.max.y += predictionOffset.y;
