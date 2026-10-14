@@ -111,6 +111,18 @@ int InventoryAccess::selectedHotbarSlot(const sdk::Player* player) const {
     return slot >= 0 && slot < 9 ? slot : -1;
 }
 
+std::string InventoryAccess::selectedHotbarIdentifier(const sdk::Player* player) const {
+    if (!player) return {};
+    std::uintptr_t begin = 0;
+    std::size_t size = 0;
+    if (!inventorySlots(player, begin, size) || !begin || size < 9) return {};
+    const int selected = selectedHotbarSlot(player);
+    if (selected < 0 || static_cast<std::size_t>(selected) >= size) return {};
+    const void* stack = reinterpret_cast<const void*>(begin +
+        static_cast<std::size_t>(selected) * ItemStackSize);
+    return stackIdentifier(stack);
+}
+
 bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     if (!player || slot < 0 || slot > 8) return false;
     std::uintptr_t begin = 0;
