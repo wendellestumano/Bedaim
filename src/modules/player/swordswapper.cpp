@@ -75,6 +75,7 @@ void SwordSwapperModule::onEnable() {
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
     m_groundedTicks = 0;
+    m_userOverrodeSwap = false;
     // Preserve ownership if the user re-enables the module before the next game
     // tick has had a chance to restore the temporarily selected sword.
 }
@@ -110,6 +111,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     if (!enabled) {
         restoreIfOwned();
+        m_userOverrodeSwap = false;
         return;
     }
 
@@ -133,10 +135,12 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const bool grounded = m_groundedTicks >= 2 && dy >= -0.0025f;
 
     if (m_ownsSwap && inventory.selectedHotbarSlot(player) != m_swordSlot) {
-        // User changed the slot manually; relinquish ownership and do not overwrite it.
+        // User changed the slot manually. Stop owning the slot and honor the override
+        // until this target leaves the crosshair or the player leaves the ground.
         m_ownsSwap = false;
         m_swordSlot = -1;
         m_previousSlot = -1;
+        m_userOverrodeSwap = true;
     }
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
@@ -155,8 +159,10 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     if (!shouldUseSword) {
         restoreIfOwned();
+        m_userOverrodeSwap = false;
         return;
     }
+    if (m_userOverrodeSwap) return;
 
     const int swordSlot = inventory.findHotbarSlot(player, "_sword");
     const int selected = inventory.selectedHotbarSlot(player);
