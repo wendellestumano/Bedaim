@@ -1,4 +1,5 @@
 #include "ModuleMenu.hpp"
+#include "MenuConfigValue.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
@@ -60,33 +61,9 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     nlohmann::json j;
     mod->saveConfig(j);
 
-    const std::string safeValue(value);
-    const std::string safeKey(key);
     try {
-        const auto it = j.find(safeKey);
-        if (it == j.end() || it->is_null()) {
-            j[safeKey] = safeValue;
-        } else if (it->is_boolean()) {
-            std::string normalized = safeValue;
-            std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-                [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-            if (normalized == "true" || normalized == "1" || normalized == "on" || normalized == "yes")
-                j[safeKey] = true;
-            else if (normalized == "false" || normalized == "0" || normalized == "off" || normalized == "no")
-                j[safeKey] = false;
-            // Preserve the current value if a malformed toggle payload is received.
-        } else if (it->is_number_integer()) {
-            char* end = nullptr;
-            const long parsed = std::strtol(safeValue.c_str(), &end, 10);
-            if (end != safeValue.c_str() && end && *end == '\0') j[safeKey] = parsed;
-        } else if (it->is_number_float()) {
-            char* end = nullptr;
-            const float parsed = std::strtof(safeValue.c_str(), &end);
-            if (end != safeValue.c_str() && end && *end == '\0' && std::isfinite(parsed))
-                j[safeKey] = parsed;
-        } else {
-            j[safeKey] = safeValue;
-        }
+        const auto result = bedaim::menuconfig::applyValue(j, key, value);
+        if (result == bedaim::menuconfig::ApplyResult::InvalidValue) return;
     } catch (...) {
         return;
     }
