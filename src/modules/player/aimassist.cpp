@@ -281,18 +281,13 @@ enum class HeldWeapon {
 
 HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
     if (!player) return HeldWeapon::None;
-    auto** vtable = *reinterpret_cast<void***>(const_cast<bedrocktools::sdk::Player*>(player));
-    constexpr std::size_t getCarriedItemIndex = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
-    if (!vtable || !vtable[getCarriedItemIndex]) return HeldWeapon::None;
-    using GetCarriedItemFn = const void* (*)(void*);
-    const void* stack = reinterpret_cast<GetCarriedItemFn>(vtable[getCarriedItemIndex])(
-        const_cast<bedrocktools::sdk::Player*>(player));
-    if (!stack) return HeldWeapon::None;
 
-    // getDescriptionId/dladdr validation is expensive on Android. Resolve one
-    // identifier and classify it with ordinary string comparisons instead of
-    // re-entering native ItemStack inspection once for every weapon category.
-    const std::string identifier = bedrocktools::core::InventoryAccess::get().stackIdentifier(stack);
+    // Use the same selected-hotbar path as the swapper modules. On some
+    // BedrockTools/LeviLamina builds Player::getCarriedItem returns a transient
+    // wrapper that does not describe the currently selected inventory stack;
+    // classifying that wrapper as None made Weapon Filter disable every weapon.
+    const std::string identifier =
+        bedrocktools::core::InventoryAccess::get().selectedHotbarIdentifier(player);
     if (identifier.empty()) return HeldWeapon::None;
     if (identifier.find("crossbow") != std::string::npos) return HeldWeapon::Crossbow;
     if (identifier.find("trident") != std::string::npos) return HeldWeapon::Trident;
@@ -1050,13 +1045,15 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         !m_weaponFilterAllowsCurrent) return;
     const int configuredKey = m_autoHitKeyCode.load(std::memory_order_acquire);
     const int configuredMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
-    if (configuredKey > 0 &&
-        !m_autoHitPhysicalKeyDown.load(std::memory_order_acquire) &&
-        !m_autoHitVirtualKeyDown.load(std::memory_order_acquire)) {
-        return;
-    }
-    if (configuredMouseButton > 0 &&
-        !m_autoHitMouseButtonDown.load(std::memory_order_acquire)) {
+    const bool physicalKeyDown = m_autoHitPhysicalKeyDown.load(std::memory_order_acquire);
+    const bool virtualKeyDown = m_autoHitVirtualKeyDown.load(std::memory_order_acquire);
+    const bool mouseButtonDown = m_autoHitMouseButtonDown.load(std::memory_order_acquire);
+    // A mouse alias may carry both its Android BUTTON_n key code and its
+    // physical/touch mouse-button identity. Treat those as alternative ways to
+    // hold the same binding, not two separate inputs that must be held together.
+    if (configuredMouseButton > 0) {
+        if (!mouseButtonDown && !physicalKeyDown && !virtualKeyDown) return;
+    } else if (configuredKey > 0 && !physicalKeyDown && !virtualKeyDown) {
         return;
     }
     if (!m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) {
@@ -1656,12 +1653,11 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         const auto parsedMouseButton = bedaim::autohitkey::parseMouseButton(m_autoHitKeyBinding);
         const auto parsedBinding = bedaim::autohitkey::parse(m_autoHitKeyBinding);
         if (parsedMouseButton.has_value()) {
-            // ModuleRegistry's mouse callback is not connected to the launcher's
-            // live Android input bridge. Translate button aliases to Android
-            // KEYCODE_BUTTON_1..16 so physical input and the floating Hold button
-            // use the existing registered key callback path.
+            // Keep both identities: Android BUTTON_n supports the launcher input
+            // bridge, while the mouse-button id lets desktop/OTG mouse events and
+            // the floating Hold control activate the same binding.
             configuredKey = *bedaim::autohitkey::androidButtonKeyCode(*parsedMouseButton);
-            configuredMouseButton = 0;
+            configuredMouseButton = *parsedMouseButton;
         } else if (parsedBinding.has_value()) {
             configuredKey = *parsedBinding;
             configuredMouseButton = 0;
