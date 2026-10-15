@@ -197,21 +197,29 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const auto now = std::chrono::steady_clock::now();
     int swordSlot = -1;
-    if (m_cachedSwordSlot >= 0) {
-        const std::string cachedIdentifier =
-            inventory.hotbarSlotIdentifier(player, m_cachedSwordSlot);
-        if (cachedIdentifier.find("sword") != std::string::npos) {
-            swordSlot = m_cachedSwordSlot;
-        } else {
-            m_cachedSwordSlot = -1;
+    const bool scanCooldownActive =
+        m_nextSwordScanAt.time_since_epoch().count() != 0 && now < m_nextSwordScanAt;
+    if (m_cachedSwordSlot >= 0 && scanCooldownActive) {
+        // Trust the last validated slot during the short cache window. Calling
+        // hotbarSlotIdentifier here every tick re-entered native item-description
+        // code even when the player was not swapping, causing avoidable mobile lag.
+        swordSlot = m_cachedSwordSlot;
+    } else {
+        if (m_cachedSwordSlot >= 0) {
+            const std::string cachedIdentifier =
+                inventory.hotbarSlotIdentifier(player, m_cachedSwordSlot);
+            if (cachedIdentifier.find("sword") != std::string::npos) {
+                swordSlot = m_cachedSwordSlot;
+            } else {
+                m_cachedSwordSlot = -1;
+            }
         }
-    }
-    if (swordSlot < 0) {
-        // If no sword is present, don't resolve all nine ItemStacks on every
-        // tick. Recheck inventory changes after a short bounded cooldown.
-        if (m_nextSwordScanAt.time_since_epoch().count() != 0 && now < m_nextSwordScanAt) return;
-        swordSlot = inventory.findHotbarSlot(player, "sword");
-        m_cachedSwordSlot = swordSlot;
+        if (swordSlot < 0) {
+            // If no sword is present, don't resolve all nine ItemStacks on every
+            // tick. Recheck inventory changes after a short bounded cooldown.
+            swordSlot = inventory.findHotbarSlot(player, "sword");
+            m_cachedSwordSlot = swordSlot;
+        }
         m_nextSwordScanAt = now + std::chrono::milliseconds(350);
     }
     if (swordSlot < 0 || selected == swordSlot) return;
