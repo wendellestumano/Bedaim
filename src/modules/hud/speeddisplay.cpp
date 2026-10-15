@@ -1,10 +1,9 @@
 #include "speeddisplay.hpp"
+#include "SpeedDisplayFormat.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <cmath>
-#include <iomanip>
-#include <sstream>
 #include <algorithm>
 #include <pl/ModMenu.hpp>
 
@@ -86,10 +85,7 @@ void SpeedDisplayModule::onDisable() {
 void SpeedDisplayModule::onFrame() {
     if (!enabled) return;
 
-    std::ostringstream speedText;
-    speedText << "Speed: " << std::fixed << std::setprecision(std::clamp(m_precision, 0, 2))
-              << m_currentSpeed << " m/s";
-    const std::string text = speedText.str();
+    const std::string text = bedaim::hud::formatSpeed(m_currentSpeed, m_precision);
 
     std::vector<PLModMenu_DrawCommand> cmds;
     float boxW = calcTextWidth(text, m_size) + 12.0f;
