@@ -1128,7 +1128,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // search range made the slider visually inert for most ordinary encounters.
     const float scaleDistanceRange = std::clamp(configuredRange, 8.0f, 30.0f);
     const float distanceFraction = std::clamp(hitboxDistance / scaleDistanceRange, 0.0f, 1.0f);
-    const float distanceStrength = std::clamp(m_hitboxDistanceGrowth, 0.1f, 10.0f);
+    const float distanceStrength = std::clamp(m_hitboxDistanceGrowth, 0.1f, 200.0f);
     // A square-root response makes even the old default (1) visible, while still
     // reserving the widest virtual region for strength 10.
     const float growth = std::sqrt(distanceStrength / 10.0f);
@@ -1379,7 +1379,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     // no long-range growth after the new curve is applied.
     if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
         migratedHitboxGrowth = 5.0f;
-    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 10.0f);
+    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 200.0f);
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 10.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
     if (m_predictionMode == "0") m_predictionMode = "Off";
@@ -1468,7 +1468,7 @@ bedrocktools::sdk::AABB HitboxExpanderModule::expandedSteeringBounds(
     bool selectedTypeEnabled = false;
     {
         std::lock_guard<std::mutex> lock(m_expandMutex);
-        configuredSize = std::clamp(m_hitboxSize, 0.6f, 10.0f);
+        configuredSize = std::clamp(m_hitboxSize, 1.0f, 200.0f);
         selectedTypeEnabled = isPlayer ? m_expandPlayers : m_expandMobs;
     }
     if (!selectedTypeEnabled || configuredSize <= 0.6001f ||
@@ -1501,7 +1501,7 @@ bool HitboxExpanderModule::requiresLineOfSight() const {
 void HitboxExpanderModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    m_hitboxSize = std::clamp(j.value("m_hitboxSize", m_hitboxSize), 0.6f, 10.0f);
+    m_hitboxSize = std::clamp(j.value("m_hitboxSize", m_hitboxSize), 1.0f, 200.0f);
     m_expandPlayers = j.value("m_expandPlayers", m_expandPlayers);
     m_expandMobs = j.value("m_expandMobs", m_expandMobs);
     m_requireLineOfSight = j.value("m_requireLineOfSight", m_requireLineOfSight);
