@@ -14,12 +14,14 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 static void registerAimAssistConfigSchema(std::string_view moduleId, const nlohmann::json& config);
 static void registerHitboxExpanderConfigSchema(std::string_view moduleId, const nlohmann::json& config);
+static void registerUltrakillHudConfigSchema(std::string_view moduleId, const nlohmann::json& config);
 static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key, const nlohmann::json& snapshot);
 
 static void persistModuleConfig() {
@@ -164,7 +166,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            ConfigChoiceStyleV2::Segmented);
     slider("m_aimSpeed", "Aim speed", "aim", "0.1", "10", "0.1", "x",
            "Base angular turn rate.");
-    slider("m_rotationSpeed", "Rotation speed", "aim", "0.1", "10", "0.1", "x",
+    slider("m_rotationSpeed", "Rotation speed", "aim", "0.1", "200", "0.1", "x",
            "Independent multiplier for large rotations and targets behind you.");
     choice("m_predictionMode", "Target prediction", "aim",
            "Predict motion for ranged weapons, or for all weapons.",
@@ -210,9 +212,9 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Maximum AutoHit point distance. Its actor scan extends to at least this range.");
     slider("m_autoHitDelayMs", "Attack interval", "auto_hit", "80", "1000", "10", "ms",
            "Minimum time between native attack attempts.");
-    addNode("m_autoHitKeyCode", "Attack key code", "auto_hit", ConfigControlTypeV2::SliderInt,
-            "0", "288", "1", "Android keycode",
-            "0 keeps automatic native AutoHit. Set an Android key code to show a floating Hold button that emits the key and enables AutoHit while held. Android KEYCODE_0 is 7; the floating button displays a friendly key label.",
+    addNode("m_autoHitKeyBinding", "Attack input key", "auto_hit", ConfigControlTypeV2::Text,
+            "", "", "", "",
+            "Type an input alias such as button1, shift, 0, a, or keycode:188. Use auto for native AutoHit without a hold-button key. A floating Hold button emits the configured key and gates AutoHit while held.",
             true, {}, ConfigChoiceStyleV2::Auto);
 
     toggle("m_weaponOnly", "Enable weapon filter", "weapons",
@@ -306,6 +308,45 @@ static void registerHitboxExpanderConfigSchema(std::string_view moduleId,
     }
 }
 
+static void registerUltrakillHudConfigSchema(std::string_view moduleId,
+                                               const nlohmann::json& config) {
+    using namespace pl::modmenu;
+    static nlohmann::json initialDefaults;
+    static bool defaultsCaptured = false;
+    if (!defaultsCaptured) {
+        initialDefaults = config;
+        defaultsCaptured = true;
+    }
+
+    ConfigSchemaBuilder schema;
+    schema.defaultCategory("hud")
+        .category("hud", "ULTRAKILL HUD", "Visual overlay and impact feedback");
+
+    for (const auto& [key, title, description] : {
+             std::tuple<const char*, const char*, const char*>{
+                 "m_showMaceStatus", "Weapon / movement panel", "Show the selected item and movement readouts."},
+             {"m_showStyleCounter", "Style score and combo", "Track confirmed hits, score, combo, and style rank."},
+             {"m_showReticle", "Crosshair reticle", "Draw the ULTRAKILL-style center reticle."},
+             {"m_enableParryFlash", "Attack / parry flash", "Show a visual pulse when an attack is attempted."},
+             {"m_enableImpactShake", "Impact shake", "Add a brief visual screen-shake effect after an attack."},
+             {"m_enableHitStop", "Extended impact hold (visual only)", "Extend the HUD impact effect without cancelling BedrockTools frame events."},
+             {"m_showImpactText", "Impact text", "Show HIT CONFIRMED / MACE HIT / GROUND SLAM text."}}) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.category = "hud";
+        node.title = title;
+        node.description = description;
+        node.type = ConfigControlTypeV2::Toggle;
+        node.defaultValue = schemaCurrentValue(initialDefaults, key, "true");
+        node.currentValue = schemaCurrentValue(config, key, "true");
+        node.hasCurrentValue = config.contains(key);
+        schema.node(std::move(node));
+    }
+
+    setConfigSchemaJson(moduleId, schema.toJson());
+}
+
 class ModuleConfigSchemaRefreshQueue final {
 public:
     ModuleConfigSchemaRefreshQueue() : m_worker(&ModuleConfigSchemaRefreshQueue::run, this) {}
@@ -372,6 +413,8 @@ private:
                     registerAimAssistConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Hitbox Expander") {
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
+                } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
+                    registerUltrakillHudConfigSchema(entry.first, entry.second);
                 }
             }
             lock.lock();
@@ -388,7 +431,8 @@ private:
 static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                                                const nlohmann::json& snapshot) {
     if (!mod || (mod->moduleId != "bedrocktools.Aim Assist" &&
-                 mod->moduleId != "bedrocktools.Hitbox Expander")) return;
+                 mod->moduleId != "bedrocktools.Hitbox Expander" &&
+                 mod->moduleId != "bedrocktools.ULTRAKILL HUD")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
     // change. Debounce continuous sliders and give the whitelist editor more time
     // so one character/drag does not reset the active widget mid-interaction.
@@ -501,7 +545,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_autoHit") displayName = "AUTO HIT > Enable";
                 else if (k == "m_autoHitRange") displayName = "AUTO HIT > Range (blocks)";
                 else if (k == "m_autoHitDelayMs") displayName = "AUTO HIT > Attack interval (ms)";
-                else if (k == "m_autoHitKeyCode") displayName = "AUTO HIT > Key code (Android; 0 disables)";
+                else if (k == "m_autoHitKeyBinding") displayName = "AUTO HIT > Input key (button1 / shift / 0)";
                 else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
                 else if (k == "m_rotationSpeed") displayName = "BEHAVIOR > Rotation speed";
@@ -794,6 +838,8 @@ void registerModulesWithLauncher() {
                 registerAimAssistConfigSchema(mod->moduleId, j);
             } else if (mod->moduleId == "bedrocktools.Hitbox Expander") {
                 registerHitboxExpanderConfigSchema(mod->moduleId, j);
+            } else if (mod->moduleId == "bedrocktools.ULTRAKILL HUD") {
+                registerUltrakillHudConfigSchema(mod->moduleId, j);
             }
         }
     }
