@@ -68,12 +68,21 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
         0.0f, 1.0f);
     const float distanceBlend = linear * linear * (3.0f - 2.0f * linear);
 
-    // Strength=5 keeps a useful ~2.8x far-range multiplier. Larger values have a
-    // stronger, but bounded, effect; unlike the previous curve this also permits
-    // a sub-native virtual area near the target instead of clamping it to 1.0.
+    // Stretch the near-to-far curve over the configured aim range (up to 30 blocks).
+    // This matters on normal 4-6 block settings too: far targets should receive the
+    // configured strength instead of the slider being muted by an arbitrary 8-block floor.
+    constexpr float kMaximumCurveRange = 30.0f;
+    const float farDistance = std::clamp(safeRange, 2.5f, kMaximumCurveRange);
+    const float linearWithinRange = std::clamp(
+        (safeDistance - kNearDistance) / std::max(1.0f, farDistance - kNearDistance),
+        0.0f, 1.0f);
+    const float distanceBlendWithinRange = linearWithinRange * linearWithinRange *
+        (3.0f - 2.0f * linearWithinRange);
+    // Strength=5 gives a 2.8x far multiplier. Greater strength is more pronounced,
+    // still bounded; the close-range multiplier is deliberately below one.
     const float strengthFactor = std::sqrt(safeStrength / 5.0f);
     const float farMultiplier = std::clamp(0.8f + 2.0f * strengthFactor, 1.1f, 12.0f);
-    const float multiplier = 0.4f + (farMultiplier - 0.4f) * distanceBlend;
+    const float multiplier = 0.4f + (farMultiplier - 0.4f) * distanceBlendWithinRange;
     return std::clamp(safeBase * multiplier, 0.25f, 200.0f);
 }
 
