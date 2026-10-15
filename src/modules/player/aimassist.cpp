@@ -433,6 +433,7 @@ void AimAssistModule::onInit() {
 void AimAssistModule::onEnable() {
     m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
     m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+    m_autoHitMouseButtonDown.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
@@ -440,12 +441,23 @@ void AimAssistModule::onEnable() {
 void AimAssistModule::onDisable() {
     m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
     m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+    m_autoHitMouseButtonDown.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
 bool AimAssistModule::showInLegacyMenu(std::string_view key) const {
     return key != "m_autoHitKeyCode";
+}
+
+bool AimAssistModule::onMouseEvent(int button, bool isDown) {
+    if (!enabled) return false;
+    const int configuredButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+    if (configuredButton > 0 && button == configuredButton) {
+        m_autoHitMouseButtonDown.store(isDown, std::memory_order_release);
+    }
+    // Never consume the user's mouse event; AutoHit observes it passively.
+    return false;
 }
 
 void AimAssistModule::onMenuRegistered() {
@@ -980,9 +992,14 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     if (!m_autoHit || !enabled || !player || player != m_lastPlayer ||
         !m_weaponFilterAllowsCurrent) return;
     const int configuredKey = m_autoHitKeyCode.load(std::memory_order_acquire);
+    const int configuredMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
     if (configuredKey > 0 &&
         !m_autoHitPhysicalKeyDown.load(std::memory_order_acquire) &&
         !m_autoHitVirtualKeyDown.load(std::memory_order_acquire)) {
+        return;
+    }
+    if (configuredMouseButton > 0 &&
+        !m_autoHitMouseButtonDown.load(std::memory_order_acquire)) {
         return;
     }
     if (!m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) {
@@ -1503,6 +1520,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::unique_lock<std::mutex> stateLock(m_stateMutex);
     const int previousAutoHitKeyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
+    const int previousAutoHitMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
@@ -1601,22 +1619,34 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_autoHitRange = std::clamp(j.value("m_autoHitRange", m_autoHitRange), 2.0f, 6.0f);
     m_autoHitDelayMs = std::clamp(j.value("m_autoHitDelayMs", m_autoHitDelayMs), 80.0f, 1000.0f);
     int configuredKey = previousAutoHitKeyCode;
+    int configuredMouseButton = previousAutoHitMouseButton;
     if (j.contains("m_autoHitKeyBinding") && j["m_autoHitKeyBinding"].is_string()) {
         m_autoHitKeyBinding = j.value("m_autoHitKeyBinding", m_autoHitKeyBinding);
+        const auto parsedMouseButton = bedaim::autohitkey::parseMouseButton(m_autoHitKeyBinding);
         const auto parsedBinding = bedaim::autohitkey::parse(m_autoHitKeyBinding);
-        // Text edits are sent as partial strings. Keep the last valid key until the
-        // user finishes entering an alias such as "button1" or "shift".
-        if (parsedBinding.has_value()) configuredKey = *parsedBinding;
+        if (parsedMouseButton.has_value()) {
+            configuredMouseButton = *parsedMouseButton;
+            configuredKey = 0;
+        } else if (parsedBinding.has_value()) {
+            configuredKey = *parsedBinding;
+            configuredMouseButton = 0;
+        }
+        // Text edits are partial values. Unknown/incomplete aliases keep the last
+        // valid binding until a complete key or mouse alias is entered.
     } else {
         configuredKey = std::clamp(j.value("m_autoHitKeyCode", previousAutoHitKeyCode), 0, 288);
+        configuredMouseButton = 0;
         m_autoHitKeyBinding = bedaim::autohitkey::format(configuredKey);
     }
     m_autoHitKeyCode.store(configuredKey, std::memory_order_release);
+    m_autoHitMouseButton.store(configuredMouseButton, std::memory_order_release);
 
     const bool keyChanged = previousAutoHitKeyCode != configuredKey;
-    if (keyChanged) {
+    const bool bindingChanged = keyChanged || previousAutoHitMouseButton != configuredMouseButton;
+    if (bindingChanged) {
         m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
         m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+        m_autoHitMouseButtonDown.store(false, std::memory_order_release);
     }
     stateLock.unlock();
     if (keyChanged && m_menuRegistered.load(std::memory_order_acquire)) {
