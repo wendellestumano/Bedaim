@@ -41,4 +41,9 @@ float normalizeOffhandPollMs(float value) noexcept {
     return std::clamp(value, 50.0f, 500.0f);
 }
 
+float normalizeUiStepDelayMs(float value) noexcept {
+    if (!std::isfinite(value)) return 80.0f;
+    return std::clamp(value, 0.0f, 500.0f);
+}
+
 } // namespace bedaim::autototem
