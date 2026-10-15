@@ -29,8 +29,11 @@ private:
     bool m_pendingRefill = false;
     bool m_lastOffhandHadTotem = false;
     std::chrono::steady_clock::time_point m_refillAfter{};
+    std::chrono::steady_clock::time_point m_nextInventoryScan{};
+    int m_cachedTotemSlot = -1;
 
     float m_delayMs = 100.0f;
+    float m_scanRetryIntervalMs = 250.0f;
     bool m_combatOnly = false;
     bool m_keepTotemEquipped = true;
 };
