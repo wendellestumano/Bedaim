@@ -1135,7 +1135,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // 0.1-200 range without allowing non-finite or unbounded scale values.
     const float growth = std::sqrt(distanceStrength / 10.0f);
     const float distanceFactor = m_distanceDependentHitbox
-        ? std::clamp(0.65f + 2.35f * growth * distanceFraction, 0.65f, 3.0f)
+        ? std::clamp(0.65f + 2.35f * growth * distanceFraction, 0.65f, 12.0f)
         : 1.0f;
     const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 1.0f, 200.0f);
     const Vec3 halfExtents{
@@ -1370,18 +1370,22 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 1.0f, 200.0f);
     m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
-    // Existing values used 0..1000 percent; convert them to the new 0.1..10
-    // strength scale. Legacy normalized values (0..1) are interpreted directly.
+    // A marker distinguishes old percentage-based configs from the expanded
+    // scale, so values above 10 remain usable after every menu change.
+    const bool usesExpandedGrowthScale = j.value("m_hitboxGrowthScaleV2", false);
     const float savedHitboxGrowth = j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth);
-    float migratedHitboxGrowth = savedHitboxGrowth > 10.0f
-        ? savedHitboxGrowth / 100.0f
-        : savedHitboxGrowth;
-    // 100 was the old built-in default. Migrate that exact legacy default to
-    // the new visible midpoint so existing profiles don't reopen with nearly
-    // no long-range growth after the new curve is applied.
-    if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
-        migratedHitboxGrowth = 5.0f;
+    float migratedHitboxGrowth = savedHitboxGrowth;
+    if (!usesExpandedGrowthScale) {
+        migratedHitboxGrowth = savedHitboxGrowth > 200.0f
+            ? savedHitboxGrowth / 100.0f
+            : savedHitboxGrowth;
+        // Migrate the exact legacy default once. Values above 10 can now be
+        // legitimate user choices in the expanded range.
+        if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
+            migratedHitboxGrowth = 5.0f;
+    }
     m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 200.0f);
+    m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 10.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
     if (m_predictionMode == "0") m_predictionMode = "Off";
@@ -1435,6 +1439,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_distanceDependentHitbox"] = m_distanceDependentHitbox;
     j["m_hitboxDistanceGrowth"] = m_hitboxDistanceGrowth;
+    j["m_hitboxGrowthScaleV2"] = true;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
     j["m_swordAimMultiplier"] = m_swordAimMultiplier;
