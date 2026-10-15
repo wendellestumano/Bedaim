@@ -4,13 +4,17 @@
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <iterator>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -63,28 +67,65 @@ static_assert(sizeof(NativeInventorySource) == 12);
 static_assert(offsetof(NativeInventorySource, flags) == 8);
 static_assert(ItemStackSize == 0x98);
 
+struct ReadableRegion {
+    std::uintptr_t begin{};
+    std::uintptr_t end{};
+};
+
 bool isReadableMemory(const void* pointer, std::size_t size) {
     if (!pointer || size == 0) return false;
     const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
     if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
     const auto end = begin + size;
-    std::FILE* maps = std::fopen("/proc/self/maps", "r");
-    if (!maps) return false;
-    char line[512]{};
-    bool found = false;
-    while (std::fgets(line, sizeof(line), maps)) {
-        unsigned long long regionBegin = 0, regionEnd = 0;
-        char permissions[5]{};
-        if (std::sscanf(line, "%llx-%llx %4s", &regionBegin, &regionEnd, permissions) == 3 &&
-            permissions[0] == 'r' &&
-            begin >= static_cast<std::uintptr_t>(regionBegin) &&
-            end <= static_cast<std::uintptr_t>(regionEnd)) {
-            found = true;
-            break;
+
+    // Inventory validation is a hot path. Reopening and scanning /proc/self/maps
+    // for each stack/vtable pointer made cost grow with both inventory size and
+    // process mapping count. Reuse a brief readable-map snapshot instead.
+    static std::mutex mapsMutex;
+    static std::vector<ReadableRegion> readableRegions;
+    static std::chrono::steady_clock::time_point mapsRefreshed{};
+    static bool mapsCacheValid = false;
+
+    std::lock_guard<std::mutex> lock(mapsMutex);
+    const auto now = std::chrono::steady_clock::now();
+    if (!mapsCacheValid || now < mapsRefreshed ||
+        now - mapsRefreshed > std::chrono::milliseconds(10)) {
+        std::vector<ReadableRegion> refreshed;
+        std::FILE* maps = std::fopen("/proc/self/maps", "r");
+        if (!maps) {
+            readableRegions.clear();
+            mapsCacheValid = false;
+            return false;
         }
+        char line[512]{};
+        while (std::fgets(line, sizeof(line), maps)) {
+            unsigned long long regionBegin = 0, regionEnd = 0;
+            char permissions[5]{};
+            if (std::sscanf(line, "%llx-%llx %4s", &regionBegin, &regionEnd, permissions) == 3 &&
+                permissions[0] == 'r' && regionEnd > regionBegin) {
+                refreshed.push_back({static_cast<std::uintptr_t>(regionBegin),
+                                     static_cast<std::uintptr_t>(regionEnd)});
+            }
+        }
+        std::fclose(maps);
+        if (refreshed.empty()) {
+            readableRegions.clear();
+            mapsCacheValid = false;
+            return false;
+        }
+        readableRegions.swap(refreshed);
+        mapsRefreshed = now;
+        mapsCacheValid = true;
     }
-    std::fclose(maps);
-    return found;
+
+    const auto it = std::upper_bound(
+        readableRegions.begin(), readableRegions.end(), begin,
+        [](std::uintptr_t address, const ReadableRegion& region) {
+            return address < region.begin;
+        });
+    if (it == readableRegions.begin()) return false;
+    const auto& region = *std::prev(it);
+    return begin >= region.begin && end <= region.end;
 }
 
 bool isMinecraftFunction(const void* address) {
