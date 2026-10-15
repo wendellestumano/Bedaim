@@ -192,7 +192,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
             "", "", "", "", "Comma-separated names to exclude.", true, {},
             ConfigChoiceStyleV2::Auto);
 
-    slider("m_hitboxScale", "Base hitbox area", "hitbox", "0.5", "1", "0.05", "x",
+    slider("m_hitboxScale", "Base hitbox area", "hitbox", "1", "200", "1", "x",
            "Base size of the virtual steering region.");
     toggle("m_distanceDependentHitbox", "Distance-dependent hitbox", "hitbox",
            "Tighten near targets and expand the virtual aim region with distance.");
@@ -432,11 +432,11 @@ void registerModulesWithLauncher() {
                     minVal = 0.1f;
                     maxVal = 10.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
-                    minVal = 0.5f;
-                    maxVal = 1.0f;
+                    minVal = 1.0f;
+                    maxVal = 200.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxdistancegrowth") {
                     minVal = 0.1f;
-                    maxVal = 10.0f;
+                    maxVal = 200.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_rotationspeed") {
                     minVal = 0.1f;
                     maxVal = 10.0f;
