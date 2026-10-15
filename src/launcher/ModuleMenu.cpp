@@ -40,11 +40,9 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     if (!mod) return;
 
     if (mod->onMenuConfigChanged(key, value)) {
-        // Menu callbacks may update a module-owned field directly. Always serialize
-        // the live module after the callback; never treat a refreshed schema as the
-        // source of truth for persisted settings.
-        nlohmann::json live;
-        mod->saveConfig(live);
+        // Menu callbacks may update module-owned fields directly. Avoid refreshing
+        // or serializing the schema here; ConfigManager snapshots live module state
+        // and persists it asynchronously after its debounce window.
         persistModuleConfig();
         return;
     }
@@ -62,8 +60,6 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     // loadConfig normalizes radio indices and clamps sliders. Serialize the
     // module again afterward so both disk config and V2 controls see that normalized value.
     mod->loadConfig(j);
-    nlohmann::json live;
-    mod->saveConfig(live);
     persistModuleConfig();
 }
 
