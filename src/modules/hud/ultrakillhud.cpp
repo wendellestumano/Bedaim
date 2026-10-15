@@ -229,6 +229,9 @@ void UltrakillHudModule::onEnable() {
     m_lastConfirmedHit = {};
     m_flashStarted = {};
     m_lastHudRender = {};
+    m_cachedSelectedSlot = -1;
+    m_nextItemRefresh = {};
+    m_selectedItemId.clear();
     m_impactFallSpeedBps = 0.0f;
     m_flashActive = false;
     m_hasLastY = false;
