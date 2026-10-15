@@ -59,6 +59,10 @@ void ConfigManager::load() {
 }
 
 void ConfigManager::save() {
+    // Snapshotting happens outside m_mutex because module saveConfig() takes its own
+    // locks. Serialize snapshot+enqueue as one operation so overlapping callers
+    // cannot enqueue an older config after a newer one.
+    std::lock_guard<std::mutex> snapshotGuard(m_saveMutex);
     nlohmann::json j;
 
     for (auto* mod : ModuleRegistry::get().modules()) {
