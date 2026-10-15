@@ -45,10 +45,4 @@ float boundedTurnStep(float angularErrorDegrees,
     return std::clamp(angularErrorDegrees, -maximumStep, maximumStep);
 }
 
-Vec3 selectAimPoint(bool stickyTracking,
-                     const Vec3& centerPoint,
-                     const Vec3& slidingPoint) noexcept {
-    return stickyTracking ? centerPoint : slidingPoint;
-}
-
 } // namespace bedaim::aimmath
