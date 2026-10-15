@@ -653,7 +653,7 @@ void registerModulesWithLauncher() {
                     maxVal = 200.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_rotationspeed") {
                     minVal = 0.1f;
-                    maxVal = 10.0f;
+                    maxVal = 200.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchhysteresis") {
                     minVal = 0.0f;
                     maxVal = 12.0f;
@@ -790,7 +790,7 @@ void registerModulesWithLauncher() {
                 "m_strength", "m_hitboxScale",
                 "m_distanceDependentHitbox", "m_hitboxDistanceGrowth",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
-                "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_autoHitKeyCode", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
+                "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_autoHitKeyBinding", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
                 "m_weaponOtherMelee", "m_elytraMode"
