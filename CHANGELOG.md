@@ -1,5 +1,18 @@
 # Changelog
 
+## Known-Good Input/Inventory Path Restoration — 2026-10-15
+
+### Regression fixes from Build 147 comparison
+- Restored the Build 147 inventory-container traversal and selected-slot reads instead of requiring every inventory-vector read to pass a `/proc/self/maps` validation path. The extra validation was on the shared hot path used by Sword/Mace Swappers and AutoTotem and could reject otherwise valid live inventory storage.
+- Weapon Filter now classifies the selected hotbar stack through the same inventory path as the swappers, rather than relying on the version-sensitive `Player::getCarriedItem` wrapper. An empty/transient carried-item wrapper previously classified every equipped weapon as `None`, making the filter suppress all aim movement.
+- ULTRAKILL HUD now reads the held-item label from the selected hotbar stack, avoiding the same carried-item wrapper that produced `EMPTY HAND` while an item was equipped.
+- AutoHit mouse aliases retain both the Android `KEYCODE_BUTTON_n` identity and the physical mouse-button identity. Either the launcher Hold control, Android key event, or mouse event can satisfy the binding; the implementation no longer requires both mouse and key states simultaneously.
+
+### Validation status
+- These changes are source-level regression fixes based on the known-good Bedrock 26.52 Build 147 implementation. They still require CI and in-game validation on the target Levi Launcher/BedrockTools runtime.
+- AutoTotem visible inventory open/transfer/close and the native attack dispatch remain dependent on symbols and ABI behavior in the active runtime; no device-level success is claimed.
+
+
 ## Restore Prior Item/Combat Paths — 2026-10-15
 
 ### Root-cause corrections from historical comparison
