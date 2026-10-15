@@ -924,57 +924,23 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     }
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    // Cached actor pointers can become invalid when an entity despawns between
-    // ticks. Revalidate membership in a fresh engine-owned actor snapshot before
-    // invoking any actor method or player-type callback on the cached pointer.
-    if (!g_fetchNearbyActors) return;
+    // processAutoHitLocked() is called synchronously at the end of
+    // processPlayerTickLocked(), immediately after m_lastTarget and its bounds
+    // were selected from a validated native actor vector. Re-querying and scanning
+    // that entire vector a second time in the same tick doubled native acquisition
+    // work whenever AutoHit was enabled. Reuse that just-validated snapshot; the
+    // stale-target and bounds guards above/below remain in place.
     auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
     auto* expander = (expanderBase && expanderBase->enabled)
         ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
-    const float queryMargin = expander ? expander->queryExpansionMargin() : 0.0f;
-    const float scanRange = bedaim::autohit::effectiveScanRange(
-        m_range, true, m_autoHitRange, queryMargin);
-    Vec3 queryExtent{scanRange, scanRange, scanRange};
-    ActorVector liveActors = g_fetchNearbyActors(player, &queryExtent, 1);
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(liveActors.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(liveActors.end);
-    if (!liveActors.begin || !liveActors.end || endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        logAutoHitOnce(g_loggedAutoHitStaleTarget,
-            "AutoHit skipped: native actor snapshot metadata failed validation.");
-        m_nextAutoHit = now + std::chrono::milliseconds(100);
-        return;
-    }
-
-    Actor* liveTarget = nullptr;
-    for (auto* entry = liveActors.begin; entry < liveActors.end; ++entry) {
-        if (entry->actor == m_lastTarget) {
-            liveTarget = reinterpret_cast<Actor*>(entry->actor);
-            break;
-        }
-    }
-    if (!liveTarget) {
-        logAutoHitOnce(g_loggedAutoHitStaleTarget,
-            "AutoHit skipped a target that disappeared from the fresh actor snapshot.");
-        m_lastTarget = nullptr;
-        m_targetPresent = false;
-        m_lastTargetIsPlayer = false;
-        m_hasAimPoint = false;
-        m_nextAutoHit = now + std::chrono::milliseconds(80);
-        return;
-    }
-
-    const Vec3 liveTargetPosition = liveTarget->position();
-    const AABB liveTargetBounds = liveTarget->bounds();
-    if (!finiteVec3(liveTargetPosition) || !validBounds(liveTargetBounds)) {
+    const AABB liveTargetBounds = m_lastTargetBounds;
+    if (!validBounds(liveTargetBounds)) {
         logAutoHitOnce(g_loggedAutoHitInvalidPosition,
-            "AutoHit skipped a live target with invalid position or bounds.");
+            "AutoHit skipped a target with invalid cached bounds from the current tick.");
         m_nextAutoHit = now + std::chrono::milliseconds(100);
         return;
     }
-    m_lastTargetBounds = liveTargetBounds;
-    const bool liveTargetIsPlayer = g_actorIsPlayer && g_actorIsPlayer(liveTarget);
+    const bool liveTargetIsPlayer = m_lastTargetIsPlayer;
 
     const Vec3 playerPosition = player->position();
     const AABB playerBounds = player->bounds();
@@ -994,7 +960,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     }
 
     AABB bounds = liveTargetBounds;
-    if (expander && g_actorIsPlayer) {
+    if (expander) {
         bounds = expander->expandedTargetBounds(liveTargetIsPlayer, bounds);
     }
     const Vec3 targetCenter{
