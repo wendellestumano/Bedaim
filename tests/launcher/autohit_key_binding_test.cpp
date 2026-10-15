@@ -21,6 +21,7 @@ void check(bool condition, std::string_view name) {
 int main() {
     using bedaim::autohitkey::format;
     using bedaim::autohitkey::parse;
+    using bedaim::autohitkey::parseMouseButton;
 
     for (const auto& [text, expected] : {
              std::pair<std::string_view, int>{"auto", 0},
