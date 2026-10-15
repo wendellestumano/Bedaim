@@ -50,7 +50,6 @@ struct ActorVector {
 };
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
-using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 
 AimAssistModule* g_aimAssist = nullptr;
 std::once_flag g_autoHitInputCallbackOnce;
@@ -59,7 +58,6 @@ ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
-PlayerGetGameTypeFn g_playerGetGameType = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 std::atomic_bool g_loggedGameTypeUnavailable{false};
 
@@ -407,16 +405,7 @@ void AimAssistModule::onInit() {
 
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
-    // LeviLamina declares GameType getPlayerGameType() const; no Player offset is guessed.
-    void* gameTypeAddress = dlsym(RTLD_DEFAULT, "_ZNK6Player17getPlayerGameTypeEv");
-    if (!gameTypeAddress) {
-        void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-        if (minecraft) {
-            gameTypeAddress = dlsym(minecraft, "_ZNK6Player17getPlayerGameTypeEv");
-            dlclose(minecraft);
-        }
-    }
-    g_playerGetGameType = reinterpret_cast<PlayerGetGameTypeFn>(gameTypeAddress);
+    // GameType lookup is centralized and retried by GameHooks after runtime load.
     g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
@@ -521,19 +510,16 @@ void AimAssistModule::refreshAutoHitKeyButton() {
         .behavior(ButtonBehavior::Hold)
         .defaultVisible(true)
         .stylePreset(ButtonStylePreset::Keycap);
-    // Mouse aliases are represented by this same touch Hold control on Android;
-    // do not inject an unrelated Android key when the user selected button1.
-    // The touch button directly gates AutoHit. Do not inject a captured Android
-    // keycode: some launcher builds retain a registered button callback while the
-    // configuration is being refreshed, which made key changes require a module toggle.
-    button.onEvent([this](std::string_view, ButtonEvent event, float) {
+    // Preserve the previously working launcher path: a keyboard-bound floating
+    // Hold control injects the configured Android key into Bedrock's input stream.
+    // The control is rebuilt after a binding change.
+    if (mouseButton <= 0 && keyCode > 0) button.androidKeyCode(keyCode);
+    button.onEvent([this, mouseButton](std::string_view, ButtonEvent event, float) {
         const bool down = event == ButtonEvent::Down;
-        const int activeMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
-        if (activeMouseButton > 0) {
+        if (mouseButton > 0)
             m_autoHitMouseButtonDown.store(down, std::memory_order_release);
-        } else {
+        else
             m_autoHitVirtualKeyDown.store(down, std::memory_order_release);
-        }
     }).registerButton();
 }
 
@@ -818,12 +804,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (isPlayer) {
             if (!m_targetPlayers) continue;
             if (m_ignoreCreativeSpectator) {
-                if (g_playerGetGameType) {
-                    const std::int32_t gameType = g_playerGetGameType(candidate);
-                    // Bedrock GameType: Survival=0, Creative=1, Adventure=2, Spectator=3.
+                std::int32_t gameType = -1;
+                if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
                     if (gameType == 1 || gameType == 3) continue;
                 } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                    autoHitLogger().warn("Creative/Spectator filtering unavailable: Player::getPlayerGameType is not exported by this runtime.");
+                    autoHitLogger().warn("Creative/Spectator filter unavailable: no verified GameType export; those players may still be eligible.");
                 }
             }
         } else {
