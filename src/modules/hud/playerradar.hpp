@@ -20,6 +20,7 @@ private:
     struct Entry {
         std::string name;
         float distance = 0.0f;
+        std::string gameMode = "Unknown";
     };
     mutable std::mutex m_mutex;
     std::vector<Entry> m_players;
