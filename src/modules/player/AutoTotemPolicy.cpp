@@ -31,4 +31,9 @@ float normalizeDelayMs(float value) noexcept {
     return std::clamp(value, 0.0f, 1000.0f);
 }
 
+float normalizeScanRetryMs(float value) noexcept {
+    if (!std::isfinite(value)) return 250.0f;
+    return std::clamp(value, 100.0f, 2000.0f);
+}
+
 } // namespace bedaim::autototem
