@@ -1067,10 +1067,13 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     // A mouse alias may carry both its Android BUTTON_n key code and its
     // physical/touch mouse-button identity. Treat those as alternative ways to
     // hold the same binding, not two separate inputs that must be held together.
-    if (configuredMouseButton > 0) {
-        if (!mouseButtonDown && !physicalKeyDown && !virtualKeyDown) return;
-    } else if (configuredKey > 0 && !physicalKeyDown && !virtualKeyDown) {
-        return;
+    const bool explicitBinding = configuredKey > 0 || configuredMouseButton > 0;
+    if (explicitBinding) {
+        if (configuredMouseButton > 0) {
+            if (!mouseButtonDown && !physicalKeyDown && !virtualKeyDown) return;
+        } else if (!physicalKeyDown && !virtualKeyDown) {
+            return;
+        }
     }
     if (!m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) {
         logAutoHitOnce(g_loggedAutoHitNoTarget,
@@ -1238,6 +1241,13 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     if (!enabled || !player) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
     m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
+    // Yield camera control completely to the player while Elytra mode is gliding.
+    if (m_elytraMode && m_localPlayerGliding) {
+        m_hasAimPoint = false;
+        m_lastAssistYawDelta = 0.0f;
+        m_lastAssistPitchDelta = 0.0f;
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
 
     auto* rotationComponent = player->rotationComponent();
@@ -1482,7 +1492,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     }
     weaponAimMultiplier = std::clamp(weaponAimMultiplier, 0.2f, 2.0f);
     const float aimSpeed = std::clamp(m_aimSpeed * weaponAimMultiplier, 0.1f, 10.0f);
-    const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 200.0f);
+    const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 1000.0f);
     float yawDelta = 0.0f;
     float pitchDelta = 0.0f;
     const float baseTurnRate = (70.0f + 58.0f * aimSpeed) * rotationSpeed;
@@ -1642,7 +1652,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     }
     m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 200.0f);
     m_hitboxGrowthScaleV2 = true;
-    m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 200.0f);
+    m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
     if (m_predictionMode == "0") m_predictionMode = "Off";
     else if (m_predictionMode == "1") m_predictionMode = "Ranged";
