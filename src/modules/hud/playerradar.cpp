@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <dlfcn.h>
 #include <string>
 #include <utility>
 
@@ -28,10 +29,12 @@ struct RadarActorVector {
 using FetchNearbyActorsFn = RadarActorVector (*)(void*, void*, int);
 using ActorIsPlayerFn = bool (*)(void*);
 using ActorGetNameTagFn = std::string (*)(void*);
+using PlayerGetNameFn = const std::string& (*)(const void*);
 
 FetchNearbyActorsFn g_fetchNearbyActors = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
+PlayerGetNameFn g_playerGetName = nullptr;
 
 std::string cleanName(std::string name) {
     if (name.size() > 64) name.resize(64);
@@ -54,6 +57,10 @@ void PlayerRadarModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
+    // Prefer player-specific names when exported; ActorGetNameTag is often empty.
+    g_playerGetName = reinterpret_cast<PlayerGetNameFn>(dlsym(RTLD_DEFAULT, "_ZNK6Player7getNameB5cxx11Ev"));
+    if (!g_playerGetName)
+        g_playerGetName = reinterpret_cast<PlayerGetNameFn>(dlsym(RTLD_DEFAULT, "_ZNK6Player7getNameEv"));
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) {
@@ -89,7 +96,9 @@ void PlayerRadarModule::onInit() {
                 const float dz = pos.z - origin.z;
                 const float distance = std::sqrt(dx * dx + dy * dy + dz * dz);
                 if (!std::isfinite(distance) || distance > range) continue;
-                std::string name = g_actorGetNameTag ? cleanName(g_actorGetNameTag(actor)) : std::string{};
+                std::string name;
+                if (g_playerGetName) name = cleanName(g_playerGetName(actor));
+                if (name.empty() && g_actorGetNameTag) name = cleanName(g_actorGetNameTag(actor));
                 if (name.empty()) name = "Player";
                 std::int32_t gameType = -1;
                 std::string mode = "Unknown";
