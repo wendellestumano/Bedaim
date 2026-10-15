@@ -115,9 +115,9 @@ void registerAllModules() {
     registry.emplace<PotCounterModule>();
     registry.emplace<QuickLootModule>();
     registry.emplace<AutoSprintModule>();
-    registry.emplace<AutoTotemModule>();
     registry.emplace<AimAssistModule>();
     registry.emplace<HitboxExpanderModule>();
+    registry.emplace<AutoTotemModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<SwordSwapperModule>();
     registry.emplace<WeatherChangerModule>();
