@@ -806,8 +806,11 @@ bool openPlayerInventoryScreen(void* player) {
 }
 
 bool closePlayerInventoryScreen(void* player) {
-    if (!player || !isReadableMemory(player, sizeof(void*)) || !inventoryUiSequenceAvailable())
-        return false;
+    if (!player || !isReadableMemory(player, sizeof(void*))) return false;
+    // The manual AutoTotem button opens with KEYCODE_E; a missing native open
+    // wrapper must not disable a separately verified native close method.
+    if (!closeInventoryScreenOriginal) resolveInventoryUiApi();
+    if (!closeInventoryScreenOriginal) return false;
     // SharedTypes::Legacy::ContainerType::Inventory == -1 (signed-char enum).
     closeInventoryScreenOriginal(player, static_cast<std::int8_t>(-1));
     return true;
