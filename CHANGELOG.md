@@ -43,11 +43,11 @@
 
 ### Changed
 - The module samples render callback cadence and does not add a Minecraft hook, signature, or version-specific offset.
-- The 1% low is calculated as the reciprocal of the average frame time among the slowest 1% of retained samples; the sample buffer is capped at 2,400 entries.
+- The 1% low is calculated as the reciprocal of the average frame time among the slowest 1% of retained samples; `std::nth_element` selects the slow tail without fully sorting each frame, the window is only pruned when its size changes or a sample arrives, and the sample buffer is capped at 2,400 entries.
 
 ### Research
 - C++ monotonic clock: https://en.cppreference.com/w/cpp/chrono/steady_clock — frame timestamps and elapsed windows use a monotonic clock.
-- C++ sorting: https://en.cppreference.com/w/cpp/algorithm/sort — frame-time samples are sorted to calculate the slowest-1% metric.
+- C++ partial selection: https://en.cppreference.com/w/cpp/algorithm/nth_element — `std::nth_element` selects the slowest 1% of frame-time samples without sorting the entire window every frame.
 - Preloader Mod Menu API: https://github.com/LiteLDev/preloader-android/blob/main/include/pl/ModMenu.hpp — uses the established draw-command and V2 configuration-schema APIs.
 
 ### Tests
