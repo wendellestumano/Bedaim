@@ -4,8 +4,8 @@
 
 ### Added
 - Added **Session Timer**, a new HUD module that displays elapsed time since it was enabled. It uses a monotonic clock, supports a configurable text size, background visibility/opacity, and a choice to always show hours. Files: `src/modules/hud/sessiontimer.hpp`, `src/modules/hud/sessiontimer.cpp`.
-- Added a small, dependency-free duration formatting helper with explicit handling for negative input and sessions longer than 24 hours. File: `src/modules/hud/SessionTimerFormat.hpp`.
-- Added host regression coverage for zero, negative, minute/hour/day boundaries, and compact formatting. File: `tests/launcher/session_timer_format_test.cpp`.
+- Added small, dependency-free formatting helpers for session duration and movement speed, including safe handling of negative/non-finite speed values and clamped precision. Files: `src/modules/hud/SessionTimerFormat.hpp`, `src/modules/hud/SpeedDisplayFormat.hpp`.
+- Added host regression coverage for duration boundaries, compact formatting, speed rounding, precision limits, negative values, infinity, and NaN. Files: `tests/launcher/session_timer_format_test.cpp`, `tests/launcher/speed_display_format_test.cpp`.
 
 ### Improved
 - Registered Session Timer in `ModuleRegistry`, so it follows the existing module lifecycle and configuration persistence. File: `src/modules/ModuleRegistry.cpp`.
@@ -22,7 +22,7 @@
 
 ### Tests
 - Added assertions for 0, 1, 59, 60, 3599, 3600, 86400, negative durations, and compact display mode.
-- The Session Timer formatting test passed on GitHub Actions run #234 before the Speed Display follow-up was added. A fresh CI run is needed to validate the complete branch.
+- The Session Timer formatting test passed on GitHub Actions run #234 before the Speed Display follow-up was added. Speed Display formatter tests are now also wired into CI; a fresh run is needed to validate the complete branch.
 
 ### Build
 - No local Android NDK build was executed in this tool session. GitHub Actions is building the branch; the final Android ARM64 package result is pending.
