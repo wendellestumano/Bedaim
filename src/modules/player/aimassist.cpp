@@ -1391,7 +1391,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // Distance-dependent Hitbox Area is a virtual steering volume. At close
     // range it tightens the pull; at long range the strength slider controls how
     // far the volume expands. Native Bedrock collision bounds are never changed.
-    const float baseHitboxScale = std::clamp(m_hitboxScale, 1.0f, 200.0f);
+    const float baseHitboxScale = std::clamp(m_hitboxScale, 0.30f, 50.0f);
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float hitboxScale = bedaim::aimmath::distanceHitboxScale(
         baseHitboxScale, hitboxDistance, m_range, m_hitboxDistanceGrowth,
