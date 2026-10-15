@@ -223,8 +223,6 @@ void UltrakillHudModule::onDisable() {
     {
         std::lock_guard lock(m_stateMutex);
         m_flashActive = false;
-        m_hitStopFrames = 0;
-        m_hitStopPending = false;
     }
     const std::vector<PLModMenu_DrawCommand> empty;
     submitDrawCommands(moduleId, empty);
@@ -244,6 +242,7 @@ void UltrakillHudModule::onFrame() {
     bool showMaceStatus = true;
     bool showStyleCounter = true;
     bool showReticle = true;
+    bool enableParryFlash = true;
     bool enableImpactShake = true;
     bool enableHitStop = true;
     bool showImpactText = true;
@@ -254,11 +253,13 @@ void UltrakillHudModule::onFrame() {
         showMaceStatus = m_showMaceStatus;
         showStyleCounter = m_showStyleCounter;
         showReticle = m_showReticle;
+        enableParryFlash = m_enableParryFlash;
         enableImpactShake = m_enableImpactShake;
         enableHitStop = m_enableHitStop;
         showImpactText = m_showImpactText;
 
-        if (m_flashActive && now - m_flashStarted >= std::chrono::milliseconds(250)) {
+        const auto impactHold = m_enableHitStop ? std::chrono::milliseconds(360) : std::chrono::milliseconds(250);
+        if (m_flashActive && now - m_flashStarted >= impactHold) {
             m_flashActive = false;
         }
         if (m_lastConfirmedHit.time_since_epoch().count() != 0 &&
@@ -355,7 +356,7 @@ void UltrakillHudModule::onFrame() {
 
     // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
     // the game simulation is not paused and no artificial frame drops are introduced.
-    if (m_enableParryFlash && impactVisible) {
+    if (enableParryFlash && impactVisible) {
         const float fade = std::exp(-std::max(0.0f, hitAge) / 0.052f);
         const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
         const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
