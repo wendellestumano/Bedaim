@@ -27,6 +27,7 @@ jobs:
           xmake -y -P .
           xmake run -P . menu_config_value_test
           xmake run -P . aimassist_math_test
+          xmake run -P . autohit_key_binding_test
           xmake run -P . autohit_guards_test
           xmake run -P . autototem_policy_test
           xmake run -P . session_timer_format_test
