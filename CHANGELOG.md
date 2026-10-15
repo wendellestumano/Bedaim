@@ -15,7 +15,7 @@
 - The supplied binary was inspected statically only and is not loaded or executed by Bedaim.
 
 ### Validation
-- Pending host regression tests, Android ARM64 build, and in-game FPS/behavior confirmation for this branch.
+- GitHub Actions run #258 passed the complete host regression suite and Android ARM64 build/package for commit `68871663d446e417143843635761276abe80dc43`: https://github.com/wendellestumano/Bedaim/actions/runs/38748534759. In-game FPS and AutoHit/AutoTotem behavior still require live validation.
 
 ## Combat Core Reliability — 2026-10-15
 
