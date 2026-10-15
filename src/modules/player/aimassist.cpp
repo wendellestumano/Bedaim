@@ -499,20 +499,27 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
         -std::sin(pitch),
         std::cos(yaw) * cosPitch
     };
-    // Small tolerance for mobile touch/camera quantization. This still requires
-    // the view ray to pass through the target's immediate hitbox area.
+    // Small tolerance handles mobile touch quantization. When enabled, the
+    // dedicated expander participates in this exact same target-ray test.
     const float crosshairTolerance = std::clamp(tolerance, 0.05f, 0.8f);
+    AABB targetQueryBounds = m_lastTargetBounds;
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expander = (expanderBase && expanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
+    if (expander && g_actorIsPlayer) {
+        targetQueryBounds = expander->expandedTargetBounds(g_actorIsPlayer(target), m_lastTargetBounds);
+    }
     const AABB crosshairBounds{
-        {m_lastTargetBounds.min.x - crosshairTolerance,
-         m_lastTargetBounds.min.y - crosshairTolerance,
-         m_lastTargetBounds.min.z - crosshairTolerance},
-        {m_lastTargetBounds.max.x + crosshairTolerance,
-         m_lastTargetBounds.max.y + crosshairTolerance,
-         m_lastTargetBounds.max.z + crosshairTolerance}
+        {targetQueryBounds.min.x - crosshairTolerance,
+         targetQueryBounds.min.y - crosshairTolerance,
+         targetQueryBounds.min.z - crosshairTolerance},
+        {targetQueryBounds.max.x + crosshairTolerance,
+         targetQueryBounds.max.y + crosshairTolerance,
+         targetQueryBounds.max.z + crosshairTolerance}
     };
     if (!rayIntersectsAABB(eyePosition, viewDirection, crosshairBounds)) return false;
 
-    if (m_cantSeeThroughBlocks) {
+    if (m_cantSeeThroughBlocks || (expander && expander->requiresLineOfSight())) {
         auto* dimension = player->dimension();
         void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
         const Vec3 center{
@@ -615,7 +622,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     const float range = std::clamp(m_range, 2.0f, 80.0f);
-    Vec3 extent{range, range, range};
+    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange);
+    Vec3 extent{scanRange, scanRange, scanRange};
     // The native nearby-actors function returns the actual candidate snapshot;
     // don't gate it on Level::mActorManager, an unused offset that can vary by build.
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
@@ -647,9 +655,19 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         : std::clamp(m_targetRetentionRadius, 0.5f, 5.0f);
     const float retentionRadiusSq = retentionRadius * retentionRadius;
     const float maxDistanceSq = range * range;
+    const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
+    const float maxAutoHitDistanceSq = autoHitRange * autoHitRange;
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
     // remain required even when the angular limit is set to 360 degrees.
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
+    const float yawRadians = currentRotation.y / kRadToDeg;
+    const float pitchRadians = currentRotation.x / kRadToDeg;
+    const float cosPitch = std::cos(pitchRadians);
+    const Vec3 viewDirection{
+        -std::sin(yawRadians) * cosPitch,
+        -std::sin(pitchRadians),
+        std::cos(yawRadians) * cosPitch
+    };
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* candidate = entry->actor;
@@ -670,13 +688,21 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const AABB targetBounds = target->bounds();
         if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
 
-        // Keep target ranking based on a stable center point. A separate point below
-        // slides within the scaled hitbox without making target selection chase the view.
+        // Aim at a stable point on the native bounds but allow the bounded
+        // expanded client box to participate in target acquisition and AutoHit range.
+        const AABB selectionBounds = expander
+            ? expander->expandedTargetBounds(isPlayer, targetBounds) : targetBounds;
         const Vec3 centerAimPoint{
             (targetBounds.min.x + targetBounds.max.x) * 0.5f,
             targetBounds.min.y + (targetBounds.max.y - targetBounds.min.y) * 0.55f,
             (targetBounds.min.z + targetBounds.max.z) * 0.5f
         };
+        const Vec3 nearestOnSelection{
+            std::clamp(eyePosition.x, selectionBounds.min.x, selectionBounds.max.x),
+            std::clamp(eyePosition.y, selectionBounds.min.y, selectionBounds.max.y),
+            std::clamp(eyePosition.z, selectionBounds.min.z, selectionBounds.max.z)
+        };
+        const float selectionDistanceSq = distanceSquared(eyePosition, nearestOnSelection);
 
         // Fail closed when the visibility signature or block source is unavailable.
         // hasClearLineOfSight() returns false if it cannot safely perform the check.
@@ -686,7 +712,10 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
-        if (!std::isfinite(d2) || d2 > maxDistanceSq || d2 < 0.01f) continue;
+        const bool inAimAssistRange = std::isfinite(d2) && d2 <= maxDistanceSq;
+        const bool inAutoHitRange = m_autoHit && std::isfinite(selectionDistanceSq) &&
+            selectionDistanceSq <= maxAutoHitDistanceSq;
+        if (!std::isfinite(d2) || d2 < 0.01f || (!inAimAssistRange && !inAutoHitRange)) continue;
 
         // If the current target is right beside/around the player, keep it locked
         // while it crosses behind the camera. Measure distance to the target AABB,
@@ -718,23 +747,26 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (!std::isfinite(angleScore)) continue;
 
         // Keep targets directly below the player's feet eligible during a mace
-        // wind-burst/ground-slam arc. The range check above still limits this to
-        // nearby actors, while the normal FOV remains enforced for other targets.
+        // slam, and permit a precise ray hit through the configured expanded box.
         const float playerFeetY = validBounds(playerBounds) ? playerBounds.min.y : playerPosition.y;
         const bool candidateBelowPlayer = !m_localPlayerGliding &&
             targetBounds.max.y <= playerFeetY + 0.12f;
+        const bool rayHitsExpandedTarget = expander &&
+            rayIntersectsAABB(eyePosition, viewDirection, selectionBounds);
 
         // The last target also gets a small 3D retention bubble, including when it
         // passes below the player or behind the camera. This prevents target loss
         // during the fast vertical movement of a slam.
-        if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer) continue;
+        if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer &&
+            !rayHitsExpandedTarget) continue;
 
-        // Player mode ranks eligible targets by world distance. Crosshair mode
-        // ranks by angular distance to the view, with world distance only breaking ties.
+        // A ray through the expanded box is a high-confidence crosshair match,
+        // not an angle-only candidate that happens to fall inside the FOV.
         const bool playerDistanceMode = (m_targetSelectionMode == "Player");
+        const float selectionAngleScore = rayHitsExpandedTarget ? 0.0f : angleScore;
         const float score = playerDistanceMode
             ? targetDistance
-            : angleScore + targetDistance * 0.0001f;
+            : selectionAngleScore + targetDistance * 0.0001f;
         if (candidate == m_lastTarget) {
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
@@ -838,7 +870,8 @@ void AimAssistModule::processPlayerFrame() {
     // current native actor list before dereferencing it, so a despawned target
     // is never accessed through the cached pointer.
     const float range = std::clamp(m_range, 2.0f, 80.0f);
-    Vec3 extent{range, range, range};
+    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange);
+    Vec3 extent{scanRange, scanRange, scanRange};
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
@@ -907,7 +940,13 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         eyePosition.y += 1.5f;
     }
 
-    const AABB bounds = m_lastTargetBounds;
+    AABB bounds = m_lastTargetBounds;
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expander = (expanderBase && expanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
+    if (expander && g_actorIsPlayer) {
+        bounds = expander->expandedTargetBounds(g_actorIsPlayer(m_lastTarget), bounds);
+    }
     const Vec3 targetCenter{
         (bounds.min.x + bounds.max.x) * 0.5f,
         bounds.min.y + (bounds.max.y - bounds.min.y) * 0.55f,
@@ -945,7 +984,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    if (m_cantSeeThroughBlocks) {
+    if (m_cantSeeThroughBlocks || (expander && expander->requiresLineOfSight())) {
         auto* dimension = player->dimension();
         void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
         if (blockSource && g_isSolidBlockingBlock &&
