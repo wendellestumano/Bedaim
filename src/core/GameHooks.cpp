@@ -5,6 +5,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/AttackResultEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
+#include <bedrocktools/sdk/offsets/Core.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
 #include <bedrocktools/sdk/offsets/World.hpp>
 #include <dlfcn.h>
