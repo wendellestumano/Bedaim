@@ -1017,56 +1017,25 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     }
     if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
 
-    // Cached actor pointers can become invalid when an entity despawns between
-    // ticks. Revalidate membership in a fresh engine-owned actor snapshot before
-    // invoking any actor method or player-type callback on the cached pointer.
-    if (!g_fetchNearbyActors) return;
+    // processAutoHitLocked is called synchronously at the end of the same
+    // LocalPlayerTickEvent that selected m_lastTarget from a validated native actor
+    // vector. Re-querying/sorting an 80-block actor cube here duplicates the most
+    // expensive native scan every tick and was a major mobile frame-time cost.
+    // Use the already validated current-tick target and its type/bounds snapshot.
     auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
     auto* expander = (expanderBase && expanderBase->enabled)
         ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
-    const float queryMargin = expander ? expander->queryExpansionMargin() : 0.0f;
-    const float scanRange = bedaim::autohit::effectiveScanRange(
-        m_range, true, m_autoHitRange, queryMargin);
-    Vec3 queryExtent{scanRange, scanRange, scanRange};
-    ActorVector liveActors = g_fetchNearbyActors(player, &queryExtent, 1);
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(liveActors.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(liveActors.end);
-    if (!liveActors.begin || !liveActors.end || endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        logAutoHitOnce(g_loggedAutoHitStaleTarget,
-            "AutoHit skipped: native actor snapshot metadata failed validation.");
-        m_nextAutoHit = now + std::chrono::milliseconds(100);
-        return;
-    }
-
-    Actor* liveTarget = nullptr;
-    for (auto* entry = liveActors.begin; entry < liveActors.end; ++entry) {
-        if (entry->actor == m_lastTarget) {
-            liveTarget = reinterpret_cast<Actor*>(entry->actor);
-            break;
-        }
-    }
-    if (!liveTarget) {
-        logAutoHitOnce(g_loggedAutoHitStaleTarget,
-            "AutoHit skipped a target that disappeared from the fresh actor snapshot.");
-        m_lastTarget = nullptr;
-        m_targetPresent = false;
-        m_hasAimPoint = false;
-        m_nextAutoHit = now + std::chrono::milliseconds(80);
-        return;
-    }
-
+    auto* liveTarget = reinterpret_cast<Actor*>(m_lastTarget);
     const Vec3 liveTargetPosition = liveTarget->position();
     const AABB liveTargetBounds = liveTarget->bounds();
     if (!finiteVec3(liveTargetPosition) || !validBounds(liveTargetBounds)) {
         logAutoHitOnce(g_loggedAutoHitInvalidPosition,
-            "AutoHit skipped a live target with invalid position or bounds.");
+            "AutoHit skipped a tick-selected target with invalid position or bounds.");
         m_nextAutoHit = now + std::chrono::milliseconds(100);
         return;
     }
     m_lastTargetBounds = liveTargetBounds;
-    const bool liveTargetIsPlayer = g_actorIsPlayer && g_actorIsPlayer(liveTarget);
+    const bool liveTargetIsPlayer = m_lastTargetIsPlayer;
 
     const Vec3 playerPosition = player->position();
     const AABB playerBounds = player->bounds();
