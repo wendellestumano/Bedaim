@@ -462,6 +462,8 @@ void registerModulesWithLauncher() {
 
             if (mod->moduleId == "bedrocktools.Auto Totem") {
                 if (k == "m_delayMs") displayName = "AUTO TOTEM > Refill delay (ms)";
+                else if (k == "m_scanRetryIntervalMs") displayName = "AUTO TOTEM > Inventory scan retry (ms)";
+                else if (k == "m_offhandPollIntervalMs") displayName = "AUTO TOTEM > Offhand check interval (ms)";
                 else if (k == "m_combatOnly") displayName = "AUTO TOTEM > Combat only";
                 else if (k == "m_keepTotemEquipped") displayName = "AUTO TOTEM > Keep totem equipped";
             }
@@ -567,7 +569,13 @@ void registerModulesWithLauncher() {
 
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
-                if (mod->moduleId == "bedrocktools.Hitbox Expander" && kLower == "m_hitboxsize") {
+                if (mod->moduleId == "bedrocktools.Auto Totem" && kLower == "mscanretryintervalms") {
+                    minVal = 100.0f;
+                    maxVal = 2000.0f;
+                } else if (mod->moduleId == "bedrocktools.Auto Totem" && kLower == "moffhandpollintervalms") {
+                    minVal = 50.0f;
+                    maxVal = 500.0f;
+                } else if (mod->moduleId == "bedrocktools.Hitbox Expander" && kLower == "m_hitboxsize") {
                     minVal = 1.0f;
                     maxVal = 200.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackrange") {
