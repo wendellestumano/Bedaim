@@ -220,8 +220,22 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
         if (now < m_uiPhaseDeadline) return;
 
+        if (m_manualSequenceActive) {
+            // Minecraft can open the ordinary inventory from KEYCODE_E without
+            // emitting the Container ScreenStateEvent in some launcher builds.
+            // Continue the manual sequence after a bounded wait. The existing
+            // transfer step still revalidates the offhand and source slot.
+            autoTotemLogger().warn(
+                "Manual inventory opened by E but no Container screen event arrived; continuing with a verified offhand transfer.");
+            m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
+            m_uiPhaseDeadline = now + std::chrono::milliseconds(
+                static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+            m_nextOffhandCheck = {};
+            return;
+        }
+
         autoTotemLogger().warn(
-            "Auto Totem inventory did not open within 600 ms; aborting without a native inventory transfer.");
+            "Auto Totem inventory did not open within 600 ms; aborting automatic UI sequence.");
         m_uiSequencePhase = UiSequencePhase::Idle;
         m_uiPhaseDeadline = {};
         m_nextOffhandCheck = {};
