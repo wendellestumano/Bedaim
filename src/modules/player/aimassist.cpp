@@ -471,6 +471,28 @@ void AimAssistModule::onMenuRegistered() {
     refreshAutoHitKeyButton();
 }
 
+bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    if (key == "m_autoHitButtonEnabled") {
+        const bool visible = value == "true" || value == "1" || value == "on";
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_autoHitButtonEnabled = visible;
+        }
+        if (m_menuRegistered.load(std::memory_order_acquire)) refreshAutoHitKeyButton();
+        return true;
+    }
+    if (key == "m_rotationSpeed") {
+        try {
+            const float parsed = std::stof(std::string(value));
+            if (!std::isfinite(parsed)) return false;
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_rotationSpeed = std::clamp(parsed, 0.1f, 1000.0f);
+            return true;
+        } catch (...) { return false; }
+    }
+    return false;
+}
+
 void AimAssistModule::refreshAutoHitKeyButton() {
     using namespace pl::modmenu;
     constexpr std::string_view ButtonId = "bedaim.aimassist.autohit_key";
@@ -1067,14 +1089,14 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     // A mouse alias may carry both its Android BUTTON_n key code and its
     // physical/touch mouse-button identity. Treat those as alternative ways to
     // hold the same binding, not two separate inputs that must be held together.
-    const bool explicitBinding = configuredKey > 0 || configuredMouseButton > 0;
-    if (explicitBinding) {
-        if (configuredMouseButton > 0) {
-            if (!mouseButtonDown && !physicalKeyDown && !virtualKeyDown) return;
-        } else if (!physicalKeyDown && !virtualKeyDown) {
-            return;
-        }
-    }
+    // Native AutoHit is automatic whenever its module toggle is enabled.
+    // Physical keys and the optional floating Hold button are input conveniences,
+    // not prerequisites for dispatch.
+    (void)configuredKey;
+    (void)configuredMouseButton;
+    (void)physicalKeyDown;
+    (void)virtualKeyDown;
+    (void)mouseButtonDown;
     if (!m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) {
         logAutoHitOnce(g_loggedAutoHitNoTarget,
             "AutoHit is enabled but Aim Assist has no valid target snapshot. Check target filters and detection range.");
