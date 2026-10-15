@@ -44,8 +44,10 @@ private:
     bool m_uiTransferSucceeded = false;
 
     float m_delayMs = 100.0f;
-    float m_scanRetryIntervalMs = 250.0f;
-    float m_offhandPollIntervalMs = 100.0f;
+    // Inventory ItemStack descriptions are expensive on mobile. Retry absent
+    // totems less often, while still detecting a consumed offhand totem quickly.
+    float m_scanRetryIntervalMs = 400.0f;
+    float m_offhandPollIntervalMs = 150.0f;
     float m_uiStepDelayMs = 80.0f;
     bool m_useInventoryUiSequence = true;
     bool m_combatOnly = false;
