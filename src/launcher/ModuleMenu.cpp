@@ -13,6 +13,8 @@
 #include <vector>
 
 static void registerAimAssistConfigSchema(std::string_view moduleId, const nlohmann::json& config);
+static void registerHitboxExpanderConfigSchema(std::string_view moduleId, const nlohmann::json& config);
+static void refreshModuleConfigSchema(Module* mod);
 
 static void persistModuleConfig() {
     // Menu callbacks can fire on every slider movement or every typed character.
@@ -40,9 +42,9 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     if (!mod) return;
 
     if (mod->onMenuConfigChanged(key, value)) {
-        // Menu callbacks may update module-owned fields directly. Avoid refreshing
-        // or serializing the schema here; ConfigManager snapshots live module state
-        // and persists it asynchronously after its debounce window.
+        // Some modules apply values directly; refresh their V2 current_value from
+        // the live module snapshot so reopening controls doesn't resurrect stale data.
+        refreshModuleConfigSchema(mod);
         persistModuleConfig();
         return;
     }
@@ -57,9 +59,10 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         return;
     }
 
-    // loadConfig normalizes radio indices and clamps sliders. Serialize the
-    // module again afterward so both disk config and V2 controls see that normalized value.
+    // loadConfig normalizes radio indices and clamps sliders. Rebuild V2's current
+    // values from the normalized live config, while keeping its initial defaults fixed.
     mod->loadConfig(j);
+    refreshModuleConfigSchema(mod);
     persistModuleConfig();
 }
 
@@ -77,6 +80,12 @@ static std::string schemaCurrentValue(const nlohmann::json& config,
 static void registerAimAssistConfigSchema(std::string_view moduleId,
                                           const nlohmann::json& config) {
     using namespace pl::modmenu;
+    static nlohmann::json initialDefaults;
+    static bool defaultsCaptured = false;
+    if (!defaultsCaptured) {
+        initialDefaults = config;
+        defaultsCaptured = true;
+    }
     ConfigSchemaBuilder schema;
     schema.defaultCategory("aim")
         .category("aim", "Aim", "Rotation, behavior and tracking profile")
@@ -101,8 +110,8 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
         node.description = description;
         node.type = type;
         node.choiceStyle = choiceStyle;
-        node.defaultValue = schemaCurrentValue(config, key, "");
-        node.currentValue = node.defaultValue;
+        node.defaultValue = schemaCurrentValue(initialDefaults, key, schemaCurrentValue(config, key, ""));
+        node.currentValue = schemaCurrentValue(config, key, "");
         node.hasCurrentValue = config.contains(key);
         node.minValue = minValue;
         node.maxValue = maxValue;
@@ -188,7 +197,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
     toggle("m_autoHit", "Enable Auto Hit", "auto_hit",
            "Attempt an attack on a valid target within range.");
     slider("m_autoHitRange", "Attack range", "auto_hit", "2", "6", "0.1", "blocks",
-           "Maximum native attack distance.");
+           "Maximum AutoHit point distance. Its actor scan extends to at least this range.");
     slider("m_autoHitDelayMs", "Attack interval", "auto_hit", "80", "1000", "10", "ms",
            "Minimum time between native attack attempts.");
 
@@ -233,6 +242,64 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
     if (!setConfigSchemaJson(moduleId, schema.toJson())) {
         // Legacy controls remain registered as a fallback when a loader version
         // does not accept the V2 schema.
+    }
+}
+
+static void registerHitboxExpanderConfigSchema(std::string_view moduleId,
+                                               const nlohmann::json& config) {
+    using namespace pl::modmenu;
+    static nlohmann::json initialDefaults;
+    static bool defaultsCaptured = false;
+    if (!defaultsCaptured) {
+        initialDefaults = config;
+        defaultsCaptured = true;
+    }
+    ConfigSchemaBuilder schema;
+    schema.defaultCategory("hitbox")
+        .category("hitbox", "Hitbox", "Client-side target geometry; the server still validates attacks.");
+    auto add = [&](const char* key, const char* title, ConfigControlTypeV2 type,
+                   const char* minValue, const char* maxValue, const char* step,
+                   const char* unit, const char* description) {
+        const std::string k(key);
+        ConfigNodeV2 node;
+        node.id = k;
+        node.key = k;
+        node.category = "hitbox";
+        node.title = title;
+        node.description = description;
+        node.type = type;
+        node.defaultValue = schemaCurrentValue(initialDefaults, k, schemaCurrentValue(config, k, ""));
+        node.currentValue = schemaCurrentValue(config, k, "");
+        node.hasCurrentValue = config.contains(k);
+        node.minValue = minValue;
+        node.maxValue = maxValue;
+        node.step = step;
+        node.unit = unit;
+        schema.node(std::move(node));
+    };
+    add("m_hitboxWidth", "Width / depth", ConfigControlTypeV2::SliderFloat,
+        "0.6", "8", "0.1", "blocks", "Minimum X/Z width of the client-side target box.");
+    add("m_hitboxHeight", "Height", ConfigControlTypeV2::SliderFloat,
+        "0.6", "8", "0.1", "blocks", "Minimum height; larger native boxes are preserved.");
+    add("m_expandPlayers", "Expand players", ConfigControlTypeV2::Toggle,
+        "", "", "", "", "Apply expanded target geometry to players.");
+    add("m_expandMobs", "Expand mobs", ConfigControlTypeV2::Toggle,
+        "", "", "", "", "Apply expanded target geometry to supported mobs.");
+    add("m_requireLineOfSight", "Require line of sight", ConfigControlTypeV2::Toggle,
+        "", "", "", "", "Require a clear block ray for expanded target checks.");
+    if (!setConfigSchemaJson(moduleId, schema.toJson())) {
+        // Legacy menu controls remain available on loaders without V2 schema support.
+    }
+}
+
+static void refreshModuleConfigSchema(Module* mod) {
+    if (!mod) return;
+    nlohmann::json current;
+    mod->saveConfig(current);
+    if (mod->moduleId == "bedrocktools.Aim Assist") {
+        registerAimAssistConfigSchema(mod->moduleId, current);
+    } else if (mod->moduleId == "bedrocktools.Hitbox Expander") {
+        registerHitboxExpanderConfigSchema(mod->moduleId, current);
     }
 }
 
@@ -314,7 +381,8 @@ void registerModulesWithLauncher() {
                 else if (k == "m_restoreSlot") displayName = "SWORD SWAPPER > Restore previous slot";
             }
             if (mod->moduleId == "bedrocktools.Hitbox Expander") {
-                if (k == "m_hitboxSize") displayName = "EXPANDER > Virtual size (1-200)";
+                if (k == "m_hitboxWidth") displayName = "EXPANDER > Width / depth (blocks)";
+                else if (k == "m_hitboxHeight") displayName = "EXPANDER > Height (blocks)";
                 else if (k == "m_expandPlayers") displayName = "EXPANDER > Players";
                 else if (k == "m_expandMobs") displayName = "EXPANDER > Mobs";
                 else if (k == "m_requireLineOfSight") displayName = "EXPANDER > Require line of sight";
@@ -612,6 +680,8 @@ void registerModulesWithLauncher() {
             mod->onMenuRegistered();
             if (mod->moduleId == "bedrocktools.Aim Assist") {
                 registerAimAssistConfigSchema(mod->moduleId, j);
+            } else if (mod->moduleId == "bedrocktools.Hitbox Expander") {
+                registerHitboxExpanderConfigSchema(mod->moduleId, j);
             }
         }
     }
