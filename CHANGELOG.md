@@ -1,5 +1,21 @@
 # Changelog
 
+## Combat Lag Rollback + Input/Inventory Controls — 2026-10-15
+
+### Corrected
+- Restored `src/modules/player/aimassist.cpp` and `aimassist.hpp` to the implementation from pre-performance commit `907ccdc265a25743b2d7de42a02612e40b6b5b1a`, before the render-frame snapshot rewrite. This is a deliberate rollback of the newer Aim Assist hot-path changes after the user reported severe stutter; the near/far hitbox curve and new key controls are then layered on top.
+- Sword Swapper no longer queries the selected hotbar slot if it does not own an automatic swap, and delays the expensive selected-item identifier lookup until sword-swap conditions are satisfied.
+- AutoTotem limits offhand identification to the configurable polling interval (default 100 ms) and limits full-inventory scans when no totem is found (default retry 250 ms).
+
+### Added
+- **AutoHit key option:** Android key-code setting; e.g. Android `KEYCODE_0` is code 7. A floating Hold button can emit the selected key and gate native AutoHit while held. Default 0 preserves automatic native AutoHit. The public launcher API observes physical keys and supports floating buttons, but does not provide generic programmatic injection of arbitrary Android key events.
+- **AutoTotem inventory UI sequence:** resolves `LocalPlayer::openInventory()` and `LocalPlayer::closeContainerScreen(ContainerType::Inventory)` by exact exported symbols from `libminecraftpe.so`. When both exist, the module opens inventory, waits the configurable UI step delay, equips via the existing verified native transaction, then requests inventory close. If the exact symbols are unavailable for the active Bedrock build, it falls back to the existing verified transaction instead of guessing vtable offsets. UI step delay defaults to 80 ms, range 0–500 ms.
+- **Distance Hitbox Strength curve:** the virtual steering box is under native bounds up close and grows smoothly with distance. Default strength reaches roughly 2.8x at the far end of the configured range (bounded to 12x), while the target aim point remains constrained to native target bounds.
+
+### Validation
+- New helper tests cover near-to-far monotonic behavior, non-finite inputs, disabled mode, bounds, offhand polling, scan retry and UI step delay.
+- Host regression tests and ARM64 build/package are pending for this branch. No in-game FPS measurement or runtime symbol-availability verification has been performed yet.
+
 ## Combat Hot-Path Optimization — 2026-10-15
 
 ### Improved
