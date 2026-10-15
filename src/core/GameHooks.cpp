@@ -491,18 +491,40 @@ void* gameMode() {
 void* gameModeForPlayer(void* player) {
     if (!player) return nullptr;
 
-    // Only trust a GameMode pointer captured as the receiver ("this") of a real
-    // engine callback. The previous Player::mGameMode offset read could mistake a
-    // neighboring field for a GameMode; a plausible-looking vtable was not enough
-    // to prove the pointer referred to the local player's actual GameMode object.
+    // Prefer the receiver captured by a real engine callback, but require the
+    // exact resolved public attack signature instead of merely a plausible game
+    // vtable. This avoids accidentally retaining a neighboring polymorphic object.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (!observed || !plausibleGameMode(observed)) {
-        static std::atomic_bool loggedNoObservedGameMode{false};
-        if (!loggedNoObservedGameMode.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().warn("AutoHit is waiting for a GameMode pointer captured from a real engine callback; unsafe Player-offset fallback is disabled.");
+    if (observed && publicAttackVirtualEntry(observed) != 0) return observed;
+
+    // Some game sessions have not yet produced a GameMode callback when AutoHit
+    // first becomes active. The Player SDK already documents the owned mGameMode
+    // field, but reading a version-sensitive offset is only acceptable after
+    // validating the storage mapping and then matching vtable slot 16 exactly to
+    // the resolved GameMode/SurvivalMode attack signature. Any ambiguous pointer
+    // is rejected; there is no fallback to an unverified native function.
+    currentGameMode.store(nullptr, std::memory_order_release);
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    constexpr auto gameModeOffset = bedrocktools::sdk::offsets::Player::mGameMode;
+    if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - gameModeOffset)
+        return nullptr;
+    const auto slotAddress = playerAddress + gameModeOffset;
+    const auto* slot = reinterpret_cast<const void*>(slotAddress);
+    if (!isReadableMemory(slot, sizeof(void*))) return nullptr;
+
+    void* candidate = *reinterpret_cast<void* const*>(slot);
+    if (!candidate || publicAttackVirtualEntry(candidate) == 0) {
+        static std::atomic_bool loggedNoVerifiedGameMode{false};
+        if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().warn("AutoHit could not validate a local Player-owned GameMode; no native attack was dispatched.");
         return nullptr;
     }
-    return observed;
+
+    currentGameMode.store(candidate, std::memory_order_release);
+    static std::atomic_bool loggedPlayerGameModeFallback{false};
+    if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("AutoHit recovered the Player-owned GameMode using a readable field and exact public attack signature match.");
+    return candidate;
 }
 
 bool attackAvailable(void* gameMode) {
