@@ -156,6 +156,40 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_uiTransferSucceeded = false;
     };
 
+    // Confirm that the inventory screen actually appeared before transferring.
+    // Some BedrockTools builds deliver the screen event on a later tick, while
+    // unsupported open wrappers can return without opening any visible UI.
+    if (m_uiSequencePhase == UiSequencePhase::WaitForOpen) {
+        if (!enabled) {
+            if (m_containerOpen.load(std::memory_order_acquire)) {
+                m_uiSequencePhase = UiSequencePhase::WaitBeforeClose;
+                m_uiPhaseDeadline = now + std::chrono::milliseconds(
+                    static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+            } else {
+                completeUiSequence();
+            }
+            return;
+        }
+        if (m_containerOpen.load(std::memory_order_acquire)) {
+            m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
+            m_uiPhaseDeadline = now + std::chrono::milliseconds(
+                static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+            m_nextOffhandCheck = {};
+            return;
+        }
+        if (now < m_uiPhaseDeadline) return;
+
+        autoTotemLogger().warn(
+            "Auto Totem open request did not produce a container-open event within 600 ms; continuing with the verified transfer fallback.");
+        // Do not get stuck forever if this runtime lacks a working visible-open
+        // route. The transaction remains verified, and the close request is still
+        // attempted after it in case the screen event itself was unavailable.
+        m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
+        m_uiPhaseDeadline = now;
+        m_nextOffhandCheck = {};
+        return;
+    }
+
     // A request is executed on the player tick thread, with bounded delay between
     // the actual LocalPlayer open, native inventory transaction and close request.
     if (m_uiSequencePhase == UiSequencePhase::WaitBeforeTransfer) {
@@ -316,9 +350,8 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         case bedaim::autototem::Decision::Equip: {
             if (m_useInventoryUiSequence && bedrocktools::core::gamehooks::inventoryUiSequenceAvailable()) {
                 if (bedrocktools::core::gamehooks::openPlayerInventoryScreen(player)) {
-                    m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
-                    m_uiPhaseDeadline = now + std::chrono::milliseconds(
-                        static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+                    m_uiSequencePhase = UiSequencePhase::WaitForOpen;
+                    m_uiPhaseDeadline = now + std::chrono::milliseconds(600);
                     m_uiTransferSucceeded = false;
                     m_nextOffhandCheck = {};
                     autoTotemLogger().info("Auto Totem started inventory UI sequence.");
