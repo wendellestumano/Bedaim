@@ -104,22 +104,33 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!player) return;
 
     const auto checkTime = std::chrono::steady_clock::now();
+    bool readOffhand = false;
     {
         std::lock_guard lock(m_stateMutex);
         if (!enabled && m_uiSequencePhase == UiSequencePhase::Idle) return;
-        const bool sequenceActive = m_uiSequencePhase != UiSequencePhase::Idle;
-        if (!sequenceActive && m_nextOffhandCheck.time_since_epoch().count() != 0 &&
-            checkTime < m_nextOffhandCheck) return;
-        if (!sequenceActive) {
+        if (m_uiSequencePhase == UiSequencePhase::Idle) {
+            if (m_nextOffhandCheck.time_since_epoch().count() != 0 &&
+                checkTime < m_nextOffhandCheck) return;
             m_nextOffhandCheck = checkTime + std::chrono::milliseconds(
                 static_cast<int>(bedaim::autototem::normalizeOffhandPollMs(m_offhandPollIntervalMs)));
+            readOffhand = true;
+        } else if (m_uiSequencePhase == UiSequencePhase::WaitBeforeTransfer &&
+                   (!enabled || checkTime >= m_uiPhaseDeadline)) {
+            // Only query the native offhand stack when a UI sequence reaches a
+            // decision point. Waiting between open/close operations doesn't need
+            // another expensive ItemStack description lookup every game tick.
+            readOffhand = true;
         }
     }
 
-    auto& inventory = bedrocktools::core::InventoryAccess::get();
-    const std::string offhandId = inventory.offhandIdentifier(player);
-    const bool offhandHasTotem = containsTotem(offhandId);
-    const bool offhandEmpty = offhandId.empty();
+    bool offhandHasTotem = false;
+    bool offhandEmpty = true;
+    if (readOffhand) {
+        auto& inventory = bedrocktools::core::InventoryAccess::get();
+        const std::string offhandId = inventory.offhandIdentifier(player);
+        offhandHasTotem = containsTotem(offhandId);
+        offhandEmpty = offhandId.empty();
+    }
     const auto now = std::chrono::steady_clock::now();
 
     std::lock_guard lock(m_stateMutex);
@@ -225,6 +236,8 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_uiPhaseDeadline = now + std::chrono::milliseconds(600);
         return;
     }
+
+    if (!readOffhand) return;
 
     if (offhandHasTotem) {
         m_lastOffhandHadTotem = true;
