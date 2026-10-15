@@ -62,11 +62,6 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
     // Stretch the curve over the user's real scan range, but cap it at 30 blocks
     // so the strength slider still has a visible effect at ordinary distances.
     constexpr float kNearDistance = 1.75f;
-    const float farDistance = std::clamp(safeRange, 8.0f, 30.0f);
-    const float linear = std::clamp(
-        (safeDistance - kNearDistance) / std::max(1.0f, farDistance - kNearDistance),
-        0.0f, 1.0f);
-    const float distanceBlend = linear * linear * (3.0f - 2.0f * linear);
 
     // Stretch the near-to-far curve over the configured aim range (up to 30 blocks).
     // This matters on normal 4-6 block settings too: far targets should receive the
