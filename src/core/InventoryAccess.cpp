@@ -47,7 +47,6 @@ constexpr std::size_t TransactionManagerExpectedActions = 16;
 constexpr std::size_t TransactionActionSize = 512;
 constexpr std::size_t ContainerSetItemVTable = 13;
 constexpr std::size_t ContainerRemoveItemVTable = 15;
-constexpr std::size_t PlayerSetOffhandVTable = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem + 1;
 constexpr std::int8_t InventoryContainerId = 0;
 constexpr std::int8_t OffhandContainerId = 119;
 
@@ -345,14 +344,15 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         if (isMinecraftFunction(entry)) removeItem = reinterpret_cast<RemoveItemFn>(entry);
     }
 
-    void** vtable = nullptr;
-    if (isReadableMemory(player, sizeof(void*))) {
-        vtable = *reinterpret_cast<void***>(player);
-    }
-    SetOffhandFn setOffhand = nullptr;
-    if (vtable && isReadableMemory(vtable, (PlayerSetOffhandVTable + 1) * sizeof(void*))) {
-        void* entry = vtable[PlayerSetOffhandVTable];
-        if (isMinecraftFunction(entry)) setOffhand = reinterpret_cast<SetOffhandFn>(entry);
+    // Do not infer the setter from an adjacent vtable slot: getCarriedItem and
+    // setCarriedItem are adjacent on several Bedrock layouts, which can overwrite
+    // the main hand instead of the offhand. Resolve the named native method and
+    // fail closed if this runtime does not export a verified entry point.
+    SetOffhandFn setOffhand = reinterpret_cast<SetOffhandFn>(
+        resolveMinecraftSymbol("_ZN6Player14setOffhandSlotERK9ItemStack"));
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN11LocalPlayer14setOffhandSlotERK9ItemStack"));
     }
 
     if (!actionCtor || !actionDtor || !addAction || !removeItem || !setOffhand) {
