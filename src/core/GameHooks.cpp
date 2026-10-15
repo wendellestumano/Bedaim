@@ -9,6 +9,7 @@
 #include <bedrocktools/sdk/offsets/World.hpp>
 #include <dlfcn.h>
 #include <EGL/egl.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -18,9 +19,11 @@
 #include <string_view>
 #include <cstdio>
 #include <limits>
+#include <iterator>
 #include <pl/Logger.hpp>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 namespace bedrocktools::core::gamehooks {
 namespace {
@@ -134,30 +137,65 @@ pl::log::Logger& autoHitLogger() {
 
 // Check a pointer against the process's readable mappings before dereferencing
 // memory obtained from a version-sensitive native object layout.
+struct ReadableRegion {
+    std::uintptr_t begin{};
+    std::uintptr_t end{};
+};
+
 bool isReadableMemory(const void* pointer, std::size_t size) {
     if (!pointer || size == 0) return false;
     const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
     if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
     const auto end = begin + size;
 
-    std::FILE* maps = std::fopen("/proc/self/maps", "r");
-    if (!maps) return false;
-    char line[512]{};
-    bool readable = false;
-    while (std::fgets(line, sizeof(line), maps)) {
-        unsigned long long regionBegin = 0;
-        unsigned long long regionEnd = 0;
-        char permissions[5]{};
-        if (std::sscanf(line, "%llx-%llx %4s", &regionBegin, &regionEnd, permissions) == 3 &&
-            permissions[0] == 'r' &&
-            begin >= static_cast<std::uintptr_t>(regionBegin) &&
-            end <= static_cast<std::uintptr_t>(regionEnd)) {
-            readable = true;
-            break;
+    // GameMode validation can happen on every AutoHit attempt. A thread-local
+    // 50 ms readable-map snapshot makes those checks O(log mappings), instead of
+    // opening/parsing /proc/self/maps on every call. No pointer is considered
+    // valid solely because it was validated earlier; address containment is
+    // still checked against the current short-lived snapshot for every query.
+    thread_local std::vector<ReadableRegion> readableRegions;
+    thread_local std::chrono::steady_clock::time_point mapsRefreshed{};
+    thread_local bool mapsCacheValid = false;
+    const auto now = std::chrono::steady_clock::now();
+
+    if (!mapsCacheValid || now < mapsRefreshed ||
+        now - mapsRefreshed > std::chrono::milliseconds(50)) {
+        std::vector<ReadableRegion> refreshed;
+        std::FILE* maps = std::fopen("/proc/self/maps", "r");
+        if (!maps) {
+            readableRegions.clear();
+            mapsCacheValid = false;
+            return false;
         }
+        char line[512]{};
+        while (std::fgets(line, sizeof(line), maps)) {
+            unsigned long long regionBegin = 0, regionEnd = 0;
+            char permissions[5]{};
+            if (std::sscanf(line, "%llx-%llx %4s", &regionBegin, &regionEnd, permissions) == 3 &&
+                permissions[0] == 'r' && regionEnd > regionBegin) {
+                refreshed.push_back({static_cast<std::uintptr_t>(regionBegin),
+                                     static_cast<std::uintptr_t>(regionEnd)});
+            }
+        }
+        std::fclose(maps);
+        if (refreshed.empty()) {
+            readableRegions.clear();
+            mapsCacheValid = false;
+            return false;
+        }
+        readableRegions.swap(refreshed);
+        mapsRefreshed = now;
+        mapsCacheValid = true;
     }
-    std::fclose(maps);
-    return readable;
+
+    const auto it = std::upper_bound(
+        readableRegions.begin(), readableRegions.end(), begin,
+        [](std::uintptr_t address, const ReadableRegion& region) {
+            return address < region.begin;
+        });
+    if (it == readableRegions.begin()) return false;
+    const auto& region = *std::prev(it);
+    return begin >= region.begin && end <= region.end;
 }
 
 bool plausibleGameMode(void* gameMode) {
