@@ -9,14 +9,40 @@
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <pl/ModMenu.hpp>
+#include <pl/Logger.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <string>
 #include <string_view>
 #include <utility>
 
 namespace {
+pl::log::Logger& autoTotemLogger() {
+    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AutoTotem");
+    return logger;
+}
+
+std::atomic_bool g_loggedAutoTotemTransferSuccess{false};
+std::atomic_bool g_loggedAutoTotemTransferFailure{false};
+
+const char* transferResultName(bedrocktools::core::OffhandTransferResult result) noexcept {
+    using bedrocktools::core::OffhandTransferResult;
+    switch (result) {
+        case OffhandTransferResult::Success: return "success";
+        case OffhandTransferResult::AlreadyEquipped: return "already equipped";
+        case OffhandTransferResult::InvalidPlayer: return "invalid player";
+        case OffhandTransferResult::InvalidSlot: return "invalid inventory slot";
+        case OffhandTransferResult::ItemUnavailable: return "totem unavailable in source slot";
+        case OffhandTransferResult::OffhandOccupied: return "offhand occupied";
+        case OffhandTransferResult::RuntimeApiUnavailable: return "verified native inventory API unavailable";
+        case OffhandTransferResult::InvalidNativeState: return "native inventory state failed validation";
+        case OffhandTransferResult::VerificationFailed: return "offhand/source verification failed";
+    }
+    return "unknown transfer result";
+}
+
 bool containsTotem(std::string_view identifier) {
     return identifier.find("totem") != std::string_view::npos;
 }
@@ -132,12 +158,16 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             const auto result = inventory.moveInventoryItemToOffhand(player, totemSlot);
             if (result == bedrocktools::core::OffhandTransferResult::Success ||
                 result == bedrocktools::core::OffhandTransferResult::AlreadyEquipped) {
+                if (!g_loggedAutoTotemTransferSuccess.exchange(true, std::memory_order_acq_rel))
+                    autoTotemLogger().info("Auto Totem first transfer result: {}.", transferResultName(result));
                 m_pendingRefill = false;
                 m_lastOffhandHadTotem = true;
                 m_refillAfter = {};
             } else {
                 // Fail closed and retry at a modest cadence if this build lacks a
                 // compatible native route or a local/server-visible transfer fails.
+                if (!g_loggedAutoTotemTransferFailure.exchange(true, std::memory_order_acq_rel))
+                    autoTotemLogger().warn("Auto Totem first transfer failed safely: {}. No unverified setter will be called.", transferResultName(result));
                 m_refillAfter = now + std::chrono::milliseconds(100);
             }
             break;
