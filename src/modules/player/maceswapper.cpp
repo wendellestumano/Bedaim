@@ -9,9 +9,12 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
+#include <bedrocktools/memory/Signatures.hpp>
+#include <bedrocktools/sdk/world/Dimension.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
@@ -25,6 +28,51 @@ bool validBounds(const bedrocktools::sdk::AABB& bounds) {
     const float depth = bounds.max.z - bounds.min.z;
     return height >= 0.25f && height <= 8.0f && width > 0.0f && width <= 5.0f
         && depth > 0.0f && depth <= 5.0f;
+}
+
+using BlockSourceIsSolidBlockingBlockFn = bool (*)(void*, const bedrocktools::sdk::BlockPos*);
+
+BlockSourceIsSolidBlockingBlockFn solidBlockingBlockQuery() {
+    static const auto query = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
+    return query;
+}
+
+// Measure vertical clearance to the first solid block under the player's own
+// X/Z column. The query range is deliberately bounded and fails closed when
+// world/block data is unavailable instead of substituting target height.
+float heightAboveGround(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    if (!player) return std::numeric_limits<float>::quiet_NaN();
+    auto* dimension = player->dimension();
+    auto* source = dimension ? dimension->blockSource() : nullptr;
+    const auto isSolid = solidBlockingBlockQuery();
+    if (!source || !isSolid) return std::numeric_limits<float>::quiet_NaN();
+
+    const Vec3 position = player->position();
+    const AABB bounds = player->bounds();
+    if (!finiteVec(position)) return std::numeric_limits<float>::quiet_NaN();
+    const float feetY = validBounds(bounds) ? bounds.min.y : position.y;
+    const float centerX = validBounds(bounds) ? (bounds.min.x + bounds.max.x) * 0.5f : position.x;
+    const float centerZ = validBounds(bounds) ? (bounds.min.z + bounds.max.z) * 0.5f : position.z;
+    if (!std::isfinite(feetY) || !std::isfinite(centerX) || !std::isfinite(centerZ) ||
+        feetY < -30000000.0f || feetY > 30000000.0f ||
+        std::abs(centerX) > 30000000.0f || std::abs(centerZ) > 30000000.0f) {
+        return std::numeric_limits<float>::quiet_NaN();
+    }
+
+    const int blockX = static_cast<int>(std::floor(centerX));
+    const int blockZ = static_cast<int>(std::floor(centerZ));
+    int blockY = static_cast<int>(std::floor(feetY)) - 1;
+    constexpr int kGroundSearchDepth = 12;
+    for (int step = 0; step < kGroundSearchDepth; ++step, --blockY) {
+        const BlockPos pos{blockX, blockY, blockZ};
+        if (!isSolid(source, &pos)) continue;
+        const float height = feetY - static_cast<float>(blockY + 1);
+        return std::isfinite(height) ? std::max(0.0f, height)
+                                     : std::numeric_limits<float>::quiet_NaN();
+    }
+    return std::numeric_limits<float>::quiet_NaN();
 }
 
 float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk::Vec3& b) {
@@ -206,13 +254,12 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange)) return;
 
-    // Approximate the height above the target's feet. This is a safe, grounded
-    // reference available from the target AABB without guessing block-query APIs.
-    const AABB localBounds = player->bounds();
-    const float localFeetY = validBounds(localBounds) ? localBounds.min.y : playerPosition.y;
-    const float verticalSeparation = localFeetY - targetBounds.min.y;
+    // Use the configured world-space height above solid ground, rather than
+    // distance to the target AABB; uneven terrain and floating targets must not
+    // change the user's height threshold.
+    const float height = heightAboveGround(player);
     const float activationHeight = std::clamp(m_activationHeight, 1.7f, 6.0f);
-    if (!std::isfinite(verticalSeparation) || verticalSeparation < activationHeight) return;
+    if (!std::isfinite(height) || height < activationHeight) return;
 
     if (!aim->currentTargetInCrosshair(player, target)) return;
     if (!targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) return;
