@@ -9,6 +9,7 @@
 
 ### Improved
 - Registered Session Timer in `ModuleRegistry`, so it follows the existing module lifecycle and configuration persistence. File: `src/modules/ModuleRegistry.cpp`.
+- Exposed Speed Display's existing 3D movement mode in the settings UI and added configurable 0–2 decimal-place output. The selected mode and precision are now persisted and clamped when loading configuration. Files: `src/modules/hud/speeddisplay.hpp`, `src/modules/hud/speeddisplay.cpp`.
 - Added the new module to the HUD inventory in `README.md` and the duration test to the CI workflow in `.github/workflows/build.yml`.
 
 ### Changed
@@ -21,10 +22,10 @@
 
 ### Tests
 - Added assertions for 0, 1, 59, 60, 3599, 3600, 86400, negative durations, and compact display mode.
-- The test is wired into GitHub Actions. Execution result is pending for this branch at the time this entry was written; no test pass is claimed yet.
+- The Session Timer formatting test passed on GitHub Actions run #234 before the Speed Display follow-up was added. A fresh CI run is needed to validate the complete branch.
 
 ### Build
-- No local Android NDK build was executed in this tool session. GitHub Actions will provide the actual host-test and Android ARM64 package result after the branch is pushed and its workflow completes.
+- No local Android NDK build was executed in this tool session. GitHub Actions is building the branch; the final Android ARM64 package result is pending.
 
 ### Known Limitations
 - The timer measures time since the module is enabled; disabling and re-enabling it resets the timer. It is not a persistent world/session clock and does not survive app restarts.
