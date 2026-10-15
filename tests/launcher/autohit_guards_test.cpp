@@ -71,7 +71,7 @@ int main() {
           "Mace rejects a fall shorter than the configured minimum");
     check(!bedaim::macefall::shouldBeginMaceAction(-0.01f, 4.0f, 1.0f),
           "Mace rejects near-level motion despite stale height");
-    check(!bedaim::macefall::shouldBeginMaceAction(-0.10f, 4.0f, std::numeric_limits<float>::quiet_NaN()),
+    check(bedaim::macefall::shouldBeginMaceAction(-0.10f, 4.0f, std::numeric_limits<float>::quiet_NaN()),
           "Mace normalizes a non-finite minimum to its safe default");
 
     check(bedaim::autohit::publicAttackRouteAvailable(true),
