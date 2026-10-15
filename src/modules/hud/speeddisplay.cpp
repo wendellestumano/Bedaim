@@ -3,6 +3,10 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <algorithm>
+#include <pl/ModMenu.hpp>
 
 static SpeedDisplayModule* g_speedMod = nullptr;
 
@@ -82,7 +86,10 @@ void SpeedDisplayModule::onDisable() {
 void SpeedDisplayModule::onFrame() {
     if (!enabled) return;
 
-    std::string text = "Speed: " + std::to_string((int)m_currentSpeed) + " m/s";
+    std::ostringstream speedText;
+    speedText << "Speed: " << std::fixed << std::setprecision(std::clamp(m_precision, 0, 2))
+              << m_currentSpeed << " m/s";
+    const std::string text = speedText.str();
 
     std::vector<PLModMenu_DrawCommand> cmds;
     float boxW = calcTextWidth(text, m_size) + 12.0f;
@@ -116,6 +123,75 @@ void SpeedDisplayModule::onFrame() {
     submitDrawCommands(moduleId, cmds);
 }
 
+void SpeedDisplayModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    schema.defaultCategory("speed")
+        .category("speed", "Speed", "Choose how movement speed is measured")
+        .category("appearance", "Appearance", "HUD text style");
+
+    ConfigNodeV2 mode;
+    mode.id = "m_use3D";
+    mode.key = "m_use3D";
+    mode.title = "Include vertical speed";
+    mode.description = "Measure full 3D movement instead of horizontal speed only.";
+    mode.category = "speed";
+    mode.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(mode));
+
+    ConfigNodeV2 precision;
+    precision.id = "m_precision";
+    precision.key = "m_precision";
+    precision.title = "Decimal places";
+    precision.description = "Choose how many decimal places to display.";
+    precision.category = "speed";
+    precision.type = ConfigControlTypeV2::Choice;
+    precision.choiceStyle = ConfigChoiceStyleV2::Segmented;
+    precision.options = {{"0", "0"}, {"1", "1"}, {"2", "2"}};
+    schema.node(std::move(precision));
+
+    ConfigNodeV2 size;
+    size.id = "m_size";
+    size.key = "m_size";
+    size.title = "Text size";
+    size.category = "appearance";
+    size.type = ConfigControlTypeV2::SliderFloat;
+    size.minValue = "6";
+    size.maxValue = "100";
+    size.step = "1";
+    size.unit = " px";
+    schema.node(std::move(size));
+
+    ConfigNodeV2 background;
+    background.id = "m_background";
+    background.key = "m_background";
+    background.title = "Background";
+    background.category = "appearance";
+    background.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(background));
+
+    ConfigNodeV2 opacity;
+    opacity.id = "m_backgroundOpacity";
+    opacity.key = "m_backgroundOpacity";
+    opacity.title = "Background opacity";
+    opacity.category = "appearance";
+    opacity.type = ConfigControlTypeV2::SliderFloat;
+    opacity.minValue = "0";
+    opacity.maxValue = "1";
+    opacity.step = "0.01";
+    opacity.visibleWhen = {{"m_background", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(opacity));
+
+    ConfigNodeV2 keybind;
+    keybind.id = "keybind";
+    keybind.key = "keybind";
+    keybind.title = "Keybind";
+    keybind.category = "speed";
+    keybind.type = ConfigControlTypeV2::Keybind;
+    schema.node(std::move(keybind));
+    setConfigSchemaJson(moduleId, schema.toJson());
+}
+
 void SpeedDisplayModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     if (j.contains("hudPosX")) hudPosX = j["hudPosX"].get<float>();
@@ -123,7 +199,9 @@ void SpeedDisplayModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("isHudModule")) isHudModule = j["isHudModule"].get<bool>();
     if (j.contains("m_size")) m_size = j["m_size"].get<float>();
     if (j.contains("m_background")) m_background = j["m_background"].get<bool>();
-    if (j.contains("m_backgroundOpacity")) m_backgroundOpacity = j["m_backgroundOpacity"].get<float>();
+    if (j.contains("m_backgroundOpacity")) m_backgroundOpacity = std::clamp(j["m_backgroundOpacity"].get<float>(), 0.0f, 1.0f);
+    if (j.contains("m_use3D") && j["m_use3D"].is_boolean()) m_use3D = j["m_use3D"].get<bool>();
+    if (j.contains("m_precision") && j["m_precision"].is_number_integer()) m_precision = std::clamp(j["m_precision"].get<int>(), 0, 2);
 }
 
 void SpeedDisplayModule::saveConfig(nlohmann::json& j) {
@@ -134,4 +212,6 @@ void SpeedDisplayModule::saveConfig(nlohmann::json& j) {
     j["m_size"] = m_size;
     j["m_background"] = m_background;
     j["m_backgroundOpacity"] = m_backgroundOpacity;
+    j["m_use3D"] = m_use3D;
+    j["m_precision"] = m_precision;
 }
