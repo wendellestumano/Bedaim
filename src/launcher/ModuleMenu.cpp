@@ -166,8 +166,8 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            ConfigChoiceStyleV2::Segmented);
     slider("m_aimSpeed", "Aim speed", "aim", "0.1", "10", "0.1", "x",
            "Base angular turn rate.");
-    slider("m_rotationSpeed", "Rotation speed", "aim", "0.1", "200", "0.1", "x",
-           "Independent multiplier for large rotations and targets behind you.");
+    slider("m_rotationSpeed", "Rotation speed", "aim", "0.1", "1000", "0.1", "x",
+           "Independent multiplier for large rotations and targets behind you; values up to 1000 apply immediately.");
     choice("m_predictionMode", "Target prediction", "aim",
            "Predict motion for ranged weapons, or for all weapons.",
            {{"Off","Off"},{"Ranged","Ranged weapons"},{"All","All weapons"}},
