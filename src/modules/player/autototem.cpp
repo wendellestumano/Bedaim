@@ -74,6 +74,7 @@ void AutoTotemModule::onEnable() {
     m_lastOffhandHadTotem = false;
     m_refillAfter = {};
     m_nextInventoryScan = {};
+    m_nextOffhandCheck = {};
     m_cachedTotemSlot = -1;
 }
 
@@ -83,11 +84,22 @@ void AutoTotemModule::onDisable() {
     m_lastOffhandHadTotem = false;
     m_refillAfter = {};
     m_nextInventoryScan = {};
+    m_nextOffhandCheck = {};
     m_cachedTotemSlot = -1;
 }
 
 void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!enabled || !player) return;
+
+    const auto checkTime = std::chrono::steady_clock::now();
+    {
+        std::lock_guard lock(m_stateMutex);
+        if (!enabled) return;
+        if (m_nextOffhandCheck.time_since_epoch().count() != 0 &&
+            checkTime < m_nextOffhandCheck) return;
+        m_nextOffhandCheck = checkTime + std::chrono::milliseconds(
+            static_cast<int>(bedaim::autototem::normalizeOffhandPollMs(m_offhandPollIntervalMs)));
+    }
 
     auto& inventory = bedrocktools::core::InventoryAccess::get();
     const std::string offhandId = inventory.offhandIdentifier(player);
@@ -226,6 +238,8 @@ void AutoTotemModule::loadConfig(const nlohmann::json& json) {
         json.value("m_delayMs", m_delayMs));
     m_scanRetryIntervalMs = bedaim::autototem::normalizeScanRetryMs(
         json.value("m_scanRetryIntervalMs", m_scanRetryIntervalMs));
+    m_offhandPollIntervalMs = bedaim::autototem::normalizeOffhandPollMs(
+        json.value("m_offhandPollIntervalMs", m_offhandPollIntervalMs));
     m_combatOnly = json.value("m_combatOnly", m_combatOnly);
     m_keepTotemEquipped = json.value("m_keepTotemEquipped", m_keepTotemEquipped);
 }
@@ -235,6 +249,7 @@ void AutoTotemModule::saveConfig(nlohmann::json& json) {
     std::lock_guard lock(m_stateMutex);
     json["m_delayMs"] = bedaim::autototem::normalizeDelayMs(m_delayMs);
     json["m_scanRetryIntervalMs"] = bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs);
+    json["m_offhandPollIntervalMs"] = bedaim::autototem::normalizeOffhandPollMs(m_offhandPollIntervalMs);
     json["m_combatOnly"] = m_combatOnly;
     json["m_keepTotemEquipped"] = m_keepTotemEquipped;
 }
@@ -271,6 +286,13 @@ void AutoTotemModule::onMenuRegistered() {
     scanRetry.step = "50";
     scanRetry.description = "How often to rescan inventory when no totem is found. Higher values reduce lag with an empty inventory.";
     schema.node(std::move(scanRetry));
+    auto offhandPoll = node("m_offhandPollIntervalMs", "Offhand check interval (ms)", "behavior",
+                            ConfigControlTypeV2::SliderFloat);
+    offhandPoll.minValue = "50";
+    offhandPoll.maxValue = "500";
+    offhandPoll.step = "10";
+    offhandPoll.description = "How often AutoTotem checks the offhand. Lower values react faster; higher values reduce inventory overhead.";
+    schema.node(std::move(offhandPoll));
     schema.node(node("m_keepTotemEquipped", "Keep Totem Equipped", "behavior",
                      ConfigControlTypeV2::Toggle));
     schema.node(node("m_combatOnly", "Combat Only", "safety",
