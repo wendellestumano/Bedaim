@@ -1,5 +1,6 @@
 #include "aimassist.hpp"
 #include "AimAssistMath.hpp"
+#include "AutoHitGuards.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
@@ -71,6 +72,7 @@ std::atomic_bool g_loggedAutoHitOutOfRange{false};
 std::atomic_bool g_loggedAutoHitBlocked{false};
 std::atomic_bool g_loggedAutoHitInvalidPosition{false};
 std::atomic_bool g_loggedAutoHitResult{false};
+std::atomic_bool g_loggedAutoHitNoAttackRoute{false};
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadToDeg = 180.0f / kPi;
@@ -959,6 +961,39 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         logAutoHitOnce(g_loggedAutoHitNoGameMode,
             "AutoHit has a target but no valid GameMode pointer has been observed from a real engine callback yet.");
         m_nextAutoHit = now + std::chrono::milliseconds(250);
+        return;
+    }
+
+    const bool attackRouteAvailable =
+        bedrocktools::core::gamehooks::attackAvailable(gameMode);
+    const float hitDistance = std::sqrt(hitDistanceSq);
+    const bool targetFresh =
+        m_lastTargetSeen.time_since_epoch().count() != 0 &&
+        now >= m_lastTargetSeen &&
+        now - m_lastTargetSeen <= std::chrono::milliseconds(150);
+    const bool cooldownReady =
+        m_nextAutoHit.time_since_epoch().count() == 0 || now >= m_nextAutoHit;
+
+    const bedaim::autohit::Inputs guardInput{
+        m_autoHit && enabled,
+        player != nullptr && player == m_lastPlayer,
+        m_lastTarget != nullptr && m_targetPresent,
+        validBounds(m_lastTargetBounds),
+        targetFresh,
+        gameMode != nullptr,
+        attackRouteAvailable,
+        finiteVec3(hitPoint) && std::isfinite(hitDistance),
+        cooldownReady,
+        hitDistance,
+        autoHitRange
+    };
+    const auto guardDecision = bedaim::autohit::evaluate(guardInput);
+    if (guardDecision != bedaim::autohit::Decision::Ready) {
+        if (guardDecision == bedaim::autohit::Decision::MissingAttackRoute) {
+            logAutoHitOnce(g_loggedAutoHitNoAttackRoute,
+                "AutoHit skipped: no validated public GameMode::attack vtable/signature route is available.");
+            m_nextAutoHit = now + std::chrono::milliseconds(250);
+        }
         return;
     }
 
