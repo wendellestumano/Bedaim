@@ -40,6 +40,16 @@ int main() {
     assert(snapshot.sampleCount == 2);
     assert(std::abs(snapshot.averageFrameMs - 10.0f) < 0.01f);
 
+    // Shrinking the window immediately prunes samples outside the new horizon.
+    stats.reset();
+    stats.addSample(100, 20.0f);
+    stats.addSample(700, 20.0f);
+    stats.addSample(900, 10.0f);
+    stats.setWindowMs(300);
+    snapshot = stats.snapshot();
+    assert(snapshot.sampleCount == 2);
+    assert(std::abs(snapshot.averageFrameMs - 15.0f) < 0.01f);
+
     // A non-monotonic timestamp resets stale samples rather than mixing epochs.
     stats.addSample(500, 20.0f);
     snapshot = stats.snapshot();
