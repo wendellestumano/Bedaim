@@ -210,6 +210,10 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Maximum AutoHit point distance. Its actor scan extends to at least this range.");
     slider("m_autoHitDelayMs", "Attack interval", "auto_hit", "80", "1000", "10", "ms",
            "Minimum time between native attack attempts.");
+    addNode("m_autoHitKeyCode", "Attack key code", "auto_hit", ConfigControlTypeV2::SliderInt,
+            "0", "288", "1", "Android keycode",
+            "0 keeps automatic native AutoHit. Set an Android key code to show a floating Hold button that emits the key and enables AutoHit while held. Android KEYCODE_0 is 7.",
+            true, {}, ConfigChoiceStyleV2::Auto);
 
     toggle("m_weaponOnly", "Enable weapon filter", "weapons",
            "Run Aim Assist only while a selected weapon type is held.");
@@ -493,6 +497,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_autoHit") displayName = "AUTO HIT > Enable";
                 else if (k == "m_autoHitRange") displayName = "AUTO HIT > Range (blocks)";
                 else if (k == "m_autoHitDelayMs") displayName = "AUTO HIT > Attack interval (ms)";
+                else if (k == "m_autoHitKeyCode") displayName = "AUTO HIT > Key code (Android; 0 disables)";
                 else if (k == "m_range") displayName = "BEHAVIOR > Range";
                 else if (k == "m_aimSpeed") displayName = "BEHAVIOR > Aim speed";
                 else if (k == "m_rotationSpeed") displayName = "BEHAVIOR > Rotation speed";
@@ -541,7 +546,9 @@ void registerModulesWithLauncher() {
                 } else {
                     int minVal = 0;
                     int maxVal = 200;
-                    if (kLower.find("cps") != std::string::npos) {
+                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "mautohitkeycode") {
+                        maxVal = 288;
+                    } else if (kLower.find("cps") != std::string::npos) {
                         minVal = 1;
                         maxVal = 30;
                     } else if (kLower.find("time") != std::string::npos) {
@@ -726,7 +733,7 @@ void registerModulesWithLauncher() {
                 "m_strength", "m_hitboxScale",
                 "m_distanceDependentHitbox", "m_hitboxDistanceGrowth",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
-                "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
+                "m_targetRetentionRadius", "m_autoHit", "m_autoHitRange", "m_autoHitDelayMs", "m_autoHitKeyCode", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
                 "m_weaponOtherMelee", "m_elytraMode"
