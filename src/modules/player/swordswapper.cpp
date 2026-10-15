@@ -150,13 +150,17 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    if (m_ownsSwap && inventory.selectedHotbarSlot(player) != m_swordSlot) {
-        // User changed the slot manually. Stop owning the slot and honor the override
-        // until this target leaves the crosshair or the player leaves the ground.
-        m_ownsSwap = false;
-        m_swordSlot = -1;
-        m_previousSlot = -1;
-        m_userOverrodeSwap = true;
+    int selectedSlotSnapshot = -1;
+    if (m_ownsSwap) {
+        selectedSlotSnapshot = inventory.selectedHotbarSlot(player);
+        if (selectedSlotSnapshot != m_swordSlot) {
+            // User changed the slot manually. Stop owning the slot and honor the override
+            // until this target leaves the crosshair or the player leaves the ground.
+            m_ownsSwap = false;
+            m_swordSlot = -1;
+            m_previousSlot = -1;
+            m_userOverrodeSwap = true;
+        }
     }
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
@@ -180,19 +184,25 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
     if (m_userOverrodeSwap) return;
 
-    // The selected item string requires a native ItemStack description lookup
-    // plus memory validation. Only pay for it when a swap would actually happen.
+    // Once we own the sword slot and it is still selected, there is no reason to
+    // resolve any ItemStack identifier or rescan the hotbar. Those native string
+    // lookups ran every game tick while the sword was equipped and were a hot path
+    // for this module. Keep the ownership check above, then exit immediately.
+    const int selected = selectedSlotSnapshot >= 0
+        ? selectedSlotSnapshot : inventory.selectedHotbarSlot(player);
+    if (selected < 0) return;
+    if (m_ownsSwap && selected == m_swordSlot) return;
+
+    const int swordSlot = inventory.findHotbarSlot(player, "_sword");
+    if (swordSlot < 0 || selected == swordSlot) return;
+
+    // ItemStack description lookup is only needed if a swap would really happen.
     const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
     if (heldIdentifier.find("wind_charge") != std::string::npos) {
         restoreIfOwned();
         m_userOverrodeSwap = true;
         return;
     }
-
-    const int swordSlot = inventory.findHotbarSlot(player, "_sword");
-    const int selected = inventory.selectedHotbarSlot(player);
-    if (swordSlot < 0 || selected < 0) return;
-    if (selected == swordSlot) return;
 
     if (!m_ownsSwap && inventory.selectHotbarSlot(player, swordSlot) &&
         inventory.selectedHotbarSlot(player) == swordSlot) {
