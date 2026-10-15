@@ -443,6 +443,10 @@ void AimAssistModule::onDisable() {
     resetTrackingState();
 }
 
+bool AimAssistModule::showInLegacyMenu(std::string_view key) const {
+    return key != "m_autoHitKeyCode";
+}
+
 void AimAssistModule::onMenuRegistered() {
     m_menuRegistered.store(true, std::memory_order_release);
     refreshAutoHitKeyButton();
