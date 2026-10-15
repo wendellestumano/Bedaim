@@ -17,6 +17,7 @@ public:
     void onEnable() override;
     void onDisable() override;
     void onMenuRegistered() override;
+    bool showInLegacyMenu(std::string_view key) const override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
