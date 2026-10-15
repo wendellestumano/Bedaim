@@ -19,7 +19,7 @@
 - Restored the previous Bedrock 26.52 `InventoryAccess::stackIdentifier` behavior. The added strict `dladdr` requirement rejected otherwise valid virtual item-description functions from the active runtime; this shared lookup feeds the Weapon Filter, HUD item label, Swappers, and AutoTotem item scans.
 - Restored Sword Swapper and Mace Swapper source/header behavior from the prior compatible revision `d424487`, including the Sword Swapper's original five-tick landing debounce, manual wind-charge override, and coordinated Mace fall priority. Removed the unverified cache behavior that could trust a stale sword slot after inventory changes.
 - Restored the four-argument internal GameMode attack trampoline for AutoHit and Mace Swapper. A public vtable address match alone does not establish a compatible three-argument ABI; `attackAvailable` now checks the mapped GameMode and the actual installed internal trampoline.
-- AutoHit button aliases now route through Android `KEYCODE_BUTTON_1..KEYCODE_BUTTON_16` (188–203), which is the launcher key-event path already registered by Bedaim. This replaces the disconnected `ModuleRegistry::onMouseEvent` path. `keycode:0`, `keycode_0`, and `KEYCODE_0` map to Android's digit-zero key (7); use `auto` for automatic mode.
+- AutoHit button aliases preserve Android `KEYCODE_BUTTON_1..KEYCODE_BUTTON_16` (188–203) plus the physical mouse-button id. The launcher Hold control, physical Android key event, and mouse event are accepted as alternative activation signals. `keycode:0`, `keycode_0`, and `KEYCODE_0` map to Android's digit-zero key (7); use `auto` for automatic mode.
 - ULTRAKILL HUD keeps the last known item label when an item-identifier read transiently fails, instead of immediately replacing it with `EMPTY HAND`.
 
 ### Validation
@@ -31,10 +31,10 @@
 ### Corrected
 - Aim Assist now samples the local player's position over bounded tick intervals and computes a smoothed local velocity. Prediction therefore uses target velocity relative to actual player movement instead of subtracting an always-zero local velocity.
 - Held-weapon classification is cached for 100 ms and refreshed immediately when the selected hotbar slot changes, reducing native ItemStack identifier lookups while preserving weapon-filter changes.
-- Sword Swapper now validates its cached sword slot only every 350 ms instead of resolving the cached ItemStack identifier on every tick when it is not actively swapping.
+- Sword Swapper retains the known-good hotbar scan and slot ownership behavior from Build 147; no new stale-slot cache is used.
 - Tracking and prediction settings accept both schema values and visible menu labels (for example, `Adaptive`/`Adaptativo` and `Ranged weapons`/`Ranged`), avoiding silent fallback to defaults when a menu implementation serializes labels.
 - AutoHit now rebuilds its floating Hold control when the mouse-button binding changes, and `button1`/`mouse1` can use the touch Hold control on Android instead of requiring a physical mouse. The touch control gates AutoHit without injecting an unrelated keyboard key.
-- AutoTotem retries resolving trusted inventory-screen APIs instead of permanently caching a failed lookup during early initialization. This addresses runtimes where BedrockTools/LeviLamina support symbols become available after module startup.
+- AutoTotem retries resolving trusted inventory-screen APIs instead of permanently caching a failed lookup during early initialization. Its close-method resolver now also checks trusted native `LocalPlayer`/`Player` exports in `libminecraftpe.so` before trying the loaded LeviLamina helper.
 - AutoTotem now waits for a container-open event (up to 600 ms) before beginning the equip step, then requests close after transfer. If the runtime does not report an open event, it falls back to the verified transfer path instead of getting stuck in the UI state machine.
 - EGL frame events can no longer suppress the original `eglSwapBuffers` call. Frame events remain observable for HUD updates, but one module's cancellation cannot freeze rendering or block BedrockTools' renderer.
 
