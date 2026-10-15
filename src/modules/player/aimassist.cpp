@@ -358,6 +358,8 @@ void AimAssistModule::resetTrackingState() {
     m_targetPresent = false;
     m_lastTargetIsPlayer = false;
     m_cachedHeldWeaponCode = 0;
+    m_cachedWeaponSlot = -1;
+    m_nextHeldWeaponRefresh = {};
     m_weaponFilterAllowsCurrent = true;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
@@ -647,8 +649,20 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     m_lastPlayer = player;
     m_localPlayerGliding = actorIsGliding(player);
 
-    const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
-    m_cachedHeldWeaponCode = static_cast<int>(heldWeapon);
+    // Native ItemStack description lookup is relatively expensive. Reclassify
+    // immediately on hotbar changes and otherwise at 10 Hz; weapon toggles still
+    // apply every tick to the cached category, without repeating native lookups.
+    auto& inventory = bedrocktools::core::InventoryAccess::get();
+    const int selectedWeaponSlot = inventory.selectedHotbarSlot(player);
+    const auto weaponCheckTime = std::chrono::steady_clock::now();
+    if (selectedWeaponSlot != m_cachedWeaponSlot ||
+        m_nextHeldWeaponRefresh.time_since_epoch().count() == 0 ||
+        weaponCheckTime >= m_nextHeldWeaponRefresh) {
+        m_cachedHeldWeaponCode = static_cast<int>(heldWeaponInMainHand(player));
+        m_cachedWeaponSlot = selectedWeaponSlot;
+        m_nextHeldWeaponRefresh = weaponCheckTime + std::chrono::milliseconds(100);
+    }
+    const HeldWeapon heldWeapon = static_cast<HeldWeapon>(m_cachedHeldWeaponCode);
     m_weaponFilterAllowsCurrent = !m_weaponOnly ||
         weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
             m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee);
@@ -922,6 +936,38 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
     const bool targetChanged = bestTarget != m_lastTarget;
     const auto motionSampleTime = std::chrono::steady_clock::now();
+
+    // Sample our own motion as well as the target. The prediction code below
+    // subtracts local-player velocity from target velocity; without this sample
+    // the local term stayed zero forever, so moving toward a stationary target
+    // never influenced the predicted relative aim point.
+    if (m_hasPredictionPlayerSample && finiteVec3(playerPosition)) {
+        const float playerDt = std::chrono::duration<float>(
+            motionSampleTime - m_lastPredictionPlayerSample).count();
+        if (std::isfinite(playerDt) && playerDt >= 0.01f && playerDt <= 0.25f) {
+            const Vec3 measuredVelocity{
+                (playerPosition.x - m_lastPredictionPlayerPosition.x) / playerDt,
+                (playerPosition.y - m_lastPredictionPlayerPosition.y) / playerDt,
+                (playerPosition.z - m_lastPredictionPlayerPosition.z) / playerDt
+            };
+            const float playerSpeedSq = distanceSquared(measuredVelocity, Vec3{});
+            if (std::isfinite(playerSpeedSq) && playerSpeedSq <= 225.0f) {
+                m_playerVelocity.x = m_playerVelocity.x * 0.35f + measuredVelocity.x * 0.65f;
+                m_playerVelocity.y = m_playerVelocity.y * 0.35f + measuredVelocity.y * 0.65f;
+                m_playerVelocity.z = m_playerVelocity.z * 0.35f + measuredVelocity.z * 0.65f;
+            } else {
+                m_playerVelocity = {};
+            }
+        } else {
+            m_playerVelocity = {};
+        }
+    } else {
+        m_playerVelocity = {};
+    }
+    m_lastPredictionPlayerPosition = finiteVec3(playerPosition) ? playerPosition : Vec3{};
+    m_hasPredictionPlayerSample = finiteVec3(playerPosition);
+    m_lastPredictionPlayerSample = motionSampleTime;
+
     const Vec3 targetPosition = reinterpret_cast<Actor*>(bestTarget)->position();
     if (targetChanged || m_motionTrackedTarget != bestTarget || !m_hasMotionSample ||
         !finiteVec3(targetPosition)) {
