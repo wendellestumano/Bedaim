@@ -3,6 +3,7 @@
 #include "../Module.hpp"
 
 #include <atomic>
+#include <cstdint>
 #include <chrono>
 #include <mutex>
 
