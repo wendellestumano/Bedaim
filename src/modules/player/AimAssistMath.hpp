@@ -19,8 +19,5 @@ float wrapDegrees(float angle) noexcept;
 float boundedTurnStep(float angularErrorDegrees,
                       float turnRateDegreesPerSecond,
                       float deltaSeconds) noexcept;
-Vec3 selectAimPoint(bool stickyTracking,
-                     const Vec3& centerPoint,
-                     const Vec3& slidingPoint) noexcept;
 
 } // namespace bedaim::aimmath
