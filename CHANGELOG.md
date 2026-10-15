@@ -1,5 +1,21 @@
 # Changelog
 
+## Combat Hot-Path Optimization — 2026-10-15
+
+### Improved
+- Aim Assist now refreshes actor candidates in the game-tick handler and steers from the last validated bounds snapshot on render frames. It no longer calls the full nearby-actor query at render FPS.
+- Weapon classification resolves the held ItemStack identifier once per tick, then caches weapon family, naturalization applicability and aim multiplier for render-frame steering.
+- Aim Assist applies cheap range/geometry filtering before name-tag, invisibility and voxel line-of-sight checks, reducing work in large long-range scans.
+- Inventory memory validation reuses a short-lived readable-memory map snapshot instead of reopening and scanning /proc/self/maps for each pointer check.
+- AutoTotem evaluates delay, container and combat gates before scanning inventory slots, and skips Aim Assist target queries when Combat Only is disabled.
+
+### Supplied binary inspection
+- The uploaded libReverseSigma.so is an Android AArch64, stripped Apollon JNI library. Strings such as hitBoxValue, hitBox and emulateNativeAttack do not identify a reusable native hitbox function or provide its ABI; no offsets or machine code were transplanted.
+- The supplied binary was inspected statically only and is not loaded or executed by Bedaim.
+
+### Validation
+- Pending host regression tests, Android ARM64 build, and in-game FPS/behavior confirmation for this branch.
+
 ## Combat Core Reliability — 2026-10-15
 
 ### Fixed
