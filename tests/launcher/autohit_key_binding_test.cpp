@@ -27,18 +27,21 @@ int main() {
              {"off", 0}, {"0", 7}, {"1", 8}, {"9", 16},
              {"a", 29}, {"Z", 54}, {"shift", 59}, {"shift right", 60},
              {"ctrl", 113}, {"space", 62}, {"enter", 66}, {"esc", 111},
-             {"button1", 188}, {"Button 16", 203}, {"keycode:120", 120}}) {
+             {"keycode:188", 188}, {"keycode:120", 120}}) {
         const auto value = parse(text);
         check(value.has_value(), "valid key alias is accepted");
         check(value && *value == expected, "key alias maps to the expected Android key code");
     }
 
+    check(!parse("button1").has_value(), "mouse alias isn't mistaken for a keyboard key");
+    check(parseMouseButton("button1") == 1, "button1 maps to mouse button one");
+    check(parseMouseButton("Mouse 16") == 16, "mouse aliases accept normalized spaces");
+    check(!parseMouseButton("button17").has_value(), "unsupported mouse index is rejected");
     check(!parse("button17").has_value(), "unsupported button index is rejected");
     check(!parse("shiftplease").has_value(), "unknown alias is rejected");
     check(!parse("keycode:999").has_value(), "out-of-range key code is rejected");
     check(format(7) == "0", "KEYCODE_0 formats as a user-friendly zero");
     check(format(59) == "shift", "shift code formats as shift");
-    check(format(188) == "button1", "button one code formats as button1");
     check(format(0) == "auto", "zero code formats as auto mode");
 
     std::cout << checks << " checks, " << failures << " failures\n";
