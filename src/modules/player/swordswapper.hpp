@@ -28,5 +28,7 @@ private:
     bool m_ownsSwap = false;
     bool m_userOverrodeSwap = false;
     int m_swordSlot = -1;
+    int m_cachedSwordSlot = -1;
+    std::chrono::steady_clock::time_point m_nextSwordScanAt{};
     int m_previousSlot = -1;
 };
