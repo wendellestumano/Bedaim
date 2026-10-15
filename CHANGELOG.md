@@ -43,7 +43,7 @@
 
 ### Changed
 - The module samples render callback cadence and does not add a Minecraft hook, signature, or version-specific offset.
-- The 1% low is calculated as the reciprocal of the average frame time among the slowest 1% of retained samples; `std::nth_element` selects the slow tail without fully sorting each frame, the window is only pruned when its size changes or a sample arrives, and the sample buffer is capped at 2,400 entries.
+- The 1% low is calculated as the reciprocal of the average frame time among the slowest 1% of retained samples; `std::nth_element` selects the slow tail without fully sorting each frame, the window is only pruned when its size changes or a sample arrives (including rejected stall samples), and the sample buffer is capped at 2,400 entries.
 
 ### Research
 - C++ monotonic clock: https://en.cppreference.com/w/cpp/chrono/steady_clock — frame timestamps and elapsed windows use a monotonic clock.
