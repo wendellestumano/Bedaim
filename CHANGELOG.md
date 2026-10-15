@@ -61,3 +61,28 @@
 - Frame Stats measures the cadence of enabled module render callbacks, not Minecraft server tick rate or an independently sampled GPU frame pipeline.
 - 1% low is noisy for short windows with few samples.
 - HUD appearance and position require validation in-game on the target LeviLauncher/Bedrock version.
+
+## Overnight Feature Development — 2026-10-15 (continued, second module)
+
+### Added
+- Added **Distance Tracker**, a HUD module that accumulates player displacement while enabled. It supports horizontal-only or 3D distance, adjustable teleport/respawn discontinuity filtering, configurable text size, background and opacity. Files: `src/modules/hud/distancetracker.hpp`, `src/modules/hud/distancetracker.cpp`.
+- Added a dependency-free `DistanceAccumulator` helper and host regression test covering horizontal and vertical movement, baseline initialization, teleport filtering, invalid coordinates, and reset. Files: `src/modules/hud/DistanceAccumulator.hpp`, `tests/launcher/distance_accumulator_test.cpp`.
+
+### Improved
+- Registered Distance Tracker through the existing module registry and documented it in the HUD list. Files: `src/modules/ModuleRegistry.cpp`, `README.md`.
+- Added `distance_accumulator_test` to xmake host tests and the GitHub Actions workflow. Files: `tests/xmake.lua`, `.github/workflows/build.yml`.
+
+### Research
+- The existing Bedaim `LocalPlayerTickEvent` and `Player::position()` wrapper provide the required local position without new signatures or offsets. The module uses the existing event subscription, HUD draw-command, and V2 configuration-schema patterns.
+- C++ floating-point validation: https://en.cppreference.com/w/cpp/numeric/math/isfinite — reject invalid coordinate samples instead of poisoning the cumulative total.
+
+### Tests
+- Added assertions for a 3-4-5 horizontal segment, vertical displacement in 3D mode, teleport-threshold rejection, invalid-coordinate baseline reset, and threshold clamping. CI result pending until the new head commit finishes.
+
+### Build
+- Android ARM64 build will run through the existing PR workflow; no in-game build or runtime validation is claimed yet.
+
+### Known Limitations
+- Distance Tracker resets when disabled/re-enabled and does not persist totals across world loads or app restarts.
+- The helper cannot identify dimension/world changes by itself; the configurable per-tick jump threshold filters large discontinuities but cannot distinguish every teleport from unusually fast movement.
+- Distance is based on client-observed player positions, not server-authoritative movement records.
