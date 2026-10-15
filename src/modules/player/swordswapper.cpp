@@ -56,7 +56,7 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
     const float dy = eye.y - nearest.y;
     const float dz = eye.z - nearest.z;
     const float distanceSq = dx * dx + dy * dy + dz * dz;
-    const float safeRange = std::clamp(range, 2.0f, 6.0f);
+    const float safeRange = std::clamp(range, 1.0f, 16.0f);
     return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
 }
 }
