@@ -39,7 +39,8 @@ inline std::optional<int> parse(std::string_view raw) {
         key.push_back(static_cast<char>(std::tolower(ch)));
     }
 
-    if (key.empty() || key == "auto" || key == "none" || key == "off") return 0;
+    if (key.empty()) return std::nullopt;
+    if (key == "auto" || key == "none" || key == "off") return 0;
 
     if (key.size() == 1 && key[0] >= '0' && key[0] <= '9')
         return 7 + (key[0] - '0'); // Android KEYCODE_0..KEYCODE_9.
