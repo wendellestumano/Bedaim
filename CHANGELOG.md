@@ -1,5 +1,15 @@
 # Changelog
 
+## Runtime reliability follow-up — 2026-10-15
+
+- Restored the floating AutoHit button's configured Android key injection while retaining direct hold-state gating.
+- AutoHit and Mace Swapper dispatch through the exact validated public GameMode attack wrapper rather than calling the internal body directly; the route-selection rule has a host regression test.
+- AutoTotem aborts when inventory does not actually open, requires trusted exported open/close symbols instead of a vtable-only opening guess, and resets after close failures.
+- GameType resolution retries after runtime initialization; Aim Assist uses it for Creative/Spectator exclusion and Player Radar shows name, distance, and Survival/Creative/Adventure/Spectator (Unknown when unavailable).
+- Sword Swapper tolerates normal vertical-position jitter; Mace Swapper uses a less brittle descent threshold after the configured fall distance.
+- Real-device verification remains required for native attack ABI, AutoTotem transfer, GameType exports, and swap timing; CI alone does not prove runtime behavior.
+
+
 ## Player Radar — 2026-10-15
 
 - Added a HUD module that scans the nearby-actor snapshot, filters player entities, calculates Euclidean distance in blocks, and displays the nearest players. Range (5–80 blocks), maximum rows, text size, and background are configurable.
