@@ -85,6 +85,9 @@ std::mutex installMutex;
 bool installed = false;
 std::string gameVersion;
 thread_local std::uint32_t gameModeActionDepth = 0;
+thread_local bool syntheticAttackDispatchActive = false;
+thread_local bool syntheticAttackResultObserved = false;
+thread_local bool syntheticAttackNativeResult = false;
 std::mutex inventoryUiApiMutex;
 OpenInventoryScreenFn openInventoryScreenOriginal = nullptr;
 CloseInventoryScreenFn closeInventoryScreenOriginal = nullptr;
@@ -497,6 +500,10 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target), reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), const_cast<void*>(hitPosition)};
     bus().publish(event);
     if (event.cancelled()) {
+        if (syntheticAttackDispatchActive) {
+            syntheticAttackResultObserved = true;
+            syntheticAttackNativeResult = false;
+        }
         static std::atomic_bool loggedCancelled{false};
         if (!loggedCancelled.exchange(true, std::memory_order_acq_rel))
             autoHitLogger().warn("The first native attack was cancelled by an AttackEvent listener.");
@@ -505,6 +512,10 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     const bool result = gameModeAttackOriginal
         ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition)
         : false;
+    if (syntheticAttackDispatchActive) {
+        syntheticAttackResultObserved = true;
+        syntheticAttackNativeResult = result;
+    }
     static std::atomic_bool loggedNativeResult{false};
     if (!loggedNativeResult.exchange(true, std::memory_order_acq_rel))
         autoHitLogger().info("First native attack trampoline result: {}.", result);
@@ -717,33 +728,38 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         explicit AttackGuard(bool& value) : active(value) { active = true; }
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
+    struct DispatchObservationGuard {
+        DispatchObservationGuard() {
+            syntheticAttackResultObserved = false;
+            syntheticAttackNativeResult = false;
+            syntheticAttackDispatchActive = true;
+        }
+        ~DispatchObservationGuard() { syntheticAttackDispatchActive = false; }
+    } observationGuard;
 
     static std::atomic_bool loggedPublicRoute{false};
     if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
         autoHitLogger().info("Combat dispatch selected the validated public GameMode::attack wrapper.");
 
-    const GameModeType modeKind = kind == AttackKind::SurvivalMode
-        ? GameModeType::SurvivalMode : GameModeType::GameMode;
-    GameModeActionScope scope{modeKind, gameMode};
-    scope.publish(GameModeAction::Attack);
-
-    AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
-        reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)),
-        const_cast<void*>(hitPosition)};
-    bus().publish(event);
-    if (event.cancelled()) return false;
-
+    // The public wrapper calls the hooked internal body, where the standard
+    // AttackEvent/GameModeAction/AttackResultEvent pipeline already runs.
+    // Do not publish a second set here; observe and return the real internal result.
     publicAttack(gameMode, target, hitPosition);
-    const bool result = true; // Invocation completed; server-side hit registration remains authoritative.
-    AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
-    bus().publish(resultEvent);
-    return result;
+    if (!syntheticAttackResultObserved) {
+        static std::atomic_bool loggedMissingInternalDispatch{false};
+        if (!loggedMissingInternalDispatch.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().error("Public attack wrapper returned without reaching the validated internal attack hook; refusing to report success.");
+        return false;
+    }
+    return syntheticAttackNativeResult;
 }
 
 
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     if (!player) return false;
-    if (!playerGetGameTypeOriginal) resolveInventoryUiApi();
+    if (!playerGetGameTypeOriginal &&
+        std::chrono::steady_clock::now() >= playerGameTypeNextResolve)
+        resolveInventoryUiApi();
     if (!playerGetGameTypeOriginal) return false;
     const std::int32_t value = playerGetGameTypeOriginal(player);
     if (value < 0 || value > 3) return false;
