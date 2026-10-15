@@ -37,6 +37,8 @@ private:
     bedrocktools::sdk::Vec3 m_lastPosition{};
 
     std::string m_selectedItemId;
+    int m_cachedSelectedSlot = -1;
+    std::chrono::steady_clock::time_point m_nextItemRefresh{};
 
     std::uint64_t m_styleScore = 0;
     unsigned int m_combo = 0;
