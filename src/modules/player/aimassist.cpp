@@ -698,7 +698,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                 std::clamp(playerCenter.y, targetBounds.min.y, targetBounds.max.y),
                 std::clamp(playerCenter.z, targetBounds.min.z, targetBounds.max.z)
             };
-            insideRetentionBubble = distanceSquared(playerCenter, nearestOnTarget) <= retentionRadiusSq;
+            insideRetentionBubble = !m_localPlayerGliding &&
+                distanceSquared(playerCenter, nearestOnTarget) <= retentionRadiusSq;
         }
 
         const float dx = centerAimPoint.x - eyePosition.x;
