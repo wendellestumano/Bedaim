@@ -17,6 +17,7 @@ public:
     void onEnable() override;
     void onDisable() override;
     void onMenuRegistered() override;
+    bool onMouseEvent(int button, bool isDown) override;
     bool showInLegacyMenu(std::string_view key) const override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
@@ -60,6 +61,8 @@ public:
     std::string m_autoHitKeyBinding = "auto";
     std::atomic_bool m_autoHitPhysicalKeyDown{false};
     std::atomic_bool m_autoHitVirtualKeyDown{false};
+    std::atomic_int m_autoHitMouseButton{0};
+    std::atomic_bool m_autoHitMouseButtonDown{false};
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
     float m_hitboxDistanceGrowth = 5.0f;
