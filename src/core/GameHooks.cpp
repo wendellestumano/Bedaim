@@ -653,25 +653,28 @@ void* gameModeForPlayer(void* player) {
 }
 
 bool attackAvailable(void* gameMode) {
-    // This only validates the mapped GameMode, the known public virtual slot,
-    // and equality with a resolved GameMode/SurvivalMode attack signature.
-    // It deliberately does not call into Minecraft.
-    return publicAttackVirtualEntry(gameMode) != 0;
+    // Match the previously validated Bedrock 26.52 route: AutoHit and Mace
+    // Swapper dispatch through the trampoline created by our internal attack
+    // hook, not a guessed public-vtable ABI with a potentially different signature.
+    return gameMode && currentGameMode.load(std::memory_order_acquire) == gameMode &&
+        plausibleGameMode(gameMode) && gameModeAttackOriginal != nullptr;
 }
 
-bool attack(void* gameMode, void* target, bool /*playPredictiveSound*/, const void* hitPosition) {
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
 
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
     if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
-    AttackKind kind = AttackKind::GameMode;
-    const auto virtualEntry = publicAttackVirtualEntry(gameMode, &kind);
-    if (!virtualEntry) {
+    // Use the known four-argument internal trampoline used by the previous
+    // working Bedrock 26.52 revision. Merely matching a public vtable address
+    // does not prove that its ABI is (this, target, hitPosition).
+    AttackFn nativeInternalAttack = gameModeAttackOriginal;
+    if (!nativeInternalAttack) {
         static std::atomic_bool loggedUnavailable{false};
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().error("Attack skipped safely: vtable slot 16 did not match this build's public GameMode::attack signature. No native attack body was called.");
+            autoHitLogger().error("AutoHit has no internal attack trampoline; signature/hook setup must be verified for this Bedrock build.");
         return false;
     }
 
@@ -681,15 +684,26 @@ bool attack(void* gameMode, void* target, bool /*playPredictiveSound*/, const vo
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    static std::atomic_bool loggedPublicRoute{false};
-    if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
-        autoHitLogger().info("Combat dispatch uses the signature-validated public GameMode::attack wrapper.");
+    static std::atomic_bool loggedTrampolineRoute{false};
+    if (!loggedTrampolineRoute.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("Combat dispatch selected the validated four-argument internal attack trampoline.");
 
-    // This public wrapper establishes Bedrock's internal attack flags and then
-    // routes through the hooked native implementation. That is the same entry
-    // point vanilla uses; do not manually replay the internal 4-argument ABI.
-    using PublicAttackFn = bool(*)(void*, void*, const void*);
-    return reinterpret_cast<PublicAttackFn>(virtualEntry)(gameMode, target, hitPosition);
+    const AttackKind kind = attackKindFor(gameMode);
+    const GameModeType modeKind = kind == AttackKind::SurvivalMode
+        ? GameModeType::SurvivalMode : GameModeType::GameMode;
+    GameModeActionScope scope{modeKind, gameMode};
+    scope.publish(GameModeAction::Attack);
+
+    AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
+        reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)),
+        const_cast<void*>(hitPosition)};
+    bus().publish(event);
+    if (event.cancelled()) return false;
+
+    const bool result = nativeInternalAttack(gameMode, target, playPredictiveSound, hitPosition);
+    AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
+    bus().publish(resultEvent);
+    return result;
 }
 
 
