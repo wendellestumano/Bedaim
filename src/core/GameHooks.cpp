@@ -48,6 +48,8 @@ using ClientInstanceUpdateFn = void*(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
 using EglSwapBuffersFn = EGLBoolean(*)(EGLDisplay, EGLSurface);
+using OpenInventoryScreenFn = void(*)(void*);
+using CloseInventoryScreenFn = void(*)(void*, std::int8_t);
 
 VersionStringFn versionOriginal = nullptr;
 NormalTickFn tickOriginal = nullptr;
@@ -80,6 +82,10 @@ std::mutex installMutex;
 bool installed = false;
 std::string gameVersion;
 thread_local std::uint32_t gameModeActionDepth = 0;
+std::once_flag inventoryUiApiOnce;
+OpenInventoryScreenFn openInventoryScreenOriginal = nullptr;
+CloseInventoryScreenFn closeInventoryScreenOriginal = nullptr;
+bool inventoryUiApiResolved = false;
 
 template <class Function>
 bool hookSignature(SignatureId id, void* detour, Function** original) {
@@ -196,6 +202,44 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
     if (it == readableRegions.begin()) return false;
     const auto& region = *std::prev(it);
     return begin >= region.begin && end <= region.end;
+}
+
+bool isMinecraftFunction(const void* address) {
+    if (!address) return false;
+    Dl_info info{};
+    return dladdr(address, &info) != 0 && info.dli_fname &&
+        std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
+}
+
+void* resolveMinecraftFunction(const char* name) {
+    if (!name || !*name) return nullptr;
+    void* address = dlsym(RTLD_DEFAULT, name);
+    if (isMinecraftFunction(address)) return address;
+    void* library = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!library) return nullptr;
+    address = dlsym(library, name);
+    const bool valid = isMinecraftFunction(address);
+    dlclose(library);
+    return valid ? address : nullptr;
+}
+
+void resolveInventoryUiApi() {
+    std::call_once(inventoryUiApiOnce, [] {
+        // These exact C++ symbols correspond to the documented client SDK
+        // signatures for LocalPlayer::openInventory() and
+        // LocalPlayer::closeContainerScreen(ContainerType::Inventory).
+        // Missing/renamed symbols disable UI mode rather than guessing vtable slots.
+        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+            resolveMinecraftFunction("_ZN11LocalPlayer13openInventoryEv"));
+        closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
+            resolveMinecraftFunction("_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+        inventoryUiApiResolved = openInventoryScreenOriginal && closeInventoryScreenOriginal;
+        if (!inventoryUiApiResolved) {
+            autoHitLogger().warn("AutoTotem inventory UI sequence unavailable on this Bedrock build; using verified native inventory transaction instead.");
+        } else {
+            autoHitLogger().info("AutoTotem found both native LocalPlayer inventory screen operations.");
+        }
+    });
 }
 
 bool plausibleGameMode(void* gameMode) {
@@ -603,6 +647,27 @@ bool attack(void* gameMode, void* target, bool /*playPredictiveSound*/, const vo
     // point vanilla uses; do not manually replay the internal 4-argument ABI.
     using PublicAttackFn = bool(*)(void*, void*, const void*);
     return reinterpret_cast<PublicAttackFn>(virtualEntry)(gameMode, target, hitPosition);
+}
+
+
+bool inventoryUiSequenceAvailable() {
+    resolveInventoryUiApi();
+    return inventoryUiApiResolved;
+}
+
+bool openPlayerInventoryScreen(void* player) {
+    if (!player || !isReadableMemory(player, sizeof(void*)) || !inventoryUiSequenceAvailable())
+        return false;
+    openInventoryScreenOriginal(player);
+    return true;
+}
+
+bool closePlayerInventoryScreen(void* player) {
+    if (!player || !isReadableMemory(player, sizeof(void*)) || !inventoryUiSequenceAvailable())
+        return false;
+    // SharedTypes::Legacy::ContainerType::Inventory == -1 (signed-char enum).
+    closeInventoryScreenOriginal(player, static_cast<std::int8_t>(-1));
+    return true;
 }
 
 }
