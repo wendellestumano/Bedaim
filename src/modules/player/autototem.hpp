@@ -12,6 +12,12 @@ class Player;
 
 class AutoTotemModule final : public Module {
 public:
+    enum class UiSequencePhase : std::uint8_t {
+        Idle,
+        WaitBeforeTransfer,
+        WaitBeforeClose,
+        WaitForClose
+    };
     AutoTotemModule();
 
     void onInit() override;
@@ -31,11 +37,16 @@ private:
     std::chrono::steady_clock::time_point m_refillAfter{};
     std::chrono::steady_clock::time_point m_nextInventoryScan{};
     std::chrono::steady_clock::time_point m_nextOffhandCheck{};
+    std::chrono::steady_clock::time_point m_uiPhaseDeadline{};
     int m_cachedTotemSlot = -1;
+    UiSequencePhase m_uiSequencePhase = UiSequencePhase::Idle;
+    bool m_uiTransferSucceeded = false;
 
     float m_delayMs = 100.0f;
     float m_scanRetryIntervalMs = 250.0f;
     float m_offhandPollIntervalMs = 100.0f;
+    float m_uiStepDelayMs = 80.0f;
+    bool m_useInventoryUiSequence = true;
     bool m_combatOnly = false;
     bool m_keepTotemEquipped = true;
 };
