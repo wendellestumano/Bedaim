@@ -1,5 +1,23 @@
 # Changelog
 
+## Input, Aim Profile, HUD & Compatibility Pass — 2026-10-15
+
+### Corrected
+- AutoHit accepts typed bindings: `button1`/ `mouse1` observe a physical mouse button without consuming it; `shift`, digits, letters and `keycode:N` support keyboard input. Legacy numeric configs remain readable, while partial text edits preserve the last valid binding.
+- Weapon filtering classifies the held item from one identifier lookup and explicitly excludes pickaxes from the axe family. Filtering now gates steering/AutoHit without erasing the target snapshot used by Sword and Mace Swapper.
+- Aim profile affects both Sticky and Smooth/Adaptive tracking. Rotation Speed accepts up to 200 in both the V2 and legacy menus and the runtime clamp.
+- Mace Swapper obtains the player's own validated GameMode and checks the attack route before changing slots, rather than depending on a GameMode observed only after a separate action.
+- AutoTotem's inventory opener now also tries a guarded, Minecraft-image-validated Player vtable route when the exact open symbol is unavailable; close still requires the exact trusted runtime helper. If no valid open/close pair exists, it explicitly falls back to the verified native inventory transfer rather than claiming that a visible inventory sequence occurred.
+- ULTRAKILL HUD no longer cancels global BedrockTools FrameEvents to emulate hit-stop. The impact hold is visual-only; HUD config uses synchronized snapshots and draw-command updates are paced to 30 Hz.
+
+### Performance
+- Aim Assist render frames reuse the latest valid target snapshot rather than rescanning the nearby-actor vector; AutoHit also reuses the target selected in the same player tick instead of doing a second large native actor scan.
+- Sword Swapper caches a validated sword slot and throttles no-sword hotbar scans. Aim Assist weapon classification avoids repeated native ItemStack string resolution. AutoTotem retains slower bounded inventory/offhand polling on mobile.
+- Target prediction now factors the local player's measured velocity as well as the target's velocity, with bounded sampling and lead clamps.
+
+### Validation status
+- Added regression coverage for the AutoHit key alias parser. GitHub Actions is validating the current branch; gameplay FPS, the visible AutoTotem UI sequence and in-game module behavior still require a live test on the target Bedrock/LeviLamina version.
+
 ## Combat Lag Rollback + Input/Inventory Controls — 2026-10-15
 
 ### Corrected
@@ -9,7 +27,7 @@
 
 ### Added
 - **AutoHit key option:** Android key-code setting; e.g. Android `KEYCODE_0` is code 7. A floating Hold button can emit the selected key and gate native AutoHit while held. Default 0 preserves automatic native AutoHit. The public launcher API observes physical keys and supports floating buttons, but does not provide generic programmatic injection of arbitrary Android key events.
-- **AutoTotem inventory UI sequence:** resolves the native `LocalPlayer::openInventory()` (or inherited `Player::openInventory()`) from `libminecraftpe.so` and the exact `LocalPlayer::closeContainerScreen(ContainerType::Inventory)` helper from a trusted loaded Bedrock/LeviLamina runtime. If both are available, it opens inventory, waits the configurable UI-step delay, equips via the existing verified native transaction, then requests inventory close. If the compatible symbol pair is missing, it falls back to the existing verified transaction rather than guessing vtable offsets. UI-step delay defaults to 80 ms, range 0–500 ms.
+- **AutoTotem inventory UI sequence:** resolves the native `LocalPlayer::openInventory()` (or inherited `Player::openInventory()`) from `libminecraftpe.so` and the exact `LocalPlayer::closeContainerScreen(ContainerType::Inventory)` helper from a trusted loaded Bedrock/LeviLamina runtime. If both are available, it opens inventory, waits the configurable UI-step delay, equips via the existing verified native transaction, then requests inventory close. If the symbols are missing, a guarded Player vtable fallback is attempted only after checking the candidate and neighboring virtual-function addresses belong to `libminecraftpe.so`; if no compatible open/close pair is available, the module falls back to the existing verified transaction. UI-step delay defaults to 80 ms, range 0–500 ms.
 - **Distance Hitbox Strength curve:** the virtual steering box is under native bounds up close and grows smoothly with distance. Default strength reaches roughly 2.8x at the far end of the configured range (bounded to 12x), while the target aim point remains constrained to native target bounds.
 
 ### Validation
