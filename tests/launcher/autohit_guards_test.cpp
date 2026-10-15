@@ -48,22 +48,20 @@ int main() {
           "non-finite Aim Assist range falls back to the safe default");
 
     std::int32_t canonicalMode = -1;
-    check(bedaim::playergametype::normalizeNativeValue(1, false, canonicalMode) && canonicalMode == 0,
-          "legacy GameType 1 normalizes to Survival");
-    check(bedaim::playergametype::normalizeNativeValue(2, false, canonicalMode) && canonicalMode == 1,
-          "legacy GameType 2 normalizes to Creative");
-    check(bedaim::playergametype::normalizeNativeValue(3, false, canonicalMode) && canonicalMode == 2,
-          "legacy GameType 3 normalizes to Adventure");
-    check(bedaim::playergametype::normalizeNativeValue(5, false, canonicalMode) && canonicalMode == 3,
-          "legacy GameType 5 normalizes to Spectator");
-    check(!bedaim::playergametype::normalizeNativeValue(0, false, canonicalMode),
-          "legacy undefined GameType isn't Survival");
-    check(bedaim::playergametype::normalizeNativeValue(0, true, canonicalMode) && canonicalMode == 0,
-          "shifted GameType 0 normalizes to Survival");
-    check(bedaim::playergametype::normalizeNativeValue(6, true, canonicalMode) && canonicalMode == 3,
-          "shifted GameType 6 normalizes to Spectator");
-    check(!bedaim::playergametype::normalizeNativeValue(5, true, canonicalMode),
-          "shifted Default isn't Spectator");
+    check(bedaim::playergametype::normalizeNativeValue(0, canonicalMode) && canonicalMode == 0,
+          "native GameType::Survival normalizes correctly");
+    check(bedaim::playergametype::normalizeNativeValue(1, canonicalMode) && canonicalMode == 1,
+          "native GameType::Creative normalizes correctly");
+    check(bedaim::playergametype::normalizeNativeValue(2, canonicalMode) && canonicalMode == 2,
+          "native GameType::Adventure normalizes correctly");
+    check(bedaim::playergametype::normalizeNativeValue(6, canonicalMode) && canonicalMode == 3,
+          "native GameType::Spectator normalizes correctly");
+    check(!bedaim::playergametype::normalizeNativeValue(-1, canonicalMode),
+          "native Undefined GameType remains unknown");
+    check(!bedaim::playergametype::normalizeNativeValue(5, canonicalMode),
+          "native Default GameType is not mislabeled as Spectator");
+    check(!bedaim::playergametype::normalizeNativeValue(3, canonicalMode),
+          "unknown native GameType values remain unknown");
 
     check(bedaim::macefall::shouldBeginMaceAction(-0.10f, 3.0f, 3.0f),
           "Mace accepts a confirmed fall at the configured minimum height");
@@ -123,6 +121,9 @@ int main() {
     input = validInputs(); input.distance = 3.0f;
     check(evaluate(input) == Decision::Ready,
           "target exactly at maximum range is permitted");
+    input = validInputs(); input.distance = 0.0f;
+    check(evaluate(input) == Decision::Ready,
+          "AutoHit may dispatch when its hit point overlaps target bounds");
 
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
