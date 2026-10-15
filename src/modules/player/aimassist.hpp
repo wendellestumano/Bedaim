@@ -81,6 +81,10 @@ private:
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
     bool m_targetPresent = false;
+    bool m_lastTargetIsPlayer = false;
+    bool m_cachedWeaponIsRanged = false;
+    bool m_cachedNaturalizationForWeapon = false;
+    float m_cachedWeaponAimMultiplier = 1.0f;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
     bool m_hasAimPoint = false;
