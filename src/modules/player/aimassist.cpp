@@ -488,6 +488,8 @@ void AimAssistModule::refreshAutoHitKeyButton() {
             keyLabel = std::to_string(keyCode == 7 ? 0 : keyCode - 6);
         } else if (keyCode >= 29 && keyCode <= 54) {
             keyLabel.assign(1, static_cast<char>('A' + (keyCode - 29)));
+        } else if (keyCode >= 188 && keyCode <= 203) {
+            keyLabel = "BUTTON" + std::to_string(keyCode - 187);
         } else if (keyCode == 62) {
             keyLabel = "SPACE";
         } else if (keyCode == 66) {
@@ -1654,8 +1656,12 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         const auto parsedMouseButton = bedaim::autohitkey::parseMouseButton(m_autoHitKeyBinding);
         const auto parsedBinding = bedaim::autohitkey::parse(m_autoHitKeyBinding);
         if (parsedMouseButton.has_value()) {
-            configuredMouseButton = *parsedMouseButton;
-            configuredKey = 0;
+            // ModuleRegistry's mouse callback is not connected to the launcher's
+            // live Android input bridge. Translate button aliases to Android
+            // KEYCODE_BUTTON_1..16 so physical input and the floating Hold button
+            // use the existing registered key callback path.
+            configuredKey = *bedaim::autohitkey::androidButtonKeyCode(*parsedMouseButton);
+            configuredMouseButton = 0;
         } else if (parsedBinding.has_value()) {
             configuredKey = *parsedBinding;
             configuredMouseButton = 0;
