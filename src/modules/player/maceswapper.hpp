@@ -17,6 +17,7 @@ public:
     void saveConfig(nlohmann::json& j) override;
 
     float m_attackRange = 3.0f;
+    float m_activationHeight = 1.7f;
     float m_attackIntervalMs = 180.0f;
     bool m_restoreSlot = true;
 
