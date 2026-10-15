@@ -713,7 +713,10 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
-        const bool inAimAssistRange = std::isfinite(d2) && d2 <= maxDistanceSq;
+        // Range checks use the nearest point on the selected hitbox geometry, not
+        // its center; the box itself still cannot exceed the configured size limits.
+        const bool inAimAssistRange = std::isfinite(selectionDistanceSq) &&
+            selectionDistanceSq <= maxDistanceSq;
         const bool inAutoHitRange = m_autoHit && std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxAutoHitDistanceSq;
         if (!std::isfinite(d2) || d2 < 0.01f || (!inAimAssistRange && !inAutoHitRange)) continue;
