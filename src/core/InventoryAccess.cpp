@@ -31,11 +31,11 @@ bool isReadableMemory(const void* pointer, std::size_t size);
 bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size) {
     begin = 0;
     size = 0;
-    if (!isReadableMemory(player, PlayerInventory + sizeof(void*))) return false;
+    if (!player) return false;
     const void* proxy = read<const void*>(player, PlayerInventory);
-    if (!isReadableMemory(proxy, PlayerInventoryContainer + sizeof(void*))) return false;
+    if (!proxy) return false;
     const void* inventory = read<const void*>(proxy, PlayerInventoryContainer);
-    if (!isReadableMemory(inventory, FillingContainerItems + 2 * sizeof(void*))) return false;
+    if (!inventory) return false;
     begin = read<std::uintptr_t>(inventory, FillingContainerItems);
     const auto end = read<std::uintptr_t>(inventory, FillingContainerItems + sizeof(void*));
     if (!begin && !end) return true;
@@ -43,8 +43,7 @@ bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size
     const auto bytes = end - begin;
     if (bytes % ItemStackSize != 0) return false;
     size = bytes / ItemStackSize;
-    if (size > 64) return false;
-    return bytes == 0 || isReadableMemory(reinterpret_cast<const void*>(begin), bytes);
+    return size <= 64;
 }
 
 constexpr std::size_t PlayerTransactionManagerOffset = 0xA28;
@@ -174,7 +173,7 @@ void InventoryAccess::initialize() {
 }
 
 int InventoryAccess::countItems(const sdk::Player* player, std::string_view identifierPart) const {
-    if (!isReadableMemory(player, PlayerInventory + sizeof(void*))) return 0;
+    if (!player) return 0;
     std::uintptr_t begin = 0;
     std::size_t size = 0;
     int total = 0;
@@ -266,9 +265,9 @@ std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const 
 }
 
 int InventoryAccess::selectedHotbarSlot(const sdk::Player* player) const {
-    if (!isReadableMemory(player, PlayerInventory + sizeof(void*))) return -1;
+    if (!player) return -1;
     const void* inventory = read<const void*>(player, PlayerInventory);
-    if (!isReadableMemory(inventory, PlayerInventorySelectedSlot + sizeof(int))) return -1;
+    if (!inventory) return -1;
     const int slot = read<int>(inventory, PlayerInventorySelectedSlot);
     return slot >= 0 && slot < 9 ? slot : -1;
 }
@@ -292,7 +291,7 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     if (!inventorySlots(player, begin, size) || !begin || size < 9) return false;
 
     void* inventory = const_cast<void*>(read<const void*>(player, PlayerInventory));
-    if (!isReadableMemory(inventory, PlayerInventorySelectedSlot + sizeof(int))) return false;
+    if (!inventory) return false;
 
     // Prefer the engine's native PlayerInventory::selectSlot method if this build exports it.
     using SelectSlotFn = bool (*)(void*, int, int);
