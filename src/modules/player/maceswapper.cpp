@@ -158,9 +158,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const float fallDistance = std::max(0.0f, m_peakY - position.y);
     // A tiny hop is not a mace slam. Require the configured drop and a confirmed downward sample before acquiring the hotbar slot.
-    if (verticalDelta < -0.04f && fallDistance >= std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
+    if (verticalDelta < -0.08f && fallDistance >= std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
         m_descentTicks = std::min(m_descentTicks + 1, 8);
-    } else if (verticalDelta >= -0.01f || fallDistance < std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
+    } else if (verticalDelta >= -0.02f || fallDistance < std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
         m_descentTicks = 0;
     }
 
@@ -188,7 +188,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // the swapper would otherwise compete for the same slot on mobile.
     if (holdingWindCharge && !m_fallPriorityActive) m_descentTicks = 0;
     if (!m_fallPriorityActive && !holdingWindCharge &&
-        m_descentTicks >= 1 && fallDistance >= std::clamp(m_minimumFallDistance, 0.30f, 10.0f) && aim &&
+        m_descentTicks >= 2 && fallDistance >= std::clamp(m_minimumFallDistance, 0.30f, 10.0f) && aim &&
         inventory.findHotbarSlot(player, "mace") >= 0) {
         void* target = nullptr;
         AABB targetBounds{};
