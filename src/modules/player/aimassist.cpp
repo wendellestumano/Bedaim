@@ -446,7 +446,19 @@ void AimAssistModule::refreshAutoHitKeyButton() {
     const int keyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
     if (keyCode <= 0 || keyCode > 288) return;
 
-    const std::string label = "AUTO HIT / KEY " + std::to_string(keyCode);
+    std::string keyLabel = "KEYCODE " + std::to_string(keyCode);
+    if (keyCode >= 7 && keyCode <= 16) {
+        keyLabel = std::to_string(keyCode == 7 ? 0 : keyCode - 6);
+    } else if (keyCode >= 29 && keyCode <= 54) {
+        keyLabel.assign(1, static_cast<char>('A' + (keyCode - 29)));
+    } else if (keyCode == 62) {
+        keyLabel = "SPACE";
+    } else if (keyCode == 66) {
+        keyLabel = "ENTER";
+    } else if (keyCode == 111) {
+        keyLabel = "ESC";
+    }
+    const std::string label = "AUTO HIT / KEY " + keyLabel;
     ButtonBuilder(std::string(ButtonId), "AutoHit Key")
         .moduleId(moduleId)
         .modId("BedrockTools")
