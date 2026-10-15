@@ -52,7 +52,7 @@ bool parseFloat(std::string_view raw, double& value) {
     char* end = nullptr;
     errno = 0;
     const double parsed = std::strtod(text.c_str(), &end);
-    if (end == text.c_str() || !end || *end != '\\0' ||
+    if (end == text.c_str() || !end || *end != '\0' ||
         errno == ERANGE || !std::isfinite(parsed)) {
         return false;
     }
