@@ -4,7 +4,7 @@
 
 BedrockTools is an open-source native mod for Minecraft Bedrock on Android, made for [LeviLauncher](https://github.com/LiteLDev/LeviLaunchroid). It adds a collection of visual, HUD, player, and utility modules while also providing a small C++ SDK and event system for native mod development.
 
-The source is public so people can study how a real LeviLauncher mod is structured, learn from it, and use the SDK as a starting point for their own mods.
+The source is public so people can study how a real LeviLauncher mod is structured, learn how BedrockTools works, and use it as a starting point for their own mods.
 
 ## Features
 
@@ -19,7 +19,7 @@ The source is public so people can study how a real LeviLauncher mod is structur
 
 **Visual:** Fullbright, Motion Blur, Fog Color, Glint Color, TNT Timer, NoFog, View Model, Third Person Nametag, Chunk Border, Hitbox, Zoom, Breadcrumbs, FPS Unlocker, Light Overlay, ShulkerPreview, Connected Glass
 
-**HUD:** Ping Counter, Reach Counter, Combo Display, Break Indicator, Player Coords, Compass, Speed Display, Session Timer, World Time, Debug Menu, Keystrokes, Tablist
+**HUD:** Ping Counter, Reach Counter, Combo Display, Break Indicator, Player Coords, Compass, Speed Display, Session Timer, Frame Stats, World Time, Debug Menu, Keystrokes, Tablist
 
 **Player:** Time Changer, Weather Changer, Nick, Skin Stealer, AutoGG, AutoReQ, Aim Assist (private training worlds)
 
@@ -97,7 +97,7 @@ Built for [LeviLauncher](https://github.com/LiteLDev/LeviLaunchroid).
 
 Discord: [discord.gg/rMgdpTFFVg](https://discord.gg/rMgdpTFFVg)
 
-**Report Issues:** Open an issue in this GitHub repository.
+**Report Issues:** Open an issue in this repository.
 
 ## License
 
