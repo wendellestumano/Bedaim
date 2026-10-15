@@ -1558,6 +1558,9 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     if (m_trackingMode == "0") m_trackingMode = "Grudado";
     else if (m_trackingMode == "1") m_trackingMode = "Smooth";
     else if (m_trackingMode == "2") m_trackingMode = "Adaptativo";
+    // Some menu builds serialize the visible option label instead of its value.
+    if (m_trackingMode == "Sticky" || m_trackingMode == "sticky") m_trackingMode = "Grudado";
+    else if (m_trackingMode == "Adaptive" || m_trackingMode == "adaptive") m_trackingMode = "Adaptativo";
     if (m_trackingMode != "Grudado" && m_trackingMode != "Smooth" &&
         m_trackingMode != "Adaptativo") m_trackingMode = "Smooth";
 
@@ -1617,6 +1620,8 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     if (m_predictionMode == "0") m_predictionMode = "Off";
     else if (m_predictionMode == "1") m_predictionMode = "Ranged";
     else if (m_predictionMode == "2") m_predictionMode = "All";
+    if (m_predictionMode == "Ranged weapons" || m_predictionMode == "ranged weapons") m_predictionMode = "Ranged";
+    else if (m_predictionMode == "All weapons" || m_predictionMode == "all weapons") m_predictionMode = "All";
     if (m_predictionMode != "Off" && m_predictionMode != "Ranged" && m_predictionMode != "All")
         m_predictionMode = "Ranged";
     m_predictionLeadMs = std::clamp(j.value("m_predictionLeadMs", m_predictionLeadMs), 0.0f, 300.0f);
