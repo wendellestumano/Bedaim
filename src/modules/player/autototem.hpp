@@ -15,6 +15,7 @@ class AutoTotemModule final : public Module {
 public:
     enum class UiSequencePhase : std::uint8_t {
         Idle,
+        WaitForOpen,
         WaitBeforeTransfer,
         WaitBeforeClose,
         WaitForClose
