@@ -1,5 +1,12 @@
 # Changelog
 
+## Mace Swapper restoration — 2026-10-15
+
+- Restored the older pending-tick slot/equip/attack/restore implementation from `main` instead of maintaining the rewritten fall-priority state machine.
+- Added a tracked fall peak as an additional activation gate, configurable from 0.30 to 10 blocks (default 1.55); the limit now appears as a menu slider.
+- Preserved target/range checks, attack interval, and prior-slot restoration. Added host tests for the threshold boundary and invalid values.
+
+
 ## Mobile runtime follow-up — 2026-10-15
 
 - Native GameType values are normalized into Bedaim's canonical Survival/Creative/Adventure/Spectator IDs for legacy and shifted Bedrock enum layouts; host regression assertions cover both.

@@ -1,5 +1,6 @@
 #include "modules/player/AutoHitGuards.hpp"
 #include "modules/player/PlayerGameType.hpp"
+#include "modules/player/MaceFallPolicy.hpp"
 
 #include <cstdlib>
 #include <cmath>
@@ -63,6 +64,15 @@ int main() {
           "shifted GameType 6 normalizes to Spectator");
     check(!bedaim::playergametype::normalizeNativeValue(5, true, canonicalMode),
           "shifted Default isn't Spectator");
+
+    check(bedaim::macefall::shouldBeginMaceAction(-0.10f, 3.0f, 3.0f),
+          "Mace accepts a confirmed fall at the configured minimum height");
+    check(!bedaim::macefall::shouldBeginMaceAction(-0.10f, 2.99f, 3.0f),
+          "Mace rejects a fall shorter than the configured minimum");
+    check(!bedaim::macefall::shouldBeginMaceAction(-0.01f, 4.0f, 1.0f),
+          "Mace rejects near-level motion despite stale height");
+    check(!bedaim::macefall::shouldBeginMaceAction(-0.10f, 4.0f, std::numeric_limits<float>::quiet_NaN()),
+          "Mace normalizes a non-finite minimum to its safe default");
 
     check(bedaim::autohit::publicAttackRouteAvailable(true),
           "validated public attack wrapper allows dispatch");
