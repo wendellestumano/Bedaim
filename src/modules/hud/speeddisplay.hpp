@@ -12,6 +12,7 @@ public:
     void onEnable() override;
     void onDisable() override;
     void onFrame() override;
+    void onMenuRegistered() override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
     
@@ -20,6 +21,7 @@ public:
 private:
     float m_currentSpeed = 0.0f;
     bool  m_use3D = false;
+    int m_precision = 0;
     
     bedrocktools::sdk::Vec3  m_lastPos;
     bool  m_firstTick = true;
