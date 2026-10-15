@@ -4,6 +4,7 @@
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
