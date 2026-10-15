@@ -30,5 +30,6 @@ Decision decide(const Inputs& input) noexcept;
 float normalizeDelayMs(float value) noexcept;
 float normalizeScanRetryMs(float value) noexcept;
 float normalizeOffhandPollMs(float value) noexcept;
+float normalizeUiStepDelayMs(float value) noexcept;
 
 } // namespace bedaim::autototem
