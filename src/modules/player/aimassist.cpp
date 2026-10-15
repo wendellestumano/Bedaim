@@ -1471,19 +1471,19 @@ bedrocktools::sdk::AABB HitboxExpanderModule::expandedSteeringBounds(
     using namespace bedrocktools::sdk;
     if (!enabled) return nativeBounds;
 
-    float configuredSize = 0.6f;
+    float configuredSize = 1.0f;
     bool selectedTypeEnabled = false;
     {
         std::lock_guard<std::mutex> lock(m_expandMutex);
         configuredSize = std::clamp(m_hitboxSize, 1.0f, 200.0f);
         selectedTypeEnabled = isPlayer ? m_expandPlayers : m_expandMobs;
     }
-    if (!selectedTypeEnabled || configuredSize <= 0.6001f ||
+    if (!selectedTypeEnabled || configuredSize <= 1.0001f ||
         !validBounds(nativeBounds)) return nativeBounds;
 
-    // 0.6 = native-size reference (1x); 10 = up to 16.67x the native dimensions.
-    // The enlarged AABB is virtual and only affects Aim Assist's soft-lock volume.
-    const float scale = std::clamp(configuredSize / 0.6f, 1.0f, 16.6667f);
+    // The setting is an explicit multiplier: 1 is native bounds; 200 is 200x.
+    // This is a virtual steering AABB only; it does not alter server collision.
+    const float scale = std::clamp(configuredSize, 1.0f, 200.0f);
     const Vec3 center{
         (nativeBounds.min.x + nativeBounds.max.x) * 0.5f,
         (nativeBounds.min.y + nativeBounds.max.y) * 0.5f,
