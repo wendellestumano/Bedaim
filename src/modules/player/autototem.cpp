@@ -2,6 +2,7 @@
 
 #include "AutoTotemPolicy.hpp"
 #include "aimassist.hpp"
+#include "core/GameHooks.hpp"
 #include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
 
@@ -70,35 +71,49 @@ void AutoTotemModule::onInit() {
 
 void AutoTotemModule::onEnable() {
     std::lock_guard lock(m_stateMutex);
+    if (m_uiSequencePhase != UiSequencePhase::Idle) return;
     m_pendingRefill = false;
     m_lastOffhandHadTotem = false;
     m_refillAfter = {};
     m_nextInventoryScan = {};
     m_nextOffhandCheck = {};
+    m_uiPhaseDeadline = {};
     m_cachedTotemSlot = -1;
+    m_uiTransferSucceeded = false;
 }
 
 void AutoTotemModule::onDisable() {
     std::lock_guard lock(m_stateMutex);
+    if (m_uiSequencePhase != UiSequencePhase::Idle) {
+        // Finish closing an inventory screen opened by this module from the
+        // next game tick. Do not call native UI methods from the menu thread.
+        m_pendingRefill = false;
+        m_uiTransferSucceeded = false;
+        return;
+    }
     m_pendingRefill = false;
     m_lastOffhandHadTotem = false;
     m_refillAfter = {};
     m_nextInventoryScan = {};
     m_nextOffhandCheck = {};
+    m_uiPhaseDeadline = {};
     m_cachedTotemSlot = -1;
 }
 
 void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
-    if (!enabled || !player) return;
+    if (!player) return;
 
     const auto checkTime = std::chrono::steady_clock::now();
     {
         std::lock_guard lock(m_stateMutex);
-        if (!enabled) return;
-        if (m_nextOffhandCheck.time_since_epoch().count() != 0 &&
+        if (!enabled && m_uiSequencePhase == UiSequencePhase::Idle) return;
+        const bool sequenceActive = m_uiSequencePhase != UiSequencePhase::Idle;
+        if (!sequenceActive && m_nextOffhandCheck.time_since_epoch().count() != 0 &&
             checkTime < m_nextOffhandCheck) return;
-        m_nextOffhandCheck = checkTime + std::chrono::milliseconds(
-            static_cast<int>(bedaim::autototem::normalizeOffhandPollMs(m_offhandPollIntervalMs)));
+        if (!sequenceActive) {
+            m_nextOffhandCheck = checkTime + std::chrono::milliseconds(
+                static_cast<int>(bedaim::autototem::normalizeOffhandPollMs(m_offhandPollIntervalMs)));
+        }
     }
 
     auto& inventory = bedrocktools::core::InventoryAccess::get();
@@ -108,7 +123,108 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const auto now = std::chrono::steady_clock::now();
 
     std::lock_guard lock(m_stateMutex);
-    if (!enabled) return;
+    if (!enabled && m_uiSequencePhase == UiSequencePhase::Idle) return;
+
+    auto completeUiSequence = [&]() {
+        m_uiSequencePhase = UiSequencePhase::Idle;
+        m_uiPhaseDeadline = {};
+        m_nextOffhandCheck = {};
+        if (m_uiTransferSucceeded) {
+            m_pendingRefill = false;
+            m_lastOffhandHadTotem = true;
+            m_refillAfter = {};
+            m_nextInventoryScan = {};
+            m_cachedTotemSlot = -1;
+        } else if (enabled && m_pendingRefill) {
+            if (m_nextInventoryScan.time_since_epoch().count() == 0) {
+                m_nextInventoryScan = now + std::chrono::milliseconds(
+                    static_cast<int>(bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs)));
+            }
+            m_refillAfter = m_nextInventoryScan;
+        }
+        m_uiTransferSucceeded = false;
+    };
+
+    // A request is executed on the player tick thread, with bounded delay between
+    // the actual LocalPlayer open, native inventory transaction and close request.
+    if (m_uiSequencePhase == UiSequencePhase::WaitBeforeTransfer) {
+        if (!enabled) {
+            m_uiTransferSucceeded = false;
+            m_uiSequencePhase = UiSequencePhase::WaitBeforeClose;
+            m_uiPhaseDeadline = now + std::chrono::milliseconds(
+                static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+            return;
+        }
+        if (offhandHasTotem) {
+            m_uiTransferSucceeded = true;
+            m_pendingRefill = false;
+            m_uiSequencePhase = UiSequencePhase::WaitBeforeClose;
+            m_uiPhaseDeadline = now + std::chrono::milliseconds(
+                static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+            return;
+        }
+        if (now < m_uiPhaseDeadline) return;
+
+        int totemSlot = m_cachedTotemSlot;
+        if (totemSlot < 0) totemSlot = inventory.findInventorySlot(player, "totem");
+        const auto result = totemSlot >= 0
+            ? inventory.moveInventoryItemToOffhand(player, totemSlot)
+            : bedrocktools::core::OffhandTransferResult::ItemUnavailable;
+        const bool success = result == bedrocktools::core::OffhandTransferResult::Success ||
+            result == bedrocktools::core::OffhandTransferResult::AlreadyEquipped;
+        m_uiTransferSucceeded = success;
+        if (success) {
+            if (!g_loggedAutoTotemTransferSuccess.exchange(true, std::memory_order_acq_rel))
+                autoTotemLogger().info("Auto Totem UI sequence transfer result: {}.", transferResultName(result));
+            m_pendingRefill = false;
+            m_lastOffhandHadTotem = true;
+            m_refillAfter = {};
+            m_nextInventoryScan = {};
+            m_cachedTotemSlot = -1;
+        } else {
+            if (!g_loggedAutoTotemTransferFailure.exchange(true, std::memory_order_acq_rel))
+                autoTotemLogger().warn("Auto Totem UI sequence transfer failed safely: {}.", transferResultName(result));
+            m_cachedTotemSlot = -1;
+            m_nextInventoryScan = now + std::chrono::milliseconds(
+                static_cast<int>(bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs)));
+            m_refillAfter = m_nextInventoryScan;
+        }
+        m_uiSequencePhase = UiSequencePhase::WaitBeforeClose;
+        m_uiPhaseDeadline = now + std::chrono::milliseconds(
+            static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+        return;
+    }
+
+    if (m_uiSequencePhase == UiSequencePhase::WaitBeforeClose) {
+        if (now < m_uiPhaseDeadline) return;
+        if (!bedrocktools::core::gamehooks::closePlayerInventoryScreen(player)) {
+            autoTotemLogger().warn("Auto Totem could not request inventory close; ending the UI sequence without using unknown screen offsets.");
+            completeUiSequence();
+            return;
+        }
+        m_uiSequencePhase = UiSequencePhase::WaitForClose;
+        m_uiPhaseDeadline = now + std::chrono::milliseconds(600);
+        return;
+    }
+
+    if (m_uiSequencePhase == UiSequencePhase::WaitForClose) {
+        if (!m_containerOpen.load(std::memory_order_acquire)) {
+            completeUiSequence();
+            return;
+        }
+        if (now < m_uiPhaseDeadline) return;
+        // closeContainerScreen queues a close on the LocalPlayer. Retry at a
+        // moderate cadence if the launcher did not deliver the close event yet.
+        if (!bedrocktools::core::gamehooks::closePlayerInventoryScreen(player)) {
+            autoTotemLogger().warn("Auto Totem could not confirm inventory close; leaving remaining UI control to the player.");
+            m_uiSequencePhase = UiSequencePhase::Idle;
+            m_uiPhaseDeadline = {};
+            m_uiTransferSucceeded = false;
+            return;
+        }
+        m_uiPhaseDeadline = now + std::chrono::milliseconds(600);
+        return;
+    }
 
     if (offhandHasTotem) {
         m_lastOffhandHadTotem = true;
@@ -118,6 +234,7 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_cachedTotemSlot = -1;
         return;
     }
+    if (!enabled) return;
 
     // Do not remove, overwrite, or attempt to move an item from a non-empty offhand.
     if (!offhandEmpty) {
@@ -130,19 +247,14 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     if (m_lastOffhandHadTotem) {
-        // This transition is the consumption signal. Start the user-configured
-        // delay once, not on every tick while the offhand remains empty.
         m_pendingRefill = true;
         m_refillAfter = now + std::chrono::milliseconds(
             static_cast<int>(bedaim::autototem::normalizeDelayMs(m_delayMs)));
         m_lastOffhandHadTotem = false;
     } else if (m_keepTotemEquipped && !m_pendingRefill) {
-        // When enabled with an empty offhand, Keep Totem Equipped can fill it
-        // immediately; the post-consumption delay above remains configurable.
         m_pendingRefill = true;
         m_refillAfter = now;
     }
-
     if (!m_pendingRefill) return;
 
     bool inCombat = player->hurtTime() > 0;
@@ -164,10 +276,6 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         enabled, m_pendingRefill, offhandHasTotem, delayElapsed,
         m_combatOnly, inCombat, containerOpen, false, offhandEmpty
     };
-
-    // Skip inventory slot scans when delay/container/combat gates block the refill.
-    // If the inventory has no totem, do not walk all 36+ slots again every game
-    // tick. Cache the last miss briefly and expose the retry interval in settings.
     auto decision = bedaim::autototem::decide(precheck);
     int totemSlot = -1;
     if (decision == bedaim::autototem::Decision::WaitForItem) {
@@ -184,7 +292,6 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     static_cast<int>(bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs)));
             }
         }
-
         const bedaim::autototem::Inputs withCandidate{
             enabled, m_pendingRefill, offhandHasTotem, delayElapsed,
             m_combatOnly, inCombat, containerOpen, totemSlot >= 0, offhandEmpty
@@ -194,21 +301,33 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     switch (decision) {
         case bedaim::autototem::Decision::Equip: {
+            if (m_useInventoryUiSequence && bedrocktools::core::gamehooks::inventoryUiSequenceAvailable()) {
+                if (bedrocktools::core::gamehooks::openPlayerInventoryScreen(player)) {
+                    m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
+                    m_uiPhaseDeadline = now + std::chrono::milliseconds(
+                        static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+                    m_uiTransferSucceeded = false;
+                    m_nextOffhandCheck = {};
+                    autoTotemLogger().info("Auto Totem started inventory UI sequence.");
+                    break;
+                }
+            }
+
+            // Missing symbols are version-gated: keep the existing verified native
+            // transaction as fallback instead of guessing screen-controller offsets.
             const auto result = inventory.moveInventoryItemToOffhand(player, totemSlot);
             if (result == bedrocktools::core::OffhandTransferResult::Success ||
                 result == bedrocktools::core::OffhandTransferResult::AlreadyEquipped) {
                 if (!g_loggedAutoTotemTransferSuccess.exchange(true, std::memory_order_acq_rel))
-                    autoTotemLogger().info("Auto Totem first transfer result: {}.", transferResultName(result));
+                    autoTotemLogger().info("Auto Totem native transfer result: {}.", transferResultName(result));
                 m_pendingRefill = false;
                 m_lastOffhandHadTotem = true;
                 m_refillAfter = {};
                 m_nextInventoryScan = {};
                 m_cachedTotemSlot = -1;
             } else {
-                // Fail closed and retry at a modest cadence if this build lacks a
-                // compatible native route or a local/server-visible transfer fails.
                 if (!g_loggedAutoTotemTransferFailure.exchange(true, std::memory_order_acq_rel))
-                    autoTotemLogger().warn("Auto Totem first transfer failed safely: {}. No unverified setter will be called.", transferResultName(result));
+                    autoTotemLogger().warn("Auto Totem native transfer failed safely: {}.", transferResultName(result));
                 m_cachedTotemSlot = -1;
                 m_refillAfter = now + std::chrono::milliseconds(
                     static_cast<int>(bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs)));
@@ -230,7 +349,6 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             break;
     }
 }
-
 void AutoTotemModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
     std::lock_guard lock(m_stateMutex);
@@ -240,6 +358,9 @@ void AutoTotemModule::loadConfig(const nlohmann::json& json) {
         json.value("m_scanRetryIntervalMs", m_scanRetryIntervalMs));
     m_offhandPollIntervalMs = bedaim::autototem::normalizeOffhandPollMs(
         json.value("m_offhandPollIntervalMs", m_offhandPollIntervalMs));
+    m_uiStepDelayMs = bedaim::autototem::normalizeUiStepDelayMs(
+        json.value("m_uiStepDelayMs", m_uiStepDelayMs));
+    m_useInventoryUiSequence = json.value("m_useInventoryUiSequence", m_useInventoryUiSequence);
     m_combatOnly = json.value("m_combatOnly", m_combatOnly);
     m_keepTotemEquipped = json.value("m_keepTotemEquipped", m_keepTotemEquipped);
 }
@@ -250,6 +371,8 @@ void AutoTotemModule::saveConfig(nlohmann::json& json) {
     json["m_delayMs"] = bedaim::autototem::normalizeDelayMs(m_delayMs);
     json["m_scanRetryIntervalMs"] = bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs);
     json["m_offhandPollIntervalMs"] = bedaim::autototem::normalizeOffhandPollMs(m_offhandPollIntervalMs);
+    json["m_uiStepDelayMs"] = bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs);
+    json["m_useInventoryUiSequence"] = m_useInventoryUiSequence;
     json["m_combatOnly"] = m_combatOnly;
     json["m_keepTotemEquipped"] = m_keepTotemEquipped;
 }
@@ -293,6 +416,17 @@ void AutoTotemModule::onMenuRegistered() {
     offhandPoll.step = "10";
     offhandPoll.description = "How often AutoTotem checks the offhand. Lower values react faster; higher values reduce inventory overhead.";
     schema.node(std::move(offhandPoll));
+    auto sequenceToggle = node("m_useInventoryUiSequence", "Open inventory around refill", "behavior",
+                               ConfigControlTypeV2::Toggle);
+    sequenceToggle.description = "When the LocalPlayer screen methods exist in this Bedrock build, open inventory, equip the totem using the verified native transaction, then request closing the inventory. If the symbols are unavailable, the safe native-transaction fallback is used.";
+    schema.node(std::move(sequenceToggle));
+    auto stepDelay = node("m_uiStepDelayMs", "UI step delay (ms)", "behavior",
+                          ConfigControlTypeV2::SliderFloat);
+    stepDelay.minValue = "0";
+    stepDelay.maxValue = "500";
+    stepDelay.step = "10";
+    stepDelay.description = "Wait time between opening inventory, equipping the totem, and requesting screen close.";
+    schema.node(std::move(stepDelay));
     schema.node(node("m_keepTotemEquipped", "Keep Totem Equipped", "behavior",
                      ConfigControlTypeV2::Toggle));
     schema.node(node("m_combatOnly", "Combat Only", "safety",
