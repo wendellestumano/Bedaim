@@ -15,18 +15,10 @@
 static void registerAimAssistConfigSchema(std::string_view moduleId, const nlohmann::json& config);
 
 static void persistModuleConfig() {
-    auto& config = bedrocktools::config::ConfigManager::get();
-    config.save();
-    // Flush the queued write before a menu close/activity transition can discard
-    // the process. This makes a successful callback an actual on-disk save.
-    config.flush();
-}
-
-static void refreshConfigSchemaIfNeeded(Module* mod) {
-    if (!mod || mod->moduleId != "bedrocktools.Aim Assist") return;
-    nlohmann::json current;
-    mod->saveConfig(current);
-    registerAimAssistConfigSchema(mod->moduleId, current);
+    // Menu callbacks can fire on every slider movement or every typed character.
+    // ConfigManager already debounces and writes on its worker thread; never force
+    // a synchronous disk flush on the UI/input thread.
+    bedrocktools::config::ConfigManager::get().save();
 }
 
 static void onModuleToggle(std::string_view module_id, bool enabled) {
@@ -53,7 +45,6 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         // source of truth for persisted settings.
         nlohmann::json live;
         mod->saveConfig(live);
-        refreshConfigSchemaIfNeeded(mod);
         persistModuleConfig();
         return;
     }
@@ -73,7 +64,6 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     mod->loadConfig(j);
     nlohmann::json live;
     mod->saveConfig(live);
-    refreshConfigSchemaIfNeeded(mod);
     persistModuleConfig();
 }
 
