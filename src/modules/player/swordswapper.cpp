@@ -197,7 +197,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 void SwordSwapperModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 1.0f, 16.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
 }
 
