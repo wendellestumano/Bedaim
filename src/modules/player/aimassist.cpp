@@ -1129,8 +1129,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float scaleDistanceRange = std::clamp(configuredRange, 8.0f, 30.0f);
     const float distanceFraction = std::clamp(hitboxDistance / scaleDistanceRange, 0.0f, 1.0f);
     const float distanceStrength = std::clamp(m_hitboxDistanceGrowth, 0.1f, 200.0f);
-    // A square-root response makes even the old default (1) visible, while still
-    // reserving the widest virtual region for strength 10.
+    // A square-root response keeps strength changes perceptible across the expanded
+    // 0.1-200 range without allowing non-finite or unbounded scale values.
     const float growth = std::sqrt(distanceStrength / 10.0f);
     const float distanceFactor = m_distanceDependentHitbox
         ? std::clamp(0.65f + 2.35f * growth * distanceFraction, 0.65f, 3.0f)
