@@ -205,6 +205,15 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     AABB targetBounds{};
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange)) return;
+
+    // Approximate the height above the target's feet. This is a safe, grounded
+    // reference available from the target AABB without guessing block-query APIs.
+    const AABB localBounds = player->bounds();
+    const float localFeetY = validBounds(localBounds) ? localBounds.min.y : playerPosition.y;
+    const float verticalSeparation = localFeetY - targetBounds.min.y;
+    const float activationHeight = std::clamp(m_activationHeight, 1.7f, 6.0f);
+    if (!std::isfinite(verticalSeparation) || verticalSeparation < activationHeight) return;
+
     if (!aim->currentTargetInCrosshair(player, target)) return;
     if (!targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) return;
 
@@ -231,6 +240,7 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_activationHeight = std::clamp(j.value("m_activationHeight", m_activationHeight), 1.7f, 6.0f);
     m_attackIntervalMs = std::clamp(j.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
 }
@@ -239,6 +249,7 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     j["m_attackRange"] = m_attackRange;
+    j["m_activationHeight"] = m_activationHeight;
     j["m_attackIntervalMs"] = m_attackIntervalMs;
     j["m_restoreSlot"] = m_restoreSlot;
 }
