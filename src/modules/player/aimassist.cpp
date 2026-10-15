@@ -299,7 +299,8 @@ HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
     if (identifier.find("mace") != std::string::npos) return HeldWeapon::Mace;
     if (identifier.find("spear") != std::string::npos) return HeldWeapon::Spear;
     if (identifier.find("sword") != std::string::npos) return HeldWeapon::Sword;
-    if (identifier.find("axe") != std::string::npos) return HeldWeapon::Axe;
+    if (identifier.find("pickaxe") == std::string::npos &&
+        identifier.find("axe") != std::string::npos) return HeldWeapon::Axe;
     if (identifier.find("bow") != std::string::npos) return HeldWeapon::Bow;
 
     constexpr std::string_view otherWeapons[] = {
