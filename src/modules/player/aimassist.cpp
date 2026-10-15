@@ -357,6 +357,7 @@ void AimAssistModule::resetTrackingState() {
     m_targetPresent = false;
     m_lastTargetIsPlayer = false;
     m_cachedHeldWeaponCode = 0;
+    m_weaponFilterAllowsCurrent = true;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
@@ -635,11 +636,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
     m_cachedHeldWeaponCode = static_cast<int>(heldWeapon);
-    if (m_weaponOnly && !weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
-            m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee)) {
-        resetTrackingState();
-        return;
-    }
+    m_weaponFilterAllowsCurrent = !m_weaponOnly ||
+        weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
+            m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee);
+    // Keep target geometry fresh for Sword/Mace Swapper even when the currently
+    // held weapon is filtered out. Camera movement and AutoHit still respect the filter.
 
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent) {
@@ -954,7 +955,7 @@ void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     auto* player = m_lastPlayer;
     if (!enabled || !player || !m_lastTarget || !m_targetPresent ||
-        (!g_applyLocalPlayerTurnDelta && !m_autoHit)) return;
+        !m_weaponFilterAllowsCurrent || (!g_applyLocalPlayerTurnDelta && !m_autoHit)) return;
 
     // Candidate scanning is performed once per player tick. Re-running the native
     // nearby-actor query on every render frame caused duplicate 80-block scans and
@@ -976,7 +977,8 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     // Attack only the target chosen from this tick's native actor snapshot. Do not
     // require a second camera-angle/crosshair test here: that duplicate gate caused
     // AutoHit to stop during camera convergence and when targets moved below the player.
-    if (!m_autoHit || !enabled || !player || player != m_lastPlayer) return;
+    if (!m_autoHit || !enabled || !player || player != m_lastPlayer ||
+        !m_weaponFilterAllowsCurrent) return;
     const int configuredKey = m_autoHitKeyCode.load(std::memory_order_acquire);
     if (configuredKey > 0 &&
         !m_autoHitPhysicalKeyDown.load(std::memory_order_acquire) &&
