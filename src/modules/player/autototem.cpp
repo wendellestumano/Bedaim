@@ -226,13 +226,14 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (now < m_uiPhaseDeadline) return;
 
         autoTotemLogger().warn(
-            "Auto Totem open request did not produce a container-open event within 600 ms; continuing with the verified transfer fallback.");
-        // Do not get stuck forever if this runtime lacks a working visible-open
-        // route. The transaction remains verified, and the close request is still
-        // attempted after it in case the screen event itself was unavailable.
-        m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
-        m_uiPhaseDeadline = now;
+            "Auto Totem inventory did not open within 600 ms; aborting without a native inventory transfer.");
+        m_uiSequencePhase = UiSequencePhase::Idle;
+        m_uiPhaseDeadline = {};
         m_nextOffhandCheck = {};
+        m_manualSequenceActive = false;
+        m_uiTransferSucceeded = false;
+        m_pendingRefill = false;
+        m_cachedTotemSlot = -1;
         return;
     }
 
@@ -289,8 +290,13 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (m_uiSequencePhase == UiSequencePhase::WaitBeforeClose) {
         if (now < m_uiPhaseDeadline) return;
         if (!bedrocktools::core::gamehooks::closePlayerInventoryScreen(player)) {
-            autoTotemLogger().warn("Auto Totem could not request inventory close; ending the UI sequence without using unknown screen offsets.");
-            completeUiSequence();
+            autoTotemLogger().warn("Auto Totem could not request inventory close; resetting state instead of retrying an unverified UI call.");
+            m_uiSequencePhase = UiSequencePhase::Idle;
+            m_uiPhaseDeadline = {};
+            m_manualSequenceActive = false;
+            m_pendingRefill = false;
+            m_uiTransferSucceeded = false;
+            m_cachedTotemSlot = -1;
             return;
         }
         m_uiSequencePhase = UiSequencePhase::WaitForClose;
