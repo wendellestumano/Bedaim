@@ -7,6 +7,7 @@
 - Weapon classification resolves the held ItemStack identifier once per tick, then caches weapon family, naturalization applicability and aim multiplier for render-frame steering.
 - Aim Assist stops walking the distance-sorted actor list once entries exceed the useful scan radius, before making more native position/bounds calls; it also applies cheap range/geometry filtering before name-tag, invisibility and voxel line-of-sight checks.
 - Inventory memory validation reuses a short-lived readable-memory map snapshot instead of reopening and scanning /proc/self/maps for each pointer check.
+- AutoHit first prefers GameMode observed from a real callback; when none is available, it can recover the Player-owned GameMode only after validating readable field storage and an exact match between vtable slot 16 and the resolved GameMode/SurvivalMode attack signature. Unverified pointers remain rejected.
 - AutoTotem evaluates delay, container and combat gates before scanning inventory slots, and skips Aim Assist target queries when Combat Only is disabled.
 
 ### Supplied binary inspection
