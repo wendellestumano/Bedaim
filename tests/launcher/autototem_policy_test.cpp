@@ -65,22 +65,25 @@ int main() {
     check(normalizeDelayMs(std::numeric_limits<float>::quiet_NaN()) == 100.0f,
           "non-finite delay returns the safe default");
 
-    check(normalizeScanRetryMs(100.0f) == 100.0f,
-          "inventory scan retry supports responsive 100 ms polling");
-    check(normalizeScanRetryMs(250.0f) == 250.0f,
-          "inventory scan retry default is 250 ms");
-    check(normalizeScanRetryMs(0.0f) == 100.0f,
-          "inventory scan retry is capped away from every-tick rescans");
+    check(normalizeScanRetryMs(100.0f) == 400.0f,
+          "inventory scan retry cannot trigger near-every-tick full inventory scans");
+    check(normalizeScanRetryMs(250.0f) == 400.0f,
+          "legacy scan retry is raised to the mobile-safe floor");
+    check(normalizeScanRetryMs(400.0f) == 400.0f,
+          "inventory scan retry uses the 400 ms default");
+    check(normalizeScanRetryMs(0.0f) == 400.0f,
+          "inventory scan retry is capped away from repeated short scans");
     check(normalizeScanRetryMs(5000.0f) == 2000.0f,
           "inventory scan retry has a safe upper bound");
-    check(normalizeScanRetryMs(std::numeric_limits<float>::quiet_NaN()) == 250.0f,
+    check(normalizeScanRetryMs(std::numeric_limits<float>::quiet_NaN()) == 400.0f,
           "non-finite inventory scan retry returns the default");
 
-    check(normalizeOffhandPollMs(50.0f) == 50.0f, "offhand poll supports responsive 50 ms");
-    check(normalizeOffhandPollMs(100.0f) == 100.0f, "offhand poll defaults to 100 ms");
-    check(normalizeOffhandPollMs(0.0f) == 50.0f, "offhand poll is not allowed to spin every tick");
+    check(normalizeOffhandPollMs(50.0f) == 150.0f, "offhand poll has a mobile-safe lower bound");
+    check(normalizeOffhandPollMs(100.0f) == 150.0f, "legacy 100 ms offhand polling is reduced");
+    check(normalizeOffhandPollMs(150.0f) == 150.0f, "offhand poll uses the 150 ms default");
+    check(normalizeOffhandPollMs(0.0f) == 150.0f, "offhand poll is not allowed to spin every tick");
     check(normalizeOffhandPollMs(900.0f) == 500.0f, "offhand poll is bounded to 500 ms");
-    check(normalizeOffhandPollMs(std::numeric_limits<float>::infinity()) == 100.0f,
+    check(normalizeOffhandPollMs(std::numeric_limits<float>::infinity()) == 150.0f,
           "non-finite offhand poll returns its safe default");
 
     check(normalizeUiStepDelayMs(0.0f) == 0.0f, "inventory sequence supports zero delay");
