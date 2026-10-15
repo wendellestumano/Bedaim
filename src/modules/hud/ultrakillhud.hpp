@@ -24,10 +24,8 @@ private:
     void onLocalPlayerTick(bedrocktools::sdk::Player* player);
     void onAttackAttempt(bedrocktools::sdk::Actor* target);
     void onAttackResult(bedrocktools::sdk::Actor* target, bool result);
-    bool isMaceEquipped(bedrocktools::sdk::Player* player) const;
 
     std::atomic<bedrocktools::sdk::Player*> m_localPlayer{nullptr};
-    std::atomic_bool m_maceEquipped{false};
     std::atomic<float> m_fallSpeedBps{0.0f};
     std::atomic<float> m_movementSpeedBps{0.0f};
 
@@ -58,6 +56,4 @@ private:
     bool m_enableHitStop = true;
     bool m_showImpactText = true;
 
-    int m_hitStopFrames = 0;
-    bool m_hitStopPending = false;
 };
