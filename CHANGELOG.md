@@ -1,5 +1,14 @@
 # Changelog
 
+## Combat Module Reliability — 2026-10-15
+
+### Fixed
+- Aim Assist V2 settings now rebuild the registered live schema values after accepted changes, preventing controls from retaining registration-time `current_value` snapshots.
+- Configuration writes now use a separate atomic writer. A failed temporary-file rename no longer deletes the previous `config.json`; `ConfigManager::flush()` reports the last write result and failed writes are logged.
+
+### Tests
+- Added `atomic_config_writer_test` for first write, atomic replacement, temporary-file cleanup, and preservation of an existing destination after a failed replacement.
+
 ## Overnight Feature Development — 2026-10-15
 
 ### Added

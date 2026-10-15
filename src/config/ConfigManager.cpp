@@ -1,7 +1,7 @@
 #include "ConfigManager.hpp"
+#include "AtomicConfigWriter.hpp"
 #include "modules/ModuleRegistry.hpp"
-#include <filesystem>
-#include <fstream>
+#include <pl/Logger.hpp>
 #include <string_view>
 
 namespace bedrocktools::config {
@@ -80,21 +80,23 @@ void ConfigManager::save() {
     m_condition.notify_all();
 }
 
-void ConfigManager::flush() {
+bool ConfigManager::flush() {
     std::unique_lock<std::mutex> lock(m_mutex);
-    if (!m_worker.joinable()) return;
+    if (!m_worker.joinable()) return true;
 
     // m_hasPending becomes false when the worker takes a payload, before the
-    // actual disk write finishes. Do not return during that window: wait for the
-    // generation queued before flush() to finish, whether still queued or writing.
+    // actual disk write finishes. Wait for the requested generation and report
+    // its latest write status rather than treating an empty queue as success.
     const std::uint64_t targetGeneration = m_queuedGeneration;
-    if (m_completedGeneration >= targetGeneration && !m_hasPending) return;
+    if (m_completedGeneration >= targetGeneration && !m_hasPending)
+        return m_lastWriteSucceeded;
 
     m_deadline = std::chrono::steady_clock::now();
     m_condition.notify_all();
     m_condition.wait(lock, [&] {
         return m_completedGeneration >= targetGeneration || m_stopping;
     });
+    return m_completedGeneration >= targetGeneration && m_lastWriteSucceeded;
 }
 
 void ConfigManager::ensureWorkerLocked() {
@@ -119,37 +121,21 @@ void ConfigManager::workerLoop() {
         std::string payload = std::move(m_pendingPayload);
         m_hasPending = false;
         lock.unlock();
-        writePayload(path, payload);
+        const bool writeSucceeded = writePayload(path, payload);
         lock.lock();
+        m_lastWriteSucceeded = writeSucceeded;
         if (m_completedGeneration < generation) m_completedGeneration = generation;
         m_condition.notify_all();
     }
 }
 
-void ConfigManager::writePayload(const std::string& pathValue, const std::string& payload) {
-    std::filesystem::path path(pathValue);
-    std::filesystem::path tempPath = path;
-    tempPath += ".tmp";
-    try {
-        if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());
-        {
-            std::ofstream outFile(tempPath, std::ios::binary | std::ios::trunc);
-            outFile.write(payload.data(), static_cast<std::streamsize>(payload.size()));
-            outFile.flush();
-            if (!outFile) return;
-        }
-        std::error_code ec;
-        std::filesystem::rename(tempPath, path, ec);
-        if (ec) {
-            std::filesystem::remove(path, ec);
-            ec.clear();
-            std::filesystem::rename(tempPath, path, ec);
-            if (ec) std::filesystem::remove(tempPath, ec);
-        }
-    } catch (...) {
-        std::error_code ec;
-        std::filesystem::remove(tempPath, ec);
+bool ConfigManager::writePayload(const std::string& pathValue, const std::string& payload) {
+    const bool succeeded = writePayloadAtomically(pathValue, payload);
+    if (!succeeded) {
+        pl::log::Logger::getOrCreate("BedaimConfig").error(
+            "Could not atomically save config to '{}'; previous config was preserved", pathValue);
     }
+    return succeeded;
 }
 
 }
