@@ -152,6 +152,25 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
+    const bool holdingConsumable =
+        heldIdentifier.find("apple") != std::string::npos ||
+        heldIdentifier.find("golden_carrot") != std::string::npos ||
+        heldIdentifier.find("bread") != std::string::npos ||
+        heldIdentifier.find("cooked_") != std::string::npos ||
+        heldIdentifier.find("raw_") != std::string::npos ||
+        heldIdentifier.find("beef") != std::string::npos ||
+        heldIdentifier.find("porkchop") != std::string::npos ||
+        heldIdentifier.find("chicken") != std::string::npos ||
+        heldIdentifier.find("mutton") != std::string::npos ||
+        heldIdentifier.find("rabbit") != std::string::npos ||
+        heldIdentifier.find("stew") != std::string::npos ||
+        heldIdentifier.find("melon_slice") != std::string::npos ||
+        heldIdentifier.find("chorus_fruit") != std::string::npos;
+    if (holdingConsumable) {
+        restoreIfOwned();
+        m_userOverrodeSwap = true;
+        return;
+    }
     if (heldIdentifier.find("wind_charge") != std::string::npos) {
         // Explicit user selection beats the automatic sword swap. Keep the
         // override until the target leaves the crosshair/grounded condition.
