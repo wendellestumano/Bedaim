@@ -15,6 +15,10 @@ jobs:
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
 
+      - name: Install host test dependencies
+        working-directory: tests
+        run: xmake require -y -P . nlohmann_json
+
       - name: Run host regression tests
         working-directory: tests
         run: |
