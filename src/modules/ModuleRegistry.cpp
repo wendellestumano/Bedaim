@@ -12,6 +12,7 @@
 #include "hud/arrowcounter.hpp"
 #include "hud/potcounter.hpp"
 #include "player/quickloot.hpp"
+#include "player/autototem.hpp"
 #include "player/aimassist.hpp"
 #include "player/maceswapper.hpp"
 #include "player/swordswapper.hpp"
@@ -114,6 +115,7 @@ void registerAllModules() {
     registry.emplace<PotCounterModule>();
     registry.emplace<QuickLootModule>();
     registry.emplace<AutoSprintModule>();
+    registry.emplace<AutoTotemModule>();
     registry.emplace<AimAssistModule>();
     registry.emplace<HitboxExpanderModule>();
     registry.emplace<MaceSwapperModule>();
