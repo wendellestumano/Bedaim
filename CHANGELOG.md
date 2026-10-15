@@ -4,8 +4,8 @@
 
 ### Corrected
 - Restored `src/modules/player/aimassist.cpp` and `aimassist.hpp` to the implementation from pre-performance commit `907ccdc265a25743b2d7de42a02612e40b6b5b1a`, before the render-frame snapshot rewrite. This is a deliberate rollback of the newer Aim Assist hot-path changes after the user reported severe stutter; the near/far hitbox curve and new key controls are then layered on top.
-- Sword Swapper no longer queries the selected hotbar slot if it does not own an automatic swap, and delays the expensive selected-item identifier lookup until sword-swap conditions are satisfied.
-- AutoTotem limits offhand identification to the configurable polling interval (default 100 ms) and limits full-inventory scans when no totem is found (default retry 250 ms).
+- Sword Swapper now exits immediately when it already owns the selected sword slot, avoiding repeated ItemStack identifier resolution and hotbar scans on every player tick. It reuses the observed selected-slot value and only resolves the held item identifier immediately before a real swap.
+- AutoTotem uses a 150 ms minimum offhand polling interval and 400 ms minimum full-inventory retry when no totem is found. This reduces expensive native ItemStack string lookups on low-end Android while keeping the UI-step delay configurable.
 
 ### Added
 - **AutoHit key option:** Android key-code setting; e.g. Android `KEYCODE_0` is code 7. A floating Hold button can emit the selected key and gate native AutoHit while held. Default 0 preserves automatic native AutoHit. The public launcher API observes physical keys and supports floating buttons, but does not provide generic programmatic injection of arbitrary Android key events.
