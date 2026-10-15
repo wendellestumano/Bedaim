@@ -1,4 +1,5 @@
 #include "GameHooks.hpp"
+#include "modules/player/AutoHitGuards.hpp"
 #include <bedrocktools/Version.hpp>
 
 #include "core/memory/Hooks.hpp"
@@ -45,6 +46,7 @@ using UseItemAsAttackFn = bool(*)(void*, void*, const void*);
 using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::uint8_t, const void*, const void*, bool);
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
+using PublicAttackFn = void(*)(void*, void*, const void*);
 using ClientInstanceUpdateFn = void*(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
@@ -87,6 +89,9 @@ std::mutex inventoryUiApiMutex;
 OpenInventoryScreenFn openInventoryScreenOriginal = nullptr;
 CloseInventoryScreenFn closeInventoryScreenOriginal = nullptr;
 bool inventoryUiApiResolved = false;
+using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
+PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
+std::chrono::steady_clock::time_point playerGameTypeNextResolve{};
 bool inventoryUiApiWarningLogged = false;
 bool openInventoryViaVtable = false;
 
@@ -246,6 +251,16 @@ void* resolveLoadedClientSupportFunction(const char* name) {
 
 void resolveInventoryUiApi() {
     std::lock_guard<std::mutex> apiLock(inventoryUiApiMutex);
+    const auto resolveNow = std::chrono::steady_clock::now();
+    if (!playerGetGameTypeOriginal && resolveNow >= playerGameTypeNextResolve) {
+        playerGameTypeNextResolve = resolveNow + std::chrono::seconds(1);
+        playerGetGameTypeOriginal = reinterpret_cast<PlayerGetGameTypeFn>(
+            resolveMinecraftFunction("_ZNK6Player17getPlayerGameTypeEv"));
+        if (!playerGetGameTypeOriginal) {
+            playerGetGameTypeOriginal = reinterpret_cast<PlayerGetGameTypeFn>(
+                resolveMinecraftFunction("_ZNK11LocalPlayer17getPlayerGameTypeEv"));
+        }
+    }
     if (inventoryUiApiResolved) return;
 
     // Do not use call_once here: BedrockTools/LeviLamina can load its support
@@ -288,9 +303,9 @@ void resolveInventoryUiApi() {
             resolveLoadedClientSupportFunction(
                 "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
     }
-    inventoryUiApiResolved =
-        (openInventoryScreenOriginal || openInventoryViaVtable) &&
-        closeInventoryScreenOriginal;
+    // Require trusted exported open/close functions; vtable-only UI calls are
+    // rejected because an incorrect slot can crash the client.
+    inventoryUiApiResolved = openInventoryScreenOriginal && closeInventoryScreenOriginal;
 
     if (!inventoryUiApiResolved) {
         if (!inventoryUiApiWarningLogged) {
@@ -667,11 +682,11 @@ void* gameModeForPlayer(void* player) {
 }
 
 bool attackAvailable(void* gameMode) {
-    // Match the previously validated Bedrock 26.52 route: AutoHit and Mace
-    // Swapper dispatch through the trampoline created by our internal attack
-    // hook, not a guessed public-vtable ABI with a potentially different signature.
-    return gameMode && currentGameMode.load(std::memory_order_acquire) == gameMode &&
-        plausibleGameMode(gameMode) && gameModeAttackOriginal != nullptr;
+    if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
+        return false;
+    AttackKind ignored = AttackKind::GameMode;
+    return bedaim::autohit::publicAttackRouteAvailable(
+        publicAttackVirtualEntry(gameMode, &ignored) != 0);
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
@@ -681,16 +696,21 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     if (inSyntheticAttack) return false;
     if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
-    // Use the known four-argument internal trampoline used by the previous
-    // working Bedrock 26.52 revision. Merely matching a public vtable address
-    // does not prove that its ABI is (this, target, hitPosition).
-    AttackFn nativeInternalAttack = gameModeAttackOriginal;
-    if (!nativeInternalAttack) {
+    // GameMode::attack is the public three-argument wrapper; it prepares the
+    // native context before invoking the internal body. Only dispatch through it
+    // when the vtable entry matches a resolved public signature for this build.
+    AttackKind kind = AttackKind::GameMode;
+    const auto publicEntry = publicAttackVirtualEntry(gameMode, &kind);
+    if (!bedaim::autohit::publicAttackRouteAvailable(publicEntry != 0)) {
         static std::atomic_bool loggedUnavailable{false};
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().error("AutoHit has no internal attack trampoline; signature/hook setup must be verified for this Bedrock build.");
+            autoHitLogger().error("Synthetic attack refused: public GameMode::attack is not validated for this runtime.");
         return false;
     }
+    auto** vtable = *reinterpret_cast<void***>(gameMode);
+    constexpr std::size_t kKnownAttackSlot = 16;
+    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[kKnownAttackSlot]);
+    if (!publicAttack) return false;
 
     struct AttackGuard {
         bool& active;
@@ -698,11 +718,10 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
 
-    static std::atomic_bool loggedTrampolineRoute{false};
-    if (!loggedTrampolineRoute.exchange(true, std::memory_order_acq_rel))
-        autoHitLogger().info("Combat dispatch selected the validated four-argument internal attack trampoline.");
+    static std::atomic_bool loggedPublicRoute{false};
+    if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("Combat dispatch selected the validated public GameMode::attack wrapper.");
 
-    const AttackKind kind = attackKindFor(gameMode);
     const GameModeType modeKind = kind == AttackKind::SurvivalMode
         ? GameModeType::SurvivalMode : GameModeType::GameMode;
     GameModeActionScope scope{modeKind, gameMode};
@@ -714,12 +733,23 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     bus().publish(event);
     if (event.cancelled()) return false;
 
-    const bool result = nativeInternalAttack(gameMode, target, playPredictiveSound, hitPosition);
+    publicAttack(gameMode, target, hitPosition);
+    const bool result = true; // Invocation completed; server-side hit registration remains authoritative.
     AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
     bus().publish(resultEvent);
     return result;
 }
 
+
+bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
+    if (!player) return false;
+    if (!playerGetGameTypeOriginal) resolveInventoryUiApi();
+    if (!playerGetGameTypeOriginal) return false;
+    const std::int32_t value = playerGetGameTypeOriginal(player);
+    if (value < 0 || value > 3) return false;
+    outGameType = value;
+    return true;
+}
 
 bool inventoryUiSequenceAvailable() {
     resolveInventoryUiApi();
