@@ -1221,19 +1221,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // far the volume expands. Native Bedrock collision bounds are never changed.
     const float baseHitboxScale = std::clamp(m_hitboxScale, 1.0f, 200.0f);
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
-    const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
-    // Decouple the size curve from the global actor scan range. Using an 80-block
-    // search range made the slider visually inert for most ordinary encounters.
-    const float scaleDistanceRange = std::clamp(configuredRange, 8.0f, 30.0f);
-    const float distanceFraction = std::clamp(hitboxDistance / scaleDistanceRange, 0.0f, 1.0f);
-    const float distanceStrength = std::clamp(m_hitboxDistanceGrowth, 0.1f, 200.0f);
-    // A square-root response keeps strength changes perceptible across the expanded
-    // 0.1-200 range without allowing non-finite or unbounded scale values.
-    const float growth = std::sqrt(distanceStrength / 10.0f);
-    const float distanceFactor = m_distanceDependentHitbox
-        ? std::clamp(0.65f + 2.35f * growth * distanceFraction, 0.65f, 12.0f)
-        : 1.0f;
-    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 1.0f, 200.0f);
+    const float hitboxScale = bedaim::aimmath::distanceHitboxScale(
+        baseHitboxScale, hitboxDistance, m_range, m_hitboxDistanceGrowth,
+        m_distanceDependentHitbox);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
