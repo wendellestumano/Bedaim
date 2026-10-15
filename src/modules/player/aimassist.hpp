@@ -110,7 +110,7 @@ public:
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
-    float m_hitboxSize = 0.6f;
+    float m_hitboxSize = 1.0f;
     bool m_expandPlayers = true;
     bool m_expandMobs = false;
     bool m_requireLineOfSight = true;
