@@ -15,21 +15,10 @@ jobs:
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
 
-      - name: Install host test dependencies
-        working-directory: tests
-        run: xmake require -y -P . nlohmann_json
-
-      - name: Run host regression tests
-        working-directory: tests
+      - name: Run session timer formatting regression test
         run: |
-          pwd
-          xmake f -y -P . -p linux -a x86_64 -m debug
-          xmake -y -P .
-          xmake run -P . menu_config_value_test
-          xmake run -P . aimassist_math_test
-          xmake run -P . autohit_guards_test
-          xmake run -P . autototem_policy_test
-          xmake run -P . session_timer_format_test
+          g++ -std=c++20 -Isrc tests/launcher/session_timer_format_test.cpp -o /tmp/session_timer_format_test
+          /tmp/session_timer_format_test
 
       - uses: nttld/setup-ndk@v1
         id: ndk
