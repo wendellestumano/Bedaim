@@ -696,6 +696,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     };
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        if (std::isfinite(entry->distance) && entry->distance > scanRange + 4.0f) break;
         void* candidate = entry->actor;
         if (!candidate || candidate == player) continue;
 
