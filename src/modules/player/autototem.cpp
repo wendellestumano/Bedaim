@@ -103,6 +103,7 @@ void AutoTotemModule::onDisable() {
 void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!player) return;
 
+    auto& inventory = bedrocktools::core::InventoryAccess::get();
     const auto checkTime = std::chrono::steady_clock::now();
     bool readOffhand = false;
     {
@@ -126,7 +127,6 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     bool offhandHasTotem = false;
     bool offhandEmpty = true;
     if (readOffhand) {
-        auto& inventory = bedrocktools::core::InventoryAccess::get();
         const std::string offhandId = inventory.offhandIdentifier(player);
         offhandHasTotem = containsTotem(offhandId);
         offhandEmpty = offhandId.empty();
