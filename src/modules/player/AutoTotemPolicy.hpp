@@ -28,5 +28,6 @@ struct Inputs {
 // inventory transfer separately; this function never touches Minecraft memory.
 Decision decide(const Inputs& input) noexcept;
 float normalizeDelayMs(float value) noexcept;
+float normalizeScanRetryMs(float value) noexcept;
 
 } // namespace bedaim::autototem
