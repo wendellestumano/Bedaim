@@ -542,7 +542,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     m_lastPlayer = player;
-    m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
+    m_localPlayerGliding = actorIsGliding(player);
 
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
     if (m_weaponOnly && !weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
@@ -642,7 +642,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         playerCenter.y = (playerBounds.min.y + playerBounds.max.y) * 0.5f;
         playerCenter.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
     }
-    const float retentionRadius = std::clamp(m_targetRetentionRadius, 0.5f, 5.0f);
+    const float retentionRadius = m_localPlayerGliding
+        ? 0.0f
+        : std::clamp(m_targetRetentionRadius, 0.5f, 5.0f);
     const float retentionRadiusSq = retentionRadius * retentionRadius;
     const float maxDistanceSq = range * range;
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
@@ -718,7 +720,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // wind-burst/ground-slam arc. The range check above still limits this to
         // nearby actors, while the normal FOV remains enforced for other targets.
         const float playerFeetY = validBounds(playerBounds) ? playerBounds.min.y : playerPosition.y;
-        const bool candidateBelowPlayer =
+        const bool candidateBelowPlayer = !m_localPlayerGliding &&
             targetBounds.max.y <= playerFeetY + 0.12f;
 
         // The last target also gets a small 3D retention bubble, including when it
