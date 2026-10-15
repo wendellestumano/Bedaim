@@ -56,7 +56,7 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
     const float dy = eye.y - nearest.y;
     const float dz = eye.z - nearest.z;
     const float distanceSq = dx * dx + dy * dy + dz * dz;
-    const float safeRange = std::clamp(range, 1.0f, 16.0f);
+    const float safeRange = std::clamp(range, 2.0f, 6.0f);
     return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
 }
 }
@@ -98,22 +98,12 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_ownsSwap = false;
         m_swordSlot = -1;
         m_previousSlot = -1;
-        m_cachedSwordSlot = -1;
-        m_nextSwordScanAt = {};
         return;
     }
 
     auto restoreIfOwned = [&]() {
-        // This lambda is reached on every tick while the module is disabled,
-        // without a target, or while Mace Swapper has priority. Do not read the
-        // native inventory at all unless Sword Swapper currently owns a swap.
-        if (!m_ownsSwap) {
-            m_swordSlot = -1;
-            m_previousSlot = -1;
-            return;
-        }
         const int current = inventory.selectedHotbarSlot(player);
-        if (m_restoreSlot && current == m_swordSlot && m_previousSlot >= 0)
+        if (m_ownsSwap && m_restoreSlot && current == m_swordSlot && m_previousSlot >= 0)
             inventory.selectHotbarSlot(player, m_previousSlot);
         m_ownsSwap = false;
         m_swordSlot = -1;
@@ -137,13 +127,13 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_lastPlayerY = position.y;
     m_hasLastPlayerY = true;
 
-    // Don't wait 5 ticks to consider a stable landing. On mobile this delayed
-    // the sword swap by roughly a quarter second and often missed short hit windows.
-    if (std::fabs(dy) <= 0.01f)
-        m_groundedTicks = std::min(m_groundedTicks + 1, 3);
+    // Require five consecutive near-stationary vertical ticks, so the jump apex
+    // is less likely to be mistaken for the ground.
+    if (std::fabs(dy) <= 0.0025f)
+        m_groundedTicks = std::min(m_groundedTicks + 1, 6);
     else
         m_groundedTicks = 0;
-    const bool grounded = m_groundedTicks >= 1 && dy >= -0.01f;
+    const bool grounded = m_groundedTicks >= 5 && dy >= -0.0025f;
 
     // Do not mistake the jump apex for ground, and never let Sword Swapper
     // override the mace while the latter owns a confirmed downward slam.
@@ -152,17 +142,22 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    int selectedSlotSnapshot = -1;
-    if (m_ownsSwap) {
-        selectedSlotSnapshot = inventory.selectedHotbarSlot(player);
-        if (selectedSlotSnapshot != m_swordSlot) {
-            // User changed the slot manually. Stop owning the slot and honor the override
-            // until this target leaves the crosshair or the player leaves the ground.
-            m_ownsSwap = false;
-            m_swordSlot = -1;
-            m_previousSlot = -1;
-            m_userOverrodeSwap = true;
-        }
+    if (m_ownsSwap && inventory.selectedHotbarSlot(player) != m_swordSlot) {
+        // User changed the slot manually. Stop owning the slot and honor the override
+        // until this target leaves the crosshair or the player leaves the ground.
+        m_ownsSwap = false;
+        m_swordSlot = -1;
+        m_previousSlot = -1;
+        m_userOverrodeSwap = true;
+    }
+
+    const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
+    if (heldIdentifier.find("wind_charge") != std::string::npos) {
+        // Explicit user selection beats the automatic sword swap. Keep the
+        // override until the target leaves the crosshair/grounded condition.
+        restoreIfOwned();
+        m_userOverrodeSwap = true;
+        return;
     }
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
@@ -176,7 +171,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         shouldUseSword =
             aim->currentTargetSnapshot(target, bounds, aimRange) &&
             targetWithinRange(player, bounds, std::min(m_attackRange, aimRange)) &&
-            aim->currentTargetInCrosshair(player, target, 0.42f);
+            aim->currentTargetInCrosshair(player, target);
     }
 
     if (!shouldUseSword) {
@@ -186,51 +181,10 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
     if (m_userOverrodeSwap) return;
 
-    // Once we own the sword slot and it is still selected, there is no reason to
-    // resolve any ItemStack identifier or rescan the hotbar. Those native string
-    // lookups ran every game tick while the sword was equipped and were a hot path
-    // for this module. Keep the ownership check above, then exit immediately.
-    const int selected = selectedSlotSnapshot >= 0
-        ? selectedSlotSnapshot : inventory.selectedHotbarSlot(player);
-    if (selected < 0) return;
-    if (m_ownsSwap && selected == m_swordSlot) return;
-
-    const auto now = std::chrono::steady_clock::now();
-    int swordSlot = -1;
-    const bool scanCooldownActive =
-        m_nextSwordScanAt.time_since_epoch().count() != 0 && now < m_nextSwordScanAt;
-    if (m_cachedSwordSlot >= 0 && scanCooldownActive) {
-        // Trust the last validated slot during the short cache window. Calling
-        // hotbarSlotIdentifier here every tick re-entered native item-description
-        // code even when the player was not swapping, causing avoidable mobile lag.
-        swordSlot = m_cachedSwordSlot;
-    } else {
-        if (m_cachedSwordSlot >= 0) {
-            const std::string cachedIdentifier =
-                inventory.hotbarSlotIdentifier(player, m_cachedSwordSlot);
-            if (cachedIdentifier.find("sword") != std::string::npos) {
-                swordSlot = m_cachedSwordSlot;
-            } else {
-                m_cachedSwordSlot = -1;
-            }
-        }
-        if (swordSlot < 0) {
-            // If no sword is present, don't resolve all nine ItemStacks on every
-            // tick. Recheck inventory changes after a short bounded cooldown.
-            swordSlot = inventory.findHotbarSlot(player, "sword");
-            m_cachedSwordSlot = swordSlot;
-        }
-        m_nextSwordScanAt = now + std::chrono::milliseconds(350);
-    }
-    if (swordSlot < 0 || selected == swordSlot) return;
-
-    // ItemStack description lookup is only needed if a swap would really happen.
-    const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
-    if (heldIdentifier.find("wind_charge") != std::string::npos) {
-        restoreIfOwned();
-        m_userOverrodeSwap = true;
-        return;
-    }
+    const int swordSlot = inventory.findHotbarSlot(player, "_sword");
+    const int selected = inventory.selectedHotbarSlot(player);
+    if (swordSlot < 0 || selected < 0) return;
+    if (selected == swordSlot) return;
 
     if (!m_ownsSwap && inventory.selectHotbarSlot(player, swordSlot) &&
         inventory.selectedHotbarSlot(player) == swordSlot) {
@@ -243,7 +197,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 void SwordSwapperModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 1.0f, 16.0f);
+    m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
 }
 
