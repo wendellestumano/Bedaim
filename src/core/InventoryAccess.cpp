@@ -193,19 +193,21 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
 }
 
 std::string InventoryAccess::stackIdentifier(const void* stack) const {
-    if (!isReadableMemory(stack, ItemStackSize)) return {};
-    if (!read<std::uint8_t>(stack, ItemStackValid)) return {};
+    // Match the known-working Bedrock 26.52 implementation. The newer strict
+    // library-origin check rejected valid Item::getDescriptionId virtual entries
+    // exposed through the active BedrockTools/LeviLamina runtime. That made every
+    // consumer see an empty item identifier: weapon filters, swappers, AutoTotem,
+    // and the ULTRAKILL HUD all depend on this shared lookup.
+    if (!stack || !read<std::uint8_t>(stack, ItemStackValid)) return {};
     if (read<std::uint8_t>(stack, ItemStackCount) == 0) return {};
     const void* counter = read<const void*>(stack, ItemStackItemCounter);
-    if (!isReadableMemory(counter, sizeof(void*))) return {};
-    const void* item = read<const void*>(counter, 0);
-    if (!isReadableMemory(item, sizeof(void*))) return {};
+    const void* item = counter ? read<const void*>(counter, 0) : nullptr;
+    if (!item) return {};
     const auto* vtable = read<const std::uintptr_t*>(item, 0);
-    if (!isReadableMemory(vtable, (ItemGetDescriptionIdVtableIndex + 1) * sizeof(std::uintptr_t))) return {};
-    const auto getDescriptionId = vtable[ItemGetDescriptionIdVtableIndex];
-    if (!getDescriptionId || !isMinecraftFunction(reinterpret_cast<const void*>(getDescriptionId))) return {};
+    if (!vtable || !vtable[ItemGetDescriptionIdVtableIndex]) return {};
     using GetDescriptionIdFn = const std::string& (*)(const void*);
-    const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(getDescriptionId)(item);
+    const auto& identifier =
+        reinterpret_cast<GetDescriptionIdFn>(vtable[ItemGetDescriptionIdVtableIndex])(item);
     if (identifier.empty() || identifier.size() > 128) return {};
     return identifier;
 }
