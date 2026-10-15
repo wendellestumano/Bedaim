@@ -5,16 +5,22 @@
 #include <pl/ModMenu.hpp>
 #include <pl/ModMenuConfig.hpp>
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 static void registerAimAssistConfigSchema(std::string_view moduleId, const nlohmann::json& config);
 static void registerHitboxExpanderConfigSchema(std::string_view moduleId, const nlohmann::json& config);
-static void refreshModuleConfigSchema(Module* mod);
+static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key, const nlohmann::json& snapshot);
 
 static void persistModuleConfig() {
     // Menu callbacks can fire on every slider movement or every typed character.
@@ -42,9 +48,11 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     if (!mod) return;
 
     if (mod->onMenuConfigChanged(key, value)) {
-        // Some modules apply values directly; refresh their V2 current_value from
-        // the live module snapshot so reopening controls doesn't resurrect stale data.
-        refreshModuleConfigSchema(mod);
+        // Snapshot the post-callback settings. V2 schema changes are debounced below
+        // so live sliders and text inputs are not rebuilt on every edit event.
+        nlohmann::json snapshot;
+        mod->saveConfig(snapshot);
+        scheduleModuleConfigSchemaRefresh(mod, key, snapshot);
         persistModuleConfig();
         return;
     }
@@ -59,10 +67,12 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         return;
     }
 
-    // loadConfig normalizes radio indices and clamps sliders. Rebuild V2's current
-    // values from the normalized live config, while keeping its initial defaults fixed.
+    // loadConfig normalizes radio indices and clamps sliders. Retain that canonical
+    // snapshot and refresh the V2 schema after input activity settles.
     mod->loadConfig(j);
-    refreshModuleConfigSchema(mod);
+    nlohmann::json snapshot;
+    mod->saveConfig(snapshot);
+    scheduleModuleConfigSchemaRefresh(mod, key, snapshot);
     persistModuleConfig();
 }
 
@@ -292,15 +302,97 @@ static void registerHitboxExpanderConfigSchema(std::string_view moduleId,
     }
 }
 
-static void refreshModuleConfigSchema(Module* mod) {
-    if (!mod) return;
-    nlohmann::json current;
-    mod->saveConfig(current);
-    if (mod->moduleId == "bedrocktools.Aim Assist") {
-        registerAimAssistConfigSchema(mod->moduleId, current);
-    } else if (mod->moduleId == "bedrocktools.Hitbox Expander") {
-        registerHitboxExpanderConfigSchema(mod->moduleId, current);
+class ModuleConfigSchemaRefreshQueue final {
+public:
+    ModuleConfigSchemaRefreshQueue() : m_worker(&ModuleConfigSchemaRefreshQueue::run, this) {}
+    ~ModuleConfigSchemaRefreshQueue() {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_stopping = true;
+        }
+        m_condition.notify_all();
+        if (m_worker.joinable()) m_worker.join();
     }
+
+    void schedule(std::string moduleId, nlohmann::json snapshot, std::chrono::milliseconds delay) {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            auto it = m_pending.find(moduleId);
+            if (it != m_pending.end()) {
+                // Keep the longer delay in a burst that includes text input, and
+                // always replace the snapshot with the newest accepted value.
+                delay = std::max(delay, it->second.delay);
+            }
+            m_pending[std::move(moduleId)] = Pending{now + delay, delay, std::move(snapshot)};
+        }
+        m_condition.notify_all();
+    }
+
+private:
+    struct Pending {
+        std::chrono::steady_clock::time_point deadline;
+        std::chrono::milliseconds delay;
+        nlohmann::json snapshot;
+    };
+
+    void run() {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        while (!m_stopping) {
+            if (m_pending.empty()) {
+                m_condition.wait(lock, [this] { return m_stopping || !m_pending.empty(); });
+                continue;
+            }
+
+            auto earliest = std::min_element(m_pending.begin(), m_pending.end(),
+                [](const auto& left, const auto& right) {
+                    return left.second.deadline < right.second.deadline;
+                });
+            const auto deadline = earliest->second.deadline;
+            m_condition.wait_until(lock, deadline);
+            if (m_stopping) break;
+
+            const auto now = std::chrono::steady_clock::now();
+            std::vector<std::pair<std::string, nlohmann::json>> ready;
+            for (auto it = m_pending.begin(); it != m_pending.end();) {
+                if (it->second.deadline <= now) {
+                    ready.emplace_back(it->first, std::move(it->second.snapshot));
+                    it = m_pending.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            lock.unlock();
+            for (const auto& entry : ready) {
+                if (entry.first == "bedrocktools.Aim Assist") {
+                    registerAimAssistConfigSchema(entry.first, entry.second);
+                } else if (entry.first == "bedrocktools.Hitbox Expander") {
+                    registerHitboxExpanderConfigSchema(entry.first, entry.second);
+                }
+            }
+            lock.lock();
+        }
+    }
+
+    std::mutex m_mutex;
+    std::condition_variable m_condition;
+    std::unordered_map<std::string, Pending> m_pending;
+    bool m_stopping = false;
+    std::thread m_worker;
+};
+
+static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
+                                               const nlohmann::json& snapshot) {
+    if (!mod || (mod->moduleId != "bedrocktools.Aim Assist" &&
+                 mod->moduleId != "bedrocktools.Hitbox Expander")) return;
+    // The V2 settings UI polls schema revisions, then rebuilds controls when they
+    // change. Debounce continuous sliders and give the whitelist editor more time
+    // so one character/drag does not reset the active widget mid-interaction.
+    const auto delay = key == "m_whitelistNames"
+        ? std::chrono::milliseconds(3000)
+        : std::chrono::milliseconds(1200);
+    static ModuleConfigSchemaRefreshQueue queue;
+    queue.schedule(mod->moduleId, snapshot, delay);
 }
 
 void registerModulesWithLauncher() {
