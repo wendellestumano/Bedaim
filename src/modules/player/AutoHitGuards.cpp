@@ -24,13 +24,19 @@ Decision evaluate(const Inputs& input) noexcept {
     return Decision::Ready;
 }
 
-float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHitRange) noexcept {
+float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHitRange,
+                         float queryExpansionMargin) noexcept {
     const float normalizedAimRange = std::isfinite(aimAssistRange)
         ? std::clamp(aimAssistRange, 2.0f, 80.0f) : 5.5f;
-    if (!autoHitEnabled) return normalizedAimRange;
-    const float normalizedAutoHitRange = std::isfinite(autoHitRange)
-        ? std::clamp(autoHitRange, 2.0f, 6.0f) : 3.0f;
-    return std::max(normalizedAimRange, normalizedAutoHitRange);
+    float baseRange = normalizedAimRange;
+    if (autoHitEnabled) {
+        const float normalizedAutoHitRange = std::isfinite(autoHitRange)
+            ? std::clamp(autoHitRange, 2.0f, 6.0f) : 3.0f;
+        baseRange = std::max(baseRange, normalizedAutoHitRange);
+    }
+    const float margin = std::isfinite(queryExpansionMargin)
+        ? std::clamp(queryExpansionMargin, 0.0f, 4.0f) : 0.0f;
+    return std::clamp(baseRange + margin, 2.0f, 80.0f);
 }
 
 } // namespace bedaim::autohit

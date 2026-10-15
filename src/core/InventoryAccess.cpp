@@ -152,15 +152,19 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
 }
 
 std::string InventoryAccess::stackIdentifier(const void* stack) const {
-    if (!stack || !read<std::uint8_t>(stack, ItemStackValid)) return {};
+    if (!isReadableMemory(stack, ItemStackSize)) return {};
+    if (!read<std::uint8_t>(stack, ItemStackValid)) return {};
     if (read<std::uint8_t>(stack, ItemStackCount) == 0) return {};
     const void* counter = read<const void*>(stack, ItemStackItemCounter);
-    const void* item = counter ? read<const void*>(counter, 0) : nullptr;
-    if (!item) return {};
+    if (!isReadableMemory(counter, sizeof(void*))) return {};
+    const void* item = read<const void*>(counter, 0);
+    if (!isReadableMemory(item, sizeof(void*))) return {};
     const auto* vtable = read<const std::uintptr_t*>(item, 0);
-    if (!vtable || !vtable[ItemGetDescriptionIdVtableIndex]) return {};
+    if (!isReadableMemory(vtable, (ItemGetDescriptionIdVtableIndex + 1) * sizeof(std::uintptr_t))) return {};
+    const auto getDescriptionId = vtable[ItemGetDescriptionIdVtableIndex];
+    if (!getDescriptionId || !isMinecraftFunction(reinterpret_cast<const void*>(getDescriptionId))) return {};
     using GetDescriptionIdFn = const std::string& (*)(const void*);
-    const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(vtable[ItemGetDescriptionIdVtableIndex])(item);
+    const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(getDescriptionId)(item);
     if (identifier.empty() || identifier.size() > 128) return {};
     return identifier;
 }
@@ -234,7 +238,7 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     if (!inventorySlots(player, begin, size) || !begin || size < 9) return false;
 
     void* inventory = const_cast<void*>(read<const void*>(player, PlayerInventory));
-    if (!inventory) return false;
+    if (!isReadableMemory(inventory, PlayerInventorySelectedSlot + sizeof(int))) return false;
 
     // Prefer the engine's native PlayerInventory::selectSlot method if this build exports it.
     using SelectSlotFn = bool (*)(void*, int, int);

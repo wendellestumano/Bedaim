@@ -38,6 +38,10 @@ int main() {
           "AutoHit never shrinks a larger Aim Assist scan range");
     check(effectiveScanRange(100.0f, true, 100.0f) == 80.0f,
           "effective scan range is capped at 80 blocks");
+    check(effectiveScanRange(2.0f, false, 6.0f, 4.0f) == 6.0f,
+          "expanded target geometry adds a bounded query margin");
+    check(effectiveScanRange(79.0f, true, 6.0f, 4.0f) == 80.0f,
+          "query expansion margin cannot push scan beyond 80 blocks");
     check(effectiveScanRange(std::numeric_limits<float>::quiet_NaN(), true, 3.0f) == 5.5f,
           "non-finite Aim Assist range falls back to the safe default");
 

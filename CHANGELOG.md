@@ -1,9 +1,9 @@
 # Changelog
 
 ### Improved
-- AutoHit's actor query now covers at least its configured reach even when Aim Assist's detection range is lower; expanded target bounds participate in acquisition, crosshair confirmation, and AutoHit's nearest-hit-point calculation.
-- Hitbox Expander now uses bounded width/depth and height settings in blocks, preserves larger native boxes, migrates old multiplier settings, and clearly labels the geometry as client-side. This does not change server-authoritative collision.
-- Inventory reads used by AutoTotem and swappers validate each native pointer region before dereferencing it.
+- AutoHit's actor query now covers at least its configured reach even when Aim Assist's detection range is lower; the scan adds a bounded margin for the expanded hitbox so an entity is not missed solely because its center falls outside the query cube. Expanded target bounds participate in acquisition, crosshair confirmation, and AutoHit's nearest-hit-point calculation.
+- Hitbox Expander now uses bounded width/depth and height settings in blocks, preserves larger native boxes, anchors added height at the target's feet, migrates old multiplier settings, and clearly labels the geometry as client-side. This does not change server-authoritative collision.
+- Inventory reads used by AutoTotem and swappers validate each native pointer region and the ItemStack counter/item/vtable chain before invoking the description-ID method.
 
 
 ## Combat Module Reliability — 2026-10-15

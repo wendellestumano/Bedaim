@@ -622,7 +622,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     const float range = std::clamp(m_range, 2.0f, 80.0f);
-    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange);
+    const float expansionMargin = expander ? expander->queryExpansionMargin() : 0.0f;
+    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange, expansionMargin);
     Vec3 extent{scanRange, scanRange, scanRange};
     // The native nearby-actors function returns the actual candidate snapshot;
     // don't gate it on Level::mActorManager, an unused offset that can vary by build.
@@ -870,7 +871,11 @@ void AimAssistModule::processPlayerFrame() {
     // current native actor list before dereferencing it, so a despawned target
     // is never accessed through the cached pointer.
     const float range = std::clamp(m_range, 2.0f, 80.0f);
-    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange);
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expander = (expanderBase && expanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
+    const float expansionMargin = expander ? expander->queryExpansionMargin() : 0.0f;
+    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange, expansionMargin);
     Vec3 extent{scanRange, scanRange, scanRange};
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
@@ -1535,10 +1540,20 @@ bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
         (nativeBounds.min.z + nativeBounds.max.z) * 0.5f
     };
     const Vec3 half{width * 0.5f, height * 0.5f, depth * 0.5f};
+    // Height extends upward from the target's feet; the base is not moved below
+    // the floor, unlike a symmetric expansion of the vertical axis.
     return {
-        {center.x - half.x, center.y - half.y, center.z - half.z},
-        {center.x + half.x, center.y + half.y, center.z + half.z}
+        {center.x - half.x, nativeBounds.min.y, center.z - half.z},
+        {center.x + half.x, nativeBounds.min.y + height, center.z + half.z}
     };
+}
+
+float HitboxExpanderModule::queryExpansionMargin() const {
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    if (!enabled || (!m_expandPlayers && !m_expandMobs)) return 0.0f;
+    return std::clamp(0.5f * std::max(
+        std::clamp(m_hitboxWidth, 0.6f, 8.0f),
+        std::clamp(m_hitboxHeight, 0.6f, 8.0f)), 0.0f, 4.0f);
 }
 
 bool HitboxExpanderModule::requiresLineOfSight() const {
