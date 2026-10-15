@@ -30,10 +30,12 @@ private:
     bool m_lastOffhandHadTotem = false;
     std::chrono::steady_clock::time_point m_refillAfter{};
     std::chrono::steady_clock::time_point m_nextInventoryScan{};
+    std::chrono::steady_clock::time_point m_nextOffhandCheck{};
     int m_cachedTotemSlot = -1;
 
     float m_delayMs = 100.0f;
     float m_scanRetryIntervalMs = 250.0f;
+    float m_offhandPollIntervalMs = 100.0f;
     bool m_combatOnly = false;
     bool m_keepTotemEquipped = true;
 };
