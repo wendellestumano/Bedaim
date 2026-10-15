@@ -36,4 +36,9 @@ float normalizeScanRetryMs(float value) noexcept {
     return std::clamp(value, 100.0f, 2000.0f);
 }
 
+float normalizeOffhandPollMs(float value) noexcept {
+    if (!std::isfinite(value)) return 100.0f;
+    return std::clamp(value, 50.0f, 500.0f);
+}
+
 } // namespace bedaim::autototem
