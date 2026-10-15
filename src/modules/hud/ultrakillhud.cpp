@@ -129,9 +129,11 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     const int selectedSlot = inventory.selectedHotbarSlot(player);
     const auto now = Clock::now();
     bool refreshItemId = false;
+    bool selectedSlotChanged = false;
     {
         std::lock_guard lock(m_stateMutex);
-        refreshItemId = selectedSlot != m_cachedSelectedSlot ||
+        selectedSlotChanged = selectedSlot != m_cachedSelectedSlot;
+        refreshItemId = selectedSlotChanged ||
             m_nextItemRefresh.time_since_epoch().count() == 0 ||
             now >= m_nextItemRefresh;
         if (refreshItemId) {
@@ -149,7 +151,10 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     const float currentY = currentPosition.y;
 
     std::lock_guard lock(m_stateMutex);
-    if (refreshItemId) m_selectedItemId = itemId;
+    // A failed native identifier read is not proof that the player has an
+    // empty hand. Keep the last known item label on same-slot transient failures;
+    // a real hotbar-slot change is allowed to clear it (empty hand).
+    if (refreshItemId && (!itemId.empty() || selectedSlotChanged)) m_selectedItemId = itemId;
     if (std::isfinite(currentPosition.x) && std::isfinite(currentPosition.y) &&
         std::isfinite(currentPosition.z)) {
         if (m_hasLastPosition) {
