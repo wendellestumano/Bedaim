@@ -35,6 +35,9 @@ private:
     void workerLoop();
     static bool writePayload(const std::string& path, const std::string& payload);
 
+    // Serialize complete snapshots before enqueueing them. Concurrent save() calls
+    // must not let an older snapshot overwrite a newer one in the debounce queue.
+    std::mutex m_saveMutex;
     mutable std::mutex m_mutex;
     std::condition_variable m_condition;
     std::thread m_worker;
