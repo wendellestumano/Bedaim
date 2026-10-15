@@ -45,4 +45,36 @@ float boundedTurnStep(float angularErrorDegrees,
     return std::clamp(angularErrorDegrees, -maximumStep, maximumStep);
 }
 
+float distanceHitboxScale(float baseScale, float distance, float configuredRange,
+                          float strength, bool enabled) noexcept {
+    const float safeBase = std::clamp(
+        std::isfinite(baseScale) ? baseScale : 1.0f, 1.0f, 200.0f);
+    if (!enabled) return safeBase;
+
+    const float safeDistance = std::max(0.0f,
+        std::isfinite(distance) ? distance : 0.0f);
+    const float safeRange = std::clamp(
+        std::isfinite(configuredRange) ? configuredRange : 5.5f, 2.0f, 80.0f);
+    const float safeStrength = std::clamp(
+        std::isfinite(strength) ? strength : 5.0f, 0.1f, 200.0f);
+
+    // Keep the steering volume deliberately tight through close-range combat.
+    // Stretch the curve over the user's real scan range, but cap it at 30 blocks
+    // so the strength slider still has a visible effect at ordinary distances.
+    constexpr float kNearDistance = 1.75f;
+    const float farDistance = std::clamp(safeRange, 8.0f, 30.0f);
+    const float linear = std::clamp(
+        (safeDistance - kNearDistance) / std::max(1.0f, farDistance - kNearDistance),
+        0.0f, 1.0f);
+    const float distanceBlend = linear * linear * (3.0f - 2.0f * linear);
+
+    // Strength=5 keeps a useful ~2.8x far-range multiplier. Larger values have a
+    // stronger, but bounded, effect; unlike the previous curve this also permits
+    // a sub-native virtual area near the target instead of clamping it to 1.0.
+    const float strengthFactor = std::sqrt(safeStrength / 5.0f);
+    const float farMultiplier = std::clamp(0.8f + 2.0f * strengthFactor, 1.1f, 12.0f);
+    const float multiplier = 0.4f + (farMultiplier - 0.4f) * distanceBlend;
+    return std::clamp(safeBase * multiplier, 0.25f, 200.0f);
+}
+
 } // namespace bedaim::aimmath
