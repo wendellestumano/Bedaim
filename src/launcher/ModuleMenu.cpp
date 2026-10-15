@@ -214,7 +214,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Minimum time between native attack attempts.");
     addNode("m_autoHitKeyBinding", "Attack input key", "auto_hit", ConfigControlTypeV2::Text,
             "", "", "", "",
-            "Type an input alias such as button1, shift, 0, a, or keycode:188. Use auto for native AutoHit without a hold-button key. A floating Hold button emits the configured key and gates AutoHit while held.",
+            "Type button1 for physical mouse button 1, shift, 0, a, or keycode:188. Mouse bindings observe input without consuming clicks. Keyboard aliases expose a floating Hold button. Use auto for always-on native AutoHit.",
             true, {}, ConfigChoiceStyleV2::Auto);
 
     toggle("m_weaponOnly", "Enable weapon filter", "weapons",
