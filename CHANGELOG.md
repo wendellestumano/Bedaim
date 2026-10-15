@@ -6,6 +6,7 @@
 - Aim Assist now samples the local player's position over bounded tick intervals and computes a smoothed local velocity. Prediction therefore uses target velocity relative to actual player movement instead of subtracting an always-zero local velocity.
 - Held-weapon classification is cached for 100 ms and refreshed immediately when the selected hotbar slot changes, reducing native ItemStack identifier lookups while preserving weapon-filter changes.
 - Tracking and prediction settings accept both schema values and visible menu labels (for example, `Adaptive`/`Adaptativo` and `Ranged weapons`/`Ranged`), avoiding silent fallback to defaults when a menu implementation serializes labels.
+- AutoHit now rebuilds its floating Hold control when the mouse-button binding changes, and `button1`/`mouse1` can use the touch Hold control on Android instead of requiring a physical mouse. The touch control gates AutoHit without injecting an unrelated keyboard key.
 - AutoTotem retries resolving trusted inventory-screen APIs instead of permanently caching a failed lookup during early initialization. This addresses runtimes where BedrockTools/LeviLamina support symbols become available after module startup.
 - EGL frame events can no longer suppress the original `eglSwapBuffers` call. Frame events remain observable for HUD updates, but one module's cancellation cannot freeze rendering or block BedrockTools' renderer.
 
