@@ -210,6 +210,7 @@ void UltrakillHudModule::onEnable() {
     m_combo = 0;
     m_lastConfirmedHit = {};
     m_flashStarted = {};
+    m_lastHudRender = {};
     m_impactFallSpeedBps = 0.0f;
     m_flashActive = false;
     m_hasLastY = false;
@@ -232,6 +233,17 @@ void UltrakillHudModule::onFrame() {
     if (!enabled) return;
 
     const auto now = Clock::now();
+    {
+        std::lock_guard lock(m_stateMutex);
+        // The overlay is made of many independent draw commands. Rebuilding and
+        // submitting them every 16 ms wastes CPU on mid-range phones; 30 updates
+        // per second keeps the HUD readable while leaving the game render loop alone.
+        if (m_lastHudRender.time_since_epoch().count() != 0 &&
+            now - m_lastHudRender < std::chrono::milliseconds(33)) {
+            return;
+        }
+        m_lastHudRender = now;
+    }
     std::uint64_t score = 0;
     unsigned int combo = 0;
     Clock::time_point lastHit{};
