@@ -252,6 +252,17 @@ void resolveInventoryUiApi() {
             openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
                 resolveMinecraftFunction("_ZN6Player13openInventoryEv"));
         }
+        // Some LeviLamina distributions expose the generated callable wrapper
+        // in the trusted client runtime even when the original Minecraft symbol
+        // is stripped. Never call a symbol from an arbitrary shared library.
+        if (!openInventoryScreenOriginal) {
+            openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+                resolveLoadedClientSupportFunction("_ZN11LocalPlayer14$openInventoryEv"));
+        }
+        if (!openInventoryScreenOriginal) {
+            openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+                resolveLoadedClientSupportFunction("_ZN6Player14$openInventoryEv"));
+        }
 
         // closeContainerScreen is a client-SDK helper, so on compatible
         // installations it may come from a loaded LeviLamina runtime instead
@@ -261,9 +272,11 @@ void resolveInventoryUiApi() {
                 "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
         inventoryUiApiResolved = openInventoryScreenOriginal && closeInventoryScreenOriginal;
         if (!inventoryUiApiResolved) {
-            autoHitLogger().warn("AutoTotem UI sequence unavailable: exact inventory open/close symbols were not found in trusted loaded runtime libraries; using the verified native inventory transaction instead.");
+            autoHitLogger().warn(
+                "AutoTotem UI sequence unavailable (open={}, close={}); the active Bedrock/LeviLamina runtime did not expose a trusted open/close pair, so the module will use the verified native inventory transaction without showing the screen.",
+                openInventoryScreenOriginal != nullptr, closeInventoryScreenOriginal != nullptr);
         } else {
-            autoHitLogger().info("AutoTotem found a verified inventory-open/close symbol pair in the active runtime.");
+            autoHitLogger().info("AutoTotem resolved a trusted inventory UI open/close pair.");
         }
     });
 }
