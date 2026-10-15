@@ -21,10 +21,10 @@
 
 ### Tests
 - Added assertions for 0, 1, 59, 60, 3599, 3600, 86400, negative durations, and compact display mode.
-- The test is wired into GitHub Actions. Execution result is pending for the original overnight branch; no test pass is claimed in advance.
+- The Session Timer format test passed in GitHub Actions run #247 on source commit `838e9544197b602e3b5d0ed6817006d193b5be86`.
 
 ### Build
-- The original overnight branch has not yet been validated by a fresh CI run for this continuation. This feature adds a host-test target and uses the existing Android ARM64 build workflow.
+- GitHub Actions run #247 passed the host regression suite and Android ARM64 packaging for source commit `838e9544197b602e3b5d0ed6817006d193b5be86`; the resulting `BedrockTools.levipack` artifact was produced.
 
 ### Known Limitations
 - The timer measures time since the module is enabled; disabling and re-enabling it resets the timer. It is not a persistent world/session clock and does not survive app restarts.
@@ -52,10 +52,10 @@
 
 ### Tests
 - Added host assertions for expected current FPS, mean frame time, mean FPS, 1% low, worst frame, ignored invalid values, time-window pruning, non-monotonic timestamps, and reset.
-- CI results are pending for this commit. No test or build pass is claimed until GitHub Actions completes.
+- `frame_stats_window_test` passed in CI run #247. The same run passed the Android ARM64 build/package step for source commit `838e9544197b602e3b5d0ed6817006d193b5be86`.
 
 ### Build
-- The existing workflow will run the new host test and package the Android ARM64 `.levipack` if all steps succeed. No local Android build is claimed.
+- CI run #247 successfully compiled and packaged the Android ARM64 `.levipack` with Frame Stats included. No in-game performance or visual validation is claimed.
 
 ### Known Limitations
 - Frame Stats measures the cadence of enabled module render callbacks, not Minecraft server tick rate or an independently sampled GPU frame pipeline.
@@ -77,7 +77,7 @@
 - C++ floating-point validation: https://en.cppreference.com/w/cpp/numeric/math/isfinite — reject invalid coordinate samples instead of poisoning the cumulative total.
 
 ### Tests
-- Added assertions for a 3-4-5 horizontal segment, vertical displacement in 3D mode, teleport-threshold rejection, invalid-coordinate baseline reset, and threshold clamping. CI result pending until the new head commit finishes.
+- The Distance Accumulator test passed in CI run #247, covering horizontal/3D movement, teleport filtering, invalid-coordinate baseline reset, and threshold clamping.
 
 ### Build
 - Android ARM64 build will run through the existing PR workflow; no in-game build or runtime validation is claimed yet.
