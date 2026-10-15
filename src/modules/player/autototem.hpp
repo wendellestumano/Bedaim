@@ -34,6 +34,8 @@ private:
 
     mutable std::mutex m_stateMutex;
     std::atomic_bool m_containerOpen{false};
+    std::atomic_bool m_manualRequest{false};
+    bool m_manualSequenceActive = false;
     bool m_pendingRefill = false;
     bool m_lastOffhandHadTotem = false;
     std::chrono::steady_clock::time_point m_refillAfter{};

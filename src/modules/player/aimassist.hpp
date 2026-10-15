@@ -53,6 +53,7 @@ public:
     float m_targetRetentionRadius = 2.75f;
     std::string m_targetSelectionMode = "Crosshair";
     bool m_autoHit = false;
+    bool m_autoHitButtonEnabled = true;
     float m_autoHitRange = 3.0f;
     float m_autoHitDelayMs = 150.0f;
     // 0 preserves full automatic mode. A non-zero Android key code exposes a

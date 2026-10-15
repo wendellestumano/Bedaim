@@ -276,7 +276,7 @@ bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist
 }
 
 enum class HeldWeapon {
-    None, Sword, Axe, Mace, Bow, Crossbow, Trident, Spear, OtherMelee
+    None, Sword, Axe, Mace, Bow, Crossbow, Trident, Spear, OtherMelee, Tool
 };
 
 HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
@@ -289,6 +289,9 @@ HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
     const std::string identifier =
         bedrocktools::core::InventoryAccess::get().selectedHotbarIdentifier(player);
     if (identifier.empty()) return HeldWeapon::None;
+    if (identifier.find("pickaxe") != std::string::npos ||
+        identifier.find("shovel") != std::string::npos ||
+        identifier.find("hoe") != std::string::npos) return HeldWeapon::Tool;
     if (identifier.find("crossbow") != std::string::npos) return HeldWeapon::Crossbow;
     if (identifier.find("trident") != std::string::npos) return HeldWeapon::Trident;
     if (identifier.find("mace") != std::string::npos) return HeldWeapon::Mace;
@@ -318,6 +321,7 @@ bool weaponAllowed(HeldWeapon weapon, bool sword, bool axe, bool mace,
         case HeldWeapon::Trident: return trident;
         case HeldWeapon::Spear: return spear;
         case HeldWeapon::OtherMelee: return otherMelee;
+        case HeldWeapon::Tool: return false;
         case HeldWeapon::None: default: return false;
     }
 }
@@ -332,6 +336,7 @@ bool naturalizationAppliesToWeapon(const std::string& setting, HeldWeapon weapon
     if (setting == "Trident") return weapon == HeldWeapon::Trident;
     if (setting == "Spear") return weapon == HeldWeapon::Spear;
     if (setting == "Other melee") return weapon == HeldWeapon::OtherMelee;
+    if (setting == "Tools") return weapon == HeldWeapon::Tool;
     return false;
 }
 
@@ -470,7 +475,7 @@ void AimAssistModule::refreshAutoHitKeyButton() {
 
     const int keyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
     const int mouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
-    if ((keyCode <= 0 || keyCode > 288) && (mouseButton <= 0 || mouseButton > 16)) return;
+    if (!m_autoHitButtonEnabled || ((keyCode <= 0 || keyCode > 288) && (mouseButton <= 0 || mouseButton > 16))) return;
 
     std::string label;
     if (mouseButton > 0) {
@@ -1461,6 +1466,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         case HeldWeapon::Trident: weaponAimMultiplier = m_tridentAimMultiplier; break;
         case HeldWeapon::Spear: weaponAimMultiplier = m_spearAimMultiplier; break;
         case HeldWeapon::OtherMelee: weaponAimMultiplier = m_otherMeleeAimMultiplier; break;
+        case HeldWeapon::Tool: weaponAimMultiplier = 1.0f; break;
         case HeldWeapon::None: break;
     }
     weaponAimMultiplier = std::clamp(weaponAimMultiplier, 0.2f, 2.0f);
@@ -1544,6 +1550,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     std::unique_lock<std::mutex> stateLock(m_stateMutex);
     const int previousAutoHitKeyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
     const int previousAutoHitMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+    const bool previousAutoHitButtonEnabled = m_autoHitButtonEnabled;
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
@@ -1585,11 +1592,12 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     else if (m_naturalizationWeapon == "6") m_naturalizationWeapon = "Trident";
     else if (m_naturalizationWeapon == "7") m_naturalizationWeapon = "Spear";
     else if (m_naturalizationWeapon == "8") m_naturalizationWeapon = "Other melee";
+    else if (m_naturalizationWeapon == "9") m_naturalizationWeapon = "Tools";
     if (m_naturalizationWeapon != "All" && m_naturalizationWeapon != "Sword" &&
         m_naturalizationWeapon != "Axe" && m_naturalizationWeapon != "Mace" &&
         m_naturalizationWeapon != "Bow" && m_naturalizationWeapon != "Crossbow" &&
         m_naturalizationWeapon != "Trident" && m_naturalizationWeapon != "Spear" &&
-        m_naturalizationWeapon != "Other melee") m_naturalizationWeapon = "All";
+        m_naturalizationWeapon != "Other melee" && m_naturalizationWeapon != "Tools") m_naturalizationWeapon = "All";
     m_weaponOnly = j.value("m_weaponOnly", m_weaponOnly);
     m_weaponSword = j.value("m_weaponSword", m_weaponSword);
     m_weaponAxe = j.value("m_weaponAxe", m_weaponAxe);
@@ -1604,7 +1612,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetSwitchHysteresis = std::clamp(j.value("m_targetSwitchHysteresis", m_targetSwitchHysteresis), 0.0f, 12.0f);
     m_targetSwitchDistanceMargin = std::clamp(j.value("m_targetSwitchDistanceMargin", m_targetSwitchDistanceMargin), 0.0f, 5.0f);
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
-    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 1.0f, 200.0f);
+    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.30f, 50.0f);
     m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
     // A marker distinguishes old percentage-based configs from the expanded
     // scale, so values above 10 remain usable after every menu change.
@@ -1644,6 +1652,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_otherMeleeAimMultiplier = std::clamp(j.value("m_otherMeleeAimMultiplier", m_otherMeleeAimMultiplier), 0.2f, 2.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
     m_autoHit = j.value("m_autoHit", m_autoHit);
+    m_autoHitButtonEnabled = j.value("m_autoHitButtonEnabled", m_autoHitButtonEnabled);
     m_autoHitRange = std::clamp(j.value("m_autoHitRange", m_autoHitRange), 2.0f, 6.0f);
     m_autoHitDelayMs = std::clamp(j.value("m_autoHitDelayMs", m_autoHitDelayMs), 80.0f, 1000.0f);
     int configuredKey = previousAutoHitKeyCode;
@@ -1674,6 +1683,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
 
     const bool keyChanged = previousAutoHitKeyCode != configuredKey;
     const bool bindingChanged = keyChanged || previousAutoHitMouseButton != configuredMouseButton;
+    const bool buttonVisibilityChanged = previousAutoHitButtonEnabled != m_autoHitButtonEnabled;
     if (bindingChanged) {
         m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
         m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
@@ -1682,7 +1692,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     stateLock.unlock();
     // Mouse-button bindings keep Android keyCode at zero, so they must refresh
     // the touch Hold control when the mouse-button selection changes too.
-    if (bindingChanged && m_menuRegistered.load(std::memory_order_acquire)) {
+    if ((bindingChanged || buttonVisibilityChanged) && m_menuRegistered.load(std::memory_order_acquire)) {
         refreshAutoHitKeyButton();
     }
 }
@@ -1732,6 +1742,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_predictionLeadMs"] = m_predictionLeadMs;
     j["m_whitelistNames"] = m_whitelistNames;
     j["m_autoHit"] = m_autoHit;
+    j["m_autoHitButtonEnabled"] = m_autoHitButtonEnabled;
     j["m_autoHitRange"] = m_autoHitRange;
     j["m_autoHitDelayMs"] = m_autoHitDelayMs;
     j["m_autoHitKeyCode"] = m_autoHitKeyCode.load(std::memory_order_acquire);

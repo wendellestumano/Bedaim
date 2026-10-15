@@ -19,6 +19,7 @@ public:
     // Explicit child toggle, in addition to the module's normal master toggle.
     bool m_enableMaceSwapper = true;
     float m_attackRange = 3.0f;
+    float m_minimumFallDistance = 1.55f;
     float m_attackIntervalMs = 180.0f;
     bool m_restoreSlot = true;
 

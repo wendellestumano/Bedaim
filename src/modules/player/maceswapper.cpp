@@ -13,8 +13,6 @@
 #include <cmath>
 
 namespace {
-constexpr float kMinimumMaceSmashFallDistance = 1.55f;
-
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
@@ -161,9 +159,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const float fallDistance = std::max(0.0f, m_peakY - position.y);
     // A tiny hop is not a mace slam. Require both a meaningful drop and multiple
     // consecutive downward ticks before acquiring the hotbar slot.
-    if (verticalDelta < -0.08f && fallDistance >= kMinimumMaceSmashFallDistance) {
+    if (verticalDelta < -0.08f && fallDistance >= std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
         m_descentTicks = std::min(m_descentTicks + 1, 8);
-    } else if (verticalDelta >= -0.02f || fallDistance < kMinimumMaceSmashFallDistance) {
+    } else if (verticalDelta >= -0.02f || fallDistance < std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
         m_descentTicks = 0;
     }
 
@@ -191,7 +189,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // the swapper would otherwise compete for the same slot on mobile.
     if (holdingWindCharge && !m_fallPriorityActive) m_descentTicks = 0;
     if (!m_fallPriorityActive && !holdingWindCharge &&
-        m_descentTicks >= 2 && fallDistance >= kMinimumMaceSmashFallDistance && aim &&
+        m_descentTicks >= 2 && fallDistance >= std::clamp(m_minimumFallDistance, 0.30f, 10.0f) && aim &&
         inventory.findHotbarSlot(player, "mace") >= 0) {
         void* target = nullptr;
         AABB targetBounds{};
@@ -298,6 +296,7 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_enableMaceSwapper = j.value("m_enableMaceSwapper", m_enableMaceSwapper);
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_minimumFallDistance = std::clamp(j.value("m_minimumFallDistance", m_minimumFallDistance), 0.30f, 10.0f);
     m_attackIntervalMs = std::clamp(j.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
 }
@@ -307,6 +306,7 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     j["m_enableMaceSwapper"] = m_enableMaceSwapper;
     j["m_attackRange"] = m_attackRange;
+    j["m_minimumFallDistance"] = m_minimumFallDistance;
     j["m_attackIntervalMs"] = m_attackIntervalMs;
     j["m_restoreSlot"] = m_restoreSlot;
 }

@@ -199,7 +199,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
             "", "", "", "", "Comma-separated names to exclude.", true, {},
             ConfigChoiceStyleV2::Auto);
 
-    slider("m_hitboxScale", "Base hitbox area", "hitbox", "1", "200", "1", "x",
+    slider("m_hitboxScale", "Base hitbox area", "hitbox", "0.30", "50", "0.10", "x",
            "Base size of the virtual steering region.");
     toggle("m_distanceDependentHitbox", "Distance-dependent hitbox", "hitbox",
            "Tighten near targets and expand the virtual aim region with distance.");
@@ -208,6 +208,8 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
 
     toggle("m_autoHit", "Enable Auto Hit", "auto_hit",
            "Attempt an attack on a valid target within range.");
+    toggle("m_autoHitButtonEnabled", "Show AutoHit floating button", "auto_hit",
+           "Show or hide the launcher Hold button without disabling AutoHit itself.");
     slider("m_autoHitRange", "Attack range", "auto_hit", "2", "6", "0.1", "blocks",
            "Maximum AutoHit point distance. Its actor scan extends to at least this range.");
     slider("m_autoHitDelayMs", "Attack interval", "auto_hit", "80", "1000", "10", "ms",
@@ -250,7 +252,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Choose when jump naturalization applies.",
            {{"All","All"},{"Sword","Sword"},{"Axe","Axe"},{"Mace","Mace"},
             {"Bow","Bow"},{"Crossbow","Crossbow"},{"Trident","Trident"},
-            {"Spear","Spear"},{"Other melee","Other melee"}},
+            {"Spear","Spear"},{"Other melee","Other melee"},{"Tools","Tools"}},
            ConfigChoiceStyleV2::Dropdown);
     toggle("m_elytraMode", "Elytra mode", "special",
            "Enable small aim-point corrections while gliding.");
@@ -516,7 +518,7 @@ void registerModulesWithLauncher() {
             if (mod->moduleId == "bedrocktools.Mace Swapper") {
                 if (k == "m_enableMaceSwapper") displayName = "MACE SWAPPER > Enable";
                 else if (k == "m_attackRange") displayName = "MACE SWAPPER > Attack range";
-                else if (k == "m_activationHeight") displayName = "MACE SWAPPER > Minimum height above target (blocks)";
+                else if (k == "m_minimumFallDistance") displayName = "MACE SWAPPER > Minimum fall distance (blocks)";
                 else if (k == "m_attackIntervalMs") displayName = "MACE SWAPPER > Attack interval (ms)";
                 else if (k == "m_restoreSlot") displayName = "MACE SWAPPER > Restore previous slot";
             }
@@ -633,9 +635,9 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_attackrange") {
                     minVal = 1.0f;
                     maxVal = 16.0f;
-                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_activationheight") {
-                    minVal = 1.7f;
-                    maxVal = 6.0f;
+                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_minimumfalldistance") {
+                    minVal = 0.30f;
+                    maxVal = 10.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackintervalms") {
                     minVal = 80.0f;
                     maxVal = 1000.0f;
@@ -646,8 +648,8 @@ void registerModulesWithLauncher() {
                     minVal = 0.1f;
                     maxVal = 10.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
-                    minVal = 1.0f;
-                    maxVal = 200.0f;
+                    minVal = 0.30f;
+                    maxVal = 50.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxdistancegrowth") {
                     minVal = 0.1f;
                     maxVal = 200.0f;
@@ -759,7 +761,7 @@ void registerModulesWithLauncher() {
 
         if (mod->moduleId == "bedrocktools.Mace Swapper") {
             const std::vector<std::string> priority = {
-                "m_enableMaceSwapper", "m_activationHeight", "m_attackRange", "m_attackIntervalMs", "m_restoreSlot"
+                "m_enableMaceSwapper", "m_minimumFallDistance", "m_attackRange", "m_attackIntervalMs", "m_restoreSlot"
             };
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);

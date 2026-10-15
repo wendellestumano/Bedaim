@@ -105,6 +105,51 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     auto& inventory = bedrocktools::core::InventoryAccess::get();
     const auto checkTime = std::chrono::steady_clock::now();
+
+    // One-shot request from the floating button; native inventory work stays on
+    // the LocalPlayer tick thread rather than the launcher UI callback.
+    if (m_manualRequest.exchange(false, std::memory_order_acq_rel)) {
+        const std::string currentOffhand = inventory.offhandIdentifier(player);
+        if (containsTotem(currentOffhand)) {
+            autoTotemLogger().info("Manual equip ignored: a totem is already equipped.");
+            return;
+        }
+        if (!currentOffhand.empty()) {
+            autoTotemLogger().warn("Manual equip refused: offhand is occupied.");
+            return;
+        }
+        const int totemSlot = inventory.findInventorySlot(player, "totem");
+        if (totemSlot < 0) {
+            autoTotemLogger().warn("Manual equip failed: no totem was found in inventory.");
+            return;
+        }
+        std::lock_guard lock(m_stateMutex);
+        if (m_uiSequencePhase != UiSequencePhase::Idle) return;
+        m_cachedTotemSlot = totemSlot;
+        m_pendingRefill = true;
+        m_refillAfter = checkTime;
+        m_uiTransferSucceeded = false;
+        m_manualSequenceActive = true;
+        if (m_containerOpen.load(std::memory_order_acquire)) {
+            m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
+            m_uiPhaseDeadline = checkTime + std::chrono::milliseconds(
+                static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
+            return;
+        }
+        if (!bedrocktools::core::gamehooks::openPlayerInventoryScreen(player)) {
+            m_manualSequenceActive = false;
+            m_pendingRefill = false;
+            m_uiSequencePhase = UiSequencePhase::Idle;
+            m_cachedTotemSlot = -1;
+            autoTotemLogger().warn("Manual equip failed: inventory-open API unavailable or rejected request.");
+            return;
+        }
+        m_uiSequencePhase = UiSequencePhase::WaitForOpen;
+        m_uiPhaseDeadline = checkTime + std::chrono::milliseconds(600);
+        m_nextOffhandCheck = {};
+        autoTotemLogger().info("Manual inventory/equip/close sequence started.");
+        return;
+    }
     bool readOffhand = false;
     {
         std::lock_guard lock(m_stateMutex);
@@ -140,6 +185,7 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_uiSequencePhase = UiSequencePhase::Idle;
         m_uiPhaseDeadline = {};
         m_nextOffhandCheck = {};
+        m_manualSequenceActive = false;
         if (m_uiTransferSucceeded) {
             m_pendingRefill = false;
             m_lastOffhandHadTotem = true;
@@ -160,7 +206,7 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // Some BedrockTools builds deliver the screen event on a later tick, while
     // unsupported open wrappers can return without opening any visible UI.
     if (m_uiSequencePhase == UiSequencePhase::WaitForOpen) {
-        if (!enabled) {
+        if (!enabled && !m_manualSequenceActive) {
             if (m_containerOpen.load(std::memory_order_acquire)) {
                 m_uiSequencePhase = UiSequencePhase::WaitBeforeClose;
                 m_uiPhaseDeadline = now + std::chrono::milliseconds(
@@ -193,7 +239,7 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // A request is executed on the player tick thread, with bounded delay between
     // the actual LocalPlayer open, native inventory transaction and close request.
     if (m_uiSequencePhase == UiSequencePhase::WaitBeforeTransfer) {
-        if (!enabled) {
+        if (!enabled && !m_manualSequenceActive) {
             m_uiTransferSucceeded = false;
             m_uiSequencePhase = UiSequencePhase::WaitBeforeClose;
             m_uiPhaseDeadline = now + std::chrono::milliseconds(
@@ -475,6 +521,17 @@ void AutoTotemModule::onMenuRegistered() {
     schema.node(std::move(stepDelay));
     schema.node(node("m_keepTotemEquipped", "Keep Totem Equipped", "behavior",
                      ConfigControlTypeV2::Toggle));
+    ButtonBuilder manualButton("bedaim.autototem.manual_equip", "AutoTotem Equip");
+    manualButton.moduleId(moduleId)
+        .modId("BedrockTools")
+        .label("EQUIP TOTEM")
+        .behavior(ButtonBehavior::Hold)
+        .defaultVisible(true)
+        .stylePreset(ButtonStylePreset::Keycap)
+        .onEvent([this](std::string_view, ButtonEvent event, float) {
+            if (event == ButtonEvent::Down)
+                m_manualRequest.store(true, std::memory_order_release);
+        }).registerButton();
     schema.node(node("m_combatOnly", "Combat Only", "safety",
                      ConfigControlTypeV2::Toggle));
     schema.node(node("keybind", "Keybind", "behavior", ConfigControlTypeV2::Keybind));

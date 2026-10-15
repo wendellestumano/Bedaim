@@ -1,5 +1,16 @@
 # Changelog
 
+## Mobile input, AutoTotem trigger, and fall-threshold follow-up — 2026-10-15
+
+- Added a setting to show/hide the AutoHit floating Hold button independently of AutoHit; input-binding and visibility changes rebuild the control.
+- Added a one-shot AutoTotem floating control that requests the inventory UI on the player tick, verifies an empty offhand and an available totem, and uses the existing bounded transfer/close state machine.
+- Made Mace Swapper minimum fall distance configurable (0.30–10 blocks) instead of fixed at 1.55 blocks.
+- Corrected Aim Assist Base Hitbox Area range to 0.30–50 in schema, legacy menu normalization, and runtime config.
+- Added Naturalize Jumps support for tools (pickaxes, shovels, hoes) without allowing them through Weapon Filter.
+
+### Validation
+- A fresh CI run is required. The AutoTotem button still depends on the target runtime exposing a working inventory-open API; no in-game success is claimed until verified on Bedrock 26.52 + Levi Launcher/BedrockTools.
+
 ## Known-Good Input/Inventory Path Restoration — 2026-10-15
 
 ### Regression fixes from Build 147 comparison
