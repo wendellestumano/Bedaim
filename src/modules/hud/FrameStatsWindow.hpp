@@ -22,7 +22,7 @@ struct FrameStatsSnapshot {
 // Pure rolling statistics, independent of Minecraft and Preloader.
 class FrameStatsWindow {
 public:
-    explicit FrameStatsWindow(std::uint64_t windowMs = 5000) : m_windowMs(windowMs) {}
+    explicit FrameStatsWindow(std::uint64_t windowMs = 5000) : m_windowMs(std::max<std::uint64_t>(1, windowMs)) {}
 
     void setWindowMs(std::uint64_t windowMs) {
         const auto normalized = std::max<std::uint64_t>(1, windowMs);
