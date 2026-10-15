@@ -1200,17 +1200,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         m_hasAimPoint = true;
     }
     const float slideAlpha = stickyMode ? 1.0f : (1.0f - std::exp(-12.0f * deltaSeconds));
-    // Grudado must pursue a target-fixed point. Feeding the camera-projected
-    // slide point back into sticky tracking makes the goal move as the camera turns,
-    // which can create an orbit around the target. Sliding is retained in Smooth
-    // and Adaptive modes, where it is an intentional hitbox-tracking behavior.
-    const auto selectedAimPoint = bedaim::aimmath::selectAimPoint(
-        stickyMode,
-        {centerAimPoint.x, centerAimPoint.y, centerAimPoint.z},
-        {slidePoint.x, slidePoint.y, slidePoint.z});
-    const Vec3 effectiveAimPoint{
-        selectedAimPoint.x, selectedAimPoint.y, selectedAimPoint.z
-    };
+    // Preserve the established Grudado behavior. The configured virtual hitbox
+    // selects the sliding point when distance-dependent hitbox is enabled; disabling
+    // it restores center-lock. Smooth/Adaptativo keep their existing interpolation.
+    const Vec3 effectiveAimPoint =
+        (stickyMode && !m_distanceDependentHitbox) ? centerAimPoint : slidePoint;
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
