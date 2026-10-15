@@ -333,34 +333,63 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         return OffhandTransferResult::RuntimeApiUnavailable;
     }
 
-    // Keep ItemStack snapshots and action objects alive until addAction has copied them.
-    alignas(8) std::array<std::byte, ItemStackSize> totemSnapshot{};
-    alignas(8) std::array<std::byte, ItemStackSize> emptyOffhandSnapshot{};
-    std::memcpy(totemSnapshot.data(), sourceItem, ItemStackSize);
-    std::memcpy(emptyOffhandSnapshot.data(), offhand, ItemStackSize);
+    // ItemStack members inside InventoryAction are real engine-constructed
+    // snapshots, unlike a byte-copied ItemStack (which could duplicate native
+    // ownership state). The current ABI layout places from/to ItemStack at 208/360.
+    constexpr std::size_t ActionFromItemOffset = 208;
+    constexpr std::size_t ActionToItemOffset = 360;
+    static_assert(ActionFromItemOffset + ItemStackSize <= TransactionActionSize);
+    static_assert(ActionToItemOffset + ItemStackSize <= TransactionActionSize);
 
     alignas(8) std::array<std::byte, TransactionActionSize> inventoryAction{};
     alignas(8) std::array<std::byte, TransactionActionSize> offhandAction{};
     NativeInventorySource inventorySource{0, InventoryContainerId, {0, 0, 0}, 0};
     NativeInventorySource offhandSource{0, OffhandContainerId, {0, 0, 0}, 0};
     actionCtor(inventoryAction.data(), inventorySource, static_cast<std::uint32_t>(slot),
-               totemSnapshot.data(), emptyOffhandSnapshot.data());
-    actionCtor(offhandAction.data(), offhandSource, 0,
-               emptyOffhandSnapshot.data(), totemSnapshot.data());
+               sourceItem, offhand);
+    actionCtor(offhandAction.data(), offhandSource, 0, offhand, sourceItem);
 
-    // Only use the supported engine mutators and publish the paired transaction;
-    // never edit ItemStack bytes or the remote server's inventory state directly.
-    setOffhand(player, totemSnapshot.data());
-    removeItem(const_cast<void*>(read<const void*>(read<const void*>(player, PlayerInventory),
-                                                   PlayerInventoryContainer)), slot, 1);
+    const void* emptyOffhandSnapshot = inventoryAction.data() + ActionToItemOffset;
+    const void* totemSnapshot = offhandAction.data() + ActionToItemOffset;
+    const void* playerInventory = read<const void*>(player, PlayerInventory);
+    void* container = playerInventory
+        ? const_cast<void*>(read<const void*>(playerInventory, PlayerInventoryContainer))
+        : nullptr;
+    if (!container || !isReadableMemory(container, sizeof(void*))) {
+        actionDtor(inventoryAction.data());
+        actionDtor(offhandAction.data());
+        return OffhandTransferResult::InvalidNativeState;
+    }
 
+    // First equip using the engine's setter and verify that the offhand changed;
+    // only then remove the source slot so a failed setter cannot destroy the item.
+    setOffhand(player, totemSnapshot);
+    const bool equippedBeforeRemoval =
+        stackIdentifier(m_getOffhandSlot(player)).find("totem") != std::string::npos;
+    if (!equippedBeforeRemoval) {
+        setOffhand(player, emptyOffhandSnapshot);
+        actionDtor(inventoryAction.data());
+        actionDtor(offhandAction.data());
+        return OffhandTransferResult::VerificationFailed;
+    }
+
+    removeItem(container, slot, 1);
     const bool equipped = stackIdentifier(m_getOffhandSlot(player)).find("totem") != std::string::npos;
     const void* updatedSource = reinterpret_cast<const void*>(
         slotsBegin + static_cast<std::size_t>(slot) * ItemStackSize);
     const bool removed = stackIdentifier(updatedSource).find("totem") == std::string::npos;
     if (!equipped || !removed) {
-        // The native route did not complete coherently. Do not add a transaction
-        // that describes state we cannot observe locally.
+        if (!removed) {
+            // The source item remained, so roll back the local offhand change.
+            setOffhand(player, emptyOffhandSnapshot);
+        } else if (!equipped) {
+            // If the source was cleared but the offhand is not showing the totem,
+            // attempt to restore the item before returning failure.
+            using SetItemFn = void (*)(void*, int, const void*);
+            auto setItem = reinterpret_cast<SetItemFn>(
+                resolveMinecraftSymbol("_ZN16FillingContainer7setItemEiRK9ItemStack"));
+            if (setItem) setItem(container, slot, totemSnapshot);
+        }
         actionDtor(inventoryAction.data());
         actionDtor(offhandAction.data());
         return OffhandTransferResult::VerificationFailed;
