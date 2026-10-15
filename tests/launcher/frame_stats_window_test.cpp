@@ -25,6 +25,8 @@ int main() {
     stats.addSample(72, std::numeric_limits<float>::infinity());
     stats.addSample(73, 1200.0f);
     assert(stats.snapshot().sampleCount == 3);
+    stats.addSample(1200, 0.0f); // discarded stall still expires stale window entries
+    assert(stats.snapshot().sampleCount == 0);
 
     // Verify pruning with timestamps that span the configured 1-second window.
     stats.reset();
