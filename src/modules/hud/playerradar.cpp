@@ -2,6 +2,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include "core/GameHooks.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <pl/ModMenu.hpp>
@@ -90,7 +91,18 @@ void PlayerRadarModule::onInit() {
                 if (!std::isfinite(distance) || distance > range) continue;
                 std::string name = g_actorGetNameTag ? cleanName(g_actorGetNameTag(actor)) : std::string{};
                 if (name.empty()) name = "Player";
-                found.push_back({std::move(name), distance});
+                std::int32_t gameType = -1;
+                std::string mode = "Unknown";
+                if (bedrocktools::core::gamehooks::tryGetPlayerGameType(actor, gameType)) {
+                    switch (gameType) {
+                        case 0: mode = "Survival"; break;
+                        case 1: mode = "Creative"; break;
+                        case 2: mode = "Adventure"; break;
+                        case 3: mode = "Spectator"; break;
+                        default: break;
+                    }
+                }
+                found.push_back({std::move(name), distance, std::move(mode)});
             }
             std::sort(found.begin(), found.end(), [](const Entry& a, const Entry& b) {
                 return a.distance < b.distance;
@@ -129,7 +141,7 @@ void PlayerRadarModule::onFrame() {
     }
     std::vector<pl::modmenu::DrawCommand> commands;
     const float rowHeight = size + 5.0f;
-    const float width = 230.0f;
+    const float width = 300.0f;
     const float height = rowHeight * static_cast<float>(std::max<std::size_t>(players.size(), 1)) + 8.0f;
     if (background) {
         pl::modmenu::DrawCommand bg{};
@@ -156,7 +168,7 @@ void PlayerRadarModule::onFrame() {
             label.y = y + 4.0f + rowHeight * static_cast<float>(i);
             label.w = width - 10.0f; label.h = rowHeight;
             label.size = size; label.color = 0xFFFFFFFF;
-            label.text = players[i].name + "  -  " + distance;
+            label.text = players[i].name + "  -  " + distance + "  [" + players[i].gameMode + "]";
             commands.push_back(std::move(label));
         }
     }
