@@ -1377,7 +1377,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     const float savedHitboxGrowth = j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth);
     float migratedHitboxGrowth = savedHitboxGrowth;
     if (!usesExpandedGrowthScale) {
-        migratedHitboxGrowth = savedHitboxGrowth > 200.0f
+        migratedHitboxGrowth = savedHitboxGrowth > 10.0f
             ? savedHitboxGrowth / 100.0f
             : savedHitboxGrowth;
         // Migrate the exact legacy default once. Values above 10 can now be
