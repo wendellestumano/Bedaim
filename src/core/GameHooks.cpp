@@ -223,21 +223,47 @@ void* resolveMinecraftFunction(const char* name) {
     return valid ? address : nullptr;
 }
 
+void* resolveLoadedClientSupportFunction(const char* name) {
+    if (!name || !*name) return nullptr;
+    void* address = dlsym(RTLD_DEFAULT, name);
+    if (!address) return nullptr;
+
+    Dl_info info{};
+    if (!dladdr(address, &info) || !info.dli_fname) return nullptr;
+    const std::string_view libraryPath(info.dli_fname);
+    // closeContainerScreen is a client-SDK helper on some distributions, not
+    // necessarily a symbol in libminecraftpe.so. Accept it only from a known
+    // loaded Bedrock/LeviLamina runtime image, never from an arbitrary module.
+    const bool trustedImage =
+        libraryPath.find("libminecraftpe.so") != std::string_view::npos ||
+        libraryPath.find("liblevilamina.so") != std::string_view::npos ||
+        libraryPath.find("libLeviLamina.so") != std::string_view::npos;
+    return trustedImage ? address : nullptr;
+}
+
 void resolveInventoryUiApi() {
     std::call_once(inventoryUiApiOnce, [] {
-        // These exact C++ symbols correspond to the documented client SDK
-        // signatures for LocalPlayer::openInventory() and
-        // LocalPlayer::closeContainerScreen(ContainerType::Inventory).
-        // Missing/renamed symbols disable UI mode rather than guessing vtable slots.
+        // openInventory is a native LocalPlayer/Player operation. Some builds
+        // export only the inherited Player implementation, so try that exact
+        // symbol too; every candidate must belong to libminecraftpe.so.
         openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
             resolveMinecraftFunction("_ZN11LocalPlayer13openInventoryEv"));
+        if (!openInventoryScreenOriginal) {
+            openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+                resolveMinecraftFunction("_ZN6Player13openInventoryEv"));
+        }
+
+        // closeContainerScreen is a client-SDK helper, so on compatible
+        // installations it may come from a loaded LeviLamina runtime instead
+        // of libminecraftpe.so. Do not accept symbols from arbitrary libraries.
         closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
-            resolveMinecraftFunction("_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+            resolveLoadedClientSupportFunction(
+                "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
         inventoryUiApiResolved = openInventoryScreenOriginal && closeInventoryScreenOriginal;
         if (!inventoryUiApiResolved) {
-            autoHitLogger().warn("AutoTotem inventory UI sequence unavailable on this Bedrock build; using verified native inventory transaction instead.");
+            autoHitLogger().warn("AutoTotem UI sequence unavailable: exact inventory open/close symbols were not found in trusted loaded runtime libraries; using the verified native inventory transaction instead.");
         } else {
-            autoHitLogger().info("AutoTotem found both native LocalPlayer inventory screen operations.");
+            autoHitLogger().info("AutoTotem found a verified inventory-open/close symbol pair in the active runtime.");
         }
     });
 }
