@@ -28,6 +28,7 @@ int main() {
     using bedaim::autototem::decide;
     using bedaim::autototem::normalizeDelayMs;
     using bedaim::autototem::normalizeScanRetryMs;
+    using bedaim::autototem::normalizeOffhandPollMs;
 
     auto state = ready();
     check(decide(state) == Decision::Equip, "valid pending refill is allowed");
@@ -73,6 +74,13 @@ int main() {
           "inventory scan retry has a safe upper bound");
     check(normalizeScanRetryMs(std::numeric_limits<float>::quiet_NaN()) == 250.0f,
           "non-finite inventory scan retry returns the default");
+
+    check(normalizeOffhandPollMs(50.0f) == 50.0f, "offhand poll supports responsive 50 ms");
+    check(normalizeOffhandPollMs(100.0f) == 100.0f, "offhand poll defaults to 100 ms");
+    check(normalizeOffhandPollMs(0.0f) == 50.0f, "offhand poll is not allowed to spin every tick");
+    check(normalizeOffhandPollMs(900.0f) == 500.0f, "offhand poll is bounded to 500 ms");
+    check(normalizeOffhandPollMs(std::numeric_limits<float>::infinity()) == 100.0f,
+          "non-finite offhand poll returns its safe default");
 
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
