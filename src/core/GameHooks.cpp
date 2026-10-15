@@ -766,15 +766,11 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
         resolveInventoryUiApi();
     if (!playerGetGameTypeOriginal) return false;
     const std::int32_t nativeValue = playerGetGameTypeOriginal(player);
-    int versionMajor = 0, versionMinor = 0, versionPatch = 0;
-    bool shiftedLayout = false;
-    if (std::sscanf(gameVersion.c_str(), "%d.%d.%d",
-                    &versionMajor, &versionMinor, &versionPatch) == 3) {
-        shiftedLayout = (versionMajor == 1 && versionMinor == 26 && versionPatch >= 60) ||
-                        (versionMajor >= 26 && versionMinor >= 60);
-    }
     std::int32_t canonical = -1;
-    if (!bedaim::playergametype::normalizeNativeValue(nativeValue, shiftedLayout, canonical))
+    // Player::getPlayerGameType() returns native C++ GameType values, not packet
+    // enum values: Survival=0, Creative=1, Adventure=2, Default=5, Spectator=6.
+    // Undefined (-1) and Default are not concrete player modes.
+    if (!bedaim::playergametype::normalizeNativeValue(nativeValue, canonical))
         return false;
     outGameType = canonical;
     return true;
