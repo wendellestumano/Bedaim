@@ -417,17 +417,17 @@ void AutoTotemModule::onMenuRegistered() {
     schema.node(std::move(delay));
     auto scanRetry = node("m_scanRetryIntervalMs", "Inventory scan retry (ms)", "behavior",
                           ConfigControlTypeV2::SliderFloat);
-    scanRetry.minValue = "100";
+    scanRetry.minValue = "400";
     scanRetry.maxValue = "2000";
     scanRetry.step = "50";
-    scanRetry.description = "How often to rescan inventory when no totem is found. Higher values reduce lag with an empty inventory.";
+    scanRetry.description = "How often to rescan inventory when no totem is found. Minimum 400 ms avoids repeated full-inventory ItemStack lookups on slower phones.";
     schema.node(std::move(scanRetry));
     auto offhandPoll = node("m_offhandPollIntervalMs", "Offhand check interval (ms)", "behavior",
                             ConfigControlTypeV2::SliderFloat);
-    offhandPoll.minValue = "50";
+    offhandPoll.minValue = "150";
     offhandPoll.maxValue = "500";
     offhandPoll.step = "10";
-    offhandPoll.description = "How often AutoTotem checks the offhand. Lower values react faster; higher values reduce inventory overhead.";
+    offhandPoll.description = "How often AutoTotem checks the offhand. Minimum 150 ms reduces native ItemStack lookups while keeping refill detection responsive.";
     schema.node(std::move(offhandPoll));
     auto sequenceToggle = node("m_useInventoryUiSequence", "Open inventory around refill", "behavior",
                                ConfigControlTypeV2::Toggle);
