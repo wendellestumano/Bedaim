@@ -1121,7 +1121,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // Distance-dependent Hitbox Area is a virtual steering volume. At close
     // range it tightens the pull; at long range the strength slider controls how
     // far the volume expands. Native Bedrock collision bounds are never changed.
-    const float baseHitboxScale = std::clamp(m_hitboxScale, 0.5f, 1.0f);
+    const float baseHitboxScale = std::clamp(m_hitboxScale, 1.0f, 200.0f);
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float configuredRange = std::clamp(m_range, 2.0f, 80.0f);
     // Decouple the size curve from the global actor scan range. Using an 80-block
@@ -1135,7 +1135,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float distanceFactor = m_distanceDependentHitbox
         ? std::clamp(0.65f + 2.35f * growth * distanceFraction, 0.65f, 3.0f)
         : 1.0f;
-    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 0.35f, 3.0f);
+    const float hitboxScale = std::clamp(baseHitboxScale * distanceFactor, 1.0f, 200.0f);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1366,7 +1366,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetSwitchHysteresis = std::clamp(j.value("m_targetSwitchHysteresis", m_targetSwitchHysteresis), 0.0f, 12.0f);
     m_targetSwitchDistanceMargin = std::clamp(j.value("m_targetSwitchDistanceMargin", m_targetSwitchDistanceMargin), 0.0f, 5.0f);
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
-    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.5f, 1.0f);
+    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 1.0f, 200.0f);
     m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
     // Existing values used 0..1000 percent; convert them to the new 0.1..10
     // strength scale. Legacy normalized values (0..1) are interpreted directly.
