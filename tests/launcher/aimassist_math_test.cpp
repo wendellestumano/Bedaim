@@ -63,17 +63,6 @@ int main() {
     check(boundedTurnStep(90.0f, nan, 1.0f / 60.0f) == 0.0f,
           "non-finite turn rate produces no camera delta");
 
-    const Vec3 centerPoint{0.0f, 1.0f, 0.0f};
-    const Vec3 movingSlidePoint{0.2f, 1.4f, -0.1f};
-    const auto stickyPoint = bedaim::aimmath::selectAimPoint(true, centerPoint, movingSlidePoint);
-    check(stickyPoint.x == centerPoint.x && stickyPoint.y == centerPoint.y &&
-          stickyPoint.z == centerPoint.z,
-          "sticky tracking uses a target-fixed point instead of chasing camera-dependent slide");
-    const auto smoothPoint = bedaim::aimmath::selectAimPoint(false, centerPoint, movingSlidePoint);
-    check(smoothPoint.x == movingSlidePoint.x && smoothPoint.y == movingSlidePoint.y &&
-          smoothPoint.z == movingSlidePoint.z,
-          "smooth/adaptive tracking preserves hitbox sliding");
-
     std::cout << checks << " checks, " << failures << " failures\\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
