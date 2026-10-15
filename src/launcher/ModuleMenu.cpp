@@ -196,7 +196,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Base size of the virtual steering region.");
     toggle("m_distanceDependentHitbox", "Distance-dependent hitbox", "hitbox",
            "Tighten near targets and expand the virtual aim region with distance.");
-    slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox", "0.1", "10",
+    slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox", "0.1", "200",
            "0.1", "x", "Higher values expand steering coverage more at long range.");
 
     toggle("m_autoHit", "Enable Auto Hit", "auto_hit",
@@ -327,7 +327,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_restoreSlot") displayName = "SWORD SWAPPER > Restore previous slot";
             }
             if (mod->moduleId == "bedrocktools.Hitbox Expander") {
-                if (k == "m_hitboxSize") displayName = "EXPANDER > Virtual size (0.6-10)";
+                if (k == "m_hitboxSize") displayName = "EXPANDER > Virtual size (1-200)";
                 else if (k == "m_expandPlayers") displayName = "EXPANDER > Players";
                 else if (k == "m_expandMobs") displayName = "EXPANDER > Mobs";
                 else if (k == "m_requireLineOfSight") displayName = "EXPANDER > Require line of sight";
@@ -352,7 +352,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
                 else if (k == "m_hitboxScale") displayName = "BEHAVIOR > Hitbox area";
                 else if (k == "m_distanceDependentHitbox") displayName = "BEHAVIOR > Distance-dependent hitbox";
-                else if (k == "m_hitboxDistanceGrowth") displayName = "BEHAVIOR > Distance hitbox strength (0.1-10)";
+                else if (k == "m_hitboxDistanceGrowth") displayName = "BEHAVIOR > Distance hitbox strength (0.1-200)";
                 else if (k == "m_targetPlayers") displayName = "TARGETING > Players";
                 else if (k == "m_targetMobs") displayName = "TARGETING > Mobs";
                 else if (k == "m_cantSeeThroughBlocks") displayName = "TARGETING > Require line of sight";
@@ -414,12 +414,14 @@ void registerModulesWithLauncher() {
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
                 if (mod->moduleId == "bedrocktools.Hitbox Expander" && kLower == "m_hitboxsize") {
-                    minVal = 0.6f;
-                    maxVal = 10.0f;
-                } else if ((mod->moduleId == "bedrocktools.Mace Swapper" ||
-                     mod->moduleId == "bedrocktools.Sword Swapper") && kLower == "m_attackrange") {
+                    minVal = 1.0f;
+                    maxVal = 200.0f;
+                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackrange") {
                     minVal = 2.0f;
                     maxVal = 6.0f;
+                } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_attackrange") {
+                    minVal = 1.0f;
+                    maxVal = 16.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackintervalms") {
                     minVal = 80.0f;
                     maxVal = 1000.0f;
