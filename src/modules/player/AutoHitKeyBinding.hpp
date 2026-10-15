@@ -31,6 +31,12 @@ inline std::optional<int> parseMouseButton(std::string_view raw) {
     return button;
 }
 
+inline std::optional<int> androidButtonKeyCode(int button) {
+    // Android KeyEvent.KEYCODE_BUTTON_1..KEYCODE_BUTTON_16 are 188..203.
+    if (button < 1 || button > 16) return std::nullopt;
+    return 187 + button;
+}
+
 inline std::optional<int> parse(std::string_view raw) {
     std::string key;
     key.reserve(raw.size());
@@ -70,7 +76,11 @@ inline std::optional<int> parse(std::string_view raw) {
         int code = 0;
         const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), code);
         if (parsed.ec == std::errc{} && parsed.ptr == digits.data() + digits.size() &&
-            code >= 1 && code <= 288) {
+            code >= 0 && code <= 288) {
+            // KEYCODE_0 is Android code 7 (the printable digit key), not the
+            // special KEYCODE_UNKNOWN value 0. Accept the common underscore/colon
+            // spellings users naturally try, while preserving "auto" as code 0.
+            if (code == 0) return 7;
             return code;
         }
     }
