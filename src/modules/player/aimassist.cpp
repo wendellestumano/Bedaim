@@ -259,7 +259,7 @@ bool whitelistContainsName(const std::string& whitelist, const std::string& name
 }
 
 bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist) {
-    if (!actor || normalizeName(whitelist).empty()) return false;
+    if (!actor || whitelist.find_first_not_of(" \t,;\r\n") == std::string::npos) return false;
     if (isPlayer) {
         const auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
         if (whitelistContainsName(whitelist, player->name())) return true;
@@ -285,21 +285,23 @@ HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
         const_cast<bedrocktools::sdk::Player*>(player));
     if (!stack) return HeldWeapon::None;
 
-    const auto& inventory = bedrocktools::core::InventoryAccess::get();
-    // Check crossbow before bow because some item-name matchers use substrings.
-    if (inventory.countStack(stack, "crossbow") > 0) return HeldWeapon::Crossbow;
-    if (inventory.countStack(stack, "trident") > 0) return HeldWeapon::Trident;
-    if (inventory.countStack(stack, "bow") > 0) return HeldWeapon::Bow;
-    if (inventory.countStack(stack, "_sword") > 0) return HeldWeapon::Sword;
-    if (inventory.countStack(stack, "_axe") > 0) return HeldWeapon::Axe;
-    if (inventory.countStack(stack, "mace") > 0) return HeldWeapon::Mace;
-    if (inventory.countStack(stack, "spear") > 0) return HeldWeapon::Spear;
+    // Resolve the native identifier once instead of repeating the same
+    // ItemStack vtable call for every possible weapon family.
+    const std::string identifier = bedrocktools::core::InventoryAccess::get().stackIdentifier(stack);
+    if (identifier.empty()) return HeldWeapon::None;
+    if (identifier.find("crossbow") != std::string::npos) return HeldWeapon::Crossbow;
+    if (identifier.find("trident") != std::string::npos) return HeldWeapon::Trident;
+    if (identifier.find("bow") != std::string::npos) return HeldWeapon::Bow;
+    if (identifier.find("_sword") != std::string::npos) return HeldWeapon::Sword;
+    if (identifier.find("_axe") != std::string::npos) return HeldWeapon::Axe;
+    if (identifier.find("mace") != std::string::npos) return HeldWeapon::Mace;
+    if (identifier.find("spear") != std::string::npos) return HeldWeapon::Spear;
 
-    constexpr const char* otherWeapons[] = {
+    constexpr std::string_view otherWeapons[] = {
         "dagger", "katana", "rapier", "scythe", "hammer", "halberd", "glaive", "lance"
     };
-    for (const char* identifier : otherWeapons) {
-        if (inventory.countStack(stack, identifier) > 0) return HeldWeapon::OtherMelee;
+    for (const auto weapon : otherWeapons) {
+        if (identifier.find(weapon) != std::string::npos) return HeldWeapon::OtherMelee;
     }
     return HeldWeapon::None;
 }
@@ -348,6 +350,10 @@ void AimAssistModule::resetTrackingState() {
     m_lastPlayer = nullptr;
     m_lastTarget = nullptr;
     m_targetPresent = false;
+    m_lastTargetIsPlayer = false;
+    m_cachedWeaponIsRanged = false;
+    m_cachedNaturalizationForWeapon = false;
+    m_cachedWeaponAimMultiplier = 1.0f;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
@@ -506,8 +512,8 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
     auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
     auto* expander = (expanderBase && expanderBase->enabled)
         ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
-    if (expander && g_actorIsPlayer) {
-        targetQueryBounds = expander->expandedTargetBounds(g_actorIsPlayer(target), m_lastTargetBounds);
+    if (expander) {
+        targetQueryBounds = expander->expandedTargetBounds(m_lastTargetIsPlayer, m_lastTargetBounds);
     }
     const AABB crosshairBounds{
         {targetQueryBounds.min.x - crosshairTolerance,
@@ -552,6 +558,23 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     m_localPlayerGliding = actorIsGliding(player);
 
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
+    m_cachedWeaponIsRanged = heldWeapon == HeldWeapon::Bow ||
+        heldWeapon == HeldWeapon::Crossbow || heldWeapon == HeldWeapon::Trident ||
+        heldWeapon == HeldWeapon::Spear;
+    m_cachedNaturalizationForWeapon =
+        m_naturalization && naturalizationAppliesToWeapon(m_naturalizationWeapon, heldWeapon);
+    switch (heldWeapon) {
+        case HeldWeapon::Sword: m_cachedWeaponAimMultiplier = m_swordAimMultiplier; break;
+        case HeldWeapon::Axe: m_cachedWeaponAimMultiplier = m_axeAimMultiplier; break;
+        case HeldWeapon::Mace: m_cachedWeaponAimMultiplier = m_maceAimMultiplier; break;
+        case HeldWeapon::Bow: m_cachedWeaponAimMultiplier = m_bowAimMultiplier; break;
+        case HeldWeapon::Crossbow: m_cachedWeaponAimMultiplier = m_crossbowAimMultiplier; break;
+        case HeldWeapon::Trident: m_cachedWeaponAimMultiplier = m_tridentAimMultiplier; break;
+        case HeldWeapon::Spear: m_cachedWeaponAimMultiplier = m_spearAimMultiplier; break;
+        case HeldWeapon::OtherMelee: m_cachedWeaponAimMultiplier = m_otherMeleeAimMultiplier; break;
+        case HeldWeapon::None: m_cachedWeaponAimMultiplier = 1.0f; break;
+    }
+    m_cachedWeaponAimMultiplier = std::clamp(m_cachedWeaponAimMultiplier, 0.2f, 2.0f);
     if (m_weaponOnly && !weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
             m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee)) {
         resetTrackingState();
@@ -640,9 +663,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
     void* bestTarget = nullptr;
     AABB bestTargetBounds{};
+    bool bestTargetIsPlayer = false;
     float bestScore = std::numeric_limits<float>::max();
     void* retainedTarget = nullptr;
     AABB retainedTargetBounds{};
+    bool retainedTargetIsPlayer = false;
     float retainedTargetScore = std::numeric_limits<float>::max();
     bool retainedTargetInsideBubble = false;
     Vec3 playerCenter = playerPosition;
@@ -681,9 +706,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             if (!m_targetMobs || !categoryHasMobBit(candidate)) continue;
         }
 
-        if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) continue;
-        if (g_actorIsInvisible && g_actorIsInvisible(candidate)) continue;
-
+        // Cheap geometry first: long-range scans can include thousands of actors.
         auto* target = reinterpret_cast<Actor*>(candidate);
         const Vec3 targetPosition = target->position();
         const AABB targetBounds = target->bounds();
@@ -705,13 +728,6 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         };
         const float selectionDistanceSq = distanceSquared(eyePosition, nearestOnSelection);
 
-        // Fail closed when the visibility signature or block source is unavailable.
-        // hasClearLineOfSight() returns false if it cannot safely perform the check.
-        // If the LOS signature is unavailable for this Minecraft build, don't
-        // silently discard every candidate. Enforce LOS only when the checker is live.
-        if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
-            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
-
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
         // Range checks use the nearest point on the selected hitbox geometry, not
         // its center; the box itself still cannot exceed the configured size limits.
@@ -720,6 +736,12 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const bool inAutoHitRange = m_autoHit && std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxAutoHitDistanceSq;
         if (!std::isfinite(d2) || d2 < 0.01f || (!inAimAssistRange && !inAutoHitRange)) continue;
+        if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) continue;
+        if (g_actorIsInvisible && g_actorIsInvisible(candidate)) continue;
+
+        // Traverse blocks only for in-range, otherwise eligible candidates.
+        if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
+            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         // If the current target is right beside/around the player, keep it locked
         // while it crosses behind the camera. Measure distance to the target AABB,
@@ -774,6 +796,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (candidate == m_lastTarget) {
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
+            retainedTargetIsPlayer = isPlayer;
             retainedTargetScore = score;
             retainedTargetInsideBubble = insideRetentionBubble || candidateBelowPlayer;
         }
@@ -781,6 +804,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             bestScore = score;
             bestTarget = candidate;
             bestTargetBounds = targetBounds;
+            bestTargetIsPlayer = isPlayer;
         }
     }
 
@@ -794,6 +818,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (retainedTarget && (retainedTargetInsideBubble || retainedTargetScore <= bestScore + switchMargin)) {
         bestTarget = retainedTarget;
         bestTargetBounds = retainedTargetBounds;
+        bestTargetIsPlayer = retainedTargetIsPlayer;
     }
 
     if (!bestTarget) {
@@ -854,6 +879,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
     m_lastTarget = bestTarget;
     m_targetPresent = true;
+    m_lastTargetIsPlayer = bestTargetIsPlayer;
     m_lastTargetBounds = bestTargetBounds;
     m_lastTargetSeen = motionSampleTime;
     // Also check Auto Hit here so it is independent of the client-frame render hook.
@@ -863,49 +889,16 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
 void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
-    using namespace bedrocktools::sdk;
-
     auto* player = m_lastPlayer;
-    if (!enabled || !player || !m_lastTarget || !g_fetchNearbyActors ||
-        (!g_applyLocalPlayerTurnDelta && !m_autoHit)) return;
+    if (!enabled || !player || !m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
 
-    // Refresh target bounds at the client-update cadence, rather than following
-    // a hitbox sampled only on LocalPlayerTickEvent. Match the pointer in the
-    // current native actor list before dereferencing it, so a despawned target
-    // is never accessed through the cached pointer.
-    const float range = std::clamp(m_range, 2.0f, 80.0f);
-    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
-    auto* expander = (expanderBase && expanderBase->enabled)
-        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
-    const float expansionMargin = expander ? expander->queryExpansionMargin() : 0.0f;
-    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange, expansionMargin);
-    Vec3 extent{scanRange, scanRange, scanRange};
-    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!actors.begin || !actors.end || endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        // A malformed frame snapshot is not proof that the tracked entity despawned.
-        return;
-    }
-
-    bool targetFound = false;
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        if (entry->actor != m_lastTarget) continue;
-        const AABB currentBounds = reinterpret_cast<Actor*>(entry->actor)->bounds();
-        if (!validBounds(currentBounds)) return;
-        m_lastTargetBounds = currentBounds;
-        m_lastTargetSeen = std::chrono::steady_clock::now();
-        targetFound = true;
-        break;
-    }
-    if (!targetFound) {
-        // LocalPlayerTickEvent performs the authoritative candidate refresh. A
-        // transient miss in this frame-level list should not erase a close lock.
-        return;
-    }
-
+    // LocalPlayerTickEvent is the authoritative target-refresh cadence. Scanning
+    // the native actor vector again for every rendered frame multiplied native
+    // work by render FPS and could walk thousands of entries at long range.
+    // Render frames now use only the last validated bounds snapshot.
+    const auto now = std::chrono::steady_clock::now();
+    if (m_lastTargetSeen.time_since_epoch().count() == 0 || now < m_lastTargetSeen ||
+        now - m_lastTargetSeen > std::chrono::milliseconds(250)) return;
     applyAimStepLocked(player);
 }
 
@@ -966,6 +959,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
             "AutoHit skipped a target that disappeared from the fresh actor snapshot.");
         m_lastTarget = nullptr;
         m_targetPresent = false;
+        m_lastTargetIsPlayer = false;
         m_hasAimPoint = false;
         m_nextAutoHit = now + std::chrono::milliseconds(80);
         return;
@@ -1112,7 +1106,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     if (!enabled || !player) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
-    m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
+    // Gliding is sampled once per game tick; do not chase entity-data pointers on
+    // every render frame.
     const auto now = std::chrono::steady_clock::now();
 
     auto* rotationComponent = player->rotationComponent();
@@ -1148,13 +1143,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     }
 
     const AABB nativeBounds = m_lastTargetBounds;
-    const HeldWeapon weaponForPrediction = heldWeaponInMainHand(player);
-    const bool rangedWeapon = weaponForPrediction == HeldWeapon::Bow ||
-        weaponForPrediction == HeldWeapon::Crossbow ||
-        weaponForPrediction == HeldWeapon::Trident ||
-        weaponForPrediction == HeldWeapon::Spear;
     const bool usePrediction = m_predictionMode == "All" ||
-        (m_predictionMode == "Ranged" && rangedWeapon);
+        (m_predictionMode == "Ranged" && m_cachedWeaponIsRanged);
 
     Vec3 predictionOffset{};
     if (usePrediction && m_hasMotionSample && m_motionTrackedTarget == m_lastTarget) {
@@ -1179,8 +1169,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         ? static_cast<HitboxExpanderModule*>(steeringExpanderBase) : nullptr;
     AABB bounds = nativeBounds;
     if (steeringExpander) {
-        const bool targetIsPlayer = g_actorIsPlayer && g_actorIsPlayer(m_lastTarget);
-        bounds = steeringExpander->expandedTargetBounds(targetIsPlayer, nativeBounds);
+        bounds = steeringExpander->expandedTargetBounds(m_lastTargetIsPlayer, nativeBounds);
     }
     bounds.min.x += predictionOffset.x; bounds.max.x += predictionOffset.x;
     bounds.min.y += predictionOffset.y; bounds.max.y += predictionOffset.y;
@@ -1320,19 +1309,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float pitchError = desiredPitch - currentRotation.x;
     if (!std::isfinite(yawError) || !std::isfinite(pitchError)) return;
 
-    float weaponAimMultiplier = 1.0f;
-    switch (weaponForPrediction) {
-        case HeldWeapon::Sword: weaponAimMultiplier = m_swordAimMultiplier; break;
-        case HeldWeapon::Axe: weaponAimMultiplier = m_axeAimMultiplier; break;
-        case HeldWeapon::Mace: weaponAimMultiplier = m_maceAimMultiplier; break;
-        case HeldWeapon::Bow: weaponAimMultiplier = m_bowAimMultiplier; break;
-        case HeldWeapon::Crossbow: weaponAimMultiplier = m_crossbowAimMultiplier; break;
-        case HeldWeapon::Trident: weaponAimMultiplier = m_tridentAimMultiplier; break;
-        case HeldWeapon::Spear: weaponAimMultiplier = m_spearAimMultiplier; break;
-        case HeldWeapon::OtherMelee: weaponAimMultiplier = m_otherMeleeAimMultiplier; break;
-        case HeldWeapon::None: break;
-    }
-    weaponAimMultiplier = std::clamp(weaponAimMultiplier, 0.2f, 2.0f);
+    const float weaponAimMultiplier = std::clamp(m_cachedWeaponAimMultiplier, 0.2f, 2.0f);
     const float aimSpeed = std::clamp(m_aimSpeed * weaponAimMultiplier, 0.1f, 10.0f);
     const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 10.0f);
     float yawDelta = 0.0f;
@@ -1388,11 +1365,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // Naturalization normally suppresses vertical correction briefly after a jump,
     // but must not block tracking when the selected target is below the player's eyes.
     // This is common during mace Wind Burst/ground-slam arcs.
-    const HeldWeapon heldWeapon = weaponForPrediction;
-    const bool naturalizationForWeapon =
-        m_naturalization && naturalizationAppliesToWeapon(m_naturalizationWeapon, heldWeapon);
     const bool targetBelowView = boundsCenter.y < eyePosition.y - 0.35f;
-    if (naturalizationForWeapon && now < m_pitchHoldUntil && !targetBelowView)
+    if (m_cachedNaturalizationForWeapon && now < m_pitchHoldUntil && !targetBelowView)
         pitchDelta = 0.0f;
 
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
