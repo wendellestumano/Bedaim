@@ -19,6 +19,7 @@ void check(bool condition, std::string_view name) {
 }
 
 int main() {
+    using bedaim::autohitkey::androidButtonKeyCode;
     using bedaim::autohitkey::format;
     using bedaim::autohitkey::parse;
     using bedaim::autohitkey::parseMouseButton;
@@ -28,14 +29,18 @@ int main() {
              {"off", 0}, {"0", 7}, {"1", 8}, {"9", 16},
              {"a", 29}, {"Z", 54}, {"shift", 59}, {"shift right", 60},
              {"ctrl", 113}, {"space", 62}, {"enter", 66}, {"esc", 111},
-             {"keycode:188", 188}, {"keycode:120", 120}}) {
+             {"keycode:188", 188}, {"keycode:120", 120},
+             {"keycode:0", 7}, {"KEYCODE_0", 7}, {"keycode_0", 7}}) {
         const auto value = parse(text);
         check(value.has_value(), "valid key alias is accepted");
         check(value && *value == expected, "key alias maps to the expected Android key code");
     }
 
     check(!parse("button1").has_value(), "mouse alias isn't mistaken for a keyboard key");
-    check(parseMouseButton("button1") == 1, "button1 maps to mouse button one");
+    check(parseMouseButton("button1") == 1, "button1 parses as button one");
+    check(androidButtonKeyCode(1) == 188, "button1 maps to Android BUTTON_1 keycode");
+    check(androidButtonKeyCode(16) == 203, "button16 maps to Android BUTTON_16 keycode");
+    check(!androidButtonKeyCode(17).has_value(), "unsupported Android button key is rejected");
     check(parseMouseButton("Mouse 16") == 16, "mouse aliases accept normalized spaces");
     check(!parseMouseButton("button17").has_value(), "unsupported mouse index is rejected");
     check(!parse("button17").has_value(), "unsupported button index is rejected");
