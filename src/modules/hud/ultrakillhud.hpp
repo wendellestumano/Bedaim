@@ -30,6 +30,7 @@ private:
     std::atomic<float> m_movementSpeedBps{0.0f};
 
     std::mutex m_stateMutex;
+    std::chrono::steady_clock::time_point m_lastHudRender{};
     bool m_hasLastY = false;
     float m_lastY = 0.0f;
     bool m_hasLastPosition = false;
