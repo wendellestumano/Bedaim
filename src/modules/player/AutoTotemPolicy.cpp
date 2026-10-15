@@ -32,13 +32,19 @@ float normalizeDelayMs(float value) noexcept {
 }
 
 float normalizeScanRetryMs(float value) noexcept {
-    if (!std::isfinite(value)) return 250.0f;
-    return std::clamp(value, 100.0f, 2000.0f);
+    if (!std::isfinite(value)) return 400.0f;
+    // A full inventory scan may resolve many native ItemStack identifiers.
+    // Keep the retry interval above a quarter second to prevent repeated scans
+    // every few ticks when the player has no spare totem.
+    return std::clamp(value, 400.0f, 2000.0f);
 }
 
 float normalizeOffhandPollMs(float value) noexcept {
-    if (!std::isfinite(value)) return 100.0f;
-    return std::clamp(value, 50.0f, 500.0f);
+    if (!std::isfinite(value)) return 150.0f;
+    // Offhand identifiers are native string lookups; polling at render cadence
+    // can stall low-end Android devices. 150 ms keeps detection responsive while
+    // avoiding a lookup on almost every frame at 10 FPS.
+    return std::clamp(value, 150.0f, 500.0f);
 }
 
 float normalizeUiStepDelayMs(float value) noexcept {
