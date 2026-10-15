@@ -1,4 +1,5 @@
 #include "modules/player/AutoHitGuards.hpp"
+#include "modules/player/PlayerGameType.hpp"
 
 #include <cstdlib>
 #include <cmath>
@@ -44,6 +45,24 @@ int main() {
           "query expansion margin cannot push scan beyond 80 blocks");
     check(effectiveScanRange(std::numeric_limits<float>::quiet_NaN(), true, 3.0f) == 5.5f,
           "non-finite Aim Assist range falls back to the safe default");
+
+    std::int32_t canonicalMode = -1;
+    check(bedaim::playergametype::normalizeNativeValue(1, false, canonicalMode) && canonicalMode == 0,
+          "legacy GameType 1 normalizes to Survival");
+    check(bedaim::playergametype::normalizeNativeValue(2, false, canonicalMode) && canonicalMode == 1,
+          "legacy GameType 2 normalizes to Creative");
+    check(bedaim::playergametype::normalizeNativeValue(3, false, canonicalMode) && canonicalMode == 2,
+          "legacy GameType 3 normalizes to Adventure");
+    check(bedaim::playergametype::normalizeNativeValue(5, false, canonicalMode) && canonicalMode == 3,
+          "legacy GameType 5 normalizes to Spectator");
+    check(!bedaim::playergametype::normalizeNativeValue(0, false, canonicalMode),
+          "legacy undefined GameType isn't Survival");
+    check(bedaim::playergametype::normalizeNativeValue(0, true, canonicalMode) && canonicalMode == 0,
+          "shifted GameType 0 normalizes to Survival");
+    check(bedaim::playergametype::normalizeNativeValue(6, true, canonicalMode) && canonicalMode == 3,
+          "shifted GameType 6 normalizes to Spectator");
+    check(!bedaim::playergametype::normalizeNativeValue(5, true, canonicalMode),
+          "shifted Default isn't Spectator");
 
     check(bedaim::autohit::publicAttackRouteAvailable(true),
           "validated public attack wrapper allows dispatch");

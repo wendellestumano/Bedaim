@@ -27,6 +27,7 @@ private:
     int m_groundedTicks = 0;
     bool m_ownsSwap = false;
     bool m_userOverrodeSwap = false;
+    bool m_foodUseOverride = false;
     int m_swordSlot = -1;
     int m_previousSlot = -1;
 };

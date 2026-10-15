@@ -1,5 +1,12 @@
 # Changelog
 
+## Mobile runtime follow-up — 2026-10-15
+
+- Native GameType values are normalized into Bedaim's canonical Survival/Creative/Adventure/Spectator IDs for legacy and shifted Bedrock enum layouts; host regression assertions cover both.
+- Added an Aim Assist Write Settings utility using supported ModMenu text fields for exact numeric values. Parsed values apply immediately and clamp to each setting's permitted range.
+- Sword Swapper remembers when it yielded to a consumable and resumes after the food item changes, without clearing unrelated manual hotbar overrides.
+
+
 ## Mobile test follow-up — 2026-10-15
 
 - AutoHit no longer requires an input hold when its module toggle is enabled; its floating button is optional.

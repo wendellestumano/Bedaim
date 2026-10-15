@@ -1,5 +1,6 @@
 #include "GameHooks.hpp"
 #include "modules/player/AutoHitGuards.hpp"
+#include "modules/player/PlayerGameType.hpp"
 #include <bedrocktools/Version.hpp>
 
 #include "core/memory/Hooks.hpp"
@@ -764,9 +765,18 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
         std::chrono::steady_clock::now() >= playerGameTypeNextResolve)
         resolveInventoryUiApi();
     if (!playerGetGameTypeOriginal) return false;
-    const std::int32_t value = playerGetGameTypeOriginal(player);
-    if (value < 0 || value > 3) return false;
-    outGameType = value;
+    const std::int32_t nativeValue = playerGetGameTypeOriginal(player);
+    int versionMajor = 0, versionMinor = 0, versionPatch = 0;
+    bool shiftedLayout = false;
+    if (std::sscanf(gameVersion.c_str(), "%d.%d.%d",
+                    &versionMajor, &versionMinor, &versionPatch) == 3) {
+        shiftedLayout = (versionMajor == 1 && versionMinor == 26 && versionPatch >= 60) ||
+                        (versionMajor >= 26 && versionMinor >= 60);
+    }
+    std::int32_t canonical = -1;
+    if (!bedaim::playergametype::normalizeNativeValue(nativeValue, shiftedLayout, canonical))
+        return false;
+    outGameType = canonical;
     return true;
 }
 

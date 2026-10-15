@@ -22,6 +22,7 @@
 #include <cstring>
 #include <cctype>
 #include <string>
+#include <optional>
 #include <limits>
 #include <atomic>
 #include <string_view>
@@ -469,10 +470,44 @@ bool AimAssistModule::onMouseEvent(int button, bool isDown) {
 void AimAssistModule::onMenuRegistered() {
     m_menuRegistered.store(true, std::memory_order_release);
     refreshAutoHitKeyButton();
+    if (!m_numericSettingsRegistered.exchange(true, std::memory_order_acq_rel)) {
+        using namespace pl::modmenu;
+        ModuleBuilder settings("bedaim.aimassist.write_settings", "Aim Assist Write Settings");
+        settings.modId("Bedaim")
+            .description("Enter exact numeric values for Aim Assist without dragging sliders.")
+            .defaultEnabled(true)
+            .config("showAutoHitButton", "Show AutoHit Floating Button", ConfigType::Toggle,
+                    m_autoHitButtonEnabled ? "true" : "false")
+            .config("rotationSpeed", "Rotation Speed (exact)", ConfigType::Text, "1.00")
+            .config("aimSpeed", "Aim Speed (exact)", ConfigType::Text, "5.00")
+            .config("fov", "FOV (exact)", ConfigType::Text, "35.00")
+            .config("range", "Aim Range (exact)", ConfigType::Text, "5.50")
+            .config("autoHitRange", "AutoHit Range (exact)", ConfigType::Text, "3.00")
+            .config("autoHitDelayMs", "AutoHit Delay ms (exact)", ConfigType::Text, "150.00")
+            .config("strength", "Strength (exact)", ConfigType::Text, "0.25")
+            .config("hitboxScale", "Hitbox Area (exact)", ConfigType::Text, "1.00")
+            .config("hitboxDistanceGrowth", "Hitbox Growth (exact)", ConfigType::Text, "5.00")
+            .config("predictionLeadMs", "Prediction Lead ms (exact)", ConfigType::Text, "120.00")
+            .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
+                onMenuConfigChanged(key, value);
+            });
+        if (!settings.registerModule()) m_numericSettingsRegistered.store(false, std::memory_order_release);
+    }
 }
 
 bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
-    if (key == "m_autoHitButtonEnabled") {
+    auto parseNumber = [&]() -> std::optional<float> {
+        try {
+            const std::string text(value);
+            std::size_t parsedLength = 0;
+            const float number = std::stof(text, &parsedLength);
+            while (parsedLength < text.size() &&
+                   std::isspace(static_cast<unsigned char>(text[parsedLength]))) ++parsedLength;
+            if (parsedLength != text.size() || !std::isfinite(number)) return std::nullopt;
+            return number;
+        } catch (...) { return std::nullopt; }
+    };
+    if (key == "m_autoHitButtonEnabled" || key == "showAutoHitButton") {
         const bool visible = value == "true" || value == "1" || value == "on";
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
@@ -481,16 +516,22 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
         if (m_menuRegistered.load(std::memory_order_acquire)) refreshAutoHitKeyButton();
         return true;
     }
-    if (key == "m_rotationSpeed") {
-        try {
-            const float parsed = std::stof(std::string(value));
-            if (!std::isfinite(parsed)) return false;
-            std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_rotationSpeed = std::clamp(parsed, 0.1f, 1000.0f);
-            return true;
-        } catch (...) { return false; }
-    }
-    return false;
+    const auto parsed = parseNumber();
+    if (!parsed) return false;
+    const float number = *parsed;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (key == "m_rotationSpeed" || key == "rotationSpeed") m_rotationSpeed = std::clamp(number, 0.1f, 1000.0f);
+    else if (key == "aimSpeed") m_aimSpeed = std::clamp(number, 0.1f, 10.0f);
+    else if (key == "fov") m_fov = std::clamp(number, 1.0f, 360.0f);
+    else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
+    else if (key == "autoHitRange") m_autoHitRange = std::clamp(number, 2.0f, 6.0f);
+    else if (key == "autoHitDelayMs") m_autoHitDelayMs = std::clamp(number, 80.0f, 1000.0f);
+    else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
+    else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
+    else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 200.0f);
+    else if (key == "predictionLeadMs") m_predictionLeadMs = std::clamp(number, 0.0f, 300.0f);
+    else return false;
+    return true;
 }
 
 void AimAssistModule::refreshAutoHitKeyButton() {

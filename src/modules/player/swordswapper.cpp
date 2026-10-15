@@ -113,6 +113,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!enabled) {
         restoreIfOwned();
         m_userOverrodeSwap = false;
+        m_foodUseOverride = false;
         return;
     }
 
@@ -169,7 +170,14 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (holdingConsumable) {
         restoreIfOwned();
         m_userOverrodeSwap = true;
+        m_foodUseOverride = true;
         return;
+    }
+    if (m_foodUseOverride) {
+        // Clear only the override introduced by the food guard; unrelated
+        // manual hotbar overrides retain the existing behavior.
+        m_foodUseOverride = false;
+        m_userOverrodeSwap = false;
     }
     if (heldIdentifier.find("wind_charge") != std::string::npos) {
         // Explicit user selection beats the automatic sword swap. Keep the

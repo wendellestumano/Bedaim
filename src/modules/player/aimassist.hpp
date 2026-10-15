@@ -95,6 +95,7 @@ private:
     void refreshAutoHitKeyButton();
     std::mutex m_stateMutex;
     std::atomic_bool m_menuRegistered{false};
+    std::atomic_bool m_numericSettingsRegistered{false};
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
     bool m_lastTargetIsPlayer = false;
