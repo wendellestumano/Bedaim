@@ -474,41 +474,49 @@ void AimAssistModule::refreshAutoHitKeyButton() {
     unregisterButton(ButtonId);
 
     const int keyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
-    if (keyCode <= 0 || keyCode > 288) return;
+    const int mouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+    if ((keyCode <= 0 || keyCode > 288) && (mouseButton <= 0 || mouseButton > 16)) return;
 
-    std::string keyLabel = bedaim::autohitkey::format(keyCode);
-    std::transform(keyLabel.begin(), keyLabel.end(), keyLabel.begin(),
-        [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
-    if (keyCode >= 7 && keyCode <= 16) {
-        keyLabel = std::to_string(keyCode == 7 ? 0 : keyCode - 6);
-    } else if (keyCode >= 29 && keyCode <= 54) {
-        keyLabel.assign(1, static_cast<char>('A' + (keyCode - 29)));
-    } else if (keyCode == 62) {
-        keyLabel = "SPACE";
-    } else if (keyCode == 66) {
-        keyLabel = "ENTER";
-    } else if (keyCode == 111) {
-        keyLabel = "ESC";
+    std::string label;
+    if (mouseButton > 0) {
+        label = "AUTO HIT / BUTTON " + std::to_string(mouseButton);
+    } else {
+        std::string keyLabel = bedaim::autohitkey::format(keyCode);
+        std::transform(keyLabel.begin(), keyLabel.end(), keyLabel.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+        if (keyCode >= 7 && keyCode <= 16) {
+            keyLabel = std::to_string(keyCode == 7 ? 0 : keyCode - 6);
+        } else if (keyCode >= 29 && keyCode <= 54) {
+            keyLabel.assign(1, static_cast<char>('A' + (keyCode - 29)));
+        } else if (keyCode == 62) {
+            keyLabel = "SPACE";
+        } else if (keyCode == 66) {
+            keyLabel = "ENTER";
+        } else if (keyCode == 111) {
+            keyLabel = "ESC";
+        }
+        label = "AUTO HIT / KEY " + keyLabel;
     }
-    const std::string label = "AUTO HIT / KEY " + keyLabel;
-    ButtonBuilder(std::string(ButtonId), "AutoHit Key")
-        .moduleId(moduleId)
+
+    ButtonBuilder button(std::string(ButtonId), "AutoHit Key");
+    button.moduleId(moduleId)
         .modId("BedrockTools")
         .label(label)
-        .androidKeyCode(keyCode)
         .behavior(ButtonBehavior::Hold)
         .defaultVisible(true)
-        .stylePreset(ButtonStylePreset::Keycap)
-        .onEvent([this](std::string_view, ButtonEvent event, float) {
-            if (event == ButtonEvent::Down) {
-                m_autoHitVirtualKeyDown.store(true, std::memory_order_release);
-            } else if (event == ButtonEvent::Up) {
-                m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
-            }
-        })
-        .registerButton();
+        .stylePreset(ButtonStylePreset::Keycap);
+    // Mouse aliases are represented by this same touch Hold control on Android;
+    // do not inject an unrelated Android key when the user selected button1.
+    if (keyCode > 0) button.androidKeyCode(keyCode);
+    button.onEvent([this, mouseButton](std::string_view, ButtonEvent event, float) {
+        const bool down = event == ButtonEvent::Down;
+        if (mouseButton > 0) {
+            m_autoHitMouseButtonDown.store(down, std::memory_order_release);
+        } else {
+            m_autoHitVirtualKeyDown.store(down, std::memory_order_release);
+        }
+    }).registerButton();
 }
-
 
 
 
@@ -1670,7 +1678,9 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         m_autoHitMouseButtonDown.store(false, std::memory_order_release);
     }
     stateLock.unlock();
-    if (keyChanged && m_menuRegistered.load(std::memory_order_acquire)) {
+    // Mouse-button bindings keep Android keyCode at zero, so they must refresh
+    // the touch Hold control when the mouse-button selection changes too.
+    if (bindingChanged && m_menuRegistered.load(std::memory_order_acquire)) {
         refreshAutoHitKeyButton();
     }
 }
