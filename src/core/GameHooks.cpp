@@ -86,6 +86,7 @@ std::once_flag inventoryUiApiOnce;
 OpenInventoryScreenFn openInventoryScreenOriginal = nullptr;
 CloseInventoryScreenFn closeInventoryScreenOriginal = nullptr;
 bool inventoryUiApiResolved = false;
+bool openInventoryViaVtable = false;
 
 template <class Function>
 bool hookSignature(SignatureId id, void* detour, Function** original) {
@@ -263,6 +264,10 @@ void resolveInventoryUiApi() {
             openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
                 resolveLoadedClientSupportFunction("_ZN6Player14$openInventoryEv"));
         }
+        // openInventory is virtual. If the inline wrapper is not exported, use the
+        // known Player vtable slot only after validating both it and the neighboring
+        // getCarriedItem slot against libminecraftpe.so at call time.
+        openInventoryViaVtable = openInventoryScreenOriginal == nullptr;
 
         // closeContainerScreen is a client-SDK helper, so on compatible
         // installations it may come from a loaded LeviLamina runtime instead
@@ -270,7 +275,7 @@ void resolveInventoryUiApi() {
         closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
             resolveLoadedClientSupportFunction(
                 "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
-        inventoryUiApiResolved = openInventoryScreenOriginal && closeInventoryScreenOriginal;
+        inventoryUiApiResolved = (openInventoryScreenOriginal || openInventoryViaVtable) && closeInventoryScreenOriginal;
         if (!inventoryUiApiResolved) {
             autoHitLogger().warn(
                 "AutoTotem UI sequence unavailable (open={}, close={}); the active Bedrock/LeviLamina runtime did not expose a trusted open/close pair, so the module will use the verified native inventory transaction without showing the screen.",
@@ -697,7 +702,20 @@ bool inventoryUiSequenceAvailable() {
 bool openPlayerInventoryScreen(void* player) {
     if (!player || !isReadableMemory(player, sizeof(void*)) || !inventoryUiSequenceAvailable())
         return false;
-    openInventoryScreenOriginal(player);
+    if (openInventoryScreenOriginal) {
+        openInventoryScreenOriginal(player);
+        return true;
+    }
+    if (!openInventoryViaVtable) return false;
+
+    auto** vtable = *reinterpret_cast<void***>(player);
+    constexpr auto carriedSlot = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
+    constexpr auto openSlot = bedrocktools::sdk::offsets::VTable::PlayerOpenInventory;
+    if (!vtable || !isReadableMemory(vtable, (openSlot + 1) * sizeof(void*))) return false;
+    const auto carriedFn = vtable[carriedSlot];
+    const auto openFn = vtable[openSlot];
+    if (!isMinecraftFunction(carriedFn) || !isMinecraftFunction(openFn)) return false;
+    reinterpret_cast<OpenInventoryScreenFn>(openFn)(player);
     return true;
 }
 
