@@ -45,6 +45,11 @@ int main() {
     check(effectiveScanRange(std::numeric_limits<float>::quiet_NaN(), true, 3.0f) == 5.5f,
           "non-finite Aim Assist range falls back to the safe default");
 
+    check(bedaim::autohit::publicAttackRouteAvailable(true),
+          "validated public attack wrapper allows dispatch");
+    check(!bedaim::autohit::publicAttackRouteAvailable(false),
+          "unvalidated public attack wrapper blocks dispatch");
+
     check(evaluate(validInputs()) == Decision::Ready,
           "all valid prerequisites allow the attack attempt");
 

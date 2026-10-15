@@ -2,6 +2,10 @@
 
 namespace bedaim::autohit {
 
+// Policy boundary for native attack dispatch. The entry must match the exact
+// public GameMode/SurvivalMode signature resolved from the active runtime.
+bool publicAttackRouteAvailable(bool publicEntryMatchesResolvedSignature) noexcept;
+
 enum class Decision {
     Ready,
     Disabled,
