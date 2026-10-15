@@ -916,7 +916,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             selectionDistanceSq <= maxDistanceSq;
         const bool inAutoHitRange = m_autoHit && std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxAutoHitDistanceSq;
-        if (!std::isfinite(d2) || d2 < 0.01f || (!inAimAssistRange && !inAutoHitRange)) continue;
+        if (!std::isfinite(d2) || (!inAimAssistRange && !inAutoHitRange)) continue;
 
         // If the current target is right beside/around the player, keep it locked
         // while it crosses behind the camera. Measure distance to the target AABB,
@@ -939,8 +939,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const float desiredYaw = std::atan2(-dx, dz) * kRadToDeg;
         const float desiredPitch = -std::atan2(dy, std::max(horizontal, 0.001f)) * kRadToDeg;
 
-        const float targetDistance = std::sqrt(d2);
-        if (!std::isfinite(targetDistance) || targetDistance <= 0.001f) continue;
+        const float targetDistance = std::sqrt(std::max(d2, 0.0f));
+        if (!std::isfinite(targetDistance)) continue;
 
         const float yawError = wrapDegrees(desiredYaw - currentRotation.y);
         const float pitchError = desiredPitch - currentRotation.x;
@@ -1200,9 +1200,9 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         (bounds.min.z + bounds.max.z) * 0.5f
     };
     const float centerDistanceSq = distanceSquared(eyePosition, targetCenter);
-    if (!std::isfinite(centerDistanceSq) || centerDistanceSq < 0.01f) {
+    if (!std::isfinite(centerDistanceSq)) {
         logAutoHitOnce(g_loggedAutoHitInvalidPosition,
-            "AutoHit skipped invalid/overlapping eye and target coordinates.");
+            "AutoHit skipped non-finite eye/target coordinates.");
         return;
     }
 
@@ -1290,7 +1290,9 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     const bool dispatched = bedrocktools::core::gamehooks::attack(
         gameMode, m_lastTarget, true, &hitPoint);
     if (!g_loggedAutoHitResult.exchange(true, std::memory_order_acq_rel)) {
-        autoHitLogger().info("First AutoHit native attack attempt returned {}.", dispatched);
+        autoHitLogger().info(
+            "First AutoHit native attack attempt returned {}; hitDistance={:.3f}, range={:.3f}, targetIsPlayer={}.",
+            dispatched, hitDistance, autoHitRange, liveTargetIsPlayer);
     }
     // Even a native rejection is rate-limited; use a short retry so a transient
     // false return doesn't permanently disable attacks for the selected target.
