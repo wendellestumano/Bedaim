@@ -1,5 +1,10 @@
 # Changelog
 
+## Player Radar — 2026-10-15
+
+- Added a HUD module that scans the nearby-actor snapshot, filters player entities, calculates Euclidean distance in blocks, and displays the nearest players. Range (5–80 blocks), maximum rows, text size, and background are configurable.
+- The radar does not infer Creative/Spectator state; Aim Assist mode filtering is a separate option and depends on the runtime exporting the verified game-type method.
+
 ## Creative/Spectator target filter follow-up — 2026-10-15
 
 - Added an Aim Assist option to skip Creative and Spectator players through the exported `Player::getPlayerGameType` method when available. No player-game-mode offset is guessed; if the method is absent, the filter logs once and leaves candidates unchanged.
