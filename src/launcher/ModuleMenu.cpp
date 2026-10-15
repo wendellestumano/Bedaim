@@ -572,10 +572,10 @@ void registerModulesWithLauncher() {
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
                 if (mod->moduleId == "bedrocktools.Auto Totem" && kLower == "mscanretryintervalms") {
-                    minVal = 100.0f;
+                    minVal = 400.0f;
                     maxVal = 2000.0f;
                 } else if (mod->moduleId == "bedrocktools.Auto Totem" && kLower == "moffhandpollintervalms") {
-                    minVal = 50.0f;
+                    minVal = 150.0f;
                     maxVal = 500.0f;
                 } else if (mod->moduleId == "bedrocktools.Auto Totem" && kLower == "muiStepDelayMs") {
                     minVal = 0.0f;
