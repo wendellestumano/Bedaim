@@ -24,6 +24,8 @@
 #include <atomic>
 #include <string_view>
 #include <pl/Logger.hpp>
+#include <pl/Input.hpp>
+#include <pl/ModMenu.hpp>
 
 
 namespace {
@@ -48,6 +50,7 @@ struct ActorVector {
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
 
 AimAssistModule* g_aimAssist = nullptr;
+std::once_flag g_autoHitInputCallbackOnce;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
@@ -369,6 +372,21 @@ void AimAssistModule::resetTrackingState() {
 }
 
 void AimAssistModule::onInit() {
+    // The launcher Input API observes real/virtual Android key events. It does
+    // not synthesize them from native code; the floating Hold button below is
+    // the supported way to emit a configurable key into the game's input path.
+    std::call_once(g_autoHitInputCallbackOnce, [] {
+        pl::input::registerKeyCallback([](const pl::input::KeyEvent& event) {
+            auto* module = g_aimAssist;
+            if (!module) return false;
+            const int configuredKey = module->m_autoHitKeyCode.load(std::memory_order_acquire);
+            if (configuredKey > 0 && event.keyCode == configuredKey) {
+                module->m_autoHitPhysicalKeyDown.store(event.isKeyDown, std::memory_order_release);
+            }
+            return false;
+        });
+    });
+
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
     g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
@@ -402,13 +420,49 @@ void AimAssistModule::onInit() {
 }
 
 void AimAssistModule::onEnable() {
+    m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
+    m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
 void AimAssistModule::onDisable() {
+    m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
+    m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
+}
+
+void AimAssistModule::onMenuRegistered() {
+    m_menuRegistered.store(true, std::memory_order_release);
+    refreshAutoHitKeyButton();
+}
+
+void AimAssistModule::refreshAutoHitKeyButton() {
+    using namespace pl::modmenu;
+    constexpr std::string_view ButtonId = "bedaim.aimassist.autohit_key";
+    unregisterButton(ButtonId);
+
+    const int keyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
+    if (keyCode <= 0 || keyCode > 288) return;
+
+    const std::string label = "AUTO HIT / KEY " + std::to_string(keyCode);
+    ButtonBuilder(std::string(ButtonId), "AutoHit Key")
+        .moduleId(moduleId)
+        .modId("BedrockTools")
+        .label(label)
+        .androidKeyCode(keyCode)
+        .behavior(ButtonBehavior::Hold)
+        .defaultVisible(true)
+        .stylePreset(ButtonStylePreset::Keycap)
+        .onEvent([this](std::string_view, ButtonEvent event, float) {
+            if (event == ButtonEvent::Down) {
+                m_autoHitVirtualKeyDown.store(true, std::memory_order_release);
+            } else if (event == ButtonEvent::Up) {
+                m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+            }
+        })
+        .registerButton();
 }
 
 
@@ -916,6 +970,12 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     // require a second camera-angle/crosshair test here: that duplicate gate caused
     // AutoHit to stop during camera convergence and when targets moved below the player.
     if (!m_autoHit || !enabled || !player || player != m_lastPlayer) return;
+    const int configuredKey = m_autoHitKeyCode.load(std::memory_order_acquire);
+    if (configuredKey > 0 &&
+        !m_autoHitPhysicalKeyDown.load(std::memory_order_acquire) &&
+        !m_autoHitVirtualKeyDown.load(std::memory_order_acquire)) {
+        return;
+    }
     if (!m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) {
         logAutoHitOnce(g_loggedAutoHitNoTarget,
             "AutoHit is enabled but Aim Assist has no valid target snapshot. Check target filters and detection range.");
@@ -1396,7 +1456,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
-    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    std::unique_lock<std::mutex> stateLock(m_stateMutex);
+    const int previousAutoHitKeyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
@@ -1494,6 +1555,19 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_autoHit = j.value("m_autoHit", m_autoHit);
     m_autoHitRange = std::clamp(j.value("m_autoHitRange", m_autoHitRange), 2.0f, 6.0f);
     m_autoHitDelayMs = std::clamp(j.value("m_autoHitDelayMs", m_autoHitDelayMs), 80.0f, 1000.0f);
+    const int configuredKey = std::clamp(j.value("m_autoHitKeyCode",
+        m_autoHitKeyCode.load(std::memory_order_acquire)), 0, 288);
+    m_autoHitKeyCode.store(configuredKey, std::memory_order_release);
+
+    const bool keyChanged = previousAutoHitKeyCode != configuredKey;
+    if (keyChanged) {
+        m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
+        m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+    }
+    stateLock.unlock();
+    if (keyChanged && m_menuRegistered.load(std::memory_order_acquire)) {
+        refreshAutoHitKeyButton();
+    }
 }
 
 void AimAssistModule::saveConfig(nlohmann::json& j) {
@@ -1543,6 +1617,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_autoHit"] = m_autoHit;
     j["m_autoHitRange"] = m_autoHitRange;
     j["m_autoHitDelayMs"] = m_autoHitDelayMs;
+    j["m_autoHitKeyCode"] = m_autoHitKeyCode.load(std::memory_order_acquire);
 }
 
  
