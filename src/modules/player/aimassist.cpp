@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "AimAssistMath.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
@@ -75,15 +76,11 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadToDeg = 180.0f / kPi;
 
 float wrapDegrees(float angle) {
-    if (!std::isfinite(angle)) return 0.0f;
-    angle = std::fmod(angle, 360.0f);
-    if (angle > 180.0f) angle -= 360.0f;
-    else if (angle < -180.0f) angle += 360.0f;
-    return angle;
+    return bedaim::aimmath::wrapDegrees(angle);
 }
 
 bool finiteVec3(const bedrocktools::sdk::Vec3& v) {
-    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+    return bedaim::aimmath::isFiniteVector({v.x, v.y, v.z});
 }
 
 bool actorIsGliding(void* actor) {
@@ -123,12 +120,10 @@ bool actorIsGliding(void* actor) {
 }
 
 bool validBounds(const bedrocktools::sdk::AABB& bounds) {
-    if (!finiteVec3(bounds.min) || !finiteVec3(bounds.max)) return false;
-    const float height = bounds.max.y - bounds.min.y;
-    const float width = bounds.max.x - bounds.min.x;
-    const float depth = bounds.max.z - bounds.min.z;
-    return height >= 0.25f && height <= 8.0f && width > 0.0f && width <= 5.0f
-        && depth > 0.0f && depth <= 5.0f;
+    return bedaim::aimmath::isValidBounds({
+        {bounds.min.x, bounds.min.y, bounds.min.z},
+        {bounds.max.x, bounds.max.y, bounds.max.z}
+    });
 }
 
 float distanceSquared(const bedrocktools::sdk::Vec3& a, const bedrocktools::sdk::Vec3& b) {
@@ -1214,9 +1209,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     if (stickyMode) {
         // No easing tail: react directly to the current error, while respecting AimSpeed.
-        const float maxStep = baseTurnRate * deltaSeconds;
-        yawDelta = std::clamp(yawError, -maxStep, maxStep);
-        pitchDelta = std::clamp(pitchError, -maxStep, maxStep);
+        yawDelta = bedaim::aimmath::boundedTurnStep(yawError, baseTurnRate, deltaSeconds);
+        pitchDelta = bedaim::aimmath::boundedTurnStep(pitchError, baseTurnRate, deltaSeconds);
     } else {
         // Smooth mode uses time-based easing with no hard-coded 30-FPS step.
         float modeResponse = 1.0f;
@@ -1237,9 +1231,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         const float response = (3.0f + 2.6f * aimSpeed) * modeResponse * adaptiveResponse;
         const float maxTurnRate = baseTurnRate * modeRate * adaptiveRate;
         const float alpha = 1.0f - std::exp(-response * deltaSeconds);
-        const float maxStep = maxTurnRate * deltaSeconds;
-        yawDelta = std::clamp(yawError * alpha, -maxStep, maxStep);
-        pitchDelta = std::clamp(pitchError * alpha, -maxStep, maxStep);
+        yawDelta = bedaim::aimmath::boundedTurnStep(yawError * alpha, maxTurnRate, deltaSeconds);
+        pitchDelta = bedaim::aimmath::boundedTurnStep(pitchError * alpha, maxTurnRate, deltaSeconds);
     }
 
     // Strongness is not aim speed: it controls how much the assist resists an
