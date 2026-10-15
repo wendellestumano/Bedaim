@@ -28,3 +28,7 @@
 - Ruling: move xmake's `-y` flag before `-P .` in the host-test commands — the recorded package prompt is consistent with the flag not being applied; cost if wrong: another CI-only command correction.
 - Corrected the C++ float parser's null-terminator comparison during source review.
 - Current status: host workflow updated; wait for a fresh Actions run and inspect its logs before declaring Task 1 complete.
+
+- CI run 38659188292 then failed because `xmake -y -P . f ...` parsed `f` as a target name; the log explicitly says `'f' is not a valid target name`. No parser compilation occurred in that run.
+- Task 1: Ruling: invoke the xmake task before project options (`xmake f -y -P . ...` and `xmake run -P . menu_config_value_test`) — the failing log proves the previous ordering treated the task name as a target; cost if wrong: another CI command-only adjustment.
+- Workflow commit c77efc04d7f8093c3056bb908cc99c237f11015a is being checked by Actions run 38659313046 (run #196); latest observed status is still in progress at Setup xmake, with host tests not yet started.
