@@ -31,6 +31,7 @@ public:
 
     bool m_targetPlayers = true;
     bool m_targetMobs = true;
+    bool m_ignoreCreativeSpectator = true;
     bool m_cantSeeThroughBlocks = true;
     std::string m_aimMode = "Classic";
     std::string m_trackingMode = "Smooth";

@@ -183,6 +183,8 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
 
     toggle("m_targetPlayers", "Target players", "targeting", "Include player entities.");
     toggle("m_targetMobs", "Target mobs", "targeting", "Include supported mob entities.");
+    toggle("m_ignoreCreativeSpectator", "Ignore Creative/Spectator players", "targeting",
+           "Skip players in Creative or Spectator when the runtime exposes the native game-type method.");
     toggle("m_cantSeeThroughBlocks", "Require line of sight", "targeting",
            "Reject targets obstructed by solid blocks.");
     choice("m_targetSelectionMode", "Target priority", "targeting",
@@ -557,6 +559,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_hitboxDistanceGrowth") displayName = "BEHAVIOR > Distance hitbox strength (0.1-200)";
                 else if (k == "m_targetPlayers") displayName = "TARGETING > Players";
                 else if (k == "m_targetMobs") displayName = "TARGETING > Mobs";
+                else if (k == "m_ignoreCreativeSpectator") displayName = "TARGETING > Ignore Creative/Spectator";
                 else if (k == "m_cantSeeThroughBlocks") displayName = "TARGETING > Require line of sight";
                 else if (k == "m_whitelistNames") displayName = "TARGETING > Ignore names";
                 else if (k == "m_weaponOnly") displayName = "WEAPON FILTER > Enable filter";
@@ -727,12 +730,12 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_naturalizationWeapon") {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     const std::vector<std::string> weapons = {
-                        "All", "Sword", "Axe", "Mace", "Bow", "Crossbow", "Trident", "Spear", "Other melee"
+                        "All", "Sword", "Axe", "Mace", "Bow", "Crossbow", "Trident", "Spear", "Other melee", "Tools"
                     };
                     const auto selected = std::find(weapons.begin(), weapons.end(), str);
                     entry.default_value = selected == weapons.end()
                         ? "0" : std::to_string(std::distance(weapons.begin(), selected));
-                    entry.min_value = "All,Sword,Axe,Mace,Bow,Crossbow,Trident,Spear,Other melee";
+                    entry.min_value = "All,Sword,Axe,Mace,Bow,Crossbow,Trident,Spear,Other melee,Tools";
 
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;

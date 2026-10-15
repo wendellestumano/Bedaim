@@ -18,6 +18,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstddef>
+#include <dlfcn.h>
 #include <cstring>
 #include <cctype>
 #include <string>
@@ -49,6 +50,7 @@ struct ActorVector {
 };
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
+using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 
 AimAssistModule* g_aimAssist = nullptr;
 std::once_flag g_autoHitInputCallbackOnce;
@@ -57,7 +59,9 @@ ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
+PlayerGetGameTypeFn g_playerGetGameType = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
+std::atomic_bool g_loggedGameTypeUnavailable{false};
 
 pl::log::Logger& autoHitLogger() {
     static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AutoHit");
@@ -403,6 +407,16 @@ void AimAssistModule::onInit() {
 
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
+    // LeviLamina declares GameType getPlayerGameType() const; no Player offset is guessed.
+    void* gameTypeAddress = dlsym(RTLD_DEFAULT, "_ZNK6Player17getPlayerGameTypeEv");
+    if (!gameTypeAddress) {
+        void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+        if (minecraft) {
+            gameTypeAddress = dlsym(minecraft, "_ZNK6Player17getPlayerGameTypeEv");
+            dlclose(minecraft);
+        }
+    }
+    g_playerGetGameType = reinterpret_cast<PlayerGetGameTypeFn>(gameTypeAddress);
     g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
@@ -800,6 +814,15 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const bool isPlayer = g_actorIsPlayer && g_actorIsPlayer(candidate);
         if (isPlayer) {
             if (!m_targetPlayers) continue;
+            if (m_ignoreCreativeSpectator) {
+                if (g_playerGetGameType) {
+                    const std::int32_t gameType = g_playerGetGameType(candidate);
+                    // Bedrock GameType: Survival=0, Creative=1, Adventure=2, Spectator=3.
+                    if (gameType == 1 || gameType == 3) continue;
+                } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
+                    autoHitLogger().warn("Creative/Spectator filtering unavailable: Player::getPlayerGameType is not exported by this runtime.");
+                }
+            }
         } else {
             if (!m_targetMobs || !categoryHasMobBit(candidate)) continue;
         }
@@ -1553,6 +1576,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     const bool previousAutoHitButtonEnabled = m_autoHitButtonEnabled;
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
+    m_ignoreCreativeSpectator = j.value("m_ignoreCreativeSpectator", m_ignoreCreativeSpectator);
     m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
     m_aimMode = j.value("m_aimMode", m_aimMode);
     m_trackingMode = j.value("m_trackingMode", m_trackingMode);
@@ -1702,6 +1726,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     j["m_targetPlayers"] = m_targetPlayers;
     j["m_targetMobs"] = m_targetMobs;
+    j["m_ignoreCreativeSpectator"] = m_ignoreCreativeSpectator;
     j["m_cantSeeThroughBlocks"] = m_cantSeeThroughBlocks;
     j["m_aimMode"] = m_aimMode;
     j["m_trackingMode"] = m_trackingMode;

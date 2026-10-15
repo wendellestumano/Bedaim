@@ -1,5 +1,10 @@
 # Changelog
 
+## Creative/Spectator target filter follow-up — 2026-10-15
+
+- Added an Aim Assist option to skip Creative and Spectator players through the exported `Player::getPlayerGameType` method when available. No player-game-mode offset is guessed; if the method is absent, the filter logs once and leaves candidates unchanged.
+- Extended the legacy Naturalize Jumps selector with the Tools option to match the V2 schema.
+
 ## Mobile input, AutoTotem trigger, and fall-threshold follow-up — 2026-10-15
 
 - Added a setting to show/hide the AutoHit floating Hold button independently of AutoHit; input-binding and visibility changes rebuild the control.
