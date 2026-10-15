@@ -212,7 +212,7 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Minimum time between native attack attempts.");
     addNode("m_autoHitKeyCode", "Attack key code", "auto_hit", ConfigControlTypeV2::SliderInt,
             "0", "288", "1", "Android keycode",
-            "0 keeps automatic native AutoHit. Set an Android key code to show a floating Hold button that emits the key and enables AutoHit while held. Android KEYCODE_0 is 7.",
+            "0 keeps automatic native AutoHit. Set an Android key code to show a floating Hold button that emits the key and enables AutoHit while held. Android KEYCODE_0 is 7; the floating button displays a friendly key label.",
             true, {}, ConfigChoiceStyleV2::Auto);
 
     toggle("m_weaponOnly", "Enable weapon filter", "weapons",
