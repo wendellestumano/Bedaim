@@ -56,6 +56,7 @@ public:
     // 0 preserves full automatic mode. A non-zero Android key code exposes a
     // floating Hold button that emits that key and gates native AutoHit while held.
     std::atomic_int m_autoHitKeyCode{0};
+    std::string m_autoHitKeyBinding = "auto";
     std::atomic_bool m_autoHitPhysicalKeyDown{false};
     std::atomic_bool m_autoHitVirtualKeyDown{false};
     float m_hitboxScale = 1.0f;
@@ -89,6 +90,8 @@ private:
     std::atomic_bool m_menuRegistered{false};
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
+    bool m_lastTargetIsPlayer = false;
+    int m_cachedHeldWeaponCode = 0;
     bool m_targetPresent = false;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
@@ -109,6 +112,10 @@ private:
     bedrocktools::sdk::Vec3 m_targetVelocity{};
     bool m_hasMotionSample = false;
     std::chrono::steady_clock::time_point m_lastMotionSample{};
+    bedrocktools::sdk::Vec3 m_lastPredictionPlayerPosition{};
+    bedrocktools::sdk::Vec3 m_playerVelocity{};
+    bool m_hasPredictionPlayerSample = false;
+    std::chrono::steady_clock::time_point m_lastPredictionPlayerSample{};
 };
 
 // Expands client-side target selection, crosshair and AutoHit geometry. The
