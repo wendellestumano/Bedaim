@@ -13,7 +13,7 @@
 - Added the new module to the HUD inventory in `README.md` and the duration test to the CI workflow in `.github/workflows/build.yml`.
 
 ### Changed
-- CI now builds and executes `session_timer_format_test` alongside the existing host regression tests. File: `tests/xmake.lua`, `.github/workflows/build.yml`.
+- Added standalone xmake targets for both formatter tests and a CI step that compiles and executes both with the runner's C++20 compiler. The existing `main` branch did not have a host-test suite, so no pre-existing tests are claimed. Files: `tests/xmake.lua`, `.github/workflows/build.yml`.
 
 ### Research
 - C++ `std::chrono::steady_clock` documentation: https://en.cppreference.com/w/cpp/chrono/steady_clock. Decision: measure elapsed time with a monotonic clock rather than wall-clock time, avoiding jumps if the system time changes.
