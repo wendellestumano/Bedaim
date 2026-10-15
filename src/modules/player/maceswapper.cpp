@@ -157,8 +157,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (position.y > m_peakY) m_peakY = position.y;
 
     const float fallDistance = std::max(0.0f, m_peakY - position.y);
-    // A tiny hop is not a mace slam. Require both a meaningful drop and multiple
-    // consecutive downward ticks before acquiring the hotbar slot.
+    // A tiny hop is not a mace slam. Require the configured drop and a confirmed downward sample before acquiring the hotbar slot.
     if (verticalDelta < -0.04f && fallDistance >= std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
         m_descentTicks = std::min(m_descentTicks + 1, 8);
     } else if (verticalDelta >= -0.01f || fallDistance < std::clamp(m_minimumFallDistance, 0.30f, 10.0f)) {
