@@ -27,6 +27,7 @@ int main() {
     using bedaim::autototem::Decision;
     using bedaim::autototem::decide;
     using bedaim::autototem::normalizeDelayMs;
+    using bedaim::autototem::normalizeScanRetryMs;
 
     auto state = ready();
     check(decide(state) == Decision::Equip, "valid pending refill is allowed");
@@ -61,6 +62,17 @@ int main() {
     check(normalizeDelayMs(-5.0f) == 0.0f, "negative delay is clamped to zero");
     check(normalizeDelayMs(std::numeric_limits<float>::quiet_NaN()) == 100.0f,
           "non-finite delay returns the safe default");
+
+    check(normalizeScanRetryMs(100.0f) == 100.0f,
+          "inventory scan retry supports responsive 100 ms polling");
+    check(normalizeScanRetryMs(250.0f) == 250.0f,
+          "inventory scan retry default is 250 ms");
+    check(normalizeScanRetryMs(0.0f) == 100.0f,
+          "inventory scan retry is capped away from every-tick rescans");
+    check(normalizeScanRetryMs(5000.0f) == 2000.0f,
+          "inventory scan retry has a safe upper bound");
+    check(normalizeScanRetryMs(std::numeric_limits<float>::quiet_NaN()) == 250.0f,
+          "non-finite inventory scan retry returns the default");
 
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
