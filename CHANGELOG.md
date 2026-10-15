@@ -5,7 +5,7 @@
 ### Improved
 - Aim Assist refreshes actor candidates at the game-tick cadence and steers from the last validated bounds snapshot on render frames; render frames no longer scan the native actor vector. AutoHit now reuses the just-validated same-tick target snapshot instead of requesting/scanning the entire native actor vector a second time.
 - Weapon classification resolves the held ItemStack identifier once per tick, then caches weapon family, naturalization applicability and aim multiplier for render-frame steering.
-- Aim Assist applies cheap range/geometry filtering before name-tag, invisibility and voxel line-of-sight checks, reducing work in large long-range scans.
+- Aim Assist stops walking the distance-sorted actor list once entries exceed the useful scan radius, before making more native position/bounds calls; it also applies cheap range/geometry filtering before name-tag, invisibility and voxel line-of-sight checks.
 - Inventory memory validation reuses a short-lived readable-memory map snapshot instead of reopening and scanning /proc/self/maps for each pointer check.
 - AutoTotem evaluates delay, container and combat gates before scanning inventory slots, and skips Aim Assist target queries when Combat Only is disabled.
 
