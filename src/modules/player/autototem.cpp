@@ -73,6 +73,8 @@ void AutoTotemModule::onEnable() {
     m_pendingRefill = false;
     m_lastOffhandHadTotem = false;
     m_refillAfter = {};
+    m_nextInventoryScan = {};
+    m_cachedTotemSlot = -1;
 }
 
 void AutoTotemModule::onDisable() {
@@ -80,6 +82,8 @@ void AutoTotemModule::onDisable() {
     m_pendingRefill = false;
     m_lastOffhandHadTotem = false;
     m_refillAfter = {};
+    m_nextInventoryScan = {};
+    m_cachedTotemSlot = -1;
 }
 
 void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
@@ -98,6 +102,8 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_lastOffhandHadTotem = true;
         m_pendingRefill = false;
         m_refillAfter = {};
+        m_nextInventoryScan = {};
+        m_cachedTotemSlot = -1;
         return;
     }
 
@@ -106,6 +112,8 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_lastOffhandHadTotem = false;
         m_pendingRefill = false;
         m_refillAfter = {};
+        m_nextInventoryScan = {};
+        m_cachedTotemSlot = -1;
         return;
     }
 
@@ -146,10 +154,25 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     };
 
     // Skip inventory slot scans when delay/container/combat gates block the refill.
+    // If the inventory has no totem, do not walk all 36+ slots again every game
+    // tick. Cache the last miss briefly and expose the retry interval in settings.
     auto decision = bedaim::autototem::decide(precheck);
     int totemSlot = -1;
     if (decision == bedaim::autototem::Decision::WaitForItem) {
-        totemSlot = inventory.findInventorySlot(player, "totem");
+        if (m_cachedTotemSlot >= 0) {
+            totemSlot = m_cachedTotemSlot;
+        } else if (m_nextInventoryScan.time_since_epoch().count() == 0 ||
+                   now >= m_nextInventoryScan) {
+            totemSlot = inventory.findInventorySlot(player, "totem");
+            if (totemSlot >= 0) {
+                m_cachedTotemSlot = totemSlot;
+                m_nextInventoryScan = {};
+            } else {
+                m_nextInventoryScan = now + std::chrono::milliseconds(
+                    static_cast<int>(bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs)));
+            }
+        }
+
         const bedaim::autototem::Inputs withCandidate{
             enabled, m_pendingRefill, offhandHasTotem, delayElapsed,
             m_combatOnly, inCombat, containerOpen, totemSlot >= 0, offhandEmpty
@@ -167,18 +190,25 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 m_pendingRefill = false;
                 m_lastOffhandHadTotem = true;
                 m_refillAfter = {};
+                m_nextInventoryScan = {};
+                m_cachedTotemSlot = -1;
             } else {
                 // Fail closed and retry at a modest cadence if this build lacks a
                 // compatible native route or a local/server-visible transfer fails.
                 if (!g_loggedAutoTotemTransferFailure.exchange(true, std::memory_order_acq_rel))
                     autoTotemLogger().warn("Auto Totem first transfer failed safely: {}. No unverified setter will be called.", transferResultName(result));
-                m_refillAfter = now + std::chrono::milliseconds(100);
+                m_cachedTotemSlot = -1;
+                m_refillAfter = now + std::chrono::milliseconds(
+                    static_cast<int>(bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs)));
+                m_nextInventoryScan = m_refillAfter;
             }
             break;
         }
         case bedaim::autototem::Decision::Idle:
             m_pendingRefill = false;
             m_refillAfter = {};
+            m_nextInventoryScan = {};
+            m_cachedTotemSlot = -1;
             break;
         case bedaim::autototem::Decision::WaitForDelay:
         case bedaim::autototem::Decision::WaitForCombat:
@@ -194,6 +224,8 @@ void AutoTotemModule::loadConfig(const nlohmann::json& json) {
     std::lock_guard lock(m_stateMutex);
     m_delayMs = bedaim::autototem::normalizeDelayMs(
         json.value("m_delayMs", m_delayMs));
+    m_scanRetryIntervalMs = bedaim::autototem::normalizeScanRetryMs(
+        json.value("m_scanRetryIntervalMs", m_scanRetryIntervalMs));
     m_combatOnly = json.value("m_combatOnly", m_combatOnly);
     m_keepTotemEquipped = json.value("m_keepTotemEquipped", m_keepTotemEquipped);
 }
@@ -202,6 +234,7 @@ void AutoTotemModule::saveConfig(nlohmann::json& json) {
     Module::saveConfig(json);
     std::lock_guard lock(m_stateMutex);
     json["m_delayMs"] = bedaim::autototem::normalizeDelayMs(m_delayMs);
+    json["m_scanRetryIntervalMs"] = bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs);
     json["m_combatOnly"] = m_combatOnly;
     json["m_keepTotemEquipped"] = m_keepTotemEquipped;
 }
@@ -229,7 +262,15 @@ void AutoTotemModule::onMenuRegistered() {
     delay.minValue = "0";
     delay.maxValue = "1000";
     delay.step = "10";
+    delay.description = "Time to wait after a totem is consumed before refilling.";
     schema.node(std::move(delay));
+    auto scanRetry = node("m_scanRetryIntervalMs", "Inventory scan retry (ms)", "behavior",
+                          ConfigControlTypeV2::SliderFloat);
+    scanRetry.minValue = "100";
+    scanRetry.maxValue = "2000";
+    scanRetry.step = "50";
+    scanRetry.description = "How often to rescan inventory when no totem is found. Higher values reduce lag with an empty inventory.";
+    schema.node(std::move(scanRetry));
     schema.node(node("m_keepTotemEquipped", "Keep Totem Equipped", "behavior",
                      ConfigControlTypeV2::Toggle));
     schema.node(node("m_combatOnly", "Combat Only", "safety",
