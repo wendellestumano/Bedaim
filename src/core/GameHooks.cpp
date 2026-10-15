@@ -271,9 +271,23 @@ void resolveInventoryUiApi() {
     // Player vtable slot is checked against libminecraftpe.so at call time.
     openInventoryViaVtable = openInventoryScreenOriginal == nullptr;
 
+    // Prefer the native LocalPlayer/Player method when this build exports it.
+    // The previous resolver only searched globally-loaded client helpers, so a
+    // valid close method exported directly by libminecraftpe.so was missed and
+    // AutoTotem never attempted its visible inventory sequence.
     closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
-        resolveLoadedClientSupportFunction(
+        resolveMinecraftFunction(
             "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+    if (!closeInventoryScreenOriginal) {
+        closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
+            resolveMinecraftFunction(
+                "_ZN6Player20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+    }
+    if (!closeInventoryScreenOriginal) {
+        closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
+            resolveLoadedClientSupportFunction(
+                "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+    }
     inventoryUiApiResolved =
         (openInventoryScreenOriginal || openInventoryViaVtable) &&
         closeInventoryScreenOriginal;
