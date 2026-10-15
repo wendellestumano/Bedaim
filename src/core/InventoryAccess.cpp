@@ -14,7 +14,6 @@
 #include <dlfcn.h>
 #include <iterator>
 #include <limits>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -81,15 +80,16 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
     // Inventory validation is a hot path. Reopening and scanning /proc/self/maps
     // for each stack/vtable pointer made cost grow with both inventory size and
     // process mapping count. Reuse a brief readable-map snapshot instead.
-    static std::mutex mapsMutex;
-    static std::vector<ReadableRegion> readableRegions;
-    static std::chrono::steady_clock::time_point mapsRefreshed{};
-    static bool mapsCacheValid = false;
+    // Each game thread performs many checks in one tick. Thread-local cache
+    // avoids serializing all inventory checks on a shared mutex and keeps the
+    // process map parse out of the normal per-slot validation path.
+    thread_local std::vector<ReadableRegion> readableRegions;
+    thread_local std::chrono::steady_clock::time_point mapsRefreshed{};
+    thread_local bool mapsCacheValid = false;
 
-    std::lock_guard<std::mutex> lock(mapsMutex);
     const auto now = std::chrono::steady_clock::now();
     if (!mapsCacheValid || now < mapsRefreshed ||
-        now - mapsRefreshed > std::chrono::milliseconds(10)) {
+        now - mapsRefreshed > std::chrono::milliseconds(50)) {
         std::vector<ReadableRegion> refreshed;
         std::FILE* maps = std::fopen("/proc/self/maps", "r");
         if (!maps) {
