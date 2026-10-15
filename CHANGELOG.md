@@ -1,5 +1,13 @@
 # Changelog
 
+## Mobile test follow-up — 2026-10-15
+
+- AutoHit no longer requires an input hold when its module toggle is enabled; its floating button is optional.
+- Added live config handling for AutoHit button visibility and exact Rotation Speed edits, clamped from 0.1 to 1000.
+- Player Radar reads usernames through the in-repository `Player::name()` SDK method before falling back to name tags, removing speculative getName symbol calls.
+- AutoTotem's manual button emits Android KEYCODE_E and waits for the actual inventory-open event rather than calling the native openInventory method directly.
+
+
 ## Follow-up requested from mobile test — 2026-10-15
 
 - Rotation speed is now configurable up to 1000 across UI, loading, and runtime clamps. Elytra mode yields camera rotation to the player while gliding.
