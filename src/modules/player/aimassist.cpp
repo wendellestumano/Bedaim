@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "AutoHitKeyBinding.hpp"
 #include "AimAssistMath.hpp"
 #include "AutoHitGuards.hpp"
 #include "core/InventoryAccess.hpp"
@@ -288,21 +289,24 @@ HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
         const_cast<bedrocktools::sdk::Player*>(player));
     if (!stack) return HeldWeapon::None;
 
-    const auto& inventory = bedrocktools::core::InventoryAccess::get();
-    // Check crossbow before bow because some item-name matchers use substrings.
-    if (inventory.countStack(stack, "crossbow") > 0) return HeldWeapon::Crossbow;
-    if (inventory.countStack(stack, "trident") > 0) return HeldWeapon::Trident;
-    if (inventory.countStack(stack, "bow") > 0) return HeldWeapon::Bow;
-    if (inventory.countStack(stack, "_sword") > 0) return HeldWeapon::Sword;
-    if (inventory.countStack(stack, "_axe") > 0) return HeldWeapon::Axe;
-    if (inventory.countStack(stack, "mace") > 0) return HeldWeapon::Mace;
-    if (inventory.countStack(stack, "spear") > 0) return HeldWeapon::Spear;
+    // getDescriptionId/dladdr validation is expensive on Android. Resolve one
+    // identifier and classify it with ordinary string comparisons instead of
+    // re-entering native ItemStack inspection once for every weapon category.
+    const std::string identifier = bedrocktools::core::InventoryAccess::get().stackIdentifier(stack);
+    if (identifier.empty()) return HeldWeapon::None;
+    if (identifier.find("crossbow") != std::string::npos) return HeldWeapon::Crossbow;
+    if (identifier.find("trident") != std::string::npos) return HeldWeapon::Trident;
+    if (identifier.find("mace") != std::string::npos) return HeldWeapon::Mace;
+    if (identifier.find("spear") != std::string::npos) return HeldWeapon::Spear;
+    if (identifier.find("sword") != std::string::npos) return HeldWeapon::Sword;
+    if (identifier.find("axe") != std::string::npos) return HeldWeapon::Axe;
+    if (identifier.find("bow") != std::string::npos) return HeldWeapon::Bow;
 
-    constexpr const char* otherWeapons[] = {
+    constexpr std::string_view otherWeapons[] = {
         "dagger", "katana", "rapier", "scythe", "hammer", "halberd", "glaive", "lance"
     };
-    for (const char* identifier : otherWeapons) {
-        if (inventory.countStack(stack, identifier) > 0) return HeldWeapon::OtherMelee;
+    for (const auto identifierPart : otherWeapons) {
+        if (identifier.find(identifierPart) != std::string::npos) return HeldWeapon::OtherMelee;
     }
     return HeldWeapon::None;
 }
@@ -351,6 +355,8 @@ void AimAssistModule::resetTrackingState() {
     m_lastPlayer = nullptr;
     m_lastTarget = nullptr;
     m_targetPresent = false;
+    m_lastTargetIsPlayer = false;
+    m_cachedHeldWeaponCode = 0;
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
@@ -369,6 +375,10 @@ void AimAssistModule::resetTrackingState() {
     m_targetVelocity = {};
     m_hasMotionSample = false;
     m_lastMotionSample = {};
+    m_lastPredictionPlayerPosition = {};
+    m_playerVelocity = {};
+    m_hasPredictionPlayerSample = false;
+    m_lastPredictionPlayerSample = {};
 }
 
 void AimAssistModule::onInit() {
@@ -446,7 +456,9 @@ void AimAssistModule::refreshAutoHitKeyButton() {
     const int keyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
     if (keyCode <= 0 || keyCode > 288) return;
 
-    std::string keyLabel = "KEYCODE " + std::to_string(keyCode);
+    std::string keyLabel = bedaim::autohitkey::format(keyCode);
+    std::transform(keyLabel.begin(), keyLabel.end(), keyLabel.begin(),
+        [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
     if (keyCode >= 7 && keyCode <= 16) {
         keyLabel = std::to_string(keyCode == 7 ? 0 : keyCode - 6);
     } else if (keyCode >= 29 && keyCode <= 54) {
@@ -618,6 +630,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     m_localPlayerGliding = actorIsGliding(player);
 
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
+    m_cachedHeldWeaponCode = static_cast<int>(heldWeapon);
     if (m_weaponOnly && !weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
             m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee)) {
         resetTrackingState();
@@ -706,11 +719,13 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
     void* bestTarget = nullptr;
     AABB bestTargetBounds{};
+    bool bestTargetIsPlayer = false;
     float bestScore = std::numeric_limits<float>::max();
     void* retainedTarget = nullptr;
     AABB retainedTargetBounds{};
     float retainedTargetScore = std::numeric_limits<float>::max();
     bool retainedTargetInsideBubble = false;
+    bool retainedTargetIsPlayer = false;
     Vec3 playerCenter = playerPosition;
     if (validBounds(playerBounds)) {
         playerCenter.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
@@ -840,6 +855,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (candidate == m_lastTarget) {
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
+            retainedTargetIsPlayer = isPlayer;
             retainedTargetScore = score;
             retainedTargetInsideBubble = insideRetentionBubble || candidateBelowPlayer;
         }
@@ -847,6 +863,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             bestScore = score;
             bestTarget = candidate;
             bestTargetBounds = targetBounds;
+            bestTargetIsPlayer = isPlayer;
         }
     }
 
@@ -860,6 +877,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (retainedTarget && (retainedTargetInsideBubble || retainedTargetScore <= bestScore + switchMargin)) {
         bestTarget = retainedTarget;
         bestTargetBounds = retainedTargetBounds;
+        bestTargetIsPlayer = retainedTargetIsPlayer;
     }
 
     if (!bestTarget) {
@@ -919,6 +937,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         m_lastRotationUpdate = {};
     }
     m_lastTarget = bestTarget;
+    m_lastTargetIsPlayer = bestTargetIsPlayer;
     m_targetPresent = true;
     m_lastTargetBounds = bestTargetBounds;
     m_lastTargetSeen = motionSampleTime;
@@ -929,46 +948,18 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
 void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
-    using namespace bedrocktools::sdk;
-
     auto* player = m_lastPlayer;
-    if (!enabled || !player || !m_lastTarget || !g_fetchNearbyActors ||
+    if (!enabled || !player || !m_lastTarget || !m_targetPresent ||
         (!g_applyLocalPlayerTurnDelta && !m_autoHit)) return;
 
-    // Refresh target bounds at the client-update cadence, rather than following
-    // a hitbox sampled only on LocalPlayerTickEvent. Match the pointer in the
-    // current native actor list before dereferencing it, so a despawned target
-    // is never accessed through the cached pointer.
-    const float range = std::clamp(m_range, 2.0f, 80.0f);
-    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
-    auto* expander = (expanderBase && expanderBase->enabled)
-        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
-    const float expansionMargin = expander ? expander->queryExpansionMargin() : 0.0f;
-    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange, expansionMargin);
-    Vec3 extent{scanRange, scanRange, scanRange};
-    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!actors.begin || !actors.end || endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        // A malformed frame snapshot is not proof that the tracked entity despawned.
-        return;
-    }
-
-    bool targetFound = false;
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        if (entry->actor != m_lastTarget) continue;
-        const AABB currentBounds = reinterpret_cast<Actor*>(entry->actor)->bounds();
-        if (!validBounds(currentBounds)) return;
-        m_lastTargetBounds = currentBounds;
-        m_lastTargetSeen = std::chrono::steady_clock::now();
-        targetFound = true;
-        break;
-    }
-    if (!targetFound) {
-        // LocalPlayerTickEvent performs the authoritative candidate refresh. A
-        // transient miss in this frame-level list should not erase a close lock.
+    // Candidate scanning is performed once per player tick. Re-running the native
+    // nearby-actor query on every render frame caused duplicate 80-block scans and
+    // unnecessary native string/geometry work on low-end Android.
+    const auto now = std::chrono::steady_clock::now();
+    if (m_lastTargetSeen.time_since_epoch().count() == 0 ||
+        now < m_lastTargetSeen ||
+        now - m_lastTargetSeen > std::chrono::milliseconds(250) ||
+        !validBounds(m_lastTargetBounds)) {
         return;
     }
 
@@ -1209,6 +1200,35 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     const Vec3 playerPosition = player->position();
     if (!finiteVec3(playerPosition)) return;
+    if (m_hasPredictionPlayerSample) {
+        const float sampleDelta = std::chrono::duration<float>(
+            now - m_lastPredictionPlayerSample).count();
+        if (std::isfinite(sampleDelta) && sampleDelta >= 0.004f && sampleDelta <= 0.25f) {
+            Vec3 velocity{
+                (playerPosition.x - m_lastPredictionPlayerPosition.x) / sampleDelta,
+                (playerPosition.y - m_lastPredictionPlayerPosition.y) / sampleDelta,
+                (playerPosition.z - m_lastPredictionPlayerPosition.z) / sampleDelta
+            };
+            const float speedSquared = distanceSquared(velocity, Vec3{});
+            if (std::isfinite(speedSquared) && speedSquared <= 400.0f) {
+                m_playerVelocity = {
+                    std::clamp(velocity.x, -20.0f, 20.0f),
+                    std::clamp(velocity.y, -20.0f, 20.0f),
+                    std::clamp(velocity.z, -20.0f, 20.0f)
+                };
+            } else {
+                m_playerVelocity = {};
+            }
+        } else {
+            m_playerVelocity = {};
+        }
+    } else {
+        m_playerVelocity = {};
+    }
+    m_lastPredictionPlayerPosition = playerPosition;
+    m_lastPredictionPlayerSample = now;
+    m_hasPredictionPlayerSample = true;
+
     const AABB playerBounds = player->bounds();
     Vec3 eyePosition = playerPosition;
     if (validBounds(playerBounds)) {
@@ -1220,7 +1240,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     }
 
     const AABB nativeBounds = m_lastTargetBounds;
-    const HeldWeapon weaponForPrediction = heldWeaponInMainHand(player);
+    const HeldWeapon weaponForPrediction = static_cast<HeldWeapon>(std::clamp(
+        m_cachedHeldWeaponCode, 0, static_cast<int>(HeldWeapon::OtherMelee)));
     const bool rangedWeapon = weaponForPrediction == HeldWeapon::Bow ||
         weaponForPrediction == HeldWeapon::Crossbow ||
         weaponForPrediction == HeldWeapon::Trident ||
@@ -1231,10 +1252,12 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     Vec3 predictionOffset{};
     if (usePrediction && m_hasMotionSample && m_motionTrackedTarget == m_lastTarget) {
         const float leadSeconds = std::clamp(m_predictionLeadMs, 0.0f, 300.0f) / 1000.0f;
+        // Aim prediction uses target velocity relative to our own movement. A
+        // moving player therefore leads their travel even when the target is still.
         predictionOffset = {
-            std::clamp(m_targetVelocity.x * leadSeconds, -3.0f, 3.0f),
-            std::clamp(m_targetVelocity.y * leadSeconds, -2.0f, 2.0f),
-            std::clamp(m_targetVelocity.z * leadSeconds, -3.0f, 3.0f)
+            std::clamp((m_targetVelocity.x - m_playerVelocity.x) * leadSeconds, -3.0f, 3.0f),
+            std::clamp((m_targetVelocity.y - m_playerVelocity.y) * leadSeconds, -2.0f, 2.0f),
+            std::clamp((m_targetVelocity.z - m_playerVelocity.z) * leadSeconds, -3.0f, 3.0f)
         };
     }
 
@@ -1251,7 +1274,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         ? static_cast<HitboxExpanderModule*>(steeringExpanderBase) : nullptr;
     AABB bounds = nativeBounds;
     if (steeringExpander) {
-        const bool targetIsPlayer = g_actorIsPlayer && g_actorIsPlayer(m_lastTarget);
+        const bool targetIsPlayer = m_lastTargetIsPlayer;
         bounds = steeringExpander->expandedTargetBounds(targetIsPlayer, nativeBounds);
     }
     bounds.min.x += predictionOffset.x; bounds.max.x += predictionOffset.x;
@@ -1396,15 +1419,19 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     }
     weaponAimMultiplier = std::clamp(weaponAimMultiplier, 0.2f, 2.0f);
     const float aimSpeed = std::clamp(m_aimSpeed * weaponAimMultiplier, 0.1f, 10.0f);
-    const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 10.0f);
+    const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 200.0f);
     float yawDelta = 0.0f;
     float pitchDelta = 0.0f;
     const float baseTurnRate = (70.0f + 58.0f * aimSpeed) * rotationSpeed;
 
     if (stickyMode) {
-        // No easing tail: react directly to the current error, while respecting AimSpeed.
-        yawDelta = bedaim::aimmath::boundedTurnStep(yawError, baseTurnRate, deltaSeconds);
-        pitchDelta = bedaim::aimmath::boundedTurnStep(pitchError, baseTurnRate, deltaSeconds);
+        // Aim profile applies in every tracking mode, including Sticky.
+        float profileRate = 1.0f;
+        if (m_aimMode == "Robotic") profileRate = 1.15f;
+        else if (m_aimMode == "Human") profileRate = 0.78f;
+        const float stickyTurnRate = baseTurnRate * profileRate;
+        yawDelta = bedaim::aimmath::boundedTurnStep(yawError, stickyTurnRate, deltaSeconds);
+        pitchDelta = bedaim::aimmath::boundedTurnStep(pitchError, stickyTurnRate, deltaSeconds);
     } else {
         // Smooth mode uses time-based easing with no hard-coded 30-FPS step.
         float modeResponse = 1.0f;
@@ -1545,7 +1572,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     }
     m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 200.0f);
     m_hitboxGrowthScaleV2 = true;
-    m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 10.0f);
+    m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 200.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
     if (m_predictionMode == "0") m_predictionMode = "Off";
     else if (m_predictionMode == "1") m_predictionMode = "Ranged";
@@ -1567,8 +1594,17 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_autoHit = j.value("m_autoHit", m_autoHit);
     m_autoHitRange = std::clamp(j.value("m_autoHitRange", m_autoHitRange), 2.0f, 6.0f);
     m_autoHitDelayMs = std::clamp(j.value("m_autoHitDelayMs", m_autoHitDelayMs), 80.0f, 1000.0f);
-    const int configuredKey = std::clamp(j.value("m_autoHitKeyCode",
-        m_autoHitKeyCode.load(std::memory_order_acquire)), 0, 288);
+    int configuredKey = previousAutoHitKeyCode;
+    if (j.contains("m_autoHitKeyBinding") && j["m_autoHitKeyBinding"].is_string()) {
+        m_autoHitKeyBinding = j.value("m_autoHitKeyBinding", m_autoHitKeyBinding);
+        const auto parsedBinding = bedaim::autohitkey::parse(m_autoHitKeyBinding);
+        // Text edits are sent as partial strings. Keep the last valid key until the
+        // user finishes entering an alias such as "button1" or "shift".
+        if (parsedBinding.has_value()) configuredKey = *parsedBinding;
+    } else {
+        configuredKey = std::clamp(j.value("m_autoHitKeyCode", previousAutoHitKeyCode), 0, 288);
+        m_autoHitKeyBinding = bedaim::autohitkey::format(configuredKey);
+    }
     m_autoHitKeyCode.store(configuredKey, std::memory_order_release);
 
     const bool keyChanged = previousAutoHitKeyCode != configuredKey;
@@ -1630,6 +1666,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_autoHitRange"] = m_autoHitRange;
     j["m_autoHitDelayMs"] = m_autoHitDelayMs;
     j["m_autoHitKeyCode"] = m_autoHitKeyCode.load(std::memory_order_acquire);
+    j["m_autoHitKeyBinding"] = m_autoHitKeyBinding;
 }
 
  
