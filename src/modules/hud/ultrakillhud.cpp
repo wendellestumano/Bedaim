@@ -145,7 +145,7 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     // on hotbar change and at a bounded cadence instead of on every player tick.
     std::string itemId;
     if (refreshItemId) {
-        itemId = inventory.stackIdentifier(carriedItemStack(player));
+        itemId = inventory.selectedHotbarIdentifier(player);
     }
     const auto currentPosition = player->position();
     const float currentY = currentPosition.y;
