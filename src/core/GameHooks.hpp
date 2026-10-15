@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace bedrocktools::core::gamehooks {
 
@@ -16,5 +17,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 bool inventoryUiSequenceAvailable();
 bool openPlayerInventoryScreen(void* player);
 bool closePlayerInventoryScreen(void* player);
+// GameType values: Survival=0, Creative=1, Adventure=2, Spectator=3.
+bool tryGetPlayerGameType(void* player, std::int32_t& outGameType);
 
 }
