@@ -21,7 +21,7 @@ The source is public so people can study how a real LeviLauncher mod is structur
 
 **HUD:** Ping Counter, Reach Counter, Combo Display, Break Indicator, Player Coords, Compass, Speed Display, Session Timer, Frame Stats, Distance Tracker, World Time, Debug Menu, Keystrokes, Tablist
 
-**Player:** Time Changer, Weather Changer, Nick, Skin Stealer, AutoGG, AutoReQ, Aim Assist (private training worlds)
+**Player:** Time Changer, Weather Changer, Nick, Skin Stealer, AutoGG, AutoReQ, Aim Assist (private training worlds), AutoHit, AutoTotem, Sword Swapper, Mace Swapper
 
 **Misc:** No Disconnect, Chat Timestamps, No Touch Border, CPS Limiter
 
