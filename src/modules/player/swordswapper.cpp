@@ -98,6 +98,8 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_ownsSwap = false;
         m_swordSlot = -1;
         m_previousSlot = -1;
+        m_cachedSwordSlot = -1;
+        m_nextSwordScanAt = {};
         return;
     }
 
@@ -193,7 +195,25 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (selected < 0) return;
     if (m_ownsSwap && selected == m_swordSlot) return;
 
-    const int swordSlot = inventory.findHotbarSlot(player, "_sword");
+    const auto now = std::chrono::steady_clock::now();
+    int swordSlot = -1;
+    if (m_cachedSwordSlot >= 0) {
+        const std::string cachedIdentifier =
+            inventory.hotbarSlotIdentifier(player, m_cachedSwordSlot);
+        if (cachedIdentifier.find("sword") != std::string::npos) {
+            swordSlot = m_cachedSwordSlot;
+        } else {
+            m_cachedSwordSlot = -1;
+        }
+    }
+    if (swordSlot < 0) {
+        // If no sword is present, don't resolve all nine ItemStacks on every
+        // tick. Recheck inventory changes after a short bounded cooldown.
+        if (m_nextSwordScanAt.time_since_epoch().count() != 0 && now < m_nextSwordScanAt) return;
+        swordSlot = inventory.findHotbarSlot(player, "sword");
+        m_cachedSwordSlot = swordSlot;
+        m_nextSwordScanAt = now + std::chrono::milliseconds(350);
+    }
     if (swordSlot < 0 || selected == swordSlot) return;
 
     // ItemStack description lookup is only needed if a swap would really happen.
