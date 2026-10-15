@@ -93,6 +93,7 @@ private:
     void* m_lastTarget = nullptr;
     bool m_lastTargetIsPlayer = false;
     int m_cachedHeldWeaponCode = 0;
+    bool m_weaponFilterAllowsCurrent = true;
     bool m_targetPresent = false;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
