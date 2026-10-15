@@ -71,6 +71,10 @@ int main() {
           "distance hitbox grows smoothly between near and far ranges");
     check(farScale > 2.0f && farScale < 4.0f,
           "default distance strength provides visible far-range expansion");
+    const float normalRangeFarScale =
+        bedaim::aimmath::distanceHitboxScale(1.0f, 5.5f, 5.5f, 5.0f, true);
+    check(normalRangeFarScale > 2.0f && normalRangeFarScale < 4.0f,
+          "default strength still expands at normal 5.5-block aim range");
     check(std::abs(bedaim::aimmath::distanceHitboxScale(2.0f, 30.0f, 30.0f, 5.0f, false) - 2.0f) < 1.0e-4f,
           "disabled distance curve uses the base hitbox scale");
     check(std::isfinite(bedaim::aimmath::distanceHitboxScale(1.0f,
