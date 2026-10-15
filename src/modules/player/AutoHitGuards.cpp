@@ -5,6 +5,11 @@
 
 namespace bedaim::autohit {
 
+bool publicAttackRouteAvailable(bool publicEntryMatchesResolvedSignature) noexcept {
+    return publicEntryMatchesResolvedSignature;
+}
+
+
 Decision evaluate(const Inputs& input) noexcept {
     if (!input.enabled) return Decision::Disabled;
     if (!input.localPlayerValid) return Decision::MissingPlayer;
