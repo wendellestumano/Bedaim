@@ -217,8 +217,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             return;
         }
 
-        void* gameMode = bedrocktools::core::gamehooks::gameMode();
-        if (!gameMode) {
+        void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
+        if (!gameMode || !bedrocktools::core::gamehooks::attackAvailable(gameMode)) {
             restoreIfStillSwapped();
             return;
         }
@@ -264,8 +264,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!aim->currentTargetInCrosshair(player, target)) return;
     if (!targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) return;
 
-    void* gameMode = bedrocktools::core::gamehooks::gameMode();
-    if (!gameMode) return;
+    void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
+    if (!gameMode || !bedrocktools::core::gamehooks::attackAvailable(gameMode)) return;
 
     const int maceSlot = inventory.findHotbarSlot(player, "mace");
     const int previousSlot = inventory.selectedHotbarSlot(player);
