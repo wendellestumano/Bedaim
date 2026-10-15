@@ -247,41 +247,37 @@ void* resolveLoadedClientSupportFunction(const char* name) {
 void resolveInventoryUiApi() {
     std::lock_guard<std::mutex> apiLock(inventoryUiApiMutex);
     if (inventoryUiApiResolved) return;
-    // Do not use call_once here: BedrockTools/LeviLamina can load their support
-    // runtime after Bedaim's module initialization. Retry symbol resolution on
-    // later inventory refill attempts until a trusted API pair becomes available.
-    // openInventory is a native LocalPlayer/Player operation. Some builds
-    // export only the inherited Player implementation, so try that exact
-    // symbol too; every candidate must belong to libminecraftpe.so.
-        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
-            resolveMinecraftFunction("_ZN11LocalPlayer13openInventoryEv"));
-        if (!openInventoryScreenOriginal) {
-            openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
-                resolveMinecraftFunction("_ZN6Player13openInventoryEv"));
-        }
-        // Some LeviLamina distributions expose the generated callable wrapper
-        // in the trusted client runtime even when the original Minecraft symbol
-        // is stripped. Never call a symbol from an arbitrary shared library.
-        if (!openInventoryScreenOriginal) {
-            openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
-                resolveLoadedClientSupportFunction("_ZN11LocalPlayer14$openInventoryEv"));
-        }
-        if (!openInventoryScreenOriginal) {
-            openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
-                resolveLoadedClientSupportFunction("_ZN6Player14$openInventoryEv"));
-        }
-        // openInventory is virtual. If the inline wrapper is not exported, use the
-        // known Player vtable slot only after validating both it and the neighboring
-        // getCarriedItem slot against libminecraftpe.so at call time.
-        openInventoryViaVtable = openInventoryScreenOriginal == nullptr;
 
-        // closeContainerScreen is a client-SDK helper, so on compatible
-        // installations it may come from a loaded LeviLamina runtime instead
-        // of libminecraftpe.so. Do not accept symbols from arbitrary libraries.
-        closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
-            resolveLoadedClientSupportFunction(
-                "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
-        inventoryUiApiResolved = (openInventoryScreenOriginal || openInventoryViaVtable) && closeInventoryScreenOriginal;
+    // Do not use call_once here: BedrockTools/LeviLamina can load its support
+    // runtime after Bedaim initialization. Retry until a trusted API pair exists.
+    openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+        resolveMinecraftFunction("_ZN11LocalPlayer13openInventoryEv"));
+    if (!openInventoryScreenOriginal) {
+        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+            resolveMinecraftFunction("_ZN6Player13openInventoryEv"));
+    }
+    // Some LeviLamina distributions expose the generated callable wrapper in a
+    // trusted client runtime even when the original Minecraft symbol is stripped.
+    if (!openInventoryScreenOriginal) {
+        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+            resolveLoadedClientSupportFunction("_ZN11LocalPlayer14$openInventoryEv"));
+    }
+    if (!openInventoryScreenOriginal) {
+        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+            resolveLoadedClientSupportFunction("_ZN6Player14$openInventoryEv"));
+    }
+
+    // openInventory is virtual. If no callable wrapper is exported, the known
+    // Player vtable slot is checked against libminecraftpe.so at call time.
+    openInventoryViaVtable = openInventoryScreenOriginal == nullptr;
+
+    closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
+        resolveLoadedClientSupportFunction(
+            "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+    inventoryUiApiResolved =
+        (openInventoryScreenOriginal || openInventoryViaVtable) &&
+        closeInventoryScreenOriginal;
+
     if (!inventoryUiApiResolved) {
         if (!inventoryUiApiWarningLogged) {
             autoHitLogger().warn(
