@@ -1,5 +1,18 @@
 # Changelog
 
+## Restore Prior Item/Combat Paths — 2026-10-15
+
+### Root-cause corrections from historical comparison
+- Restored the previous Bedrock 26.52 `InventoryAccess::stackIdentifier` behavior. The added strict `dladdr` requirement rejected otherwise valid virtual item-description functions from the active runtime; this shared lookup feeds the Weapon Filter, HUD item label, Swappers, and AutoTotem item scans.
+- Restored Sword Swapper and Mace Swapper source/header behavior from the prior compatible revision `d424487`, including the Sword Swapper's original five-tick landing debounce, manual wind-charge override, and coordinated Mace fall priority. Removed the unverified cache behavior that could trust a stale sword slot after inventory changes.
+- Restored the four-argument internal GameMode attack trampoline for AutoHit and Mace Swapper. A public vtable address match alone does not establish a compatible three-argument ABI; `attackAvailable` now checks the mapped GameMode and the actual installed internal trampoline.
+- AutoHit button aliases now route through Android `KEYCODE_BUTTON_1..KEYCODE_BUTTON_16` (188–203), which is the launcher key-event path already registered by Bedaim. This replaces the disconnected `ModuleRegistry::onMouseEvent` path. `keycode:0`, `keycode_0`, and `KEYCODE_0` map to Android's digit-zero key (7); use `auto` for automatic mode.
+- ULTRAKILL HUD keeps the last known item label when an item-identifier read transiently fails, instead of immediately replacing it with `EMPTY HAND`.
+
+### Validation
+- Added parser regression cases for `KEYCODE_0` spellings and Android mouse-button keycodes.
+- CI must be rerun on this revision. Live AutoHit input, inventory UI/transfer, and in-game swapper/HUD behavior remain unverified on the target runtime.
+
 ## Runtime Compatibility + Prediction Follow-up — 2026-10-15
 
 ### Corrected
