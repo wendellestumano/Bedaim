@@ -9,6 +9,7 @@
 - Tracking and prediction settings accept both schema values and visible menu labels (for example, `Adaptive`/`Adaptativo` and `Ranged weapons`/`Ranged`), avoiding silent fallback to defaults when a menu implementation serializes labels.
 - AutoHit now rebuilds its floating Hold control when the mouse-button binding changes, and `button1`/`mouse1` can use the touch Hold control on Android instead of requiring a physical mouse. The touch control gates AutoHit without injecting an unrelated keyboard key.
 - AutoTotem retries resolving trusted inventory-screen APIs instead of permanently caching a failed lookup during early initialization. This addresses runtimes where BedrockTools/LeviLamina support symbols become available after module startup.
+- AutoTotem now waits for a container-open event (up to 600 ms) before beginning the equip step, then requests close after transfer. If the runtime does not report an open event, it falls back to the verified transfer path instead of getting stuck in the UI state machine.
 - EGL frame events can no longer suppress the original `eglSwapBuffers` call. Frame events remain observable for HUD updates, but one module's cancellation cannot freeze rendering or block BedrockTools' renderer.
 
 ### Validation
