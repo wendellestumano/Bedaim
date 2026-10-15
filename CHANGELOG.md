@@ -14,7 +14,7 @@
 
 ### Validation
 - New helper tests cover near-to-far monotonic behavior, non-finite inputs, disabled mode, bounds, offhand polling, scan retry and UI step delay.
-- Host regression tests and ARM64 build/package are pending for this branch. No in-game FPS measurement or runtime symbol-availability verification has been performed yet.
+- GitHub Actions run #261 passed the complete host regression suite and Android ARM64 build/package for commit `322d6307522c37fa73c5baa11f633258097ea7c7`: https://github.com/wendellestumano/Bedaim/actions/runs/38755547172. No in-game FPS measurement or runtime symbol-availability verification has been performed yet.
 
 ## Combat Hot-Path Optimization — 2026-10-15
 
