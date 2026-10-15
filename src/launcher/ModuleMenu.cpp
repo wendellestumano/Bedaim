@@ -309,6 +309,7 @@ void registerModulesWithLauncher() {
             if (mod->moduleId == "bedrocktools.Mace Swapper") {
                 if (k == "m_enableMaceSwapper") displayName = "MACE SWAPPER > Enable";
                 else if (k == "m_attackRange") displayName = "MACE SWAPPER > Attack range";
+                else if (k == "m_activationHeight") displayName = "MACE SWAPPER > Minimum height above target (blocks)";
                 else if (k == "m_attackIntervalMs") displayName = "MACE SWAPPER > Attack interval (ms)";
                 else if (k == "m_restoreSlot") displayName = "MACE SWAPPER > Restore previous slot";
             }
@@ -412,6 +413,9 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_attackrange") {
                     minVal = 1.0f;
                     maxVal = 16.0f;
+                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_activationheight") {
+                    minVal = 1.7f;
+                    maxVal = 6.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackintervalms") {
                     minVal = 80.0f;
                     maxVal = 1000.0f;
@@ -535,7 +539,7 @@ void registerModulesWithLauncher() {
 
         if (mod->moduleId == "bedrocktools.Mace Swapper") {
             const std::vector<std::string> priority = {
-                "m_enableMaceSwapper", "m_attackRange", "m_attackIntervalMs", "m_restoreSlot"
+                "m_enableMaceSwapper", "m_activationHeight", "m_attackRange", "m_attackIntervalMs", "m_restoreSlot"
             };
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
