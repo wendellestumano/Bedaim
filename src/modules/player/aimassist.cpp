@@ -523,10 +523,13 @@ void AimAssistModule::refreshAutoHitKeyButton() {
         .stylePreset(ButtonStylePreset::Keycap);
     // Mouse aliases are represented by this same touch Hold control on Android;
     // do not inject an unrelated Android key when the user selected button1.
-    if (keyCode > 0) button.androidKeyCode(keyCode);
-    button.onEvent([this, mouseButton](std::string_view, ButtonEvent event, float) {
+    // The touch button directly gates AutoHit. Do not inject a captured Android
+    // keycode: some launcher builds retain a registered button callback while the
+    // configuration is being refreshed, which made key changes require a module toggle.
+    button.onEvent([this](std::string_view, ButtonEvent event, float) {
         const bool down = event == ButtonEvent::Down;
-        if (mouseButton > 0) {
+        const int activeMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+        if (activeMouseButton > 0) {
             m_autoHitMouseButtonDown.store(down, std::memory_order_release);
         } else {
             m_autoHitVirtualKeyDown.store(down, std::memory_order_release);

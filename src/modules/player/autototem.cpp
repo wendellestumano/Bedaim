@@ -311,6 +311,9 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             m_uiSequencePhase = UiSequencePhase::Idle;
             m_uiPhaseDeadline = {};
             m_uiTransferSucceeded = false;
+            m_manualSequenceActive = false;
+            m_pendingRefill = false;
+            m_cachedTotemSlot = -1;
             return;
         }
         m_uiPhaseDeadline = now + std::chrono::milliseconds(600);
