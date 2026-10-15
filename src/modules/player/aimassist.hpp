@@ -96,6 +96,8 @@ private:
     void* m_lastTarget = nullptr;
     bool m_lastTargetIsPlayer = false;
     int m_cachedHeldWeaponCode = 0;
+    int m_cachedWeaponSlot = -1;
+    std::chrono::steady_clock::time_point m_nextHeldWeaponRefresh{};
     bool m_weaponFilterAllowsCurrent = true;
     bool m_targetPresent = false;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
