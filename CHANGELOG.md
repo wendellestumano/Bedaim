@@ -8,7 +8,7 @@
 - Aim profile affects both Sticky and Smooth/Adaptive tracking. Rotation Speed accepts up to 200 in both the V2 and legacy menus and the runtime clamp.
 - Mace Swapper obtains the player's own validated GameMode and checks the attack route before changing slots, rather than depending on a GameMode observed only after a separate action.
 - AutoTotem's inventory opener now also tries a guarded, Minecraft-image-validated Player vtable route when the exact open symbol is unavailable; close still requires the exact trusted runtime helper. If no valid open/close pair exists, it explicitly falls back to the verified native inventory transfer rather than claiming that a visible inventory sequence occurred.
-- ULTRAKILL HUD no longer cancels global BedrockTools FrameEvents to emulate hit-stop. The impact hold is visual-only; HUD config uses synchronized snapshots and draw-command updates are paced to 30 Hz.
+- ULTRAKILL HUD no longer cancels global BedrockTools FrameEvents to emulate hit-stop. The impact hold is visual-only; HUD config uses synchronized snapshots and draw-command updates are paced to 30 Hz. The held-item identifier refreshes only on hotbar change or every 250 ms rather than on every player tick.
 
 ### Performance
 - Aim Assist render frames reuse the latest valid target snapshot rather than rescanning the nearby-actor vector; AutoHit also reuses the target selected in the same player tick instead of doing a second large native actor scan.
