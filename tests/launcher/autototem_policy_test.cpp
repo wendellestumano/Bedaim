@@ -19,7 +19,7 @@ void check(bool condition, std::string_view name) {
 }
 
 bedaim::autototem::Inputs ready() {
-    return {true, true, false, true, true, false, true, true, true};
+    return {true, true, false, true, false, false, false, true, true};
 }
 }
 
