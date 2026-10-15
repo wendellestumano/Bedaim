@@ -1,5 +1,18 @@
 # Changelog
 
+## Runtime Compatibility + Prediction Follow-up — 2026-10-15
+
+### Corrected
+- Aim Assist now samples the local player's position over bounded tick intervals and computes a smoothed local velocity. Prediction therefore uses target velocity relative to actual player movement instead of subtracting an always-zero local velocity.
+- Held-weapon classification is cached for 100 ms and refreshed immediately when the selected hotbar slot changes, reducing native ItemStack identifier lookups while preserving weapon-filter changes.
+- Tracking and prediction settings accept both schema values and visible menu labels (for example, `Adaptive`/`Adaptativo` and `Ranged weapons`/`Ranged`), avoiding silent fallback to defaults when a menu implementation serializes labels.
+- AutoTotem retries resolving trusted inventory-screen APIs instead of permanently caching a failed lookup during early initialization. This addresses runtimes where BedrockTools/LeviLamina support symbols become available after module startup.
+- EGL frame events can no longer suppress the original `eglSwapBuffers` call. Frame events remain observable for HUD updates, but one module's cancellation cannot freeze rendering or block BedrockTools' renderer.
+
+### Validation
+- Host regression tests and Android ARM64 packaging are being rerun on this revision.
+- Live FPS, typed AutoHit input, visible AutoTotem open/equip/close behavior, and in-game HUD/swappers still require testing in Minecraft Bedrock 26.52 with the target LeviLamina/BedrockTools build.
+
 ## Input, Aim Profile, HUD & Compatibility Pass — 2026-10-15
 
 ### Corrected
