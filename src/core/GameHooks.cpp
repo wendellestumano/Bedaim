@@ -83,10 +83,11 @@ std::mutex installMutex;
 bool installed = false;
 std::string gameVersion;
 thread_local std::uint32_t gameModeActionDepth = 0;
-std::once_flag inventoryUiApiOnce;
+std::mutex inventoryUiApiMutex;
 OpenInventoryScreenFn openInventoryScreenOriginal = nullptr;
 CloseInventoryScreenFn closeInventoryScreenOriginal = nullptr;
 bool inventoryUiApiResolved = false;
+bool inventoryUiApiWarningLogged = false;
 bool openInventoryViaVtable = false;
 
 template <class Function>
@@ -244,10 +245,14 @@ void* resolveLoadedClientSupportFunction(const char* name) {
 }
 
 void resolveInventoryUiApi() {
-    std::call_once(inventoryUiApiOnce, [] {
-        // openInventory is a native LocalPlayer/Player operation. Some builds
-        // export only the inherited Player implementation, so try that exact
-        // symbol too; every candidate must belong to libminecraftpe.so.
+    std::lock_guard<std::mutex> apiLock(inventoryUiApiMutex);
+    if (inventoryUiApiResolved) return;
+    // Do not use call_once here: BedrockTools/LeviLamina can load their support
+    // runtime after Bedaim's module initialization. Retry symbol resolution on
+    // later inventory refill attempts until a trusted API pair becomes available.
+    // openInventory is a native LocalPlayer/Player operation. Some builds
+    // export only the inherited Player implementation, so try that exact
+    // symbol too; every candidate must belong to libminecraftpe.so.
         openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
             resolveMinecraftFunction("_ZN11LocalPlayer13openInventoryEv"));
         if (!openInventoryScreenOriginal) {
@@ -277,14 +282,17 @@ void resolveInventoryUiApi() {
             resolveLoadedClientSupportFunction(
                 "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
         inventoryUiApiResolved = (openInventoryScreenOriginal || openInventoryViaVtable) && closeInventoryScreenOriginal;
-        if (!inventoryUiApiResolved) {
+    if (!inventoryUiApiResolved) {
+        if (!inventoryUiApiWarningLogged) {
             autoHitLogger().warn(
-                "AutoTotem UI sequence unavailable (open={}, close={}); the active Bedrock/LeviLamina runtime did not expose a trusted open/close pair, so the module will use the verified native inventory transaction without showing the screen.",
+                "AutoTotem UI sequence not available yet (open={}, close={}); will retry when the runtime loads its inventory helpers.",
                 openInventoryScreenOriginal != nullptr, closeInventoryScreenOriginal != nullptr);
-        } else {
-            autoHitLogger().info("AutoTotem resolved a trusted inventory UI open/close pair.");
+            inventoryUiApiWarningLogged = true;
         }
-    });
+    } else {
+        inventoryUiApiWarningLogged = false;
+        autoHitLogger().info("AutoTotem resolved a trusted inventory UI open/close pair.");
+    }
 }
 
 bool plausibleGameMode(void* gameMode) {
@@ -527,15 +535,9 @@ EGLBoolean swapBuffersDetour(EGLDisplay display, EGLSurface surface) {
     if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
         FrameEvent event;
         bus().publish(event);
-        // Keep the previously presented frame visible for this swap. The HUD
-        // limits this to two frames for an attack-attempt fallback or four frames
-        // for a positive native result; do not hold the render thread indefinitely.
-        if (event.cancelled()) {
-            static std::atomic_bool loggedHeldFrame{false};
-            if (!loggedHeldFrame.exchange(true, std::memory_order_acq_rel))
-                autoHitLogger().info("ULTRAKILL HUD hit-stop reached eglSwapBuffers; holding the presented frame for a few swaps.");
-            return EGL_TRUE;
-        }
+        // FrameEvent is observational only. A module must never suppress the
+        // real EGL swap: returning EGL_TRUE without calling the original stalls
+        // presentation and can conflict with BedrockTools' own render hooks.
     }
     return swapBuffersOriginal ? swapBuffersOriginal(display, surface) : EGL_FALSE;
 }
@@ -590,7 +592,7 @@ bool install() {
     hookSignature(SignatureId::ChatScreenDtor, reinterpret_cast<void*>(chatCloseDetour), &chatCloseOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOnContainerSlotSelected, reinterpret_cast<void*>(containerSlotSelectedDetour), &containerSlotSelectedOriginal);
     const bool eglHooked = hookEgl();
-    autoHitLogger().info("HUD frame-swap hook installed={}. Hit-stop is visual-only and requires this hook.", eglHooked);
+    autoHitLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
     installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
     return installed;
 }
