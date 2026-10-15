@@ -126,34 +126,38 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!m_pendingRefill) return;
 
     bool inCombat = player->hurtTime() > 0;
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (aimBase && aimBase->enabled) {
-        auto* aim = static_cast<AimAssistModule*>(aimBase);
-        void* target = nullptr;
-        bedrocktools::sdk::AABB targetBounds{};
-        float targetRange = 0.0f;
-        if (aim->currentTargetSnapshot(target, targetBounds, targetRange)) {
-            inCombat = true;
+    if (m_combatOnly && !inCombat) {
+        auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+        if (aimBase && aimBase->enabled) {
+            auto* aim = static_cast<AimAssistModule*>(aimBase);
+            void* target = nullptr;
+            bedrocktools::sdk::AABB targetBounds{};
+            float targetRange = 0.0f;
+            if (aim->currentTargetSnapshot(target, targetBounds, targetRange)) inCombat = true;
         }
     }
 
     const bool containerOpen = m_containerOpen.load(std::memory_order_acquire);
-    const int totemSlot = inventory.findInventorySlot(player, "totem");
     const bool delayElapsed =
         m_refillAfter.time_since_epoch().count() == 0 || now >= m_refillAfter;
-    const bedaim::autototem::Inputs input{
-        enabled,
-        m_pendingRefill,
-        offhandHasTotem,
-        delayElapsed,
-        m_combatOnly,
-        inCombat,
-        containerOpen,
-        totemSlot >= 0,
-        offhandEmpty
+    const bedaim::autototem::Inputs precheck{
+        enabled, m_pendingRefill, offhandHasTotem, delayElapsed,
+        m_combatOnly, inCombat, containerOpen, false, offhandEmpty
     };
 
-    switch (bedaim::autototem::decide(input)) {
+    // Skip inventory slot scans when delay/container/combat gates block the refill.
+    auto decision = bedaim::autototem::decide(precheck);
+    int totemSlot = -1;
+    if (decision == bedaim::autototem::Decision::WaitForItem) {
+        totemSlot = inventory.findInventorySlot(player, "totem");
+        const bedaim::autototem::Inputs withCandidate{
+            enabled, m_pendingRefill, offhandHasTotem, delayElapsed,
+            m_combatOnly, inCombat, containerOpen, totemSlot >= 0, offhandEmpty
+        };
+        decision = bedaim::autototem::decide(withCandidate);
+    }
+
+    switch (decision) {
         case bedaim::autototem::Decision::Equip: {
             const auto result = inventory.moveInventoryItemToOffhand(player, totemSlot);
             if (result == bedrocktools::core::OffhandTransferResult::Success ||
