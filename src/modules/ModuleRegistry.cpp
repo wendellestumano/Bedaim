@@ -8,6 +8,7 @@
 #include "visual/nofog.hpp"
 #include "hud/pingcounter.hpp"
 #include "hud/worldtime.hpp"
+#include "hud/sessiontimer.hpp"
 #include "hud/totemcounter.hpp"
 #include "hud/arrowcounter.hpp"
 #include "hud/potcounter.hpp"
@@ -110,6 +111,7 @@ void registerAllModules() {
     registry.emplace<PotionHudModule>();
     registry.emplace<TimeChangerModule>();
     registry.emplace<WorldTimeModule>();
+    registry.emplace<SessionTimerModule>();
     registry.emplace<TotemCounterModule>();
     registry.emplace<ArrowCounterModule>();
     registry.emplace<PotCounterModule>();
