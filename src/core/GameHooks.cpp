@@ -702,6 +702,8 @@ bool attackAvailable(void* gameMode) {
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
+    (void)playPredictiveSound; // The validated public wrapper owns this default.
+
 
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
@@ -710,8 +712,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // GameMode::attack is the public three-argument wrapper; it prepares the
     // native context before invoking the internal body. Only dispatch through it
     // when the vtable entry matches a resolved public signature for this build.
-    AttackKind kind = AttackKind::GameMode;
-    const auto publicEntry = publicAttackVirtualEntry(gameMode, &kind);
+    const auto publicEntry = publicAttackVirtualEntry(gameMode);
     if (!bedaim::autohit::publicAttackRouteAvailable(publicEntry != 0)) {
         static std::atomic_bool loggedUnavailable{false};
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
