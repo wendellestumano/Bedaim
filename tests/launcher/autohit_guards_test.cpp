@@ -1,6 +1,7 @@
 #include "modules/player/AutoHitGuards.hpp"
 
 #include <cstdlib>
+#include <cmath>
 #include <iostream>
 #include <limits>
 #include <string_view>
@@ -27,6 +28,18 @@ bedaim::autohit::Inputs validInputs() {
 int main() {
     using bedaim::autohit::Decision;
     using bedaim::autohit::evaluate;
+    using bedaim::autohit::effectiveScanRange;
+
+    check(effectiveScanRange(5.0f, false, 6.0f) == 5.0f,
+          "AutoHit disabled preserves Aim Assist scan range");
+    check(effectiveScanRange(2.0f, true, 6.0f) == 6.0f,
+          "AutoHit query reaches the configured AutoHit range");
+    check(effectiveScanRange(10.0f, true, 6.0f) == 10.0f,
+          "AutoHit never shrinks a larger Aim Assist scan range");
+    check(effectiveScanRange(100.0f, true, 100.0f) == 80.0f,
+          "effective scan range is capped at 80 blocks");
+    check(effectiveScanRange(std::numeric_limits<float>::quiet_NaN(), true, 3.0f) == 5.5f,
+          "non-finite Aim Assist range falls back to the safe default");
 
     check(evaluate(validInputs()) == Decision::Ready,
           "all valid prerequisites allow the attack attempt");

@@ -34,4 +34,7 @@ struct Inputs {
 // the caller; it never reads game memory or calls the engine.
 Decision evaluate(const Inputs& input) noexcept;
 
+// Extends the native actor query far enough to include AutoHit's configured reach.
+float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHitRange) noexcept;
+
 } // namespace bedaim::autohit

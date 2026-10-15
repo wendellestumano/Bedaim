@@ -1085,7 +1085,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     AABB bounds = nativeBounds;
     if (steeringExpander) {
         const bool targetIsPlayer = g_actorIsPlayer && g_actorIsPlayer(m_lastTarget);
-        bounds = steeringExpander->expandedSteeringBounds(targetIsPlayer, nativeBounds);
+        bounds = steeringExpander->expandedTargetBounds(targetIsPlayer, nativeBounds);
     }
     bounds.min.x += predictionOffset.x; bounds.max.x += predictionOffset.x;
     bounds.min.y += predictionOffset.y; bounds.max.y += predictionOffset.y;
@@ -1463,38 +1463,39 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
  
 HitboxExpanderModule::HitboxExpanderModule()
     : Module("Hitbox Expander",
-             "Expands the local Aim Assist steering region only; it does not change server-side collision bounds.") {
+             "Expands client-side target selection, crosshair and AutoHit bounds; the server still validates reach and hits.") {
     keybind = 0;
 }
 
-bedrocktools::sdk::AABB HitboxExpanderModule::expandedSteeringBounds(
+bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
     bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const {
     using namespace bedrocktools::sdk;
-    if (!enabled) return nativeBounds;
+    if (!enabled || !validBounds(nativeBounds)) return nativeBounds;
 
-    float configuredSize = 1.0f;
+    float configuredWidth = 1.5f;
+    float configuredHeight = 2.5f;
     bool selectedTypeEnabled = false;
     {
         std::lock_guard<std::mutex> lock(m_expandMutex);
-        configuredSize = std::clamp(m_hitboxSize, 1.0f, 200.0f);
+        configuredWidth = std::clamp(m_hitboxWidth, 0.6f, 8.0f);
+        configuredHeight = std::clamp(m_hitboxHeight, 0.6f, 8.0f);
         selectedTypeEnabled = isPlayer ? m_expandPlayers : m_expandMobs;
     }
-    if (!selectedTypeEnabled || configuredSize <= 1.0001f ||
-        !validBounds(nativeBounds)) return nativeBounds;
+    if (!selectedTypeEnabled) return nativeBounds;
 
-    // The setting is an explicit multiplier: 1 is native bounds; 200 is 200x.
-    // This is a virtual steering AABB only; it does not alter server collision.
-    const float scale = std::clamp(configuredSize, 1.0f, 200.0f);
+    // Width controls X/Z and height controls Y. Preserve larger native sizes.
+    const float nativeWidth = nativeBounds.max.x - nativeBounds.min.x;
+    const float nativeHeight = nativeBounds.max.y - nativeBounds.min.y;
+    const float nativeDepth = nativeBounds.max.z - nativeBounds.min.z;
+    const float width = std::max(nativeWidth, configuredWidth);
+    const float height = std::max(nativeHeight, configuredHeight);
+    const float depth = std::max(nativeDepth, configuredWidth);
     const Vec3 center{
         (nativeBounds.min.x + nativeBounds.max.x) * 0.5f,
         (nativeBounds.min.y + nativeBounds.max.y) * 0.5f,
         (nativeBounds.min.z + nativeBounds.max.z) * 0.5f
     };
-    const Vec3 half{
-        (nativeBounds.max.x - nativeBounds.min.x) * 0.5f * scale,
-        (nativeBounds.max.y - nativeBounds.min.y) * 0.5f * scale,
-        (nativeBounds.max.z - nativeBounds.min.z) * 0.5f * scale
-    };
+    const Vec3 half{width * 0.5f, height * 0.5f, depth * 0.5f};
     return {
         {center.x - half.x, center.y - half.y, center.z - half.z},
         {center.x + half.x, center.y + half.y, center.z + half.z}
@@ -1506,10 +1507,39 @@ bool HitboxExpanderModule::requiresLineOfSight() const {
     return enabled && m_requireLineOfSight;
 }
 
+bool HitboxExpanderModule::showInLegacyMenu(std::string_view key) const {
+    return key != "m_hitboxSize";
+}
+
 void HitboxExpanderModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
+    float legacyScale = m_hitboxSize;
+    if (j.contains("m_hitboxSize") && j["m_hitboxSize"].is_number()) {
+        const float value = j["m_hitboxSize"].get<float>();
+        if (std::isfinite(value)) legacyScale = std::clamp(value, 1.0f, 200.0f);
+    }
+    legacyScale = std::clamp(legacyScale, 1.0f, 8.0f);
+    float width = m_hitboxWidth;
+    float height = m_hitboxHeight;
+    if (j.contains("m_hitboxWidth") && j["m_hitboxWidth"].is_number()) {
+        const float value = j["m_hitboxWidth"].get<float>();
+        if (std::isfinite(value)) width = std::clamp(value, 0.6f, 8.0f);
+    } else {
+        width = std::clamp(std::max(1.5f, 0.6f * legacyScale), 0.6f, 8.0f);
+    }
+    if (j.contains("m_hitboxHeight") && j["m_hitboxHeight"].is_number()) {
+        const float value = j["m_hitboxHeight"].get<float>();
+        if (std::isfinite(value)) height = std::clamp(value, 0.6f, 8.0f);
+    } else {
+        height = std::clamp(std::max(2.5f, 1.8f * legacyScale), 0.6f, 8.0f);
+    }
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    m_hitboxSize = std::clamp(j.value("m_hitboxSize", m_hitboxSize), 1.0f, 200.0f);
+    if (j.contains("m_hitboxSize") && j["m_hitboxSize"].is_number()) {
+        const float value = j["m_hitboxSize"].get<float>();
+        if (std::isfinite(value)) m_hitboxSize = std::clamp(value, 1.0f, 200.0f);
+    }
+    m_hitboxWidth = width;
+    m_hitboxHeight = height;
     m_expandPlayers = j.value("m_expandPlayers", m_expandPlayers);
     m_expandMobs = j.value("m_expandMobs", m_expandMobs);
     m_requireLineOfSight = j.value("m_requireLineOfSight", m_requireLineOfSight);
@@ -1519,6 +1549,8 @@ void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     std::lock_guard<std::mutex> lock(m_expandMutex);
     j["m_hitboxSize"] = m_hitboxSize;
+    j["m_hitboxWidth"] = m_hitboxWidth;
+    j["m_hitboxHeight"] = m_hitboxHeight;
     j["m_expandPlayers"] = m_expandPlayers;
     j["m_expandMobs"] = m_expandMobs;
     j["m_requireLineOfSight"] = m_requireLineOfSight;

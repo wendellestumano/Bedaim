@@ -5,6 +5,7 @@
 #include <chrono>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 class AimAssistModule final : public Module {
 public:
@@ -101,17 +102,21 @@ private:
     std::chrono::steady_clock::time_point m_lastMotionSample{};
 };
 
-// Client-side virtual hitbox expander for Aim Assist. It widens the steering
-// region only; it does not rewrite the server-authoritative collision AABB.
+// Expands client-side target selection, crosshair and AutoHit geometry. The
+// server remains authoritative for collision and final hit registration.
 class HitboxExpanderModule final : public Module {
 public:
     HitboxExpanderModule();
-    bedrocktools::sdk::AABB expandedSteeringBounds(bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const;
+    bedrocktools::sdk::AABB expandedTargetBounds(bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const;
     bool requiresLineOfSight() const;
+    bool showInLegacyMenu(std::string_view key) const override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
+    // Retained to migrate older configurations that used a 1–200x multiplier.
     float m_hitboxSize = 1.0f;
+    float m_hitboxWidth = 1.5f;
+    float m_hitboxHeight = 2.5f;
     bool m_expandPlayers = true;
     bool m_expandMobs = false;
     bool m_requireLineOfSight = true;

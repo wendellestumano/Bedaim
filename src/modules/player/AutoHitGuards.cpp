@@ -1,5 +1,6 @@
 #include "AutoHitGuards.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace bedaim::autohit {
@@ -21,6 +22,15 @@ Decision evaluate(const Inputs& input) noexcept {
     if (input.distance > input.maxDistance) return Decision::OutOfRange;
     if (!input.cooldownReady) return Decision::Cooldown;
     return Decision::Ready;
+}
+
+float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHitRange) noexcept {
+    const float normalizedAimRange = std::isfinite(aimAssistRange)
+        ? std::clamp(aimAssistRange, 2.0f, 80.0f) : 5.5f;
+    if (!autoHitEnabled) return normalizedAimRange;
+    const float normalizedAutoHitRange = std::isfinite(autoHitRange)
+        ? std::clamp(autoHitRange, 2.0f, 6.0f) : 3.0f;
+    return std::max(normalizedAimRange, normalizedAutoHitRange);
 }
 
 } // namespace bedaim::autohit
