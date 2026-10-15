@@ -1,5 +1,15 @@
 # Changelog
 
+## Combat Core Reliability — 2026-10-15
+
+### Fixed
+- Serialized complete configuration snapshot creation and queue insertion in `ConfigManager::save()`. Concurrent menu/toggle callbacks can no longer enqueue an older snapshot after a newer one and silently revert recently changed Aim Assist settings.
+- AutoHit now revalidates its cached target against a fresh native actor snapshot before calling actor methods or the player-type callback. If the target despawned or the native vector metadata is invalid, the attack is skipped and throttled instead of dereferencing a stale entity pointer.
+- AutoHit uses the live target bounds from the validated snapshot before applying the configured client-side Hitbox Expander geometry.
+
+### Validation
+- Pending GitHub Actions host regression tests and Android ARM64 build for this change. These changes do not establish server-authoritative hitbox expansion; the server still validates hits and reach.
+
 ### Improved
 - AutoHit's actor query now covers at least its configured reach even when Aim Assist's detection range is lower; the scan adds a bounded margin for the expanded hitbox so an entity is not missed solely because its center falls outside the query cube. Expanded target bounds participate in acquisition, crosshair confirmation, and AutoHit's nearest-hit-point calculation.
 - Hitbox Expander now uses bounded width/depth and height settings in blocks, preserves larger native boxes, anchors added height at the target's feet, migrates old multiplier settings, and clearly labels the geometry as client-side. This does not change server-authoritative collision.
