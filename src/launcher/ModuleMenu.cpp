@@ -311,6 +311,11 @@ void registerModulesWithLauncher() {
                 }
             }
 
+            if (mod->moduleId == "bedrocktools.Auto Totem") {
+                if (k == "m_delayMs") displayName = "AUTO TOTEM > Refill delay (ms)";
+                else if (k == "m_combatOnly") displayName = "AUTO TOTEM > Combat only";
+                else if (k == "m_keepTotemEquipped") displayName = "AUTO TOTEM > Keep totem equipped";
+            }
             if (mod->moduleId == "bedrocktools.Mace Swapper") {
                 if (k == "m_enableMaceSwapper") displayName = "MACE SWAPPER > Enable";
                 else if (k == "m_attackRange") displayName = "MACE SWAPPER > Attack range";
