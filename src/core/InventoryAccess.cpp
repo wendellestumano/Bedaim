@@ -45,6 +45,8 @@ constexpr std::size_t PlayerTransactionManagerOffset = 0xA28;
 constexpr std::size_t TransactionManagerSize = 48;
 constexpr std::size_t TransactionManagerExpectedActions = 16;
 constexpr std::size_t TransactionActionSize = 512;
+constexpr std::size_t ContainerSetItemVTable = 13;
+constexpr std::size_t ContainerRemoveItemVTable = 15;
 constexpr std::size_t PlayerSetOffhandVTable = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem + 1;
 constexpr std::int8_t InventoryContainerId = 0;
 constexpr std::int8_t OffhandContainerId = 119;
@@ -300,10 +302,28 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         return OffhandTransferResult::InvalidNativeState;
     }
 
+    const void* playerInventory = read<const void*>(player, PlayerInventory);
+    void* container = playerInventory
+        ? const_cast<void*>(read<const void*>(playerInventory, PlayerInventoryContainer))
+        : nullptr;
+    if (!container || !isReadableMemory(container, sizeof(void*))) {
+        return OffhandTransferResult::InvalidNativeState;
+    }
+
+    void** containerVtable = nullptr;
+    if (isReadableMemory(container, sizeof(void*))) {
+        containerVtable = *reinterpret_cast<void***>(container);
+    }
+    if (!containerVtable ||
+        !isReadableMemory(containerVtable, (ContainerRemoveItemVTable + 1) * sizeof(void*))) {
+        return OffhandTransferResult::RuntimeApiUnavailable;
+    }
+
     using InventoryActionCtorFn = void (*)(void*, NativeInventorySource, std::uint32_t, const void*, const void*);
     using InventoryActionDtorFn = void (*)(void*);
     using AddActionFn = void (*)(void*, const void*, bool);
     using RemoveItemFn = void (*)(void*, int, int);
+    using SetItemFn = void (*)(void*, int, const void*);
     using SetOffhandFn = void (*)(void*, const void*);
 
     auto actionCtor = reinterpret_cast<InventoryActionCtorFn>(
@@ -318,6 +338,12 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         resolveMinecraftSymbol("_ZN27InventoryTransactionManager9addActionERK15InventoryActionb"));
     auto removeItem = reinterpret_cast<RemoveItemFn>(
         resolveMinecraftSymbol("_ZN16FillingContainer10removeItemEii"));
+    if (!removeItem) {
+        // FillingContainer inherits Container's declared virtual method order.
+        // The slot fallback is used only after validating it points into Minecraft.
+        void* entry = containerVtable[ContainerRemoveItemVTable];
+        if (isMinecraftFunction(entry)) removeItem = reinterpret_cast<RemoveItemFn>(entry);
+    }
 
     void** vtable = nullptr;
     if (isReadableMemory(player, sizeof(void*))) {
@@ -351,16 +377,6 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
 
     const void* emptyOffhandSnapshot = inventoryAction.data() + ActionToItemOffset;
     const void* totemSnapshot = offhandAction.data() + ActionToItemOffset;
-    const void* playerInventory = read<const void*>(player, PlayerInventory);
-    void* container = playerInventory
-        ? const_cast<void*>(read<const void*>(playerInventory, PlayerInventoryContainer))
-        : nullptr;
-    if (!container || !isReadableMemory(container, sizeof(void*))) {
-        actionDtor(inventoryAction.data());
-        actionDtor(offhandAction.data());
-        return OffhandTransferResult::InvalidNativeState;
-    }
-
     // First equip using the engine's setter and verify that the offhand changed;
     // only then remove the source slot so a failed setter cannot destroy the item.
     setOffhand(player, totemSnapshot);
@@ -385,9 +401,12 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         } else if (!equipped) {
             // If the source was cleared but the offhand is not showing the totem,
             // attempt to restore the item before returning failure.
-            using SetItemFn = void (*)(void*, int, const void*);
             auto setItem = reinterpret_cast<SetItemFn>(
                 resolveMinecraftSymbol("_ZN16FillingContainer7setItemEiRK9ItemStack"));
+            if (!setItem) {
+                void* entry = containerVtable[ContainerSetItemVTable];
+                if (isMinecraftFunction(entry)) setItem = reinterpret_cast<SetItemFn>(entry);
+            }
             if (setItem) setItem(container, slot, totemSnapshot);
         }
         actionDtor(inventoryAction.data());
