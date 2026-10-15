@@ -125,13 +125,31 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     m_localPlayer.store(player, std::memory_order_release);
     if (!enabled) return;
 
-    const std::string itemId = bedrocktools::core::InventoryAccess::get().stackIdentifier(
-        carriedItemStack(player));
+    auto& inventory = bedrocktools::core::InventoryAccess::get();
+    const int selectedSlot = inventory.selectedHotbarSlot(player);
+    const auto now = Clock::now();
+    bool refreshItemId = false;
+    {
+        std::lock_guard lock(m_stateMutex);
+        refreshItemId = selectedSlot != m_cachedSelectedSlot ||
+            m_nextItemRefresh.time_since_epoch().count() == 0 ||
+            now >= m_nextItemRefresh;
+        if (refreshItemId) {
+            m_cachedSelectedSlot = selectedSlot;
+            m_nextItemRefresh = now + std::chrono::milliseconds(250);
+        }
+    }
+    // An ItemStack identifier can enter native item-description code. Refresh it
+    // on hotbar change and at a bounded cadence instead of on every player tick.
+    std::string itemId;
+    if (refreshItemId) {
+        itemId = inventory.stackIdentifier(carriedItemStack(player));
+    }
     const auto currentPosition = player->position();
     const float currentY = currentPosition.y;
 
     std::lock_guard lock(m_stateMutex);
-    m_selectedItemId = itemId;
+    if (refreshItemId) m_selectedItemId = itemId;
     if (std::isfinite(currentPosition.x) && std::isfinite(currentPosition.y) &&
         std::isfinite(currentPosition.z)) {
         if (m_hasLastPosition) {
