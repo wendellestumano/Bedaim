@@ -2,6 +2,7 @@
 
 #include "../Module.hpp"
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -15,6 +16,7 @@ public:
     void onInit() override;
     void onEnable() override;
     void onDisable() override;
+    void onMenuRegistered() override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
@@ -51,6 +53,11 @@ public:
     bool m_autoHit = false;
     float m_autoHitRange = 3.0f;
     float m_autoHitDelayMs = 150.0f;
+    // 0 preserves full automatic mode. A non-zero Android key code exposes a
+    // floating Hold button that emits that key and gates native AutoHit while held.
+    std::atomic_int m_autoHitKeyCode{0};
+    std::atomic_bool m_autoHitPhysicalKeyDown{false};
+    std::atomic_bool m_autoHitVirtualKeyDown{false};
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
     float m_hitboxDistanceGrowth = 5.0f;
@@ -77,7 +84,9 @@ private:
     void processPlayerTickLocked(bedrocktools::sdk::Player* player);
     void applyAimStepLocked(bedrocktools::sdk::Player* player);
     void processAutoHitLocked(bedrocktools::sdk::Player* player);
+    void refreshAutoHitKeyButton();
     std::mutex m_stateMutex;
+    std::atomic_bool m_menuRegistered{false};
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
     bool m_targetPresent = false;
