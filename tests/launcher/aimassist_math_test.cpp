@@ -63,6 +63,22 @@ int main() {
     check(boundedTurnStep(90.0f, nan, 1.0f / 60.0f) == 0.0f,
           "non-finite turn rate produces no camera delta");
 
+    const float nearScale = bedaim::aimmath::distanceHitboxScale(1.0f, 0.5f, 30.0f, 5.0f, true);
+    const float mediumScale = bedaim::aimmath::distanceHitboxScale(1.0f, 10.0f, 30.0f, 5.0f, true);
+    const float farScale = bedaim::aimmath::distanceHitboxScale(1.0f, 30.0f, 30.0f, 5.0f, true);
+    check(nearScale < 1.0f, "distance hitbox is smaller than native near the player");
+    check(mediumScale > nearScale && mediumScale < farScale,
+          "distance hitbox grows smoothly between near and far ranges");
+    check(farScale > 2.0f && farScale < 4.0f,
+          "default distance strength provides visible far-range expansion");
+    check(std::abs(bedaim::aimmath::distanceHitboxScale(2.0f, 30.0f, 30.0f, 5.0f, false) - 2.0f) < 1.0e-4f,
+          "disabled distance curve uses the base hitbox scale");
+    check(std::isfinite(bedaim::aimmath::distanceHitboxScale(1.0f,
+              std::numeric_limits<float>::infinity(), 80.0f, 200.0f, true)),
+          "non-finite distance does not poison the hitbox scale");
+    check(bedaim::aimmath::distanceHitboxScale(1.0f, 80.0f, 80.0f, 200.0f, true) <= 12.0f,
+          "far-range hitbox multiplier remains bounded");
+
     std::cout << checks << " checks, " << failures << " failures\\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
