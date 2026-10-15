@@ -3,7 +3,7 @@
 ## Combat Hot-Path Optimization — 2026-10-15
 
 ### Improved
-- Aim Assist now refreshes actor candidates in the game-tick handler and steers from the last validated bounds snapshot on render frames. It no longer calls the full nearby-actor query at render FPS.
+- Aim Assist refreshes actor candidates at the game-tick cadence and steers from the last validated bounds snapshot on render frames; render frames no longer scan the native actor vector. AutoHit now reuses the just-validated same-tick target snapshot instead of requesting/scanning the entire native actor vector a second time.
 - Weapon classification resolves the held ItemStack identifier once per tick, then caches weapon family, naturalization applicability and aim multiplier for render-frame steering.
 - Aim Assist applies cheap range/geometry filtering before name-tag, invisibility and voxel line-of-sight checks, reducing work in large long-range scans.
 - Inventory memory validation reuses a short-lived readable-memory map snapshot instead of reopening and scanning /proc/self/maps for each pointer check.
