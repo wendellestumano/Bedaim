@@ -12,4 +12,9 @@ void* gameModeForPlayer(void* player);
 bool attackAvailable(void* gameMode);
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition);
 
+// Verified LocalPlayer inventory-screen operations resolved only from libminecraftpe.
+bool inventoryUiSequenceAvailable();
+bool openPlayerInventoryScreen(void* player);
+bool closePlayerInventoryScreen(void* player);
+
 }
