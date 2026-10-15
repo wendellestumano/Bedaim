@@ -3,6 +3,7 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
+#include <bedrocktools/sdk/Offsets.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>
