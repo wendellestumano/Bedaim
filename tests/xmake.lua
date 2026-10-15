@@ -18,6 +18,12 @@ target("aimassist_math_test")
     add_includedirs("../include", "../src")
 target_end()
 
+target("autohit_key_binding_test")
+    set_kind("binary")
+    add_files("launcher/autohit_key_binding_test.cpp")
+    add_includedirs("../src")
+target_end()
+
 target("autohit_guards_test")
     set_kind("binary")
     add_files("launcher/autohit_guards_test.cpp", "../src/modules/player/AutoHitGuards.cpp")
