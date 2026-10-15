@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +25,9 @@ public:
     explicit FrameStatsWindow(std::uint64_t windowMs = 5000) : m_windowMs(windowMs) {}
 
     void setWindowMs(std::uint64_t windowMs) {
-        m_windowMs = std::max<std::uint64_t>(1, windowMs);
+        const auto normalized = std::max<std::uint64_t>(1, windowMs);
+        if (normalized == m_windowMs) return;
+        m_windowMs = normalized;
         prune(m_samples.empty() ? 0 : m_samples.back().timestampMs);
     }
 
@@ -48,19 +51,23 @@ public:
         if (m_samples.empty()) return result;
 
         float totalMs = 0.0f;
-        std::vector<float> slowFrames;
-        slowFrames.reserve(m_samples.size());
+        std::array<float, 2400> slowFrames{};
+        std::size_t sampleIndex = 0;
         for (const auto& sample : m_samples) {
             totalMs += sample.frameMs;
-            slowFrames.push_back(sample.frameMs);
+            slowFrames[sampleIndex++] = sample.frameMs;
             result.worstFrameMs = std::max(result.worstFrameMs, sample.frameMs);
         }
         result.averageFrameMs = totalMs / static_cast<float>(m_samples.size());
         result.currentFps = 1000.0f / m_samples.back().frameMs;
         result.averageFps = result.averageFrameMs > 0.0f ? 1000.0f / result.averageFrameMs : 0.0f;
 
-        std::sort(slowFrames.begin(), slowFrames.end(), std::greater<float>());
-        const std::size_t slowCount = std::max<std::size_t>(1, (slowFrames.size() + 99) / 100);
+        const std::size_t slowCount = std::max<std::size_t>(1, (m_samples.size() + 99) / 100);
+        auto sampleEnd = slowFrames.begin() + static_cast<std::ptrdiff_t>(m_samples.size());
+        if (slowCount < m_samples.size()) {
+            std::nth_element(slowFrames.begin(), slowFrames.begin() + static_cast<std::ptrdiff_t>(slowCount),
+                             sampleEnd, std::greater<float>());
+        }
         float slowSum = 0.0f;
         for (std::size_t i = 0; i < slowCount; ++i) slowSum += slowFrames[i];
         const float slowAverageMs = slowSum / static_cast<float>(slowCount);
