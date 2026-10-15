@@ -29,6 +29,7 @@ int main() {
     using bedaim::autototem::normalizeDelayMs;
     using bedaim::autototem::normalizeScanRetryMs;
     using bedaim::autototem::normalizeOffhandPollMs;
+    using bedaim::autototem::normalizeUiStepDelayMs;
 
     auto state = ready();
     check(decide(state) == Decision::Equip, "valid pending refill is allowed");
@@ -81,6 +82,12 @@ int main() {
     check(normalizeOffhandPollMs(900.0f) == 500.0f, "offhand poll is bounded to 500 ms");
     check(normalizeOffhandPollMs(std::numeric_limits<float>::infinity()) == 100.0f,
           "non-finite offhand poll returns its safe default");
+
+    check(normalizeUiStepDelayMs(0.0f) == 0.0f, "inventory sequence supports zero delay");
+    check(normalizeUiStepDelayMs(80.0f) == 80.0f, "inventory sequence step defaults to 80 ms");
+    check(normalizeUiStepDelayMs(900.0f) == 500.0f, "inventory sequence step is capped at 500 ms");
+    check(normalizeUiStepDelayMs(std::numeric_limits<float>::quiet_NaN()) == 80.0f,
+          "non-finite UI sequence delay returns default");
 
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
