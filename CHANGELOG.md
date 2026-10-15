@@ -1,5 +1,15 @@
 # Changelog
 
+## Follow-up requested from mobile test — 2026-10-15
+
+- Rotation speed is now configurable up to 1000 across UI, loading, and runtime clamps. Elytra mode yields camera rotation to the player while gliding.
+- AutoHit supports automatic mode without requiring an explicit key/button hold; explicit bindings still gate it.
+- Player Radar attempts a player-specific name getter before falling back to ActorGetNameTag. Exact symbol and GameType availability remain runtime-dependent and need in-game confirmation.
+- Sword Swapper yields while a food/consumable is selected to preserve golden-apple eating.
+- Mace Swapper restores the older descent thresholds and keeps the configurable minimum fall distance as an activation gate.
+- Exact numeric text-entry controls require a verified input widget in the active ModMenu API; no speculative control was added.
+
+
 ## Runtime reliability follow-up — 2026-10-15
 
 - Restored the floating AutoHit button's configured Android key injection while retaining direct hold-state gating.
