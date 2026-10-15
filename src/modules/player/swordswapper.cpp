@@ -102,8 +102,16 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     auto restoreIfOwned = [&]() {
+        // This lambda is reached on every tick while the module is disabled,
+        // without a target, or while Mace Swapper has priority. Do not read the
+        // native inventory at all unless Sword Swapper currently owns a swap.
+        if (!m_ownsSwap) {
+            m_swordSlot = -1;
+            m_previousSlot = -1;
+            return;
+        }
         const int current = inventory.selectedHotbarSlot(player);
-        if (m_ownsSwap && m_restoreSlot && current == m_swordSlot && m_previousSlot >= 0)
+        if (m_restoreSlot && current == m_swordSlot && m_previousSlot >= 0)
             inventory.selectHotbarSlot(player, m_previousSlot);
         m_ownsSwap = false;
         m_swordSlot = -1;
@@ -151,15 +159,6 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_userOverrodeSwap = true;
     }
 
-    const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
-    if (heldIdentifier.find("wind_charge") != std::string::npos) {
-        // Explicit user selection beats the automatic sword swap. Keep the
-        // override until the target leaves the crosshair/grounded condition.
-        restoreIfOwned();
-        m_userOverrodeSwap = true;
-        return;
-    }
-
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     auto* aim = (aimBase && aimBase->enabled) ? static_cast<AimAssistModule*>(aimBase) : nullptr;
     bool shouldUseSword = false;
@@ -180,6 +179,15 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
     if (m_userOverrodeSwap) return;
+
+    // The selected item string requires a native ItemStack description lookup
+    // plus memory validation. Only pay for it when a swap would actually happen.
+    const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
+    if (heldIdentifier.find("wind_charge") != std::string::npos) {
+        restoreIfOwned();
+        m_userOverrodeSwap = true;
+        return;
+    }
 
     const int swordSlot = inventory.findHotbarSlot(player, "_sword");
     const int selected = inventory.selectedHotbarSlot(player);
