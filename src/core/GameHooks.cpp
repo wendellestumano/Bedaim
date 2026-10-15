@@ -693,7 +693,9 @@ void* gameModeForPlayer(void* player) {
 }
 
 bool attackAvailable(void* gameMode) {
-    if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
+    // The hooked internal body is how we observe the true native result after
+    // dispatching through the public wrapper. Refuse the route if that hook is absent.
+    if (!gameMode || !gameModeAttackOriginal || currentGameMode.load(std::memory_order_acquire) != gameMode)
         return false;
     AttackKind ignored = AttackKind::GameMode;
     return bedaim::autohit::publicAttackRouteAvailable(
@@ -701,7 +703,7 @@ bool attackAvailable(void* gameMode) {
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    if (!gameMode || !target || !hitPosition) return false;
+    if (!gameMode || !target || !hitPosition || !gameModeAttackOriginal) return false;
     (void)playPredictiveSound; // The validated public wrapper owns this default.
 
 
