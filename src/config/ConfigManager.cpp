@@ -2,6 +2,8 @@
 #include "AtomicConfigWriter.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <pl/Logger.hpp>
+#include <filesystem>
+#include <fstream>
 #include <string_view>
 
 namespace bedrocktools::config {
