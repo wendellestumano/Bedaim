@@ -505,6 +505,13 @@ void* gameModeForPlayer(void* player) {
     return observed;
 }
 
+bool attackAvailable(void* gameMode) {
+    // This only validates the mapped GameMode, the known public virtual slot,
+    // and equality with a resolved GameMode/SurvivalMode attack signature.
+    // It deliberately does not call into Minecraft.
+    return publicAttackVirtualEntry(gameMode) != 0;
+}
+
 bool attack(void* gameMode, void* target, bool /*playPredictiveSound*/, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
 
