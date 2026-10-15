@@ -555,7 +555,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     m_lastPlayer = player;
-    m_localPlayerGliding = actorIsGliding(player);
+    m_localPlayerGliding = (m_elytraMode && actorIsGliding(player));
 
     const HeldWeapon heldWeapon = heldWeaponInMainHand(player);
     m_cachedWeaponIsRanged = heldWeapon == HeldWeapon::Bow ||
