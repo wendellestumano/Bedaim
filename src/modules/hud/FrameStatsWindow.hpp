@@ -34,10 +34,12 @@ public:
     void reset() { m_samples.clear(); }
 
     void addSample(std::uint64_t timestampMs, float frameMs) {
-        if (!std::isfinite(frameMs) || frameMs < 0.1f || frameMs > 1000.0f) return;
         if (!m_samples.empty() && timestampMs < m_samples.back().timestampMs) m_samples.clear();
-        m_samples.push_back({timestampMs, frameMs});
+        // Even a discarded pause/stall sample advances the time window so old
+        // values do not remain visible after the app resumes.
         prune(timestampMs);
+        if (!std::isfinite(frameMs) || frameMs < 0.1f || frameMs > 1000.0f) return;
+        m_samples.push_back({timestampMs, frameMs});
         constexpr std::size_t kMaxSamples = 2400;
         if (m_samples.size() > kMaxSamples) {
             m_samples.erase(m_samples.begin(),
