@@ -758,85 +758,42 @@ void* gameModeForPlayer(void* player) {
 }
 
 bool attackAvailable(void* gameMode) {
-    // Dispatch safety comes from validating the actual public GameMode vtable
-    // entry against the resolved public signatures. The internal hook is only
-    // used to observe the result/events; requiring it here silently disables
-    // AutoHit on builds where that secondary signature is unavailable.
+    // TEST BRANCH ONLY: Apollon-style direct internal attack experiment.
+    // Require the current observed GameMode, a resolved signature for this exact
+    // build, and the hooked internal function's trampoline. Never use old fixed
+    // offsets from the public Apollon source.
     if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
         return false;
-    AttackKind ignored = AttackKind::GameMode;
-    return bedaim::autohit::publicAttackRouteAvailable(
-        publicAttackVirtualEntry(gameMode, &ignored) != 0);
+    return plausibleGameMode(gameMode) &&
+        bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0 &&
+        gameModeAttackOriginal != nullptr;
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
-    (void)playPredictiveSound; // The validated public wrapper owns this default.
 
-    static thread_local bool inSyntheticAttack = false;
-    if (inSyntheticAttack) return false;
-    if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
-
-    // GameMode::attack is the public three-argument wrapper; it prepares the
-    // native context before invoking the internal body. Only dispatch through it
-    // when the vtable entry matches a resolved public signature for this build.
-    const auto publicEntry = publicAttackVirtualEntry(gameMode);
-    if (!bedaim::autohit::publicAttackRouteAvailable(publicEntry != 0)) {
-        static std::atomic_bool loggedUnavailable{false};
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().error("Synthetic attack refused: public GameMode::attack is not validated for this runtime.");
-        return false;
-    }
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    constexpr std::size_t kKnownAttackSlot = 16;
-    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[kKnownAttackSlot]);
-    if (!publicAttack) return false;
+    // TEST BRANCH ONLY: deliberately bypass the public wrapper and invoke the
+    // validated internal GameMode attack trampoline, approximating Apollon's
+    // direct GameMode::_attack path. This is isolated from the normal build.
+    static thread_local bool inApollonExperiment = false;
+    if (inApollonExperiment || !attackAvailable(gameMode)) return false;
 
     struct AttackGuard {
         bool& active;
         explicit AttackGuard(bool& value) : active(value) { active = true; }
         ~AttackGuard() { active = false; }
-    } guard{inSyntheticAttack};
-    const bool canObserveNativeResult = gameModeAttackOriginal != nullptr;
-    struct DispatchObservationGuard {
-        bool active;
-        explicit DispatchObservationGuard(bool shouldObserve) : active(shouldObserve) {
-            if (active) {
-                syntheticAttackResultObserved = false;
-                syntheticAttackNativeResult = false;
-                syntheticAttackDispatchActive = true;
-            }
-        }
-        ~DispatchObservationGuard() {
-            if (active) syntheticAttackDispatchActive = false;
-        }
-    } observationGuard{canObserveNativeResult};
+    } guard{inApollonExperiment};
 
-    static std::atomic_bool loggedPublicRoute{false};
-    if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
-        autoHitLogger().info("Combat dispatch selected the validated public GameMode::attack wrapper.");
+    static std::atomic_bool loggedExperimentalRoute{false};
+    if (!loggedExperimentalRoute.exchange(true, std::memory_order_acq_rel)) {
+        autoHitLogger().warn(
+            "TEST BUILD: using Apollon-style direct internal attack route; public wrapper and standard attack event pipeline are bypassed.");
+    }
 
-    // The public wrapper calls the hooked internal body, where the standard
-    // AttackEvent/GameModeAction/AttackResultEvent pipeline already runs.
-    // Do not publish a second set here; observe and return the real internal result.
-    publicAttack(gameMode, target, hitPosition);
-    if (!canObserveNativeResult) {
-        // The call went through a validated public engine entry, but this build
-        // lacks the internal observer required to read the native bool result.
-        // Return "dispatched" so AutoHit can rate-limit/retry; this is not proof
-        // that the target took damage.
-        static std::atomic_bool loggedUnobservedDispatch{false};
-        if (!loggedUnobservedDispatch.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().warn("AutoHit dispatched through the validated public GameMode::attack entry, but the internal result hook is unavailable; damage confirmation is not observable.");
-        return true;
-    }
-    if (!syntheticAttackResultObserved) {
-        static std::atomic_bool loggedMissingInternalDispatch{false};
-        if (!loggedMissingInternalDispatch.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().error("Validated public attack returned without reaching the installed internal observer; dispatch result is unknown.");
-        return true;
-    }
-    return syntheticAttackNativeResult;
+    // gameModeAttackOriginal is the hook framework's trampoline to the original
+    // internal routine. Its signature is defined by the current build's
+    // GameModeAttackInternal detour, not by a hard-coded historical offset.
+    return gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition);
 }
 
 
