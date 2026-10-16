@@ -700,6 +700,14 @@ void uninstall() {
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
+    playerSetGameTypeOriginal = nullptr;
+    playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
+    playerSetGameTypeSeen.store(false, std::memory_order_release);
+    playerSetGameTypeNextResolve = {};
+    {
+        std::lock_guard cacheLock(playerGameTypeCacheMutex);
+        playerGameTypeCache.clear();
+    }
 }
 
 void* clientInstance() {
