@@ -1,5 +1,13 @@
 # Changelog
 
+## Combat reliability follow-up — 2026-10-15
+
+- Weapon-specific Aim Assist multipliers now range from 0.2× to 10× in both the V2 controls and runtime/config clamps. The combined effective Aim Speed clamp is 100× so profile values above 2× are not truncated; test high values gradually.
+- AutoHit now permits dispatch through a validated public GameMode::attack vtable entry even when the separate internal result-observer hook is unavailable. In that case logs explicitly say the attack was dispatched but damage confirmation is not observable; this is not a claim that the hit landed.
+- AutoTotem no longer opens the visible inventory before confirming that the native inventory-to-offhand transaction works. The manual button is now a click-only transfer probe and logs the concrete transaction result; automatic refill likewise attempts the direct validated transfer first, avoiding a UI that can remain open when the runtime lacks a trusted close function.
+- Player Radar/GameMode Checker still needs a version-specific source of remote players' native GameType. The current dlsym-only Player::getPlayerGameType resolver does not provide that source in the tested runtime; do not label these modes as fixed until a native signature or reliable packet-based source is implemented and tested.
+
+
 ## Weapon profile range follow-up — 2026-10-15
 
 - Increased all eight weapon-specific Aim Assist multipliers (sword, axe, mace, bow, crossbow, trident, spear, other melee) from a maximum of 2× to 10× in the menu and config loading.
