@@ -56,6 +56,9 @@ public:
     std::string m_targetSelectionMode = "Crosshair";
     bool m_autoHit = false;
     bool m_autoHitButtonEnabled = true;
+    // Optional four-anchor aiming picks the anchor nearest the camera-ray projection;
+    // the existing Smooth hitbox slide blend is preserved after anchor selection.
+    bool m_fourPointAiming = false;
     float m_autoHitRange = 3.0f;
     float m_autoHitDelayMs = 150.0f;
     // 0 preserves full automatic mode. A non-zero Android key code exposes a
@@ -83,6 +86,15 @@ public:
     float m_tridentAimMultiplier = 0.9f;
     float m_spearAimMultiplier = 1.0f;
     float m_otherMeleeAimMultiplier = 1.0f;
+    // Vertical target point as a fraction of the native hitbox height: 0=feet, 1=head.
+    float m_swordAimPointY = 0.55f;
+    float m_axeAimPointY = 0.55f;
+    float m_maceAimPointY = 0.80f;
+    float m_bowAimPointY = 0.55f;
+    float m_crossbowAimPointY = 0.55f;
+    float m_tridentAimPointY = 0.55f;
+    float m_spearAimPointY = 0.55f;
+    float m_otherMeleeAimPointY = 0.55f;
     std::string m_predictionMode = "Ranged";
     float m_predictionLeadMs = 120.0f;
     std::string m_whitelistNames = "";

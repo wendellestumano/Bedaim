@@ -56,7 +56,7 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
     const float safeRange = std::clamp(
         std::isfinite(configuredRange) ? configuredRange : 5.5f, 2.0f, 80.0f);
     const float safeStrength = std::clamp(
-        std::isfinite(strength) ? strength : 5.0f, 0.1f, 200.0f);
+        std::isfinite(strength) ? strength : 5.0f, 0.1f, 500.0f);
 
     // Keep the steering volume deliberately tight through close-range combat.
     // Stretch the curve over the user's real scan range, but cap it at 30 blocks
@@ -76,7 +76,7 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
     // Strength=5 gives a 2.8x far multiplier. Greater strength is more pronounced,
     // still bounded; the close-range multiplier is deliberately below one.
     const float strengthFactor = std::sqrt(safeStrength / 5.0f);
-    const float farMultiplier = std::clamp(0.8f + 2.0f * strengthFactor, 1.1f, 12.0f);
+    const float farMultiplier = std::clamp(0.8f + 2.0f * strengthFactor, 1.1f, 40.0f);
     const float multiplier = 0.4f + (farMultiplier - 0.4f) * distanceBlendWithinRange;
     return std::clamp(safeBase * multiplier, 0.25f, 200.0f);
 }

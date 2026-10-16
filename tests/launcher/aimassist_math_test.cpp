@@ -80,8 +80,12 @@ int main() {
     check(std::isfinite(bedaim::aimmath::distanceHitboxScale(1.0f,
               std::numeric_limits<float>::infinity(), 80.0f, 200.0f, true)),
           "non-finite distance does not poison the hitbox scale");
-    check(bedaim::aimmath::distanceHitboxScale(1.0f, 80.0f, 80.0f, 200.0f, true) <= 12.0f,
-          "far-range hitbox multiplier remains bounded");
+    const float maxStrengthScale =
+        bedaim::aimmath::distanceHitboxScale(1.0f, 30.0f, 30.0f, 500.0f, true);
+    check(std::isfinite(maxStrengthScale) && maxStrengthScale > 12.0f && maxStrengthScale <= 40.0f,
+          "distance hitbox strength accepts 500 and produces a larger bounded steering volume");
+    check(bedaim::aimmath::distanceHitboxScale(1.0f, 80.0f, 80.0f, 500.0f, true) <= 40.0f,
+          "far-range hitbox multiplier remains bounded at maximum strength");
 
     std::cout << checks << " checks, " << failures << " failures\\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

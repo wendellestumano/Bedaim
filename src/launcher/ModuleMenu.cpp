@@ -205,8 +205,10 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Base size of the virtual steering region.");
     toggle("m_distanceDependentHitbox", "Distance-dependent hitbox", "hitbox",
            "Tighten near targets and expand the virtual aim region with distance.");
-    slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox", "0.1", "200",
-           "0.1", "x", "Higher values expand steering coverage more at long range.");
+    slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox", "0.1", "500",
+           "0.1", "x", "Higher values expand the virtual steering volume more at long range; this does not alter server collision.");
+    toggle("m_fourPointAiming", "Four-point hitbox aiming", "hitbox",
+           "Select the closest of four stable hitbox anchors, then keep the existing slide behavior.");
 
     toggle("m_autoHit", "Enable Auto Hit", "auto_hit",
            "Attempt an attack on a valid target within range.");
@@ -237,6 +239,22 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Aim-speed multiplier while an axe is held.");
     slider("m_maceAimMultiplier", "Mace aim profile", "weapons", "0.2", "10", "0.1", "x",
            "Aim-speed multiplier while the mace is held.");
+    slider("m_swordAimPointY", "Sword hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Aim height as a fraction of target height: 0.05 is near feet, 0.95 is near head.");
+    slider("m_axeAimPointY", "Axe hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Aim height as a fraction of target height.");
+    slider("m_maceAimPointY", "Mace hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Higher values aim closer to the upper hitbox; default is 0.80.");
+    slider("m_bowAimPointY", "Bow hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Aim height as a fraction of target height.");
+    slider("m_crossbowAimPointY", "Crossbow hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Aim height as a fraction of target height.");
+    slider("m_tridentAimPointY", "Trident hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Aim height as a fraction of target height.");
+    slider("m_spearAimPointY", "Spear hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Aim height as a fraction of target height.");
+    slider("m_otherMeleeAimPointY", "Other melee hitbox Y point", "weapons", "0.05", "0.95", "0.05", "Y",
+           "Aim height as a fraction of target height.");
     slider("m_bowAimMultiplier", "Bow aim profile", "weapons", "0.2", "10", "0.1", "x",
            "Aim-speed multiplier while a bow is held.");
     slider("m_crossbowAimMultiplier", "Crossbow aim profile", "weapons", "0.2", "10", "0.1", "x",

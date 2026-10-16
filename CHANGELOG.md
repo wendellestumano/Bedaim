@@ -1,5 +1,14 @@
 # Changelog
 
+## Hitbox controls and weapon aim-point profiles — 2026-10-16
+
+- Increased Distance Hitbox Strength's UI/config/runtime ceiling to 500 and raised the bounded curve multiplier cap so values above 200 have an effect. The setting changes client-side steering geometry only; it does not modify server collision.
+- Added an opt-in four-anchor aiming mode. It chooses the anchor closest to the current view-ray projection and then retains the existing hitbox slide blend.
+- Added independent vertical aim-point controls for each weapon class. The Y value is a fraction of the target's native hitbox height; the mace defaults to 0.80 to aim higher.
+- Fixed loading of saved hitbox scale, distance-dependent toggle and distance-strength settings, which were saved but were not consistently restored by AimAssistModule::loadConfig.
+- AutoHit still requires live-runtime diagnosis: a working physical attack button does not prove that the native synthetic attack route uses the correct ABI for Bedrock 26.52. The public Apollon tree contains older direct offsets, which are not copied into this build. AutoTotem still requires its logged OffhandTransferResult to identify the runtime API/transaction blocker.
+- Validation required: host tests and Android ARM64 build; then in-game verification on Bedrock 26.52 / Levi Launcher 1.5.25. No gameplay fix is claimed from compilation alone.
+
 ## Combat reliability follow-up — 2026-10-15
 
 - Weapon-specific Aim Assist multipliers now range from 0.2× to 10× in both the V2 controls and runtime/config clamps. The combined effective Aim Speed clamp is 100× so profile values above 2× are not truncated; test high values gradually.

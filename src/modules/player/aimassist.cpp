@@ -528,7 +528,16 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "autoHitDelayMs") m_autoHitDelayMs = std::clamp(number, 80.0f, 1000.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
-    else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 200.0f);
+    else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
+    else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "axeAimPointY" || key == "m_axeAimPointY") m_axeAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "maceAimPointY" || key == "m_maceAimPointY") m_maceAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "bowAimPointY" || key == "m_bowAimPointY") m_bowAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "crossbowAimPointY" || key == "m_crossbowAimPointY") m_crossbowAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "tridentAimPointY" || key == "m_tridentAimPointY") m_tridentAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "spearAimPointY" || key == "m_spearAimPointY") m_spearAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "otherMeleeAimPointY" || key == "m_otherMeleeAimPointY") m_otherMeleeAimPointY = std::clamp(number, 0.05f, 0.95f);
+    else if (key == "fourPointAiming" || key == "m_fourPointAiming") m_fourPointAiming = value == "true" || value == "1" || value == "on";
     else if (key == "predictionLeadMs") m_predictionLeadMs = std::clamp(number, 0.0f, 300.0f);
     else return false;
     return true;
@@ -1423,9 +1432,23 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         (bounds.min.y + bounds.max.y) * 0.5f,
         (bounds.min.z + bounds.max.z) * 0.5f
     };
-    const Vec3 centerAimPoint{
+    float aimPointY = 0.55f;
+    switch (weaponForPrediction) {
+        case HeldWeapon::Sword: aimPointY = m_swordAimPointY; break;
+        case HeldWeapon::Axe: aimPointY = m_axeAimPointY; break;
+        case HeldWeapon::Mace: aimPointY = m_maceAimPointY; break;
+        case HeldWeapon::Bow: aimPointY = m_bowAimPointY; break;
+        case HeldWeapon::Crossbow: aimPointY = m_crossbowAimPointY; break;
+        case HeldWeapon::Trident: aimPointY = m_tridentAimPointY; break;
+        case HeldWeapon::Spear: aimPointY = m_spearAimPointY; break;
+        case HeldWeapon::OtherMelee: aimPointY = m_otherMeleeAimPointY; break;
+        case HeldWeapon::Tool:
+        case HeldWeapon::None: break;
+    }
+    aimPointY = std::clamp(std::isfinite(aimPointY) ? aimPointY : 0.55f, 0.05f, 0.95f);
+    Vec3 centerAimPoint{
         boundsCenter.x,
-        targetAimBounds.min.y + (targetAimBounds.max.y - targetAimBounds.min.y) * 0.55f,
+        targetAimBounds.min.y + (targetAimBounds.max.y - targetAimBounds.min.y) * aimPointY,
         boundsCenter.z
     };
 
@@ -1447,6 +1470,29 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         eyePosition.y + viewDirection.y * alongView,
         eyePosition.z + viewDirection.z * alongView
     };
+    if (m_fourPointAiming) {
+        // Four stable anchors on the hitbox cross-plane. Pick the anchor nearest
+        // to the current view-ray projection, then retain the existing slide blend.
+        const float width = targetAimBounds.max.x - targetAimBounds.min.x;
+        const float depth = targetAimBounds.max.z - targetAimBounds.min.z;
+        const float insetX = width * 0.25f;
+        const float insetZ = depth * 0.25f;
+        const Vec3 anchors[] = {
+            {targetAimBounds.min.x + insetX, centerAimPoint.y, boundsCenter.z},
+            {targetAimBounds.max.x - insetX, centerAimPoint.y, boundsCenter.z},
+            {boundsCenter.x, centerAimPoint.y, targetAimBounds.min.z + insetZ},
+            {boundsCenter.x, centerAimPoint.y, targetAimBounds.max.z - insetZ}
+        };
+        float bestAnchorDistance = std::numeric_limits<float>::infinity();
+        for (const auto& anchor : anchors) {
+            const float distance = distanceSquared(anchor, projectedPoint);
+            if (std::isfinite(distance) && distance < bestAnchorDistance) {
+                bestAnchorDistance = distance;
+                centerAimPoint.x = anchor.x;
+                centerAimPoint.z = anchor.z;
+            }
+        }
+    }
 
     // Distance-dependent Hitbox Area is a virtual steering volume. At close
     // range it tightens the pull; at long range the strength slider controls how
@@ -1727,11 +1773,23 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     if (m_predictionMode != "Off" && m_predictionMode != "Ranged" && m_predictionMode != "All")
         m_predictionMode = "Ranged";
     m_predictionLeadMs = std::clamp(j.value("m_predictionLeadMs", m_predictionLeadMs), 0.0f, 300.0f);
+    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.30f, 50.0f);
+    m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
+    m_hitboxDistanceGrowth = std::clamp(j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth), 0.1f, 500.0f);
+    m_fourPointAiming = j.value("m_fourPointAiming", m_fourPointAiming);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
     m_swordAimMultiplier = std::clamp(j.value("m_swordAimMultiplier", m_swordAimMultiplier), 0.2f, 10.0f);
     m_axeAimMultiplier = std::clamp(j.value("m_axeAimMultiplier", m_axeAimMultiplier), 0.2f, 10.0f);
     m_maceAimMultiplier = std::clamp(j.value("m_maceAimMultiplier", m_maceAimMultiplier), 0.2f, 10.0f);
+    m_swordAimPointY = std::clamp(j.value("m_swordAimPointY", m_swordAimPointY), 0.05f, 0.95f);
+    m_axeAimPointY = std::clamp(j.value("m_axeAimPointY", m_axeAimPointY), 0.05f, 0.95f);
+    m_maceAimPointY = std::clamp(j.value("m_maceAimPointY", m_maceAimPointY), 0.05f, 0.95f);
+    m_bowAimPointY = std::clamp(j.value("m_bowAimPointY", m_bowAimPointY), 0.05f, 0.95f);
+    m_crossbowAimPointY = std::clamp(j.value("m_crossbowAimPointY", m_crossbowAimPointY), 0.05f, 0.95f);
+    m_tridentAimPointY = std::clamp(j.value("m_tridentAimPointY", m_tridentAimPointY), 0.05f, 0.95f);
+    m_spearAimPointY = std::clamp(j.value("m_spearAimPointY", m_spearAimPointY), 0.05f, 0.95f);
+    m_otherMeleeAimPointY = std::clamp(j.value("m_otherMeleeAimPointY", m_otherMeleeAimPointY), 0.05f, 0.95f);
     m_bowAimMultiplier = std::clamp(j.value("m_bowAimMultiplier", m_bowAimMultiplier), 0.2f, 10.0f);
     m_crossbowAimMultiplier = std::clamp(j.value("m_crossbowAimMultiplier", m_crossbowAimMultiplier), 0.2f, 10.0f);
     m_tridentAimMultiplier = std::clamp(j.value("m_tridentAimMultiplier", m_tridentAimMultiplier), 0.2f, 10.0f);
@@ -1820,6 +1878,15 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_swordAimMultiplier"] = m_swordAimMultiplier;
     j["m_axeAimMultiplier"] = m_axeAimMultiplier;
     j["m_maceAimMultiplier"] = m_maceAimMultiplier;
+    j["m_swordAimPointY"] = m_swordAimPointY;
+    j["m_axeAimPointY"] = m_axeAimPointY;
+    j["m_maceAimPointY"] = m_maceAimPointY;
+    j["m_bowAimPointY"] = m_bowAimPointY;
+    j["m_crossbowAimPointY"] = m_crossbowAimPointY;
+    j["m_tridentAimPointY"] = m_tridentAimPointY;
+    j["m_spearAimPointY"] = m_spearAimPointY;
+    j["m_otherMeleeAimPointY"] = m_otherMeleeAimPointY;
+    j["m_fourPointAiming"] = m_fourPointAiming;
     j["m_bowAimMultiplier"] = m_bowAimMultiplier;
     j["m_crossbowAimMultiplier"] = m_crossbowAimMultiplier;
     j["m_tridentAimMultiplier"] = m_tridentAimMultiplier;
