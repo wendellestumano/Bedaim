@@ -123,26 +123,39 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             autoTotemLogger().warn("Manual equip failed: no totem was found in inventory.");
             return;
         }
-        std::lock_guard lock(m_stateMutex);
-        if (m_uiSequencePhase != UiSequencePhase::Idle) return;
-        m_cachedTotemSlot = totemSlot;
-        m_pendingRefill = true;
-        m_refillAfter = checkTime;
-        m_uiTransferSucceeded = false;
-        m_manualSequenceActive = true;
-        if (m_containerOpen.load(std::memory_order_acquire)) {
-            m_uiSequencePhase = UiSequencePhase::WaitBeforeTransfer;
-            m_uiPhaseDeadline = checkTime + std::chrono::milliseconds(
-                static_cast<int>(bedaim::autototem::normalizeUiStepDelayMs(m_uiStepDelayMs)));
-            return;
+        // First validate the actual inventory-to-offhand transaction without
+        // opening UI. Opening inventory first left the user stuck on builds where
+        // the native close helper is not exported, while hiding the real transfer
+        // failure. Keep this one-shot operation on the player tick thread.
+        const auto transfer = inventory.moveInventoryItemToOffhand(player, totemSlot);
+        const bool equipped =
+            transfer == bedrocktools::core::OffhandTransferResult::Success ||
+            transfer == bedrocktools::core::OffhandTransferResult::AlreadyEquipped;
+        {
+            std::lock_guard lock(m_stateMutex);
+            m_uiSequencePhase = UiSequencePhase::Idle;
+            m_uiPhaseDeadline = {};
+            m_manualSequenceActive = false;
+            m_uiTransferSucceeded = equipped;
+            m_cachedTotemSlot = -1;
+            m_pendingRefill = false;
+            if (equipped) {
+                m_lastOffhandHadTotem = true;
+                m_refillAfter = {};
+                m_nextInventoryScan = {};
+                m_nextOffhandCheck = {};
+            } else {
+                m_nextInventoryScan = checkTime + std::chrono::milliseconds(
+                    static_cast<int>(bedaim::autototem::normalizeScanRetryMs(m_scanRetryIntervalMs)));
+            }
         }
-        // The floating button emits KEYCODE_E. Minecraft must open its inventory
-        // itself; this manual path deliberately avoids calling an uncertain native
-        // openInventory function after the previous device crash.
-        m_uiSequencePhase = UiSequencePhase::WaitForOpen;
-        m_uiPhaseDeadline = checkTime + std::chrono::milliseconds(600);
-        m_nextOffhandCheck = {};
-        autoTotemLogger().info("Manual inventory/equip/close sequence started.");
+        if (equipped) {
+            autoTotemLogger().info("Manual AutoTotem transfer result: {}.", transferResultName(transfer));
+        } else {
+            autoTotemLogger().error(
+                "Manual AutoTotem transfer failed: {}. Inventory UI was not opened; this result identifies the native API/transaction blocker.",
+                transferResultName(transfer));
+        }
         return;
     }
     bool readOffhand = false;
@@ -542,13 +555,12 @@ void AutoTotemModule::onMenuRegistered() {
     ButtonBuilder manualButton("bedaim.autototem.manual_equip", "AutoTotem Equip");
     manualButton.moduleId(moduleId)
         .modId("BedrockTools")
-        .label("EQUIP TOTEM / E")
-        .behavior(ButtonBehavior::Hold)
+        .label("EQUIP TOTEM")
+        .behavior(ButtonBehavior::Click)
         .defaultVisible(true)
         .stylePreset(ButtonStylePreset::Keycap)
-        .androidKeyCode(33) // Android KEYCODE_E; lets Minecraft open the inventory UI.
         .onEvent([this](std::string_view, ButtonEvent event, float) {
-            if (event == ButtonEvent::Down)
+            if (event == ButtonEvent::Click || event == ButtonEvent::Down)
                 m_manualRequest.store(true, std::memory_order_release);
         }).registerButton();
     schema.node(node("m_combatOnly", "Combat Only", "safety",
