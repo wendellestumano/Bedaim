@@ -530,17 +530,9 @@ void AutoTotemModule::onMenuRegistered() {
     offhandPoll.step = "10";
     offhandPoll.description = "How often AutoTotem checks the offhand. Minimum 150 ms reduces native ItemStack lookups while keeping refill detection responsive.";
     schema.node(std::move(offhandPoll));
-    auto sequenceToggle = node("m_useInventoryUiSequence", "Open inventory around refill", "behavior",
-                               ConfigControlTypeV2::Toggle);
-    sequenceToggle.description = "When the LocalPlayer screen methods exist in this Bedrock build, open inventory, equip the totem using the verified native transaction, then request closing the inventory. If the symbols are unavailable, the safe native-transaction fallback is used.";
-    schema.node(std::move(sequenceToggle));
-    auto stepDelay = node("m_uiStepDelayMs", "UI step delay (ms)", "behavior",
-                          ConfigControlTypeV2::SliderFloat);
-    stepDelay.minValue = "0";
-    stepDelay.maxValue = "500";
-    stepDelay.step = "10";
-    stepDelay.description = "Wait time between opening inventory, equipping the totem, and requesting screen close.";
-    schema.node(std::move(stepDelay));
+    // The inventory UI automation controls remain hidden until the matching
+    // native open/close path is validated on the target Bedrock runtime. Persisted
+    // values are still accepted for compatibility with older configuration files.
     schema.node(node("m_keepTotemEquipped", "Keep Totem Equipped", "behavior",
                      ConfigControlTypeV2::Toggle));
     ButtonBuilder manualButton("bedaim.autototem.manual_equip", "AutoTotem Equip");
