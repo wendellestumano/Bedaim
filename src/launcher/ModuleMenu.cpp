@@ -536,29 +536,29 @@ void registerModulesWithLauncher() {
                 else if (k == "m_keepTotemEquipped") displayName = "AUTO TOTEM > Keep totem equipped";
             }
             if (mod->moduleId == "bedrocktools.Mace Swapper") {
-                if (k == "m_enableMaceSwapper") displayName = "MACE SWAPPER > Enable";
-                else if (k == "m_attackRange") displayName = "MACE SWAPPER > Attack range";
-                else if (k == "m_minimumFallDistance") displayName = "MACE SWAPPER > Minimum fall distance (blocks)";
-                else if (k == "m_attackIntervalMs") displayName = "MACE SWAPPER > Attack interval (ms)";
-                else if (k == "m_restoreSlot") displayName = "MACE SWAPPER > Restore previous slot";
+                if (k == "m_enableMaceSwapper") displayName = "MACEFALL > Enable";
+                else if (k == "m_attackRange") displayName = "MACEFALL > Attack range";
+                else if (k == "m_minimumFallDistance") displayName = "MACEFALL > Minimum fall distance (blocks)";
+                else if (k == "m_attackIntervalMs") displayName = "MACEFALL > Attack interval (ms)";
+                else if (k == "m_restoreSlot") displayName = "MACEFALL > Restore previous slot";
             }
             if (mod->moduleId == "bedrocktools.Sword Swapper") {
-                if (k == "m_attackRange") displayName = "SWORD SWAPPER > Attack range";
-                else if (k == "m_restoreSlot") displayName = "SWORD SWAPPER > Restore previous slot";
+                if (k == "m_attackRange") displayName = "BLADESHIFT > Attack range";
+                else if (k == "m_restoreSlot") displayName = "BLADESHIFT > Restore previous slot";
             }
             if (mod->moduleId == "bedrocktools.Hitbox Expander") {
-                if (k == "m_hitboxWidth") displayName = "EXPANDER > Width / depth (blocks)";
-                else if (k == "m_hitboxHeight") displayName = "EXPANDER > Height (blocks)";
-                else if (k == "m_expandPlayers") displayName = "EXPANDER > Players";
-                else if (k == "m_expandMobs") displayName = "EXPANDER > Mobs";
-                else if (k == "m_requireLineOfSight") displayName = "EXPANDER > Require line of sight";
+                if (k == "m_hitboxWidth") displayName = "BEDROCK BOUNDS > Width / depth (blocks)";
+                else if (k == "m_hitboxHeight") displayName = "BEDROCK BOUNDS > Height (blocks)";
+                else if (k == "m_expandPlayers") displayName = "BEDROCK BOUNDS > Players";
+                else if (k == "m_expandMobs") displayName = "BEDROCK BOUNDS > Mobs";
+                else if (k == "m_requireLineOfSight") displayName = "BEDROCK BOUNDS > Require line of sight";
             }
 
             if (mod->moduleId == "bedrocktools.Aim Assist") {
-                if (k == "m_aimMode") displayName = "AIM OPTIONS > Profile";
-                else if (k == "m_trackingMode") displayName = "AIM OPTIONS > Tracking mode";
-                else if (k == "m_naturalization") displayName = "AIM OPTIONS > Naturalization during jumps";
-                else if (k == "m_naturalizationWeapon") displayName = "AIM OPTIONS > Naturalization weapon";
+                if (k == "m_aimMode") displayName = "BEDROCK AIM > Profile";
+                else if (k == "m_trackingMode") displayName = "BEDROCK AIM > Tracking mode";
+                else if (k == "m_naturalization") displayName = "BEDROCK AIM > Naturalization during jumps";
+                else if (k == "m_naturalizationWeapon") displayName = "BEDROCK AIM > Naturalization weapon";
                 else if (k == "m_fov") displayName = "BEHAVIOR > FOV";
                 else if (k == "m_targetSwitchHysteresis") displayName = "TARGETING > Crosshair switch stability";
                 else if (k == "m_targetSwitchDistanceMargin") displayName = "TARGETING > Distance switch margin";
