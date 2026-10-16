@@ -26,6 +26,7 @@
 #include <pl/Logger.hpp>
 #include <chrono>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace bedrocktools::core::gamehooks {
@@ -94,8 +95,15 @@ OpenInventoryScreenFn openInventoryScreenOriginal = nullptr;
 CloseInventoryScreenFn closeInventoryScreenOriginal = nullptr;
 bool inventoryUiApiResolved = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
+using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
 PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
+PlayerSetGameTypeFn playerSetGameTypeOriginal = nullptr;
 std::chrono::steady_clock::time_point playerGameTypeNextResolve{};
+std::chrono::steady_clock::time_point playerSetGameTypeNextResolve{};
+std::atomic_bool playerSetGameTypeHookInstalled{false};
+std::atomic_bool playerSetGameTypeSeen{false};
+std::mutex playerGameTypeCacheMutex;
+std::unordered_map<const void*, std::int32_t> playerGameTypeCache;
 bool inventoryUiApiWarningLogged = false;
 bool openInventoryViaVtable = false;
 
@@ -253,6 +261,49 @@ void* resolveLoadedClientSupportFunction(const char* name) {
     return trustedImage ? address : nullptr;
 }
 
+void playerSetGameTypeDetour(void* player, std::int32_t nativeValue) {
+    if (playerSetGameTypeOriginal) playerSetGameTypeOriginal(player, nativeValue);
+    if (!player) return;
+
+    playerSetGameTypeSeen.store(true, std::memory_order_release);
+    std::int32_t canonical = -1;
+    std::lock_guard<std::mutex> cacheLock(playerGameTypeCacheMutex);
+    if (bedaim::playergametype::normalizeNativeValue(nativeValue, canonical)) {
+        playerGameTypeCache[player] = canonical;
+    } else {
+        playerGameTypeCache.erase(player);
+    }
+}
+
+bool installPlayerSetGameTypeHook() {
+    if (playerSetGameTypeHookInstalled.load(std::memory_order_acquire)) return true;
+    const char* symbols[] = {
+        "_ZN6Player17setPlayerGameTypeE8GameType",
+        "_ZN11LocalPlayer17setPlayerGameTypeE8GameType",
+        "_ZN6Player18$setPlayerGameTypeE8GameType",
+        "_ZN11LocalPlayer18$setPlayerGameTypeE8GameType"
+    };
+    for (const char* symbol : symbols) {
+        void* address = resolveMinecraftFunction(symbol);
+        if (!address) address = resolveLoadedClientSupportFunction(symbol);
+        if (!address || handleCount >= handles.size()) continue;
+        auto handle = bedrocktools::hooks::install(
+            address,
+            reinterpret_cast<void*>(playerSetGameTypeDetour),
+            reinterpret_cast<void**>(&playerSetGameTypeOriginal));
+        if (!handle) {
+            playerSetGameTypeOriginal = nullptr;
+            continue;
+        }
+        handles[handleCount++] = handle;
+        playerSetGameTypeHookInstalled.store(true, std::memory_order_release);
+        autoHitLogger().info(
+            "Installed a trusted Player::setPlayerGameType observer; remote player modes can be cached when the engine updates them.");
+        return true;
+    }
+    return false;
+}
+
 void resolveInventoryUiApi() {
     std::lock_guard<std::mutex> apiLock(inventoryUiApiMutex);
     const auto resolveNow = std::chrono::steady_clock::now();
@@ -264,6 +315,11 @@ void resolveInventoryUiApi() {
             playerGetGameTypeOriginal = reinterpret_cast<PlayerGetGameTypeFn>(
                 resolveMinecraftFunction("_ZNK11LocalPlayer17getPlayerGameTypeEv"));
         }
+    }
+    if (!playerSetGameTypeHookInstalled.load(std::memory_order_acquire) &&
+        resolveNow >= playerSetGameTypeNextResolve) {
+        playerSetGameTypeNextResolve = resolveNow + std::chrono::seconds(1);
+        installPlayerSetGameTypeHook();
     }
     if (inventoryUiApiResolved) return;
 
@@ -778,33 +834,47 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     if (!player) return false;
-    if (!playerGetGameTypeOriginal &&
-        std::chrono::steady_clock::now() >= playerGameTypeNextResolve)
+    if ((!playerGetGameTypeOriginal ||
+         !playerSetGameTypeHookInstalled.load(std::memory_order_acquire)) &&
+        std::chrono::steady_clock::now() >= playerGameTypeNextResolve) {
         resolveInventoryUiApi();
-    if (!playerGetGameTypeOriginal) {
-        static std::atomic_bool loggedMissingGameType{false};
-        if (!loggedMissingGameType.exchange(true, std::memory_order_acq_rel)) {
-            autoHitLogger().warn(
-                "Player Radar/GameMode Checker cannot resolve Player::getPlayerGameType in the active libminecraftpe.so. Native mode labels will remain Unknown until a matching-build getter or packet hook is available.");
-        }
-        return false;
     }
-    const std::int32_t nativeValue = playerGetGameTypeOriginal(player);
-    std::int32_t canonical = -1;
-    // Player::getPlayerGameType() returns native C++ GameType values, not packet
-    // enum values: Survival=0, Creative=1, Adventure=2, Default=5, Spectator=6.
-    // Undefined (-1) and Default are not concrete player modes.
-    if (!bedaim::playergametype::normalizeNativeValue(nativeValue, canonical)) {
+
+    if (playerGetGameTypeOriginal) {
+        const std::int32_t nativeValue = playerGetGameTypeOriginal(player);
+        std::int32_t canonical = -1;
+        // Native C++ GameType values: Survival=0, Creative=1, Adventure=2,
+        // Default=5, Spectator=6. Undefined and Default are not player modes.
+        if (bedaim::playergametype::normalizeNativeValue(nativeValue, canonical)) {
+            outGameType = canonical;
+            return true;
+        }
         static std::atomic_bool loggedUnknownNativeGameType{false};
         if (!loggedUnknownNativeGameType.exchange(true, std::memory_order_acq_rel)) {
             autoHitLogger().warn(
-                "Player::getPlayerGameType returned unrecognized native value {}; leaving the mode Unknown rather than guessing.",
+                "Player::getPlayerGameType returned unrecognized native value {}; checking the observed setter cache instead of guessing.",
                 nativeValue);
         }
-        return false;
     }
-    outGameType = canonical;
-    return true;
+
+    {
+        std::lock_guard<std::mutex> cacheLock(playerGameTypeCacheMutex);
+        const auto cached = playerGameTypeCache.find(player);
+        if (cached != playerGameTypeCache.end()) {
+            outGameType = cached->second;
+            return true;
+        }
+    }
+
+    static std::atomic_bool loggedMissingGameType{false};
+    if (!loggedMissingGameType.exchange(true, std::memory_order_acq_rel)) {
+        autoHitLogger().warn(
+            "No native GameType getter result or setter-cache entry is available yet (getter={}, setterHook={}, setterObserved={}); this player's mode remains Unknown until the engine updates a cached player or a matching-build packet hook is added.",
+            playerGetGameTypeOriginal != nullptr,
+            playerSetGameTypeHookInstalled.load(std::memory_order_acquire),
+            playerSetGameTypeSeen.load(std::memory_order_acquire));
+    }
+    return false;
 }
 
 bool inventoryUiSequenceAvailable() {
