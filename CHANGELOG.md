@@ -1,5 +1,12 @@
 # Changelog
 
+## BedrockAim steering correction and module identity — 2026-10-16
+
+- Fixed weapon Y aim profiles to use the selected height as a stable vertical anchor; the Smooth hitbox slide now changes horizontal X/Z only, so sliding no longer pulls the aim back toward the box center vertically.
+- Replaced the approximate four-point selection based on a single center projection with a nearest-forward-ray test against four real, inset hitbox anchors. The four points inherit the selected weapon Y profile.
+- Changed user-facing module names to BedrockAim, BedrockBounds, MaceFall and BladeShift while retaining the original `bedrocktools.*` internal IDs for config and module interoperability.
+- Added host math tests for Y-height mapping, four-anchor geometry and nearest-ray selection. Device-level camera behavior still requires validation in Bedrock 26.52.
+
 ## Hitbox controls and weapon aim-point profiles — 2026-10-16
 
 - Increased Distance Hitbox Strength's UI/config/runtime ceiling to 500 and raised the bounded curve multiplier cap so values above 200 have an effect. The setting changes client-side steering geometry only; it does not modify server collision.
