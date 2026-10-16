@@ -826,6 +826,35 @@ bool attackAvailable(void* gameMode) {
         publicAttackVirtualEntry(gameMode, &ignored) != 0);
 }
 
+bool queueApollonInputAttackTest() {
+    autoHitLogger().info("Apollon input test requested: clientInstance={}, pending={}.",
+        currentClientInstance.load(std::memory_order_acquire) != nullptr,
+        apollonInputAttackPending.load(std::memory_order_acquire));
+    void* clientInstance = currentClientInstance.load(std::memory_order_acquire);
+    if (!clientInstance) {
+        autoHitLogger().warn(
+            "Apollon input test unavailable: ClientInstance has not been observed yet; enter a world and retry.");
+        return false;
+    }
+    const auto handler = resolveApollonInputAttackHandler();
+    if (!handler) {
+        autoHitLogger().error(
+            "Apollon input test failed: no exported ClientInstance attack-button wrapper could be resolved. "
+            "This build deliberately has no fallback to the stale numeric offsets.");
+        return false;
+    }
+    bool expected = false;
+    if (!apollonInputAttackPending.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        autoHitLogger().warn("Apollon input test not queued: a previous test click is still pending.");
+        return false;
+    }
+    autoHitLogger().info(
+        "Apollon input test queued. The next ClientInstance update will call the native input handler; "
+        "keep the desired target in the crosshair. This is not a damage confirmation.");
+    return true;
+}
+
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
     (void)playPredictiveSound; // The validated public wrapper owns this default.

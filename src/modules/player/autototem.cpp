@@ -543,9 +543,12 @@ void AutoTotemModule::onMenuRegistered() {
         .defaultVisible(true)
         .stylePreset(ButtonStylePreset::Keycap)
         .onEvent([this](std::string_view, ButtonEvent event, float) {
-            if (event == ButtonEvent::Click)
+            if (event == ButtonEvent::Click) {
+                autoTotemLogger().info("AutoTotem manual button clicked; queuing one-shot inventory transfer.");
                 m_manualRequest.store(true, std::memory_order_release);
+            }
         }).registerButton();
+    autoTotemLogger().info("AutoTotem manual equip button registration requested by the test build.");
     schema.node(node("m_combatOnly", "Combat Only", "safety",
                      ConfigControlTypeV2::Toggle));
     schema.node(node("keybind", "Keybind", "behavior", ConfigControlTypeV2::Keybind));
