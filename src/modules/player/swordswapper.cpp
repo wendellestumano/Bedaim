@@ -62,7 +62,8 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
 }
 
 SwordSwapperModule::SwordSwapperModule()
-    : Module("Sword Swapper", "Equips a hotbar sword when an Aim Assist target is in the crosshair and the player is grounded.") {
+    : Module("BladeShift", "Selects a hotbar sword when a BedrockAim target is in the crosshair and the player is grounded.",
+             "Sword Swapper") {
     keybind = 0;
 }
 
