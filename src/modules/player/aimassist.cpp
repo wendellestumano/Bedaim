@@ -1450,7 +1450,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         {targetAimBounds.min.x, targetAimBounds.min.y, targetAimBounds.min.z},
         {targetAimBounds.max.x, targetAimBounds.max.y, targetAimBounds.max.z}
     };
-    Vec3 centerAimPoint = bedaim::aimmath::aimPointAtHeight(nativeAimMathBounds, aimPointY);
+    const auto mathAimPoint = bedaim::aimmath::aimPointAtHeight(nativeAimMathBounds, aimPointY);
+    Vec3 centerAimPoint{mathAimPoint.x, mathAimPoint.y, mathAimPoint.z};
 
     const float yawRadians = currentRotation.y / kRadToDeg;
     const float pitchRadians = currentRotation.x / kRadToDeg;
@@ -1465,8 +1466,13 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         // of the box center). Vertical Y is chosen first and remains independent
         // of horizontal Smooth hitbox sliding.
         const auto anchors = bedaim::aimmath::fourAimAnchors(nativeAimMathBounds, aimPointY);
-        centerAimPoint = anchors[bedaim::aimmath::nearestAnchorToRay(
-            eyePosition, viewDirection, anchors)];
+        const bedaim::aimmath::Vec3 mathEye{eyePosition.x, eyePosition.y, eyePosition.z};
+        const bedaim::aimmath::Vec3 mathViewDirection{
+            viewDirection.x, viewDirection.y, viewDirection.z
+        };
+        const auto& selectedAnchor = anchors[bedaim::aimmath::nearestAnchorToRay(
+            mathEye, mathViewDirection, anchors)];
+        centerAimPoint = {selectedAnchor.x, selectedAnchor.y, selectedAnchor.z};
     }
 
     const float toCenterX = boundsCenter.x - eyePosition.x;
