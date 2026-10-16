@@ -1,5 +1,12 @@
 # Changelog
 
+## Weapon profile range follow-up — 2026-10-15
+
+- Increased all eight weapon-specific Aim Assist multipliers (sword, axe, mace, bow, crossbow, trident, spear, other melee) from a maximum of 2× to 10× in the menu and config loading.
+- Raised the post-multiplier effective Aim Speed clamp to 100× so weapon profile values above 2× are not immediately truncated by the next calculation. Extreme settings can cause abrupt camera movement and should be tested incrementally.
+- AutoHit, AutoTotem and GameType still need runtime-level fixes: the public attack route has to be proven against the active Bedrock build; the inventory UI close API is unavailable if its native helper is not exported; GameMode lookup depends on a dynamically exported getter. Do not interpret the earlier successful CI as in-game confirmation.
+
+
 ## Mace Swapper restoration — 2026-10-15
 
 - Restored the older pending-tick slot/equip/attack/restore implementation from `main` instead of maintaining the rewritten fall-priority state machine.
