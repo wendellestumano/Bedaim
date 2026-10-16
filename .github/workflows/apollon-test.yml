@@ -1,9 +1,9 @@
-name: Apollon Experimental ARM64 Test Build
+name: BedrockAim Apollon v6.7 Compatibility Test Build
 
 on:
   push:
     branches:
-      - test/apollon-current-26.52
+      - test/apollon-current-26.52-analysis-20261016
   workflow_dispatch:
 
 jobs:
@@ -23,7 +23,7 @@ jobs:
         working-directory: tests
         run: |
           xmake f -y -P . -p linux -a x86_64 -m debug
-          xmake -y -P .
+          xmake -y -P . 
           xmake run -P . menu_config_value_test
           xmake run -P . aimassist_math_test
           xmake run -P . autohit_key_binding_test
@@ -39,13 +39,25 @@ jobs:
         with:
           ndk-version: r28c
 
-      - name: Build experimental package
+      - name: Build and package isolated experimental artifact
         run: |
           xmake f -y -p android -a arm64-v8a -m release --ndk=${{ steps.ndk.outputs.ndk-path }}
           xmake -y
 
+      - name: Verify experimental manifest identity
+        run: |
+          python3 - <<'PY'
+          import json, zipfile
+          p = "build/android/arm64-v8a/release/BedrockTools.levipack"
+          with zipfile.ZipFile(p) as z:
+              manifest = json.loads(z.read("manifest.json"))
+          assert manifest["name"] == "BedrockTools Apollon Experimental", manifest
+          assert manifest["version"] == "1.5.7-apollon-test-26.52", manifest
+          print("Verified experimental package identity:", manifest["name"], manifest["version"])
+          PY
+
       - uses: actions/upload-artifact@v4
         with:
-          name: BedrockTools-ApollonTest-26.52
+          name: BedrockAim-Apollon-v6.7-26.52-EXPERIMENTAL
           path: build/android/arm64-v8a/release/BedrockTools.levipack
           if-no-files-found: error
