@@ -425,19 +425,10 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     switch (decision) {
         case bedaim::autototem::Decision::Equip: {
-            if (m_useInventoryUiSequence && bedrocktools::core::gamehooks::inventoryUiSequenceAvailable()) {
-                if (bedrocktools::core::gamehooks::openPlayerInventoryScreen(player)) {
-                    m_uiSequencePhase = UiSequencePhase::WaitForOpen;
-                    m_uiPhaseDeadline = now + std::chrono::milliseconds(600);
-                    m_uiTransferSucceeded = false;
-                    m_nextOffhandCheck = {};
-                    autoTotemLogger().info("Auto Totem started inventory UI sequence.");
-                    break;
-                }
-            }
-
-            // Missing symbols are version-gated: keep the existing verified native
-            // transaction as fallback instead of guessing screen-controller offsets.
+            // Do not open the visible inventory until both transfer and close APIs
+            // have been proven on this runtime. The direct native transaction either
+            // equips and verifies the totem or returns a specific failure reason;
+            // this avoids leaving the player's inventory open after an API miss.
             const auto result = inventory.moveInventoryItemToOffhand(player, totemSlot);
             if (result == bedrocktools::core::OffhandTransferResult::Success ||
                 result == bedrocktools::core::OffhandTransferResult::AlreadyEquipped) {
