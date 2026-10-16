@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace bedaim::aimmath {
 
@@ -43,6 +44,66 @@ float boundedTurnStep(float angularErrorDegrees,
     const float maximumStep = turnRateDegreesPerSecond * safeDelta;
     if (!std::isfinite(maximumStep) || maximumStep <= 0.0f) return 0.0f;
     return std::clamp(angularErrorDegrees, -maximumStep, maximumStep);
+}
+
+Vec3 aimPointAtHeight(const Bounds& bounds, float yFraction) noexcept {
+    const float safeY = std::clamp(std::isfinite(yFraction) ? yFraction : 0.55f,
+                                   0.05f, 0.95f);
+    return {
+        (bounds.min.x + bounds.max.x) * 0.5f,
+        bounds.min.y + (bounds.max.y - bounds.min.y) * safeY,
+        (bounds.min.z + bounds.max.z) * 0.5f
+    };
+}
+
+std::array<Vec3, 4> fourAimAnchors(const Bounds& bounds, float yFraction,
+                                  float insetFraction) noexcept {
+    const float safeInset = std::clamp(std::isfinite(insetFraction) ? insetFraction : 0.25f,
+                                       0.05f, 0.45f);
+    const Vec3 center = aimPointAtHeight(bounds, yFraction);
+    const float xInset = (bounds.max.x - bounds.min.x) * safeInset;
+    const float zInset = (bounds.max.z - bounds.min.z) * safeInset;
+    return {{
+        {bounds.min.x + xInset, center.y, center.z},
+        {bounds.max.x - xInset, center.y, center.z},
+        {center.x, center.y, bounds.min.z + zInset},
+        {center.x, center.y, bounds.max.z - zInset}
+    }};
+}
+
+std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
+                               const std::array<Vec3, 4>& anchors) noexcept {
+    if (!isFiniteVector(origin) || !isFiniteVector(direction)) return 0;
+    const float directionLengthSquared =
+        direction.x * direction.x + direction.y * direction.y + direction.z * direction.z;
+    if (!std::isfinite(directionLengthSquared) || directionLengthSquared <= 1.0e-8f) return 0;
+
+    std::size_t bestIndex = 0;
+    float bestDistanceSquared = std::numeric_limits<float>::infinity();
+    for (std::size_t i = 0; i < anchors.size(); ++i) {
+        const Vec3& point = anchors[i];
+        if (!isFiniteVector(point)) continue;
+        const float dx = point.x - origin.x;
+        const float dy = point.y - origin.y;
+        const float dz = point.z - origin.z;
+        const float alongRay = std::max(
+            0.0f, (dx * direction.x + dy * direction.y + dz * direction.z) /
+                      directionLengthSquared);
+        const Vec3 closest{
+            origin.x + direction.x * alongRay,
+            origin.y + direction.y * alongRay,
+            origin.z + direction.z * alongRay
+        };
+        const float ex = point.x - closest.x;
+        const float ey = point.y - closest.y;
+        const float ez = point.z - closest.z;
+        const float d2 = ex * ex + ey * ey + ez * ez;
+        if (std::isfinite(d2) && d2 < bestDistanceSquared) {
+            bestDistanceSquared = d2;
+            bestIndex = i;
+        }
+    }
+    return bestIndex;
 }
 
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
