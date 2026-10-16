@@ -22,18 +22,23 @@ public:
 
 private:
     void onLocalPlayerTick(bedrocktools::sdk::Player* player);
+    void onAttackAttempt(bedrocktools::sdk::Actor* target);
     void onAttackResult(bedrocktools::sdk::Actor* target, bool result);
-    bool isMaceEquipped(bedrocktools::sdk::Player* player) const;
 
     std::atomic<bedrocktools::sdk::Player*> m_localPlayer{nullptr};
-    std::atomic_bool m_maceEquipped{false};
     std::atomic<float> m_fallSpeedBps{0.0f};
+    std::atomic<float> m_movementSpeedBps{0.0f};
 
     std::mutex m_stateMutex;
+    std::chrono::steady_clock::time_point m_lastHudRender{};
     bool m_hasLastY = false;
     float m_lastY = 0.0f;
+    bool m_hasLastPosition = false;
+    bedrocktools::sdk::Vec3 m_lastPosition{};
 
     std::string m_selectedItemId;
+    int m_cachedSelectedSlot = -1;
+    std::chrono::steady_clock::time_point m_nextItemRefresh{};
 
     std::uint64_t m_styleScore = 0;
     unsigned int m_combo = 0;
@@ -54,6 +59,4 @@ private:
     bool m_enableHitStop = true;
     bool m_showImpactText = true;
 
-    int m_hitStopFrames = 0;
-    bool m_hitStopPending = false;
 };

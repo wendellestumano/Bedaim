@@ -8,12 +8,18 @@
 #include "visual/nofog.hpp"
 #include "hud/pingcounter.hpp"
 #include "hud/worldtime.hpp"
+#include "hud/sessiontimer.hpp"
+#include "hud/framestats.hpp"
+#include "hud/distancetracker.hpp"
+#include "hud/playerradar.hpp"
 #include "hud/totemcounter.hpp"
 #include "hud/arrowcounter.hpp"
 #include "hud/potcounter.hpp"
 #include "player/quickloot.hpp"
+#include "player/autototem.hpp"
 #include "player/aimassist.hpp"
 #include "player/maceswapper.hpp"
+#include "player/swordswapper.hpp"
 #include "hud/reachcounter.hpp"
 #include "hud/breakindicator.hpp"
 #include "hud/playercoords.hpp"
@@ -108,13 +114,20 @@ void registerAllModules() {
     registry.emplace<PotionHudModule>();
     registry.emplace<TimeChangerModule>();
     registry.emplace<WorldTimeModule>();
+    registry.emplace<SessionTimerModule>();
+    registry.emplace<FrameStatsModule>();
+    registry.emplace<DistanceTrackerModule>();
+    registry.emplace<PlayerRadarModule>();
     registry.emplace<TotemCounterModule>();
     registry.emplace<ArrowCounterModule>();
     registry.emplace<PotCounterModule>();
     registry.emplace<QuickLootModule>();
     registry.emplace<AutoSprintModule>();
     registry.emplace<AimAssistModule>();
+    registry.emplace<HitboxExpanderModule>();
+    registry.emplace<AutoTotemModule>();
     registry.emplace<MaceSwapperModule>();
+    registry.emplace<SwordSwapperModule>();
     registry.emplace<WeatherChangerModule>();
     registry.emplace<NickModule>();
     registry.emplace<NoDisconnectModule>();

@@ -1,0 +1,97 @@
+#include "modules/player/AutoTotemPolicy.hpp"
+
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <limits>
+#include <string_view>
+
+namespace {
+int checks = 0;
+int failures = 0;
+
+void check(bool condition, std::string_view name) {
+    ++checks;
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << name << '\n';
+    }
+}
+
+bedaim::autototem::Inputs ready() {
+    return {true, true, false, true, false, false, false, true, true};
+}
+}
+
+int main() {
+    using bedaim::autototem::Decision;
+    using bedaim::autototem::decide;
+    using bedaim::autototem::normalizeDelayMs;
+    using bedaim::autototem::normalizeScanRetryMs;
+    using bedaim::autototem::normalizeOffhandPollMs;
+    using bedaim::autototem::normalizeUiStepDelayMs;
+
+    auto state = ready();
+    check(decide(state) == Decision::Equip, "valid pending refill is allowed");
+
+    state.enabled = false;
+    check(decide(state) == Decision::Idle, "disabled module does nothing");
+
+    state = ready(); state.pending = false;
+    check(decide(state) == Decision::Idle, "no refill request does nothing");
+
+    state = ready(); state.offhandHasTotem = true;
+    check(decide(state) == Decision::Idle, "already equipped totem is never replaced");
+
+    state = ready(); state.containerOpen = true;
+    check(decide(state) == Decision::WaitForContainer, "wait while player inventory UI is open");
+
+    state = ready(); state.combatOnly = true; state.inCombat = false;
+    check(decide(state) == Decision::WaitForCombat, "combat-only mode waits for combat");
+
+    state = ready(); state.delayElapsed = false;
+    check(decide(state) == Decision::WaitForDelay, "configured post-consumption delay is honored");
+
+    state = ready(); state.candidateAvailable = false;
+    check(decide(state) == Decision::WaitForItem, "retry when no inventory totem is available");
+
+    state = ready(); state.offhandEmpty = false;
+    check(decide(state) == Decision::WaitForOffhandClear, "never overwrite a non-totem offhand item");
+
+    check(normalizeDelayMs(0.0f) == 0.0f, "zero delay is supported");
+    check(normalizeDelayMs(100.0f) == 100.0f, "default delay stays 100 ms");
+    check(normalizeDelayMs(1500.0f) == 1000.0f, "delay is capped at 1000 ms");
+    check(normalizeDelayMs(-5.0f) == 0.0f, "negative delay is clamped to zero");
+    check(normalizeDelayMs(std::numeric_limits<float>::quiet_NaN()) == 100.0f,
+          "non-finite delay returns the safe default");
+
+    check(normalizeScanRetryMs(100.0f) == 400.0f,
+          "inventory scan retry cannot trigger near-every-tick full inventory scans");
+    check(normalizeScanRetryMs(250.0f) == 400.0f,
+          "legacy scan retry is raised to the mobile-safe floor");
+    check(normalizeScanRetryMs(400.0f) == 400.0f,
+          "inventory scan retry uses the 400 ms default");
+    check(normalizeScanRetryMs(0.0f) == 400.0f,
+          "inventory scan retry is capped away from repeated short scans");
+    check(normalizeScanRetryMs(5000.0f) == 2000.0f,
+          "inventory scan retry has a safe upper bound");
+    check(normalizeScanRetryMs(std::numeric_limits<float>::quiet_NaN()) == 400.0f,
+          "non-finite inventory scan retry returns the default");
+
+    check(normalizeOffhandPollMs(50.0f) == 150.0f, "offhand poll has a mobile-safe lower bound");
+    check(normalizeOffhandPollMs(100.0f) == 150.0f, "legacy 100 ms offhand polling is reduced");
+    check(normalizeOffhandPollMs(150.0f) == 150.0f, "offhand poll uses the 150 ms default");
+    check(normalizeOffhandPollMs(0.0f) == 150.0f, "offhand poll is not allowed to spin every tick");
+    check(normalizeOffhandPollMs(900.0f) == 500.0f, "offhand poll is bounded to 500 ms");
+    check(normalizeOffhandPollMs(std::numeric_limits<float>::infinity()) == 150.0f,
+          "non-finite offhand poll returns its safe default");
+
+    check(normalizeUiStepDelayMs(0.0f) == 0.0f, "inventory sequence supports zero delay");
+    check(normalizeUiStepDelayMs(80.0f) == 80.0f, "inventory sequence step defaults to 80 ms");
+    check(normalizeUiStepDelayMs(900.0f) == 500.0f, "inventory sequence step is capped at 500 ms");
+    check(normalizeUiStepDelayMs(std::numeric_limits<float>::quiet_NaN()) == 80.0f,
+          "non-finite UI sequence delay returns default");
+
+    std::cout << checks << " checks, " << failures << " failures\n";
+    return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+}

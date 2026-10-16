@@ -47,6 +47,11 @@ std::string itemLabel(std::string identifier) {
     if (identifier.empty()) return "EMPTY HAND";
     const auto colon = identifier.find(':');
     if (colon != std::string::npos) identifier.erase(0, colon + 1);
+    // Bedrock description ids can be "item.minecraft.mace", "tile.stone", or
+    // "minecraft:mace". Strip engine prefixes before presenting the label.
+    if (identifier.rfind("item.", 0) == 0) identifier.erase(0, 5);
+    if (identifier.rfind("tile.", 0) == 0) identifier.erase(0, 5);
+    if (identifier.rfind("minecraft.", 0) == 0) identifier.erase(0, 10);
     for (char& c : identifier) {
         if (c == '_') c = ' ';
         else c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -76,6 +81,19 @@ RankInfo rankFor(std::uint64_t score) {
     return {"D", "DESTRUCTIVE", kWhite};
 }
 
+float rankProgressFor(std::uint64_t score) {
+    constexpr std::uint64_t thresholds[] = {0, 650, 1800, 3500, 6000, 9500, 14000, 18000};
+    for (std::size_t i = 1; i < 8; ++i) {
+        if (score < thresholds[i]) {
+            const auto lower = thresholds[i - 1];
+            const auto upper = thresholds[i];
+            return std::clamp(static_cast<float>(score - lower) /
+                              static_cast<float>(upper - lower), 0.0f, 1.0f);
+        }
+    }
+    return 1.0f;
+}
+
 float clamp01(float value) {
     return std::clamp(value, 0.0f, 1.0f);
 }
@@ -91,38 +109,15 @@ UltrakillHudModule::UltrakillHudModule()
              "ULTRAKILL-inspired HUD with confirmed mace-impact flash and hit pulse.") {
 }
 
-bool UltrakillHudModule::isMaceEquipped(Player* player) const {
-    const auto identifier = bedrocktools::core::InventoryAccess::get().stackIdentifier(
-        carriedItemStack(player));
-    return identifier.find("mace") != std::string::npos;
-}
-
 void UltrakillHudModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onLocalPlayerTick(event.player); });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>(
+        [this](auto& event) { onAttackAttempt(event.target); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
-    // Runtime calls ModuleRegistry::onFrame() before this last-priority listener.
-    // The impact frame itself is presented, then the next two swaps are held.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
-        [this](auto& event) {
-            if (!enabled) return;
-            std::lock_guard lock(m_stateMutex);
-            if (!m_enableHitStop) {
-                m_hitStopPending = false;
-                m_hitStopFrames = 0;
-                return;
-            }
-            if (m_hitStopPending) {
-                m_hitStopPending = false;
-                return;
-            }
-            if (m_hitStopFrames > 0) {
-                --m_hitStopFrames;
-                event.cancel();
-            }
-        }, bedrocktools::events::EventPriority::Last);
+
 }
 
 void UltrakillHudModule::onLocalPlayerTick(Player* player) {
@@ -130,16 +125,60 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     m_localPlayer.store(player, std::memory_order_release);
     if (!enabled) return;
 
-    const std::string itemId = bedrocktools::core::InventoryAccess::get().stackIdentifier(
-        carriedItemStack(player));
-    const float currentY = player->position().y;
-    m_maceEquipped.store(itemId.find("mace") != std::string::npos, std::memory_order_relaxed);
+    auto& inventory = bedrocktools::core::InventoryAccess::get();
+    const int selectedSlot = inventory.selectedHotbarSlot(player);
+    const auto now = Clock::now();
+    bool refreshItemId = false;
+    bool selectedSlotChanged = false;
+    {
+        std::lock_guard lock(m_stateMutex);
+        selectedSlotChanged = selectedSlot != m_cachedSelectedSlot;
+        refreshItemId = selectedSlotChanged ||
+            m_nextItemRefresh.time_since_epoch().count() == 0 ||
+            now >= m_nextItemRefresh;
+        if (refreshItemId) {
+            m_cachedSelectedSlot = selectedSlot;
+            m_nextItemRefresh = now + std::chrono::milliseconds(250);
+        }
+    }
+    // An ItemStack identifier can enter native item-description code. Refresh it
+    // on hotbar change and at a bounded cadence instead of on every player tick.
+    std::string itemId;
+    if (refreshItemId) {
+        itemId = inventory.selectedHotbarIdentifier(player);
+    }
+    const auto currentPosition = player->position();
+    const float currentY = currentPosition.y;
 
     std::lock_guard lock(m_stateMutex);
-    m_selectedItemId = itemId;
+    // A failed native identifier read is not proof that the player has an
+    // empty hand. Keep the last known item label on same-slot transient failures;
+    // a real hotbar-slot change is allowed to clear it (empty hand).
+    if (refreshItemId && (!itemId.empty() || selectedSlotChanged)) m_selectedItemId = itemId;
+    if (std::isfinite(currentPosition.x) && std::isfinite(currentPosition.y) &&
+        std::isfinite(currentPosition.z)) {
+        if (m_hasLastPosition) {
+            const float dx = currentPosition.x - m_lastPosition.x;
+            const float dy = currentPosition.y - m_lastPosition.y;
+            const float dz = currentPosition.z - m_lastPosition.z;
+            const float instantMoveSpeed = std::sqrt(dx * dx + dy * dy + dz * dz) * 20.0f;
+            if (std::isfinite(instantMoveSpeed) && instantMoveSpeed < 120.0f) {
+                const float previous = m_movementSpeedBps.load(std::memory_order_relaxed);
+                m_movementSpeedBps.store(previous * 0.35f + instantMoveSpeed * 0.65f,
+                                          std::memory_order_relaxed);
+            }
+        } else {
+            m_hasLastPosition = true;
+        }
+        m_lastPosition = currentPosition;
+    } else {
+        m_hasLastPosition = false;
+        m_movementSpeedBps.store(0.0f, std::memory_order_relaxed);
+    }
+
     if (m_hasLastY) {
-        // Estimate blocks/second from local-player tick positions. This is an estimate,
-        // not a native velocity attribute exposed by the SDK.
+        // Estimate vertical blocks/second from ticks. This is an estimate rather
+        // than a native velocity attribute exposed by the SDK.
         const float instantSpeed = (currentY - m_lastY) * 20.0f;
         if (std::isfinite(instantSpeed) && std::fabs(instantSpeed) < 80.0f) {
             const float previous = m_fallSpeedBps.load(std::memory_order_relaxed);
@@ -152,10 +191,24 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     m_lastY = currentY;
 }
 
+void UltrakillHudModule::onAttackAttempt(Actor* target) {
+    if (!enabled || !target) return;
+    const float signedFallSpeed = m_fallSpeedBps.load(std::memory_order_relaxed);
+    const auto now = Clock::now();
+    std::lock_guard lock(m_stateMutex);
+    if (!m_enableParryFlash) return;
+    m_flashStarted = now;
+    m_impactFallSpeedBps = std::isfinite(signedFallSpeed)
+        ? std::max(0.0f, -signedFallSpeed) : 0.0f;
+    m_flashActive = true;
+}
+
 void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
     if (!enabled || !target || !result) return;
     Player* player = m_localPlayer.load(std::memory_order_acquire);
-    if (!player || !isMaceEquipped(player)) return;
+    if (!player) return;
+    // Style score tracks every confirmed hit, not only mace attacks. Restricting
+    // this handler to a mace made the meter appear frozen while other items were used.
 
     const auto now = Clock::now();
     std::lock_guard lock(m_stateMutex);
@@ -172,14 +225,6 @@ void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
         0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
     m_flashActive = true;
 
-    // Present one flash frame, then hold it briefly for the visual hit-stop.
-    if (m_enableHitStop) {
-        m_hitStopFrames = 4;
-        m_hitStopPending = true;
-    } else {
-        m_hitStopFrames = 0;
-        m_hitStopPending = false;
-    }
 }
 
 void UltrakillHudModule::onEnable() {
@@ -188,20 +233,23 @@ void UltrakillHudModule::onEnable() {
     m_combo = 0;
     m_lastConfirmedHit = {};
     m_flashStarted = {};
+    m_lastHudRender = {};
+    m_cachedSelectedSlot = -1;
+    m_nextItemRefresh = {};
+    m_selectedItemId.clear();
     m_impactFallSpeedBps = 0.0f;
     m_flashActive = false;
-    m_hitStopFrames = 0;
-    m_hitStopPending = false;
     m_hasLastY = false;
+    m_hasLastPosition = false;
+    m_lastPosition = {};
     m_fallSpeedBps.store(0.0f, std::memory_order_relaxed);
+    m_movementSpeedBps.store(0.0f, std::memory_order_relaxed);
 }
 
 void UltrakillHudModule::onDisable() {
     {
         std::lock_guard lock(m_stateMutex);
         m_flashActive = false;
-        m_hitStopFrames = 0;
-        m_hitStopPending = false;
     }
     const std::vector<PLModMenu_DrawCommand> empty;
     submitDrawCommands(moduleId, empty);
@@ -211,6 +259,17 @@ void UltrakillHudModule::onFrame() {
     if (!enabled) return;
 
     const auto now = Clock::now();
+    {
+        std::lock_guard lock(m_stateMutex);
+        // The overlay is made of many independent draw commands. Rebuilding and
+        // submitting them every 16 ms wastes CPU on mid-range phones; 30 updates
+        // per second keeps the HUD readable while leaving the game render loop alone.
+        if (m_lastHudRender.time_since_epoch().count() != 0 &&
+            now - m_lastHudRender < std::chrono::milliseconds(33)) {
+            return;
+        }
+        m_lastHudRender = now;
+    }
     std::uint64_t score = 0;
     unsigned int combo = 0;
     Clock::time_point lastHit{};
@@ -218,12 +277,27 @@ void UltrakillHudModule::onFrame() {
     float impactFallSpeed = 0.0f;
     bool flashActive = false;
     std::string selectedItemId;
+    bool showMaceStatus = true;
+    bool showStyleCounter = true;
+    bool showReticle = true;
+    bool enableParryFlash = true;
+    bool enableImpactShake = true;
+    bool enableHitStop = true;
+    bool showImpactText = true;
 
     {
         std::lock_guard lock(m_stateMutex);
         selectedItemId = m_selectedItemId;
+        showMaceStatus = m_showMaceStatus;
+        showStyleCounter = m_showStyleCounter;
+        showReticle = m_showReticle;
+        enableParryFlash = m_enableParryFlash;
+        enableImpactShake = m_enableImpactShake;
+        enableHitStop = m_enableHitStop;
+        showImpactText = m_showImpactText;
 
-        if (m_flashActive && now - m_flashStarted >= std::chrono::milliseconds(250)) {
+        const auto impactHold = m_enableHitStop ? std::chrono::milliseconds(360) : std::chrono::milliseconds(250);
+        if (m_flashActive && now - m_flashStarted >= impactHold) {
             m_flashActive = false;
         }
         if (m_lastConfirmedHit.time_since_epoch().count() != 0 &&
@@ -252,15 +326,17 @@ void UltrakillHudModule::onFrame() {
     const bool hasSelectedItem = !selectedItemId.empty();
     const float signedFallSpeed = m_fallSpeedBps.load(std::memory_order_relaxed);
     const float downwardSpeed = std::max(0.0f, -signedFallSpeed);
+    const float movementSpeed = m_movementSpeedBps.load(std::memory_order_relaxed);
     const float hitAge = flashActive
         ? std::chrono::duration<float>(now - flashStarted).count()
         : 100.0f;
-    const bool impactVisible = flashActive && hitAge >= 0.0f && hitAge < 0.25f;
-    const float impactProgress = impactVisible ? clamp01(1.0f - hitAge / 0.25f) : 0.0f;
+    const float impactDuration = enableHitStop ? 0.36f : 0.25f;
+    const bool impactVisible = flashActive && hitAge >= 0.0f && hitAge < impactDuration;
+    const float impactProgress = impactVisible ? clamp01(1.0f - hitAge / impactDuration) : 0.0f;
 
     float shakeX = 0.0f;
     float shakeY = 0.0f;
-    if (m_enableImpactShake && impactVisible) {
+    if (enableImpactShake && impactVisible) {
         shakeX = std::sin(hitAge * 520.0f) * 5.0f * scale * impactProgress;
         shakeY = std::cos(hitAge * 410.0f) * 3.0f * scale * impactProgress;
     }
@@ -318,7 +394,7 @@ void UltrakillHudModule::onFrame() {
 
     // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
     // the game simulation is not paused and no artificial frame drops are introduced.
-    if (m_enableParryFlash && impactVisible) {
+    if (enableParryFlash && impactVisible) {
         const float fade = std::exp(-std::max(0.0f, hitAge) / 0.052f);
         const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
         const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
@@ -339,9 +415,9 @@ void UltrakillHudModule::onFrame() {
     }
 
     // Lower-left weapon panel: live held-item identifier and a horizontal outline glyph.
-    if (m_showMaceStatus) {
+    if (showMaceStatus) {
         const float panelW = 286.0f * scale;
-        const float panelH = 82.0f * scale;
+        const float panelH = 104.0f * scale;
         const float panelX = 16.0f * scale + shakeX;
         const float panelY = std::max(8.0f * scale, screenH - panelH - 16.0f * scale) + shakeY;
         const auto accent = hasSelectedItem ? kCyan : kRed;
@@ -351,19 +427,45 @@ void UltrakillHudModule::onFrame() {
                 "WEAPON / ITEM", 8.0f * scale, kMuted);
         addText(panelX + 11.0f * scale, panelY + 19.0f * scale,
                 itemLabel(selectedItemId), 12.0f * scale, hasSelectedItem ? kWhite : kMuted);
-        addText(panelX + 11.0f * scale, panelY + 43.0f * scale,
+        addText(panelX + 11.0f * scale, panelY + 42.0f * scale,
                 "FALL SPEED", 7.0f * scale, kMuted);
-        std::ostringstream speedStream;
-        speedStream << std::fixed << std::setprecision(1) << downwardSpeed << " B/S";
-        addText(panelX + 77.0f * scale, panelY + 41.0f * scale,
-                speedStream.str(), 8.5f * scale, kWhite);
+        std::ostringstream fallSpeedStream;
+        fallSpeedStream << std::fixed << std::setprecision(1) << downwardSpeed << " B/S";
+        addText(panelX + 77.0f * scale, panelY + 40.0f * scale,
+                fallSpeedStream.str(), 8.5f * scale, kWhite);
+        addText(panelX + 11.0f * scale, panelY + 58.0f * scale,
+                "MOVE SPEED", 7.0f * scale, kMuted);
+        std::ostringstream movementSpeedStream;
+        movementSpeedStream << std::fixed << std::setprecision(1) << movementSpeed << " B/S";
+        addText(panelX + 77.0f * scale, panelY + 56.0f * scale,
+                movementSpeedStream.str(), 8.5f * scale, kCyan);
         const float barX = panelX + 11.0f * scale;
-        const float barY = panelY + 63.0f * scale;
         const float barW = panelW - 22.0f * scale;
         const float barH = 4.0f * scale;
-        addRect(barX, barY, barW, barH, kTrack);
-        addRect(barX, barY, barW * clamp01(downwardSpeed / 12.0f), barH,
+
+        // Separate live meters for fall velocity and total movement velocity.
+        const float fallBarY = panelY + 77.0f * scale;
+        addRect(barX, fallBarY, barW, barH, kTrack);
+        addRect(barX, fallBarY, barW * clamp01(downwardSpeed / 12.0f), barH,
                 downwardSpeed >= 4.0f ? kRed : kCyan);
+
+        const float moveBarY = panelY + 88.0f * scale;
+        addRect(barX, moveBarY, barW, barH, kTrack);
+        addRect(barX, moveBarY, barW * clamp01(movementSpeed / 12.0f), barH,
+                movementSpeed >= 8.0f ? kGold : kCyan);
+        // Scanline and tick marks add a compact retro HUD texture without image assets.
+        for (int tick = 1; tick < 12; ++tick) {
+            const float tickX = barX + barW * static_cast<float>(tick) / 12.0f;
+            addRect(tickX, fallBarY, 1.0f * scale, barH, withAlpha(kDeepBlack, 180));
+            addRect(tickX, moveBarY, 1.0f * scale, barH, withAlpha(kDeepBlack, 180));
+        }
+        // Pixel-scan texture gives the panel a subtle game-interface finish without
+        // requiring image assets or introducing draw commands unsupported by Levi.
+        for (int stripe = 0; stripe < 10; ++stripe) {
+            const float stripeX = panelX + panelW - (static_cast<float>(stripe) * 13.0f + 9.0f) * scale;
+            addRect(stripeX, panelY + 3.0f * scale, 5.0f * scale,
+                    1.0f * scale, withAlpha(stripe % 2 ? kCyan : kRed, 110));
+        }
 
         const float iconX = panelX + 190.0f * scale;
         const float iconY = panelY + 13.0f * scale;
@@ -387,6 +489,28 @@ void UltrakillHudModule::onFrame() {
             } else if (id.find("trident") != std::string::npos) {
                 line(8, 37, 42, -17); line(42, 23, 10, -4); line(52, 19, -1, -9); line(51, 10, -6, 8);
                 line(45, 18, -4, -7); line(41, 11, -5, 7);
+            } else if (id.find("spear") != std::string::npos) {
+                line(8, 42, 37, -34); line(40, 8, 12, -4); line(52, 4, -3, 13);
+                line(49, 17, -10, -1); line(18, 33, 7, 7); line(13, 37, 8, 2);
+            } else if (id.find("wind_charge") != std::string::npos) {
+                line(13, 25, 9, -11); line(22, 14, 13, 0); line(35, 14, 9, 10);
+                line(44, 24, -6, 12); line(38, 36, -13, 3); line(25, 39, -10, -7);
+                line(15, 32, 1, -7); line(27, 22, 9, 1); line(36, 23, -2, 7);
+            } else if (id.find("ender_pearl") != std::string::npos || id.find("snowball") != std::string::npos) {
+                line(20, 12, 15, -4); line(35, 8, 10, 7); line(45, 15, 4, 14);
+                line(49, 29, -8, 11); line(41, 40, -15, 1); line(26, 41, -11, -8);
+                line(15, 33, 5, -14); line(20, 19, 11, -6); line(31, 13, 10, 7);
+            } else if (id.find("totem") != std::string::npos) {
+                line(17, 8, 25, 0); line(42, 8, 0, 28); line(42, 36, -25, 0);
+                line(17, 36, 0, -28); line(17, 8, 8, 8); line(25, 16, 9, 0);
+                line(34, 16, 8, -8); line(25, 16, 0, 12); line(25, 28, 9, 0);
+            } else if (id.find("firework") != std::string::npos || id.find("rocket") != std::string::npos) {
+                line(25, 41, 0, -18); line(25, 23, -7, 7); line(25, 23, 7, 7);
+                line(18, 30, 0, -12); line(18, 18, 7, -8); line(25, 10, 7, 8);
+                line(32, 18, 0, 12); line(22, 41, -4, 5); line(28, 41, 4, 5);
+            } else if (id.find("arrow") != std::string::npos) {
+                line(8, 40, 40, -29); line(36, 10, 12, -2); line(48, 8, -3, 12);
+                line(8, 40, 3, -10); line(8, 40, 10, 3);
             } else if (id.find("bow") != std::string::npos || id.find("crossbow") != std::string::npos) {
                 line(12, 9, 9, 8); line(21, 17, 0, 13); line(21, 30, -9, 9); line(12, 9, 0, 30); line(5, 24, 48, -2);
                 if (id.find("crossbow") != std::string::npos) { line(22, 18, 15, 0); line(37, 18, 0, 9); line(28, 27, 9, 0); }
@@ -408,12 +532,13 @@ void UltrakillHudModule::onFrame() {
                 line(12, 28, 15, -15); line(27, 13, 15, 15); line(42, 28, -15, 15); line(27, 43, -15, -15); line(27, 13, 0, 30);
             }
         };
-        drawItemGlyph(2.0f * scale, 1.0f * scale, kShadow, 5.0f);
-        drawItemGlyph(0.0f, 0.0f, accent, 1.8f);
+        // Offset, thicker glyph gives the live item emblem a readable drop shadow.
+        drawItemGlyph(3.0f * scale, 3.0f * scale, 0xCC000000u, 5.0f);
+        drawItemGlyph(0.0f, 0.0f, accent, 2.0f);
     }
 
     // Upper-right style meter: rank, white progress, and gold FRESH tag.
-    if (m_showStyleCounter) {
+    if (showStyleCounter) {
         const float cardW = 244.0f * scale;
         const float cardH = 70.0f * scale;
         const float cardX = std::max(8.0f * scale, screenW - cardW - 16.0f * scale) + shakeX;
@@ -423,7 +548,7 @@ void UltrakillHudModule::onFrame() {
         const float age = lastHit.time_since_epoch().count() == 0
             ? 99.0f : std::chrono::duration<float>(now - lastHit).count();
         const float freshness = age < 2.4f ? clamp01(1.0f - age / 2.4f) : 0.0f;
-        const float meter = score == 0 ? 0.12f : 0.20f + freshness * 0.80f;
+        const float meter = rankProgressFor(score);
         const float multiplier = 1.0f + 0.5f * freshness;
 
         addRect(cardX, cardY, cardW, cardH, kBlack, 1.0f * scale);
@@ -455,7 +580,7 @@ void UltrakillHudModule::onFrame() {
                 freshText, 7.0f * scale, kDeepBlack);
     }
 
-    if (m_showReticle) {
+    if (showReticle) {
         const float cx = screenW * 0.5f + shakeX;
         const float cy = screenH * 0.5f + shakeY;
         const float arm = (impactVisible ? 8.0f + (1.0f - impactProgress) * 6.0f : 7.0f) * scale;
@@ -471,10 +596,12 @@ void UltrakillHudModule::onFrame() {
         addCircle(cx, cy, 1.3f * scale, color);
     }
 
-    if (m_showImpactText && impactVisible) {
+    if (showImpactText && impactVisible) {
         const float cx = screenW * 0.5f;
         const float cy = screenH * 0.5f;
-        const char* label = impactFallSpeed >= 4.0f ? "GROUND SLAM" : "MACE HIT";
+        const bool selectedMace = selectedItemId.find("mace") != std::string::npos;
+        const char* label = impactFallSpeed >= 4.0f
+            ? "GROUND SLAM" : (selectedMace ? "MACE HIT" : "HIT CONFIRMED");
         addText(cx + 19.0f * scale, cy - 28.0f * scale,
                 label, 12.0f * scale,
                 withAlpha(impactFallSpeed >= 4.0f ? kRed : kWhite,
@@ -489,6 +616,7 @@ void UltrakillHudModule::onFrame() {
 
 void UltrakillHudModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
+    std::lock_guard lock(m_stateMutex);
     if (j.contains("hudPosX")) hudPosX = j["hudPosX"].get<float>();
     if (j.contains("hudPosY")) hudPosY = j["hudPosY"].get<float>();
     if (j.contains("isHudModule")) isHudModule = j["isHudModule"].get<bool>();
@@ -503,6 +631,7 @@ void UltrakillHudModule::loadConfig(const nlohmann::json& j) {
 
 void UltrakillHudModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
+    std::lock_guard lock(m_stateMutex);
     j["hudPosX"] = hudPosX;
     j["hudPosY"] = hudPosY;
     j["isHudModule"] = isHudModule;
