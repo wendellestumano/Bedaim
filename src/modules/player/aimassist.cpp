@@ -1257,7 +1257,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
     if (!gameMode) {
         logAutoHitOnce(g_loggedAutoHitNoGameMode,
-            "AutoHit has a target but no valid GameMode pointer has been observed from a real engine callback yet.");
+            "AutoHit has a target but neither a validated GameMode receiver nor a usable native input route is available.");
         m_nextAutoHit = now + std::chrono::milliseconds(250);
         return;
     }
@@ -1289,7 +1289,7 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
     if (guardDecision != bedaim::autohit::Decision::Ready) {
         if (guardDecision == bedaim::autohit::Decision::MissingAttackRoute) {
             logAutoHitOnce(g_loggedAutoHitNoAttackRoute,
-                "AutoHit skipped: no validated public GameMode::attack vtable/signature route is available.");
+                "AutoHit skipped: neither the exported ClientInstance attack-button handler nor the validated public GameMode::attack wrapper is available.");
             m_nextAutoHit = now + std::chrono::milliseconds(250);
         }
         return;
@@ -1300,7 +1300,8 @@ void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
         gameMode, m_lastTarget, true, &hitPoint);
     if (!g_loggedAutoHitResult.exchange(true, std::memory_order_acq_rel)) {
         autoHitLogger().info(
-            "First AutoHit native attack attempt returned {}; hitDistance={:.3f}, range={:.3f}, targetIsPlayer={}.",
+            "First AutoHit request accepted/queued={}; hitDistance={:.3f}, range={:.3f}, targetIsPlayer={}. "
+            "Request acceptance is not confirmation of a landed hit.",
             dispatched, hitDistance, autoHitRange, liveTargetIsPlayer);
     }
     // Even a native rejection is rate-limited; use a short retry so a transient
