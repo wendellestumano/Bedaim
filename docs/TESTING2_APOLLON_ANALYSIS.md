@@ -58,3 +58,39 @@ A second upload, `MCPE_Apollon_Client_1.26.52_v6.7_64Bit.apk`, was inspected dir
 - Important: its `libminecraftpe.so` SHA-256 is exactly `53c4a86a8f3dbd7f0d48e440f8607d63c55100aeb364c80d19afefa8097e233a`, byte-identical to the library in `Testing2.zip`. The `libReverseSigma.so` hash is also byte-identical between the two uploads. So the new APK supplies application/package context but no newer native engine or Apollon overlay binary compared with the prior archive.
 
 The overlay library contains native ARM64 code and can be disassembled for further static study. However, code/data references do not by themselves establish a private function's ABI, side effects, or safe call context. No old offset is promoted to a Bedaim runtime constant from this analysis alone.
+
+
+## Binary-level validation of Apollon offsets
+
+The 1.26.52 v6.7 APK was extracted and inspected with ELF section metadata and AArch64 disassembly:
+
+- The named `.text` section starts at virtual address `0x64C64E0`. The `.eh_frame` section spans `0x452C1D0` to `0x64C64DC`.
+- Apollon's old `ClientInstance::handleDestoryOrAttackButtonPress` offset `0x6462B60` lies inside `.eh_frame` unwind metadata, not inside the named `.text` code section. It is not a valid code entry for this exact library. No numeric fallback to it is enabled.
+- At `0xCCC075C`, the current binary disassembles to `str x8, [x0]` inside an allocation/object-initialization instruction sequence, not the start of a GameMode attack routine.
+- At `0xC94727C`, the current binary contains a conditional branch within cleanup/free logic; at `0xC93AE58`, it contains a stack-address calculation inside another routine. These locations do not validate the old `Actor::intersects` or `Actor::getAABBDim` function entries.
+
+These observations are specific to the exact supplied `libminecraftpe.so` SHA-256 recorded above. They reject those old offsets for this binary; they do not claim the corresponding concepts/functions do not exist at different addresses.
+
+## Behavior observed in the public Apollon source
+
+The inspected `app/src/main/jni/main.cpp` and `hook_classes.h` indicate:
+
+- In the player KillAura path, `emulateNativeAttack` prevents the direct `myGameMode->attack(target, true)` call, marks a pending attack request, and invokes the ClientInstance attack-button handler from the ClientInstance tick hook. The pending flag is then cleared.
+- That behavior is an input-handler route, not a call to the private `GameMode::_attack` implementation. The source also calls GameMode directly in other paths, including the examined MobAura branches; the option is not a universal replacement for every attack.
+- The examined code expands client-facing target dimensions by changing the returned AABB dimensions used for local selection. This does not demonstrate server-authoritative collision expansion.
+- No AutoTotem implementation was found in the examined public `main.cpp`/configuration paths. Bedaim AutoTotem remains an independent inventory-transaction investigation.
+
+## Bedaim experimental implementation added
+
+On branch `test/apollon-current-26.52-analysis-20261016`:
+
+- Added an independent, symbol-only attempt to resolve exported ClientInstance attack-button handler spellings and queue one request for the ClientInstance update path.
+- Explicitly prohibited reuse of Apollon's numeric offsets.
+- Replaced the experimental direct internal attack-trampoline call with the verified public GameMode wrapper fallback. The internal function body bypasses setup performed by the public wrapper and must not be called directly.
+- Updated AutoHit diagnostics so that accepting or queueing a request is not reported as proof of damage.
+
+The supplied engine is stripped and the relevant handler symbols are not exported, so the symbol-only handler route is expected to report unavailable on this exact APK. In that case the branch tries only the exact-signature public GameMode wrapper route. If neither validates, AutoHit remains blocked safely and needs further version-specific analysis.
+
+## Validation caveats
+
+CI can verify host regressions, Android ARM64 compilation, and experimental package identity. It cannot verify the runtime ABI, whether a target was damaged, AutoTotem transfer success, or server collision. Those still require the exact device/game build and captured runtime logs.

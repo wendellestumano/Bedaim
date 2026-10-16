@@ -1,5 +1,18 @@
 # Changelog
 
+## Apollon v6.7 static analysis and safe attack-route experiment — 2026-10-16
+
+- Verified old Apollon offsets against the supplied stripped AArch64 engine. The old attack-button offset lies in `.eh_frame` metadata, and the old GameMode/Actor offsets disassemble in unrelated instruction sequences; none are used as runtime addresses.
+- Documented the observed `emulateNativeAttack` flow: queue a ClientInstance attack-button action from the tick path, rather than directly calling the private attack body.
+- Added a symbol-only ClientInstance attack-button route to the isolated experiment. When no exact exported symbol resolves, the branch falls back only to the already-validated public GameMode attack wrapper.
+- Removed the experimental direct call to the internal GameMode attack trampoline, which bypasses public-wrapper setup and is unsafe to treat as equivalent to the public attack call.
+- Clarified AutoHit logs: a queued/accepted input request is not proof of a landed hit.
+- The exact supplied v6.7 APK has the same `libminecraftpe.so` and `libReverseSigma.so` binaries as the prior Testing2 archive. Its stripped engine does not export the handler symbols searched by this experiment.
+- AutoTotem remains separate: no AutoTotem code was found in the examined Apollon source paths. Hitbox expansion remains client-side geometry only.
+- Runtime tests on Bedrock 26.52 / Levi Launcher 1.5.25 remain required. No successful AutoHit, AutoTotem, or server-hitbox modification is claimed.
+
+# Changelog
+
 ## Apollon v6.7 APK verification and experimental packaging — 2026-10-16
 
 - Inspected the supplied Apollon v6.7 APK and recorded SHA-256 fingerprints for the APK, Apollon overlay library, and Minecraft engine library in `docs/TESTING2_APOLLON_ANALYSIS.md`.
