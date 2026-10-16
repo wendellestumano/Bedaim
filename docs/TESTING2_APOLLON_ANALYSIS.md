@@ -94,3 +94,15 @@ The supplied engine is stripped and the relevant handler symbols are not exporte
 ## Validation caveats
 
 CI can verify host regressions, Android ARM64 compilation, and experimental package identity. It cannot verify the runtime ABI, whether a target was damaged, AutoTotem transfer success, or server collision. Those still require the exact device/game build and captured runtime logs.
+
+
+## Signature-pattern scan against the exact engine binary
+
+The current Bedaim signature patterns from `src/core/memory/Signatures.cpp` were scanned against the exact `libminecraftpe.so` in this APK:
+
+- `GameModeAttack` pattern: one match at virtual/file offset `0xF89FA74`. AArch64 disassembly there is `mov x3, x2; mov w2, #1; b 0xF89FA80`, followed by a native function prologue at the branch target. This shape is consistent with a public three-argument attack wrapper preparing the fourth argument and defaulting the predictive-sound flag.
+- A relative relocation at `0x13016E18` points to `0xF89FA74`; it sits at the 16th 8-byte entry of a vtable-like function-pointer cluster. That supports the public wrapper hypothesis, but the runtime code must still verify that the active object's vtable slot 16 is exactly the resolved pattern address before calling it.
+- `GameModeAttackInternal`, `SurvivalModeAttack`, and `ClientInstanceUpdate` patterns from the current signature table had zero matches in the exact file. Thus the experimental direct-internal route cannot be considered validated here, and the ClientInstance update hook signature used by the handler adapter is not established by this scan.
+- `ActorGetOffhandSlot` matched twice, so it is ambiguous without additional runtime/object validation. The inventory transaction must remain fail-closed if its getter, setter, transaction manager or action constructors cannot be validated.
+
+This evidence explains the new route priority: never call the unmatched internal attack body; only attempt the public wrapper after its signature and the live GameMode vtable entry agree. The symbol-only native input route remains unavailable for this stripped binary unless an exact exported handler is found and the required ClientInstance dispatch context is established.

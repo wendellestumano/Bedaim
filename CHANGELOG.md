@@ -1,3 +1,10 @@
+## Runtime signature checks against supplied v6.7 engine — 2026-10-16
+
+- Scanned Bedaim's signature patterns against the uploaded `libminecraftpe.so`. The `GameModeAttack` wrapper candidate matches once at `0xF89FA74` and its instruction sequence is consistent with forwarding the 3-argument public wrapper into a 4-argument body.
+- The internal-attack, SurvivalMode attack, and ClientInstance-update patterns do not match this exact file; the prior direct-internal experiment is therefore rejected for this build. Runtime vtable matching remains required before invoking the public wrapper.
+- The offhand getter pattern matches twice and is ambiguous in static bytes alone. AutoTotem must continue to require verified native inventory APIs/transactions and report the exact failure state.
+- No private offset was enabled.
+
 # Changelog
 
 ## Apollon v6.7 static analysis and safe attack-route experiment — 2026-10-16
