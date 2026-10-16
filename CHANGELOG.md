@@ -1,5 +1,14 @@
 # Changelog
 
+## Apollon route test build — 2026-10-16
+
+- Added a dedicated visible TEST NATIVE ATTACK button to the isolated test branch. It queues the Apollon-style ClientInstance attack-button wrapper for the next engine update, independently of AutoHit target selection.
+- Added diagnostic logs for missing ClientInstance, unavailable exported handler, duplicate pending click, queued click, and the native attack hook result. A queued click is not evidence of damage.
+- Added one-time diagnostics confirming whether BedrockBounds reaches its client-side expanded-bounds path. This does not modify server-authoritative collision; a true native hitbox hook remains disabled until its 26.52 function signature is validated.
+- Added logs when the AutoTotem manual button registration is requested and when it is clicked, separating a missing UI control from a failed native inventory transaction.
+- The public Apollon numeric offsets were not copied: the bundled libminecraftpe.so contains 1.26.52.03_RC2, and inspecting the old 0xCCC075C location shows unrelated instructions there. The old attack, Intersects, and AABB offsets are not safe to use.
+- Test target only: test/apollon-attack-route-20261016. The normal branch and the main display-name-only change do not include this experimental route.
+
 ## BedrockAim steering correction and module identity — 2026-10-16
 
 - Fixed weapon Y aim profiles to use the selected height as a stable vertical anchor; the Smooth hitbox slide now changes horizontal X/Z only, so sliding no longer pulls the aim back toward the box center vertically.

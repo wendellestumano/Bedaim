@@ -472,9 +472,24 @@ void AimAssistModule::onMenuRegistered() {
     refreshAutoHitKeyButton();
     if (!m_numericSettingsRegistered.exchange(true, std::memory_order_acq_rel)) {
         using namespace pl::modmenu;
-        ModuleBuilder settings("bedaim.aimassist.write_settings", "Aim Assist Write Settings");
+
+        // Test-only action: invoke the Apollon-style native attack-button handler
+        // on the engine's ClientInstance update thread, independently of target selection.
+        ButtonBuilder apollonInputTest("bedaim.apollon.input_test", "Apollon Native Input Test");
+        apollonInputTest.moduleId(moduleId)
+            .modId("BedrockTools")
+            .label("TEST NATIVE ATTACK")
+            .behavior(ButtonBehavior::Click)
+            .defaultVisible(true)
+            .stylePreset(ButtonStylePreset::Keycap)
+            .onEvent([](std::string_view, ButtonEvent event, float) {
+                if (event == ButtonEvent::Click)
+                    bedrocktools::core::gamehooks::queueApollonInputAttackTest();
+            }).registerButton();
+
+        ModuleBuilder settings("bedaim.aimassist.write_settings", "BedrockAim Write Settings");
         settings.modId("Bedaim")
-            .description("Enter exact numeric values for Aim Assist without dragging sliders.")
+            .description("Enter exact numeric values for BedrockAim without dragging sliders.")
             .defaultEnabled(true)
             .config("showAutoHitButton", "Show AutoHit Floating Button", ConfigType::Toggle,
                     m_autoHitButtonEnabled ? "true" : "false")
@@ -1926,6 +1941,20 @@ bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
         selectedTypeEnabled = isPlayer ? m_expandPlayers : m_expandMobs;
     }
     if (!selectedTypeEnabled) return nativeBounds;
+
+    // Test-build instrumentation: confirm that the bounded client-side expansion
+    // path is reached, without spamming a log every frame. This is not a native
+    // collision patch and does not change server-authoritative hit registration.
+    static std::atomic_bool loggedExpandedBounds{false};
+    if (!loggedExpandedBounds.exchange(true, std::memory_order_acq_rel)) {
+        const float nativeWidth = nativeBounds.max.x - nativeBounds.min.x;
+        const float nativeHeight = nativeBounds.max.y - nativeBounds.min.y;
+        autoHitLogger().info(
+            "BedrockBounds test: expansion reached for {} queries; native width/height={:.3f}/{:.3f}, "
+            "configured width/height={:.3f}/{:.3f}. This affects client target selection only.",
+            isPlayer ? "player" : "mob", nativeWidth, nativeHeight,
+            configuredWidth, configuredHeight);
+    }
 
     // Width controls X/Z and height controls Y. Preserve larger native sizes.
     const float nativeWidth = nativeBounds.max.x - nativeBounds.min.x;
