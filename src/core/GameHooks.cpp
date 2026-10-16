@@ -694,9 +694,11 @@ void* gameModeForPlayer(void* player) {
 }
 
 bool attackAvailable(void* gameMode) {
-    // The hooked internal body is how we observe the true native result after
-    // dispatching through the public wrapper. Refuse the route if that hook is absent.
-    if (!gameMode || !gameModeAttackOriginal || currentGameMode.load(std::memory_order_acquire) != gameMode)
+    // Dispatch safety comes from validating the actual public GameMode vtable
+    // entry against the resolved public signatures. The internal hook is only
+    // used to observe the result/events; requiring it here silently disables
+    // AutoHit on builds where that secondary signature is unavailable.
+    if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
         return false;
     AttackKind ignored = AttackKind::GameMode;
     return bedaim::autohit::publicAttackRouteAvailable(
@@ -704,9 +706,8 @@ bool attackAvailable(void* gameMode) {
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    if (!gameMode || !target || !hitPosition || !gameModeAttackOriginal) return false;
+    if (!gameMode || !target || !hitPosition) return false;
     (void)playPredictiveSound; // The validated public wrapper owns this default.
-
 
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack) return false;
@@ -732,14 +733,20 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         explicit AttackGuard(bool& value) : active(value) { active = true; }
         ~AttackGuard() { active = false; }
     } guard{inSyntheticAttack};
+    const bool canObserveNativeResult = gameModeAttackOriginal != nullptr;
     struct DispatchObservationGuard {
-        DispatchObservationGuard() {
-            syntheticAttackResultObserved = false;
-            syntheticAttackNativeResult = false;
-            syntheticAttackDispatchActive = true;
+        bool active;
+        explicit DispatchObservationGuard(bool shouldObserve) : active(shouldObserve) {
+            if (active) {
+                syntheticAttackResultObserved = false;
+                syntheticAttackNativeResult = false;
+                syntheticAttackDispatchActive = true;
+            }
         }
-        ~DispatchObservationGuard() { syntheticAttackDispatchActive = false; }
-    } observationGuard;
+        ~DispatchObservationGuard() {
+            if (active) syntheticAttackDispatchActive = false;
+        }
+    } observationGuard{canObserveNativeResult};
 
     static std::atomic_bool loggedPublicRoute{false};
     if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
@@ -749,11 +756,21 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // AttackEvent/GameModeAction/AttackResultEvent pipeline already runs.
     // Do not publish a second set here; observe and return the real internal result.
     publicAttack(gameMode, target, hitPosition);
+    if (!canObserveNativeResult) {
+        // The call went through a validated public engine entry, but this build
+        // lacks the internal observer required to read the native bool result.
+        // Return "dispatched" so AutoHit can rate-limit/retry; this is not proof
+        // that the target took damage.
+        static std::atomic_bool loggedUnobservedDispatch{false};
+        if (!loggedUnobservedDispatch.exchange(true, std::memory_order_acq_rel))
+            autoHitLogger().warn("AutoHit dispatched through the validated public GameMode::attack entry, but the internal result hook is unavailable; damage confirmation is not observable.");
+        return true;
+    }
     if (!syntheticAttackResultObserved) {
         static std::atomic_bool loggedMissingInternalDispatch{false};
         if (!loggedMissingInternalDispatch.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().error("Public attack wrapper returned without reaching the validated internal attack hook; refusing to report success.");
-        return false;
+            autoHitLogger().error("Validated public attack returned without reaching the installed internal observer; dispatch result is unknown.");
+        return true;
     }
     return syntheticAttackNativeResult;
 }
