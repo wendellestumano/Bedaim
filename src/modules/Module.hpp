@@ -18,6 +18,9 @@ public:
     int keybind = 0;
 
     Module(const char* n, const char* d) : name(n), description(d), moduleId(std::string("bedrocktools.") + n) {}
+    // Keep the stable internal/config ID while allowing a distinct product-facing display name.
+    Module(const char* displayName, const char* d, const char* stableIdName)
+        : name(displayName), description(d), moduleId(std::string("bedrocktools.") + stableIdName) {}
     virtual ~Module() = default;
 
     virtual void onInit()     {}

@@ -50,8 +50,8 @@ bool containsTotem(std::string_view identifier) {
 }
 
 AutoTotemModule::AutoTotemModule()
-    : Module("Auto Totem",
-             "Refills an empty offhand, using the inventory screen sequence when this Bedrock build exposes verified LocalPlayer methods.") {
+    : Module("BedrockGuard",
+             "BedrockGuard: offhand protection and totem refill.", "Auto Totem") {
     keybind = 0;
 }
 

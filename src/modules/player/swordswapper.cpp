@@ -62,7 +62,7 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
 }
 
 SwordSwapperModule::SwordSwapperModule()
-    : Module("Sword Swapper", "Equips a hotbar sword when an Aim Assist target is in the crosshair and the player is grounded.") {
+    : Module("BedrockEdge", "BedrockEdge: context-aware hotbar sword selection.", "Sword Swapper") {
     keybind = 0;
 }
 

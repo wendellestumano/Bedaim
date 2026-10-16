@@ -346,7 +346,7 @@ bool naturalizationAppliesToWeapon(const std::string& setting, HeldWeapon weapon
 }
 
 AimAssistModule::AimAssistModule()
-    : Module("Aim Assist", "Smooth target tracking for private PvP training worlds.") {
+    : Module("BedrockAim", "BedrockAim: configurable camera tracking for Bedrock.", "Aim Assist") {
     keybind = 0;
     g_aimAssist = this;
 }
@@ -1460,11 +1460,14 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         -std::sin(pitchRadians),
         std::cos(yawRadians) * cosPitch
     };
-    const float toCenterX = boundsCenter.x - eyePosition.x;
-    const float toCenterY = boundsCenter.y - eyePosition.y;
-    const float toCenterZ = boundsCenter.z - eyePosition.z;
+    // Project the camera ray against the selected vertical aim plane, not the
+    // geometric bounds center. Otherwise the per-weapon Y profile is ignored when
+    // choosing anchors and the slide point drifts back toward the center.
+    const float toAimX = centerAimPoint.x - eyePosition.x;
+    const float toAimY = centerAimPoint.y - eyePosition.y;
+    const float toAimZ = centerAimPoint.z - eyePosition.z;
     const float alongView = std::max(0.0f,
-        toCenterX * viewDirection.x + toCenterY * viewDirection.y + toCenterZ * viewDirection.z);
+        toAimX * viewDirection.x + toAimY * viewDirection.y + toAimZ * viewDirection.z);
     const Vec3 projectedPoint{
         eyePosition.x + viewDirection.x * alongView,
         eyePosition.y + viewDirection.y * alongView,
@@ -1528,7 +1531,10 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     const Vec3 clampedSlidePoint{
         std::clamp(projectedPoint.x, boundsCenter.x - halfExtents.x, boundsCenter.x + halfExtents.x),
-        std::clamp(projectedPoint.y, boundsCenter.y - halfExtents.y, boundsCenter.y + halfExtents.y),
+        // Keep the vertical weapon profile independent from horizontal hitbox sliding.
+        // X/Z can slide; Y stays at the configured point instead of blending toward
+        // the ray's arbitrary vertical projection.
+        centerAimPoint.y,
         std::clamp(projectedPoint.z, boundsCenter.z - halfExtents.z, boundsCenter.z + halfExtents.z)
     };
     // Never let the point fully follow the camera ray: that makes aim error collapse

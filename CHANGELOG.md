@@ -1,3 +1,11 @@
+## BedrockAim aim-point correction and module branding — 2026-10-16
+
+- Fixed the ray projection to use the selected weapon aim point, rather than the geometric center, so vertical profiles influence anchor selection.
+- Kept the per-weapon Y target independent from hitbox slide interpolation: Smooth can continue sliding in X/Z without pulling the vertical point back toward the center.
+- Gave selected modules product-specific display names: BedrockAim, BoundsPlus, BedrockImpact, BedrockEdge, and BedrockGuard. Stable internal module IDs are preserved so existing settings and cross-module lookups continue to work.
+- The four-anchor mode remains optional and selects the closest of four X/Z anchors using the view-ray projection at the chosen Y plane.
+- This is a source-level correction only; in-game behavior still needs device validation on Bedrock 26.52 / Levi Launcher 1.5.25.
+
 # Changelog
 
 ## Hitbox controls and weapon aim-point profiles — 2026-10-16
