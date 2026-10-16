@@ -277,11 +277,11 @@ void playerSetGameTypeDetour(void* player, std::int32_t nativeValue) {
 
 bool installPlayerSetGameTypeHook() {
     if (playerSetGameTypeHookInstalled.load(std::memory_order_acquire)) return true;
+    // Player Radar needs mode updates for remote Player instances. Do not
+    // mistake a LocalPlayer-only setter for a complete remote-player source.
     const char* symbols[] = {
         "_ZN6Player17setPlayerGameTypeE8GameType",
-        "_ZN11LocalPlayer17setPlayerGameTypeE8GameType",
-        "_ZN6Player18$setPlayerGameTypeE8GameType",
-        "_ZN11LocalPlayer18$setPlayerGameTypeE8GameType"
+        "_ZN6Player18$setPlayerGameTypeE8GameType"
     };
     for (const char* symbol : symbols) {
         void* address = resolveMinecraftFunction(symbol);
