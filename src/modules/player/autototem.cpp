@@ -27,6 +27,9 @@ pl::log::Logger& autoTotemLogger() {
 
 std::atomic_bool g_loggedAutoTotemTransferSuccess{false};
 std::atomic_bool g_loggedAutoTotemTransferFailure{false};
+std::atomic_bool g_loggedManualButtonRegistration{false};
+std::atomic_bool g_loggedManualButtonClick{false};
+std::atomic_bool g_loggedManualRequestConsumed{false};
 
 const char* transferResultName(bedrocktools::core::OffhandTransferResult result) noexcept {
     using bedrocktools::core::OffhandTransferResult;
@@ -109,6 +112,10 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // One-shot request from the floating button; native inventory work stays on
     // the LocalPlayer tick thread rather than the launcher UI callback.
     if (m_manualRequest.exchange(false, std::memory_order_acq_rel)) {
+        if (!g_loggedManualRequestConsumed.exchange(true, std::memory_order_acq_rel)) {
+            autoTotemLogger().info(
+                "Manual EQUIP TOTEM request reached LocalPlayerTick; inspecting offhand and inventory now.");
+        }
         const std::string currentOffhand = inventory.offhandIdentifier(player);
         if (containsTotem(currentOffhand)) {
             autoTotemLogger().info("Manual equip ignored: a totem is already equipped.");
@@ -543,9 +550,19 @@ void AutoTotemModule::onMenuRegistered() {
         .defaultVisible(true)
         .stylePreset(ButtonStylePreset::Keycap)
         .onEvent([this](std::string_view, ButtonEvent event, float) {
-            if (event == ButtonEvent::Click)
+            if (event == ButtonEvent::Click) {
                 m_manualRequest.store(true, std::memory_order_release);
+                if (!g_loggedManualButtonClick.exchange(true, std::memory_order_acq_rel)) {
+                    autoTotemLogger().info(
+                        "Manual EQUIP TOTEM button callback received Click; one-shot request queued for LocalPlayerTick.");
+                }
+            }
         }).registerButton();
+    if (!g_loggedManualButtonRegistration.exchange(true, std::memory_order_acq_rel)) {
+        autoTotemLogger().info(
+            "Requested registration of manual EQUIP TOTEM button (id=bedaim.autototem.manual_equip). "
+            "Runtime visibility and click delivery still need device verification.");
+    }
     schema.node(node("m_combatOnly", "Combat Only", "safety",
                      ConfigControlTypeV2::Toggle));
     schema.node(node("keybind", "Keybind", "behavior", ConfigControlTypeV2::Keybind));

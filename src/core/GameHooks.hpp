@@ -9,8 +9,10 @@ void* clientInstance();
 void* gameMode();
 // Resolve the local player's owned GameMode instance without waiting for a manual action.
 void* gameModeForPlayer(void* player);
-// Checks the live GameMode and the exact public attack vtable/signature route without dispatching an attack.
+// Checks whether the isolated build can submit an attack through the symbol-resolved
+// ClientInstance input handler or the exact public GameMode wrapper. Does not dispatch.
 bool attackAvailable(void* gameMode);
+// Submits one attack request; true means accepted/queued, not confirmed damage.
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition);
 
 // Verified LocalPlayer inventory-screen operations resolved only from libminecraftpe.
