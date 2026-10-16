@@ -50,6 +50,7 @@ using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
 using PublicAttackFn = void(*)(void*, void*, const void*);
 using ClientInstanceUpdateFn = void*(*)(void*, bool);
+using ClientInputAttackFn = void(*)(void*);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
 using EglSwapBuffersFn = EGLBoolean(*)(EGLDisplay, EGLSurface);
@@ -73,6 +74,14 @@ InteractFn gameModeInteractOriginal = nullptr;
 InteractFn survivalModeInteractOriginal = nullptr;
 AttackFn gameModeAttackOriginal = nullptr;
 ClientInstanceUpdateFn clientUpdateOriginal = nullptr;
+ClientInputAttackFn apollonInputAttackHandler = nullptr;
+std::mutex apollonInputResolveMutex;
+std::chrono::steady_clock::time_point apollonInputNextResolve{};
+std::atomic_bool apollonInputAttackPending{false};
+std::atomic_bool loggedApollonInputResolved{false};
+std::atomic_bool loggedApollonInputUnavailable{false};
+std::atomic_bool loggedApollonInputQueued{false};
+std::atomic_bool loggedApollonInputDispatched{false};
 ContainerSlotSelectedFn containerSlotSelectedOriginal = nullptr;
 ScreenFn containerOpenOriginal = nullptr;
 ScreenFn containerCloseOriginal = nullptr;
@@ -241,6 +250,45 @@ void* resolveMinecraftFunction(const char* name) {
     const bool valid = isMinecraftFunction(address);
     dlclose(library);
     return valid ? address : nullptr;
+}
+
+// Independent adapter of Apollon's emulateNativeAttack flow. Only exact exported
+// symbols are considered; no historical numeric offset is accepted as a fallback.
+// The supplied 26.52 engine is stripped, so this is expected to remain unavailable
+// there until a verified, build-specific symbol or signature is identified.
+ClientInputAttackFn resolveApollonInputAttackHandler() {
+    if (apollonInputAttackHandler) return apollonInputAttackHandler;
+    std::lock_guard<std::mutex> lock(apollonInputResolveMutex);
+    if (apollonInputAttackHandler) return apollonInputAttackHandler;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now < apollonInputNextResolve) return nullptr;
+    apollonInputNextResolve = now + std::chrono::seconds(2);
+
+    static constexpr const char* kCandidates[] = {
+        "_ZN14ClientInstance32handleDestroyOrAttackButtonPressEv",
+        "_ZN14ClientInstance32handleDestoryOrAttackButtonPressEv",
+        "_ZN14ClientInstance33handleDestroyOrAttackButtonPressEv",
+        "_ZN14ClientInstance33handleDestoryOrAttackButtonPressEv",
+        "_ZN14ClientInstance32$handleDestroyOrAttackButtonPressEv",
+        "_ZN14ClientInstance33$handleDestoryOrAttackButtonPressEv"
+    };
+    for (const char* symbol : kCandidates) {
+        void* address = resolveMinecraftFunction(symbol);
+        if (!address) continue;
+        apollonInputAttackHandler = reinterpret_cast<ClientInputAttackFn>(address);
+        if (!loggedApollonInputResolved.exchange(true, std::memory_order_acq_rel)) {
+            autoHitLogger().info("Apollon-inspired input route resolved ClientInstance handler symbol: {}.", symbol);
+        }
+        return apollonInputAttackHandler;
+    }
+
+    if (!loggedApollonInputUnavailable.exchange(true, std::memory_order_acq_rel)) {
+        autoHitLogger().warn(
+            "Apollon-inspired input handler symbols are not exported by this libminecraftpe.so; "
+            "historical offsets are disabled and the verified public GameMode route will be used if available.");
+    }
+    return nullptr;
 }
 
 void* resolveLoadedClientSupportFunction(const char* name) {
@@ -584,6 +632,30 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 
 void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
+
+    // Apollon's emulateNativeAttack behavior is an attack-button handler request
+    // made from the ClientInstance tick path, not a direct private _attack call.
+    // Consume one queued request per update and observe the normal engine route.
+    if (clientInstance && apollonInputAttackPending.exchange(false, std::memory_order_acq_rel)) {
+        const auto handler = resolveApollonInputAttackHandler();
+        if (handler) {
+            syntheticAttackDispatchActive = true;
+            syntheticAttackResultObserved = false;
+            syntheticAttackNativeResult = false;
+            handler(clientInstance);
+            syntheticAttackDispatchActive = false;
+
+            if (!loggedApollonInputDispatched.exchange(true, std::memory_order_acq_rel)) {
+                autoHitLogger().info(
+                    "Apollon-inspired ClientInstance input handler dispatched; native attack result observed={}, result={}. "
+                    "Handler dispatch alone does not prove a hit.",
+                    syntheticAttackResultObserved, syntheticAttackNativeResult);
+            }
+        } else {
+            autoHitLogger().warn("Queued Apollon-inspired input request was dropped because the handler no longer resolves.");
+        }
+    }
+
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
@@ -721,11 +793,18 @@ void* gameMode() {
 void* gameModeForPlayer(void* player) {
     if (!player) return nullptr;
 
-    // Prefer the receiver captured by a real engine callback, but require the
-    // exact resolved public attack signature instead of merely a plausible game
-    // vtable. This avoids accidentally retaining a neighboring polymorphic object.
+    // The native input-handler route does not invoke GameMode directly. If it is
+    // available, a plausible engine-owned GameMode can accompany the request
+    // without pretending that its private attack entry has been validated.
+    const bool inputRouteAvailable =
+        currentClientInstance.load(std::memory_order_acquire) != nullptr &&
+        resolveApollonInputAttackHandler() != nullptr;
+
+    // Prefer the receiver captured by a real engine callback. The stronger exact
+    // public signature match remains mandatory whenever the public route is used.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (observed && publicAttackVirtualEntry(observed) != 0) return observed;
+    if (observed && (publicAttackVirtualEntry(observed) != 0 ||
+                     (inputRouteAvailable && plausibleGameMode(observed)))) return observed;
 
     // Some game sessions have not yet produced a GameMode callback when AutoHit
     // first becomes active. The Player SDK already documents the owned mGameMode
@@ -743,10 +822,12 @@ void* gameModeForPlayer(void* player) {
     if (!isReadableMemory(slot, sizeof(void*))) return nullptr;
 
     void* candidate = *reinterpret_cast<void* const*>(slot);
-    if (!candidate || publicAttackVirtualEntry(candidate) == 0) {
+    if (!candidate ||
+        (publicAttackVirtualEntry(candidate) == 0 &&
+         !(inputRouteAvailable && plausibleGameMode(candidate)))) {
         static std::atomic_bool loggedNoVerifiedGameMode{false};
         if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-            autoHitLogger().warn("AutoHit could not validate a local Player-owned GameMode; no native attack was dispatched.");
+            autoHitLogger().warn("AutoHit could not validate an engine-owned GameMode or a usable native input route; no attack was dispatched.");
         return nullptr;
     }
 
@@ -758,42 +839,59 @@ void* gameModeForPlayer(void* player) {
 }
 
 bool attackAvailable(void* gameMode) {
-    // TEST BRANCH ONLY: Apollon-style direct internal attack experiment.
-    // Require the current observed GameMode, a resolved signature for this exact
-    // build, and the hooked internal function's trampoline. Never use old fixed
-    // offsets from the public Apollon source.
+    // Prefer the Apollon-style ClientInstance button handler when an exact exported
+    // symbol is available. A usable public GameMode wrapper remains the fallback.
+    if (currentClientInstance.load(std::memory_order_acquire) != nullptr &&
+        resolveApollonInputAttackHandler() != nullptr) {
+        return true;
+    }
     if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
         return false;
-    return plausibleGameMode(gameMode) &&
-        bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0 &&
-        gameModeAttackOriginal != nullptr;
+    return plausibleGameMode(gameMode) && publicAttackVirtualEntry(gameMode) != 0;
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    if (!gameMode || !target || !hitPosition) return false;
+    if (!target || !hitPosition) return false;
 
-    // TEST BRANCH ONLY: deliberately bypass the public wrapper and invoke the
-    // validated internal GameMode attack trampoline, approximating Apollon's
-    // direct GameMode::_attack path. This is isolated from the normal build.
-    static thread_local bool inApollonExperiment = false;
-    if (inApollonExperiment || !attackAvailable(gameMode)) return false;
-
-    struct AttackGuard {
-        bool& active;
-        explicit AttackGuard(bool& value) : active(value) { active = true; }
-        ~AttackGuard() { active = false; }
-    } guard{inApollonExperiment};
-
-    static std::atomic_bool loggedExperimentalRoute{false};
-    if (!loggedExperimentalRoute.exchange(true, std::memory_order_acq_rel)) {
-        autoHitLogger().warn(
-            "TEST BUILD: using Apollon-style direct internal attack route; public wrapper and standard attack event pipeline are bypassed.");
+    const auto handler = resolveApollonInputAttackHandler();
+    void* client = currentClientInstance.load(std::memory_order_acquire);
+    if (handler && client) {
+        bool expected = false;
+        if (!apollonInputAttackPending.compare_exchange_strong(
+                expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return false;
+        }
+        if (!loggedApollonInputQueued.exchange(true, std::memory_order_acq_rel)) {
+            autoHitLogger().info(
+                "Queued one Apollon-inspired ClientInstance attack-button request. "
+                "This is input dispatch, not confirmation of a landed hit.");
+        }
+        return true;
     }
 
-    // gameModeAttackOriginal is the hook framework's trampoline to the original
-    // internal routine. Its signature is defined by the current build's
-    // GameModeAttackInternal detour, not by a hard-coded historical offset.
-    return gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition);
+    // Safe fallback: call only the exactly matched public GameMode wrapper. Never
+    // invoke GameModeAttackInternal directly; that body expects arguments/setup
+    // prepared by the public wrapper and has previously stalled the game.
+    if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode ||
+        !plausibleGameMode(gameMode)) return false;
+    const auto publicEntry = publicAttackVirtualEntry(gameMode);
+    if (!publicEntry) return false;
+
+    syntheticAttackDispatchActive = true;
+    syntheticAttackResultObserved = false;
+    syntheticAttackNativeResult = false;
+    reinterpret_cast<PublicAttackFn>(publicEntry)(gameMode, target, hitPosition);
+    syntheticAttackDispatchActive = false;
+
+    static std::atomic_bool loggedPublicWrapperDispatch{false};
+    if (!loggedPublicWrapperDispatch.exchange(true, std::memory_order_acq_rel)) {
+        autoHitLogger().info(
+            "AutoHit invoked the verified public GameMode::attack wrapper; native result observed={}, result={}. "
+            "Dispatch is not by itself proof of a landed hit.",
+            syntheticAttackResultObserved, syntheticAttackNativeResult);
+    }
+    (void)playPredictiveSound;
+    return true;
 }
 
 
