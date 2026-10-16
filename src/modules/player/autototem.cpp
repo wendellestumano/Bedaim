@@ -551,7 +551,7 @@ void AutoTotemModule::onMenuRegistered() {
         .defaultVisible(true)
         .stylePreset(ButtonStylePreset::Keycap)
         .onEvent([this](std::string_view, ButtonEvent event, float) {
-            if (event == ButtonEvent::Click || event == ButtonEvent::Down)
+            if (event == ButtonEvent::Click)
                 m_manualRequest.store(true, std::memory_order_release);
         }).registerButton();
     schema.node(node("m_combatOnly", "Combat Only", "safety",
