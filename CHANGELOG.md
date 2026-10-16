@@ -1,5 +1,16 @@
 # Changelog
 
+## Apollon v6.7 APK verification and experimental packaging — 2026-10-16
+
+- Inspected the supplied Apollon v6.7 APK and recorded SHA-256 fingerprints for the APK, Apollon overlay library, and Minecraft engine library in `docs/TESTING2_APOLLON_ANALYSIS.md`.
+- Confirmed that the engine and overlay native libraries are byte-identical to the previously supplied `Testing2.zip`; the APK does not provide a newer native binary than the earlier archive.
+- Recorded `emulateNativeAttack`, `hitBoxValue`, and `hitBox` as strings present in the overlay library. These are not exported engine functions and do not verify a callable ABI.
+- Updated only this experimental branch's package manifest metadata to identify the test build as `BedrockTools Apollon Experimental`, version `1.5.7-apollon-test-26.52`. Stable branches and `main` are unchanged.
+- Added a CI assertion that the packaged manifest carries the experimental identity before the artifact is uploaded.
+- No private engine offsets were enabled and no AutoHit/AutoTotem/Hitbox gameplay fix is claimed. CI and device tests remain required.
+
+# Changelog
+
 ## BedrockAim steering correction and module identity — 2026-10-16
 
 - Fixed weapon Y aim profiles to use the selected height as a stable vertical anchor; the Smooth hitbox slide now changes horizontal X/Z only, so sliding no longer pulls the aim back toward the box center vertically.
