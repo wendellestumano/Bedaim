@@ -346,7 +346,7 @@ bool naturalizationAppliesToWeapon(const std::string& setting, HeldWeapon weapon
 }
 
 AimAssistModule::AimAssistModule()
-    : Module("Aim Assist", "Smooth target tracking for private PvP training worlds.") {
+    : Module("BedrockAim", "Smooth target tracking for private PvP training worlds.", "Aim Assist") {
     keybind = 0;
     g_aimAssist = this;
 }
@@ -1446,11 +1446,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         case HeldWeapon::None: break;
     }
     aimPointY = std::clamp(std::isfinite(aimPointY) ? aimPointY : 0.55f, 0.05f, 0.95f);
-    Vec3 centerAimPoint{
-        boundsCenter.x,
-        targetAimBounds.min.y + (targetAimBounds.max.y - targetAimBounds.min.y) * aimPointY,
-        boundsCenter.z
+    const bedaim::aimmath::Bounds nativeAimMathBounds{
+        {targetAimBounds.min.x, targetAimBounds.min.y, targetAimBounds.min.z},
+        {targetAimBounds.max.x, targetAimBounds.max.y, targetAimBounds.max.z}
     };
+    Vec3 centerAimPoint = bedaim::aimmath::aimPointAtHeight(nativeAimMathBounds, aimPointY);
 
     const float yawRadians = currentRotation.y / kRadToDeg;
     const float pitchRadians = currentRotation.x / kRadToDeg;
@@ -1460,6 +1460,15 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         -std::sin(pitchRadians),
         std::cos(yawRadians) * cosPitch
     };
+    if (m_fourPointAiming) {
+        // Pick by distance to the forward view ray (not distance to one projection
+        // of the box center). Vertical Y is chosen first and remains independent
+        // of horizontal Smooth hitbox sliding.
+        const auto anchors = bedaim::aimmath::fourAimAnchors(nativeAimMathBounds, aimPointY);
+        centerAimPoint = anchors[bedaim::aimmath::nearestAnchorToRay(
+            eyePosition, viewDirection, anchors)];
+    }
+
     const float toCenterX = boundsCenter.x - eyePosition.x;
     const float toCenterY = boundsCenter.y - eyePosition.y;
     const float toCenterZ = boundsCenter.z - eyePosition.z;
@@ -1470,30 +1479,6 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         eyePosition.y + viewDirection.y * alongView,
         eyePosition.z + viewDirection.z * alongView
     };
-    if (m_fourPointAiming) {
-        // Four stable anchors on the hitbox cross-plane. Pick the anchor nearest
-        // to the current view-ray projection, then retain the existing slide blend.
-        const float width = targetAimBounds.max.x - targetAimBounds.min.x;
-        const float depth = targetAimBounds.max.z - targetAimBounds.min.z;
-        const float insetX = width * 0.25f;
-        const float insetZ = depth * 0.25f;
-        const Vec3 anchors[] = {
-            {targetAimBounds.min.x + insetX, centerAimPoint.y, boundsCenter.z},
-            {targetAimBounds.max.x - insetX, centerAimPoint.y, boundsCenter.z},
-            {boundsCenter.x, centerAimPoint.y, targetAimBounds.min.z + insetZ},
-            {boundsCenter.x, centerAimPoint.y, targetAimBounds.max.z - insetZ}
-        };
-        float bestAnchorDistance = std::numeric_limits<float>::infinity();
-        for (const auto& anchor : anchors) {
-            const float distance = distanceSquared(anchor, projectedPoint);
-            if (std::isfinite(distance) && distance < bestAnchorDistance) {
-                bestAnchorDistance = distance;
-                centerAimPoint.x = anchor.x;
-                centerAimPoint.z = anchor.z;
-            }
-        }
-    }
-
     // Distance-dependent Hitbox Area is a virtual steering volume. At close
     // range it tightens the pull; at long range the strength slider controls how
     // far the volume expands. Native Bedrock collision bounds are never changed.
@@ -1520,7 +1505,15 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // In Smooth mode, do not keep steering toward the center once the crosshair
     // ray already intersects the configured hitbox area. This lets the crosshair
     // move across the hitbox naturally instead of magnetically snapping to center.
-    if (!stickyMode && rayIntersectsAABB(eyePosition, viewDirection, scaledAimBounds)) {
+    // Smooth mode keeps the free-slide dead-zone only when the view ray is already
+    // close to this weapon's chosen vertical point. Merely crossing the expanded
+    // box at its center must not cancel a higher/lower Y profile.
+    const float nativeTargetHeight = targetAimBounds.max.y - targetAimBounds.min.y;
+    const float verticalAimTolerance = std::max(0.05f, nativeTargetHeight * 0.08f);
+    const bool viewIsAtSelectedAimHeight =
+        std::abs(projectedPoint.y - centerAimPoint.y) <= verticalAimTolerance;
+    if (!stickyMode && viewIsAtSelectedAimHeight &&
+        rayIntersectsAABB(eyePosition, viewDirection, scaledAimBounds)) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = now;
         return;
@@ -1528,7 +1521,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     const Vec3 clampedSlidePoint{
         std::clamp(projectedPoint.x, boundsCenter.x - halfExtents.x, boundsCenter.x + halfExtents.x),
-        std::clamp(projectedPoint.y, boundsCenter.y - halfExtents.y, boundsCenter.y + halfExtents.y),
+        centerAimPoint.y,
         std::clamp(projectedPoint.z, boundsCenter.z - halfExtents.z, boundsCenter.z + halfExtents.z)
     };
     // Never let the point fully follow the camera ray: that makes aim error collapse
@@ -1906,8 +1899,9 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
 
  
 HitboxExpanderModule::HitboxExpanderModule()
-    : Module("Hitbox Expander",
-             "Expands client-side target selection, crosshair and AutoHit bounds; the server still validates reach and hits.") {
+    : Module("BedrockBounds",
+             "Expands client-side target selection, crosshair and AutoHit bounds; the server still validates reach and hits.",
+             "Hitbox Expander") {
     keybind = 0;
 }
 
