@@ -1555,8 +1555,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         case HeldWeapon::Tool: weaponAimMultiplier = 1.0f; break;
         case HeldWeapon::None: break;
     }
-    weaponAimMultiplier = std::clamp(weaponAimMultiplier, 0.2f, 2.0f);
-    const float aimSpeed = std::clamp(m_aimSpeed * weaponAimMultiplier, 0.1f, 10.0f);
+    weaponAimMultiplier = std::clamp(weaponAimMultiplier, 0.2f, 10.0f);
+    const float aimSpeed = std::clamp(m_aimSpeed * weaponAimMultiplier, 0.1f, 100.0f);
     const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 1000.0f);
     float yawDelta = 0.0f;
     float pitchDelta = 0.0f;
@@ -1729,14 +1729,14 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_predictionLeadMs = std::clamp(j.value("m_predictionLeadMs", m_predictionLeadMs), 0.0f, 300.0f);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
-    m_swordAimMultiplier = std::clamp(j.value("m_swordAimMultiplier", m_swordAimMultiplier), 0.2f, 2.0f);
-    m_axeAimMultiplier = std::clamp(j.value("m_axeAimMultiplier", m_axeAimMultiplier), 0.2f, 2.0f);
-    m_maceAimMultiplier = std::clamp(j.value("m_maceAimMultiplier", m_maceAimMultiplier), 0.2f, 2.0f);
-    m_bowAimMultiplier = std::clamp(j.value("m_bowAimMultiplier", m_bowAimMultiplier), 0.2f, 2.0f);
-    m_crossbowAimMultiplier = std::clamp(j.value("m_crossbowAimMultiplier", m_crossbowAimMultiplier), 0.2f, 2.0f);
-    m_tridentAimMultiplier = std::clamp(j.value("m_tridentAimMultiplier", m_tridentAimMultiplier), 0.2f, 2.0f);
-    m_spearAimMultiplier = std::clamp(j.value("m_spearAimMultiplier", m_spearAimMultiplier), 0.2f, 2.0f);
-    m_otherMeleeAimMultiplier = std::clamp(j.value("m_otherMeleeAimMultiplier", m_otherMeleeAimMultiplier), 0.2f, 2.0f);
+    m_swordAimMultiplier = std::clamp(j.value("m_swordAimMultiplier", m_swordAimMultiplier), 0.2f, 10.0f);
+    m_axeAimMultiplier = std::clamp(j.value("m_axeAimMultiplier", m_axeAimMultiplier), 0.2f, 10.0f);
+    m_maceAimMultiplier = std::clamp(j.value("m_maceAimMultiplier", m_maceAimMultiplier), 0.2f, 10.0f);
+    m_bowAimMultiplier = std::clamp(j.value("m_bowAimMultiplier", m_bowAimMultiplier), 0.2f, 10.0f);
+    m_crossbowAimMultiplier = std::clamp(j.value("m_crossbowAimMultiplier", m_crossbowAimMultiplier), 0.2f, 10.0f);
+    m_tridentAimMultiplier = std::clamp(j.value("m_tridentAimMultiplier", m_tridentAimMultiplier), 0.2f, 10.0f);
+    m_spearAimMultiplier = std::clamp(j.value("m_spearAimMultiplier", m_spearAimMultiplier), 0.2f, 10.0f);
+    m_otherMeleeAimMultiplier = std::clamp(j.value("m_otherMeleeAimMultiplier", m_otherMeleeAimMultiplier), 0.2f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
     m_autoHit = j.value("m_autoHit", m_autoHit);
     m_autoHitButtonEnabled = j.value("m_autoHitButtonEnabled", m_autoHitButtonEnabled);
