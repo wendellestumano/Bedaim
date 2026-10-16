@@ -67,7 +67,8 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
 }
 
 MaceSwapperModule::MaceSwapperModule()
-    : Module("Mace Swapper", "Swaps to a hotbar mace for a falling hit when the AimAssist target is in the crosshair.") {
+    : Module("MaceFall", "Selects the mace for a falling hit when the BedrockAim target is in the crosshair.",
+             "Mace Swapper") {
     keybind = 0;
 }
 

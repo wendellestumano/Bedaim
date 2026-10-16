@@ -316,7 +316,7 @@ bool naturalizationAppliesToWeapon(const std::string& setting, HeldWeapon weapon
 }
 
 AimAssistModule::AimAssistModule()
-    : Module("Aim Assist", "Smooth target tracking for private PvP training worlds.") {
+    : Module("BedrockAim", "Smooth target tracking for private PvP training worlds.", "Aim Assist") {
     keybind = 0;
     g_aimAssist = this;
 }

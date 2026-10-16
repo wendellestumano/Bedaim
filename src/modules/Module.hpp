@@ -17,7 +17,10 @@ public:
     bool hideInHudEditor = false;
     int keybind = 0;
 
-    Module(const char* n, const char* d) : name(n), description(d), moduleId(std::string("bedrocktools.") + n) {}
+    // Display names can evolve independently from saved configuration IDs.
+    Module(const char* n, const char* d, const char* stableId = nullptr)
+        : name(n), description(d),
+          moduleId(std::string("bedrocktools.") + (stableId ? stableId : n)) {}
     virtual ~Module() = default;
 
     virtual void onInit()     {}
