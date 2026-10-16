@@ -781,14 +781,28 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     if (!playerGetGameTypeOriginal &&
         std::chrono::steady_clock::now() >= playerGameTypeNextResolve)
         resolveInventoryUiApi();
-    if (!playerGetGameTypeOriginal) return false;
+    if (!playerGetGameTypeOriginal) {
+        static std::atomic_bool loggedMissingGameType{false};
+        if (!loggedMissingGameType.exchange(true, std::memory_order_acq_rel)) {
+            autoHitLogger().warn(
+                "Player Radar/GameMode Checker cannot resolve Player::getPlayerGameType in the active libminecraftpe.so. Native mode labels will remain Unknown until a matching-build getter or packet hook is available.");
+        }
+        return false;
+    }
     const std::int32_t nativeValue = playerGetGameTypeOriginal(player);
     std::int32_t canonical = -1;
     // Player::getPlayerGameType() returns native C++ GameType values, not packet
     // enum values: Survival=0, Creative=1, Adventure=2, Default=5, Spectator=6.
     // Undefined (-1) and Default are not concrete player modes.
-    if (!bedaim::playergametype::normalizeNativeValue(nativeValue, canonical))
+    if (!bedaim::playergametype::normalizeNativeValue(nativeValue, canonical)) {
+        static std::atomic_bool loggedUnknownNativeGameType{false};
+        if (!loggedUnknownNativeGameType.exchange(true, std::memory_order_acq_rel)) {
+            autoHitLogger().warn(
+                "Player::getPlayerGameType returned unrecognized native value {}; leaving the mode Unknown rather than guessing.",
+                nativeValue);
+        }
         return false;
+    }
     outGameType = canonical;
     return true;
 }
