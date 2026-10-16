@@ -26,6 +26,9 @@ int main() {
     using bedaim::aimmath::isFiniteVector;
     using bedaim::aimmath::isValidBounds;
     using bedaim::aimmath::wrapDegrees;
+    using bedaim::aimmath::aimPointAtHeight;
+    using bedaim::aimmath::fourAimAnchors;
+    using bedaim::aimmath::nearestAnchorToRay;
 
     const float wrapAcrossBoundary = wrapDegrees(-179.0f - 179.0f);
     check(std::abs(wrapAcrossBoundary - 2.0f) < 1.0e-4f,
@@ -50,6 +53,26 @@ int main() {
           "zero-height bounds are rejected");
     check(!isValidBounds(Bounds{{-0.3f, 0.0f, -0.3f}, {nan, 1.8f, 0.3f}}),
           "bounds with non-finite coordinates are rejected");
+
+    const Bounds aimBounds{{-0.3f, 0.0f, -0.3f}, {0.3f, 2.0f, 0.3f}};
+    const Vec3 midAim = aimPointAtHeight(aimBounds, 0.55f);
+    const Vec3 highAim = aimPointAtHeight(aimBounds, 0.80f);
+    check(std::abs(midAim.y - 1.10f) < 1.0e-4f,
+          "weapon Y profile 0.55 maps to 55 percent of native hitbox height");
+    check(std::abs(highAim.y - 1.60f) < 1.0e-4f && highAim.y > midAim.y,
+          "weapon Y profile 0.80 aims higher without changing hitbox dimensions");
+
+    const auto highAnchors = fourAimAnchors(aimBounds, 0.80f);
+    check(highAnchors[0].y == highAim.y && highAnchors[1].y == highAim.y &&
+          highAnchors[2].y == highAim.y && highAnchors[3].y == highAim.y,
+          "all four anchors retain the weapon's configured vertical aim point");
+    check(highAnchors[0].x < highAim.x && highAnchors[1].x > highAim.x &&
+          highAnchors[2].z < highAim.z && highAnchors[3].z > highAim.z,
+          "four anchors occupy left, right, back, and front positions inside the hitbox");
+    const std::size_t nearestSideAnchor = nearestAnchorToRay(
+        Vec3{-2.0f, 1.60f, 0.20f}, Vec3{1.0f, 0.0f, 0.0f}, highAnchors);
+    check(nearestSideAnchor == 3,
+          "four-point aiming picks the anchor nearest the forward view ray, not the box-center projection");
 
     const float turn = boundedTurnStep(90.0f, 120.0f, 1.0f / 60.0f);
     check(std::isfinite(turn) && turn <= 2.0001f && turn > 0.0f,
