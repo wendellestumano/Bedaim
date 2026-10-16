@@ -834,9 +834,10 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     if (!player) return false;
-    if ((!playerGetGameTypeOriginal ||
-         !playerSetGameTypeHookInstalled.load(std::memory_order_acquire)) &&
+    if (!playerGetGameTypeOriginal &&
         std::chrono::steady_clock::now() >= playerGameTypeNextResolve) {
+        // Retry the exported getter and setter observer at a bounded cadence. The
+        // resolver owns the separate retry schedule for the setter hook.
         resolveInventoryUiApi();
     }
 
