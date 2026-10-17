@@ -428,6 +428,9 @@ private:
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
                     registerUltrakillHudConfigSchema(entry.first, entry.second);
+                } else if (entry.first == "bedrocktools.Module Diagnostics") {
+                    if (auto* module = ModuleRegistry::get().find(entry.first))
+                        module->onMenuRegistered();
                 }
             }
             lock.lock();
@@ -445,7 +448,8 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                                                const nlohmann::json& snapshot) {
     if (!mod || (mod->moduleId != "bedrocktools.Aim Assist" &&
                  mod->moduleId != "bedrocktools.Hitbox Expander" &&
-                 mod->moduleId != "bedrocktools.ULTRAKILL HUD")) return;
+                 mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
+                 mod->moduleId != "bedrocktools.Module Diagnostics")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
     // change. Debounce continuous sliders and give the whitelist editor more time
     // so one character/drag does not reset the active widget mid-interaction.
