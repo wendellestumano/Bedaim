@@ -35,6 +35,7 @@ private:
     bool m_hasPeakY = false;
     std::chrono::steady_clock::time_point m_nextAttack{};
     bool m_pendingAttack = false;
+    bool m_cancelPendingAttack = false;
     int m_pendingMaceSlot = -1;
     int m_pendingPreviousSlot = -1;
     void* m_pendingTarget = nullptr;
