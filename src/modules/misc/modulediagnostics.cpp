@@ -1,4 +1,6 @@
 #include "modulediagnostics.hpp"
+#include "../core/Diagnostics.hpp"
+#include <pl/ModMenu.hpp>
 
 #include "modules/ModuleRegistry.hpp"
 #include "config/ConfigManager.hpp"
@@ -33,8 +35,80 @@ std::string moduleStatus(const Module* module) {
 
 ModuleDiagnosticsModule::ModuleDiagnosticsModule()
     : Module("Module Diagnostics",
-             "Generates a JSON health report for registered modules and shows a compact status summary.") {
+             "Generates a JSON health report for registered modules and shows a compact status summary, and exports all diagnostic log levels.") {
     keybind = 0;
+}
+
+void ModuleDiagnosticsModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    schema.defaultCategory("diagnostics")
+        .category("diagnostics", "Diagnostics", "Module health report and exportable runtime logs.");
+
+    ConfigNodeV2 exportNode;
+    exportNode.id = "m_exportLogsNow";
+    exportNode.key = "m_exportLogsNow";
+    exportNode.title = "Export all logs now";
+    exportNode.description = "Writes bedaim_diagnostics.log next to config.json, including trace/debug/info/warn/error/critical entries.";
+    exportNode.category = "diagnostics";
+    exportNode.type = ConfigControlTypeV2::Toggle;
+    exportNode.defaultValue = "false";
+    exportNode.currentValue = "false";
+    exportNode.hasCurrentValue = true;
+    schema.node(std::move(exportNode));
+
+    ConfigNodeV2 clearNode;
+    clearNode.id = "m_clearLogsNow";
+    clearNode.key = "m_clearLogsNow";
+    clearNode.title = "Clear in-memory logs";
+    clearNode.description = "Clears the 4096-entry log buffer. Export first if you need to keep it.";
+    clearNode.category = "diagnostics";
+    clearNode.type = ConfigControlTypeV2::Toggle;
+    clearNode.defaultValue = "false";
+    clearNode.currentValue = "false";
+    clearNode.hasCurrentValue = true;
+    schema.node(std::move(clearNode));
+    pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
+}
+
+bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    const bool requested = value == "true" || value == "1" || value == "on";
+    if (key == "m_exportLogsNow") {
+        if (!requested) return true;
+        const auto configPath = bedrocktools::config::ConfigManager::get().getConfigPath();
+        const auto outputPath = (std::filesystem::path(configPath).parent_path() /
+                                 "bedaim_diagnostics.log").string();
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Diagnostics",
+            "log export requested; destination=" + outputPath);
+        std::string error;
+        const bool ok = bedrocktools::diagnostics::exportTo(outputPath, &error);
+        bedrocktools::diagnostics::log(ok ? bedrocktools::diagnostics::Level::Info :
+            bedrocktools::diagnostics::Level::Error, "Diagnostics",
+            ok ? "diagnostic log exported to " + outputPath :
+                 "diagnostic log export failed: " + error);
+        return true;
+    }
+    if (key == "m_clearLogsNow") {
+        if (requested) {
+            bedrocktools::diagnostics::clear();
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Diagnostics",
+                "in-memory diagnostic log cleared from settings");
+        }
+        return true;
+    }
+    return false;
+}
+
+void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
+    Module::loadConfig(j);
+    m_exportLogsNow = false;
+    m_clearLogsNow = false;
+}
+
+void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
+    Module::saveConfig(j);
+    j["m_exportLogsNow"] = false;
+    j["m_clearLogsNow"] = false;
 }
 
 void ModuleDiagnosticsModule::onEnable() {
