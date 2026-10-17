@@ -1,1 +1,1 @@
-__candidate_source_is_supplied_below__
+Restoration requested from the validated pre-fallback branch source.
