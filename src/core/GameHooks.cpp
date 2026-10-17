@@ -627,8 +627,24 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 }
 
 void* clientUpdateDetour(void* clientInstance, bool value) {
-    if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
+    // Preserve the original hook argument for the trampoline, but do not assume
+    // it is a ClientInstance: this signature has delivered an unreadable value
+    // on the affected runtime. Prefer the runtime API's canonical instance when
+    // the hook argument fails basic memory validation.
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
+    void* resolvedClientInstance = clientInstance;
+    bool usedRuntimeApiInstance = false;
+    if (!resolvedClientInstance || !isReadableMemory(resolvedClientInstance, sizeof(void*))) {
+        auto* apiClient = bedrocktools::sdk::ClientInstance::current();
+        if (apiClient && isReadableMemory(apiClient, sizeof(void*))) {
+            resolvedClientInstance = apiClient;
+            usedRuntimeApiInstance = true;
+        } else {
+            resolvedClientInstance = nullptr;
+        }
+    }
+    if (resolvedClientInstance)
+        currentClientInstance.store(resolvedClientInstance, std::memory_order_release);
 
     const auto localPlayerGetter =
         bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
@@ -641,15 +657,15 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
                isMinecraftFunction(playerVtable[0]);
     };
 
-    if (!clientInstance || !isReadableMemory(clientInstance, sizeof(void*))) {
+    if (!resolvedClientInstance || !isReadableMemory(resolvedClientInstance, sizeof(void*))) {
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Error, "GameHooks",
             "local_player_resolution", "client_instance_unreadable",
-            "ClientInstance pointer is null or outside readable mapped memory");
+            "hook argument was invalid and runtime API did not provide a readable ClientInstance");
     } else {
         // Prefer the signature-based path when it returns a validated player.
         if (localPlayerGetter) {
-            auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
+            auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(resolvedClientInstance);
             void* candidate = client->localPlayer();
             if (validPlayerCandidate(candidate)) localPlayer = candidate;
         }
@@ -662,7 +678,7 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
         if (!localPlayer) {
             constexpr std::size_t getterSlot =
                 bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
-            auto** clientVtable = *reinterpret_cast<void***>(clientInstance);
+            auto** clientVtable = *reinterpret_cast<void***>(resolvedClientInstance);
             const bool readableVtable = clientVtable &&
                 isReadableMemory(clientVtable, (getterSlot + 1) * sizeof(void*));
             if (readableVtable) {
@@ -670,7 +686,7 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
                 if (isMinecraftFunction(getterAddress)) {
                     using LocalPlayerGetterFn = void* (*)(const void*);
                     void* candidate =
-                        reinterpret_cast<LocalPlayerGetterFn>(getterAddress)(clientInstance);
+                        reinterpret_cast<LocalPlayerGetterFn>(getterAddress)(resolvedClientInstance);
                     if (validPlayerCandidate(candidate)) {
                         localPlayer = candidate;
                         usedVirtualGetter = true;
@@ -694,6 +710,9 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
         } else {
             state = "getter_returned_null_virtual_fallback_failed";
             detail = "signature getter produced no validated Player; SDK virtual getter also failed validation";
+        }
+        if (usedRuntimeApiInstance && localPlayer) {
+            detail += "; ClientInstance recovered through BedrockTools runtime API";
         }
         bedrocktools::diagnostics::probe(
             level, "GameHooks", "local_player_resolution", state, detail);
