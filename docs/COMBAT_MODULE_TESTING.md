@@ -11,7 +11,7 @@ Module Diagnostics provides a compact registry health report and a bounded runti
 3. In its **Diagnostics** settings, use **Export all logs now** to write `bedaim_diagnostics.log` next to the configured `config.json`.
 4. Use **Clear in-memory logs** only after exporting any entries you want to retain.
 
-The separate `module_diagnostics.json` report contains the registry/metadata checks. The log contains timestamped entries with sequence numbers, levels (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`), component names, and messages. The buffer is capped at 4,096 entries; export before clearing or before a long test if you need the full trace.
+The `module_diagnostics.json` report contains the registry/metadata checks plus the most recent 128 runtime log entries. The log contains timestamped entries with sequence numbers, levels (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`), component names, and messages. The buffer is capped at 4,096 entries; export before clearing or before a long test if you need the full trace.
 
 ## Reading the log
 
