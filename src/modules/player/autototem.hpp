@@ -30,6 +30,9 @@ private:
     std::atomic_bool m_containerOpen{false};
     bool m_pendingRefill = false;
     bool m_lastOffhandHadTotem = false;
+    // A missing/unvalidated native transfer API is a hard stop for this session.
+    // Avoid hammering the same unsafe route every few ticks; re-enable retries it.
+    bool m_transferBlocked = false;
     std::chrono::steady_clock::time_point m_refillAfter{};
 
     float m_delayMs = 100.0f;
