@@ -3,6 +3,7 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include "core/GameHooks.hpp"
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <regex>
