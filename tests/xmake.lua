@@ -36,6 +36,12 @@ target("autohit_guards_test")
     add_files("launcher/autohit_guards_test.cpp", "../src/modules/player/AutoHitGuards.cpp")
     add_includedirs("../src")
 target_end()
+target("autohit_weapon_profile_test")
+    set_kind("binary")
+    add_files("launcher/autohit_weapon_profile_test.cpp")
+    add_includedirs("../src")
+target_end()
+
 
 target("autototem_policy_test")
     set_kind("binary")
