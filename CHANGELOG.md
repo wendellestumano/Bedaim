@@ -1,7 +1,7 @@
 # Changelog
 
 ## 2026-10-17 — ElytraMacing module
-- Added an isolated ElytraMacing module with its own configuration for elytra glide gating, minimum fall distance, mace equip/restore, target range, hitpoint height, crosshair tolerance and attack interval.
+- Added an isolated ElytraMacing module with its own configuration for elytra glide gating, minimum fall distance, mace equip/restore, target range, hitpoint height, crosshair tolerance, camera assist speed and attack interval.
 - Glide-state reads use the current Bedrock entity-data encoding with SDK readable-memory checks. The module reads the existing BedrockAim target snapshot and does not write state to Aim Assist, Hitbox Expander, or MaceSwapper.
 - The module is isolated on the feature branch and requires Android ARM64 build/runtime verification before being considered complete.
 - All target/range state reads in the new module validate pointer-derived data locally; it does not change Aim Assist state or global hook policy.

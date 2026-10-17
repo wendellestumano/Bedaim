@@ -27,6 +27,8 @@ private:
     bool m_equipMace = true;
     bool m_restorePreviousSlot = true;
     bool m_requireCrosshair = true;
+    bool m_cameraAssist = false;
+    float m_aimSpeed = 8.0f;
     float m_attackRange = 5.5f;
     float m_minimumFallDistance = 0.25f;
     float m_attackIntervalMs = 180.0f;

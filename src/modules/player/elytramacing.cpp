@@ -44,6 +44,32 @@ Vec3 eyePosition(Player* p) {
 
 // Same Bedrock entity-data encoding as the established Aim Assist helper,
 // but every pointer and scalar read is validated with the SDK memory probe.
+using LocalPlayerApplyTurnDeltaFn = void (*)(void*, bedrocktools::sdk::Vec2*);
+LocalPlayerApplyTurnDeltaFn resolveTurnDelta() {
+    static auto* fn = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
+    return fn;
+}
+float wrapDegrees(float angle) {
+    angle = std::fmod(angle + 180.0f, 360.0f);
+    if (angle < 0.0f) angle += 360.0f;
+    return angle - 180.0f;
+}
+void applyCameraAssist(Player* player, const Vec3& eye, const Vec3& target, float aimSpeed) {
+    auto fn = resolveTurnDelta();
+    if (!fn || !player || !finiteVec(eye) || !finiteVec(target)) return;
+    const auto delta = Vec3{target.x-eye.x,target.y-eye.y,target.z-eye.z};
+    const float horizontal = std::sqrt(delta.x*delta.x + delta.z*delta.z);
+    if (!(horizontal > 0.0001f) || !std::isfinite(horizontal)) return;
+    const auto current = player->rotation();
+    const float desiredYaw = std::atan2(-delta.x,delta.z) * 180.0f / 3.14159265358979323846f;
+    const float desiredPitch = -std::atan2(delta.y,horizontal) * 180.0f / 3.14159265358979323846f;
+    const float yawStep = std::clamp(wrapDegrees(desiredYaw-current.y),-aimSpeed,aimSpeed);
+    const float pitchStep = std::clamp(wrapDegrees(desiredPitch-current.x),-aimSpeed,aimSpeed);
+    bedrocktools::sdk::Vec2 turn{-pitchStep,yawStep};
+    fn(player,&turn);
+}
+
 bool safelyGliding(const void* actor) {
     using namespace bedrocktools::sdk;
     if (!actor) return false;
@@ -157,7 +183,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         return;
     }
     if(!enabled||!m_behaviorEnabled||(m_requireGliding&&!gliding)||
-       !bedaim::macefall::shouldBeginMaceAction(dy,fallDistance,m_minimumFallDistance)) return;
+       !(dy < -0.025f && fallDistance >= std::clamp(m_minimumFallDistance,0.0f,15.0f))) return;
     const auto now=std::chrono::steady_clock::now();
     if(m_nextAttack.time_since_epoch().count()!=0&&now<m_nextAttack) return;
     auto* aimBase=ModuleRegistry::get().find("bedrocktools.Aim Assist");
@@ -170,6 +196,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     const Vec3 targetPoint{(bounds.min.x+bounds.max.x)*0.5f,
         bounds.min.y+(bounds.max.y-bounds.min.y)*m_targetAimHeight,
         (bounds.min.z+bounds.max.z)*0.5f};
+    if(m_cameraAssist) applyCameraAssist(player,eye,targetPoint,std::clamp(m_aimSpeed,0.1f,30.0f));
     const float dist=std::sqrt(distanceSquared(eye,targetPoint));
     const float range=std::min(m_attackRange,aimRange);
     if(!std::isfinite(dist)||!std::isfinite(range)||dist>range) return;
@@ -193,6 +220,8 @@ void ElytraMacingModule::loadConfig(const nlohmann::json& j) {
     m_equipMace=j.value("m_equipMace",m_equipMace);
     m_restorePreviousSlot=j.value("m_restorePreviousSlot",m_restorePreviousSlot);
     m_requireCrosshair=j.value("m_requireCrosshair",m_requireCrosshair);
+    m_cameraAssist=j.value("m_cameraAssist",m_cameraAssist);
+    m_aimSpeed=std::clamp(j.value("m_aimSpeed",m_aimSpeed),0.1f,30.0f);
     m_attackRange=std::clamp(j.value("m_attackRange",m_attackRange),2.0f,12.0f);
     m_minimumFallDistance=std::clamp(j.value("m_minimumFallDistance",m_minimumFallDistance),0.0f,15.0f);
     m_attackIntervalMs=std::clamp(j.value("m_attackIntervalMs",m_attackIntervalMs),80.0f,1000.0f);
@@ -203,7 +232,8 @@ void ElytraMacingModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j); std::lock_guard<std::mutex> lock(m_stateMutex);
     j["m_behaviorEnabled"]=m_behaviorEnabled; j["m_requireGliding"]=m_requireGliding;
     j["m_equipMace"]=m_equipMace; j["m_restorePreviousSlot"]=m_restorePreviousSlot;
-    j["m_requireCrosshair"]=m_requireCrosshair; j["m_attackRange"]=m_attackRange;
+    j["m_requireCrosshair"]=m_requireCrosshair; j["m_cameraAssist"]=m_cameraAssist;
+    j["m_aimSpeed"]=m_aimSpeed; j["m_attackRange"]=m_attackRange;
     j["m_minimumFallDistance"]=m_minimumFallDistance; j["m_attackIntervalMs"]=m_attackIntervalMs;
     j["m_targetAimHeight"]=m_targetAimHeight; j["m_crosshairTolerance"]=m_crosshairTolerance;
 }
@@ -222,11 +252,13 @@ void ElytraMacingModule::onMenuRegistered() {
     toggle("m_equipMace","Equip mace before attack");
     toggle("m_restorePreviousSlot","Restore previous hotbar slot");
     toggle("m_requireCrosshair","Require target in crosshair");
+    toggle("m_cameraAssist","Enable ElytraMacing camera assist");
     slider("m_attackRange","Target range","2","12","0.1"," blocks");
     slider("m_minimumFallDistance","Minimum fall distance","0","15","0.1"," blocks");
     slider("m_attackIntervalMs","Attack interval","80","1000","10"," ms");
     slider("m_targetAimHeight","Target point height","0.1","0.95","0.01"," fraction");
     slider("m_crosshairTolerance","Crosshair tolerance","0.05","0.8","0.01"," blocks");
+    slider("m_aimSpeed","Camera assist speed","0.1","30","0.1"," deg/tick");
     ConfigNodeV2 kb;kb.id="keybind";kb.key="keybind";kb.title="Keybind";kb.category="combat";
     kb.type=ConfigControlTypeV2::Keybind;schema.node(std::move(kb));
     pl::modmenu::setConfigSchemaJson(moduleId,schema.toJson());
@@ -234,13 +266,14 @@ void ElytraMacingModule::onMenuRegistered() {
 bool ElytraMacingModule::onMenuConfigChanged(std::string_view key,std::string_view value) {
     auto flag=[&](){return value=="true"||value=="1"||value=="on";};
     if(key=="m_behaviorEnabled"||key=="m_requireGliding"||key=="m_equipMace"||
-       key=="m_restorePreviousSlot"||key=="m_requireCrosshair") {
+       key=="m_restorePreviousSlot"||key=="m_requireCrosshair"||key=="m_cameraAssist") {
         std::lock_guard<std::mutex> lock(m_stateMutex); const bool v=flag();
         if(key=="m_behaviorEnabled")m_behaviorEnabled=v;
         else if(key=="m_requireGliding")m_requireGliding=v;
         else if(key=="m_equipMace")m_equipMace=v;
         else if(key=="m_restorePreviousSlot")m_restorePreviousSlot=v;
         else if(key=="m_requireCrosshair")m_requireCrosshair=v;
+        else if(key=="m_cameraAssist")m_cameraAssist=v;
         return true;
     }
     try {
@@ -252,6 +285,7 @@ bool ElytraMacingModule::onMenuConfigChanged(std::string_view key,std::string_vi
         else if(key=="m_minimumFallDistance")m_minimumFallDistance=std::clamp(v,0.0f,15.0f);
         else if(key=="m_attackIntervalMs")m_attackIntervalMs=std::clamp(v,80.0f,1000.0f);
         else if(key=="m_targetAimHeight")m_targetAimHeight=std::clamp(v,0.1f,0.95f);
+        else if(key=="m_aimSpeed")m_aimSpeed=std::clamp(v,0.1f,30.0f);
         else if(key=="m_crosshairTolerance")m_crosshairTolerance=std::clamp(v,0.05f,0.8f);
         else return false;
         return true;
