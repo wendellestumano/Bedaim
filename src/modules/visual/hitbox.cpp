@@ -318,7 +318,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             expander->expandsType(isPlayer);
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
-            const auto expanded = expander->expandedTargetBounds(isPlayer, aabb);
+            const bedrocktools::sdk::AABB nativeBounds{aabb.min, aabb.max};
+            const auto expanded = expander->expandedTargetBounds(isPlayer, nativeBounds);
             aabb = {expanded.min, expanded.max};
         }
         const uint32_t boxColor = g_hitboxMod ? g_hitboxMod->hitboxColor : 0xFF00FFFF;
