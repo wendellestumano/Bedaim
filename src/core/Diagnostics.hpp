@@ -35,6 +35,7 @@ std::vector<Entry> snapshot();
 std::size_t count() noexcept;
 void clear() noexcept;
 bool exportTo(const std::string& path, std::string* error = nullptr) noexcept;
+bool exportJsonTo(const std::string& path, std::string* error = nullptr) noexcept;
 std::string levelName(Level level);
 
 } // namespace bedrocktools::diagnostics

@@ -14,6 +14,7 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 namespace bedrocktools::diagnostics {
 namespace {
@@ -138,6 +139,45 @@ std::string levelName(Level level) {
         case Level::Critical: return "CRITICAL";
     }
     return "UNKNOWN";
+}
+
+bool exportJsonTo(const std::string& path, std::string* error) noexcept {
+    try {
+        if (path.empty()) {
+            if (error) *error = "empty export path";
+            return false;
+        }
+
+        const auto entries = snapshot();
+        nlohmann::json payload;
+        payload["schema_version"] = 1;
+        payload["generated_at_unix_ms"] = nowMs();
+        payload["entry_count"] = entries.size();
+        payload["buffer_capacity"] = kCapacity;
+        payload["entries"] = nlohmann::json::array();
+        for (const auto& entry : entries) {
+            payload["entries"].push_back({
+                {"timestamp_ms", entry.timestampMs},
+                {"sequence", entry.sequence},
+                {"level", levelName(entry.level)},
+                {"component", entry.component},
+                {"message", entry.message}
+            });
+        }
+
+        if (!bedrocktools::config::writePayloadAtomically(path, payload.dump(2) + "\n")) {
+            if (error) *error = "could not atomically replace exported JSON log";
+            return false;
+        }
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+    } catch (...) {
+        if (error) *error = "unknown JSON export failure";
+        return false;
+    }
 }
 
 bool exportTo(const std::string& path, std::string* error) noexcept {

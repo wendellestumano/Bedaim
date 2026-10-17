@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <nlohmann/json.hpp>
 
 int main() {
     using bedrocktools::diagnostics::Level;
@@ -38,6 +39,20 @@ int main() {
     std::string error;
     assert(bedrocktools::diagnostics::exportTo(path.string(), &error));
 
+    const auto jsonPath = std::filesystem::temp_directory_path() / "bedaim_diagnostics_test.json";
+    assert(bedrocktools::diagnostics::exportJsonTo(jsonPath.string(), &error));
+    {
+        std::ifstream jsonIn(jsonPath, std::ios::binary);
+        const nlohmann::json exported = nlohmann::json::parse(
+            std::string((std::istreambuf_iterator<char>(jsonIn)), std::istreambuf_iterator<char>()));
+        assert(exported.at("schema_version").get<int>() == 1);
+        assert(exported.at("entry_count").get<std::size_t>() == 8);
+        assert(exported.at("entries").size() == 8);
+        assert(exported.at("entries").front().at("level") == "TRACE");
+        assert(exported.at("entries").back().at("message") ==
+               "target=missing: native query returned no actor");
+    }
+
     const auto blockedPath = std::filesystem::temp_directory_path() / "bedaim_diagnostics_blocked";
     std::error_code ec;
     std::filesystem::remove_all(blockedPath, ec);
@@ -56,6 +71,7 @@ int main() {
     assert(content.find("ERROR") != std::string::npos);
     assert(content.find("CRITICAL") != std::string::npos);
     std::filesystem::remove(path, ec);
+    std::filesystem::remove(jsonPath, ec);
     bedrocktools::diagnostics::clear();
     assert(bedrocktools::diagnostics::count() == 0);
     bedrocktools::diagnostics::probe(Level::Debug, "ProbeTest", "target", "none");
