@@ -627,21 +627,40 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 }
 
 void* clientUpdateDetour(void* clientInstance, bool value) {
-    // Preserve the original hook argument for the trampoline, but do not assume
-    // it is a ClientInstance: this signature has delivered an unreadable value
-    // on the affected runtime. Prefer the runtime API's canonical instance when
-    // the hook argument fails basic memory validation.
+    // Keep the native trampoline call unchanged. The prior fallback queried the
+    // runtime API, whose ClientInstance accessor reads currentClientInstance,
+    // i.e. the same value populated by this hook. It was circular and could not
+    // recover an invalid argument.
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
     void* resolvedClientInstance = clientInstance;
     bool usedRuntimeApiInstance = false;
+
+    // Capture the actual hook target and call-site evidence once per process.
+    // This distinguishes a bad signature match from a bad object pointer without
+    // dereferencing the incoming argument.
+    static std::atomic_bool loggedClientUpdateEvidence{false};
+    if (!loggedClientUpdateEvidence.exchange(true, std::memory_order_acq_rel)) {
+        Dl_info targetInfo{};
+        Dl_info callerInfo{};
+        const auto target = bedrocktools::memory::resolve(SignatureId::ClientInstanceUpdate);
+        const auto caller = reinterpret_cast<void*>(__builtin_return_address(0));
+        const bool targetKnown = target && dladdr(reinterpret_cast<void*>(target), &targetInfo);
+        const bool callerKnown = caller && dladdr(caller, &callerInfo);
+        char evidence[768]{};
+        std::snprintf(evidence, sizeof(evidence),
+            "client_update_hook_evidence: arg=%p readable=%d value=%d target=%p target_module=%s trampoline=%p caller=%p caller_module=%s",
+            clientInstance, isReadableMemory(clientInstance, sizeof(void*)), value,
+            reinterpret_cast<void*>(target),
+            targetKnown && targetInfo.dli_fname ? targetInfo.dli_fname : "unknown",
+            reinterpret_cast<void*>(clientUpdateOriginal), caller,
+            callerKnown && callerInfo.dli_fname ? callerInfo.dli_fname : "unknown");
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", evidence);
+    }
+
+    // Do not ask ClientInstance::current() here: that API returns the value
+    // stored by this very hook, so it is not an independent fallback.
     if (!resolvedClientInstance || !isReadableMemory(resolvedClientInstance, sizeof(void*))) {
-        auto* apiClient = bedrocktools::sdk::ClientInstance::current();
-        if (apiClient && isReadableMemory(apiClient, sizeof(void*))) {
-            resolvedClientInstance = apiClient;
-            usedRuntimeApiInstance = true;
-        } else {
-            resolvedClientInstance = nullptr;
-        }
+        resolvedClientInstance = nullptr;
     }
     if (resolvedClientInstance)
         currentClientInstance.store(resolvedClientInstance, std::memory_order_release);
