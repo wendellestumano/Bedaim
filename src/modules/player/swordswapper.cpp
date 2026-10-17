@@ -1,6 +1,6 @@
 #include "swordswapper.hpp"
 #include "swapperstate.hpp"
-#include "../core/Diagnostics.hpp"
+#include "../../core/Diagnostics.hpp"
 #include <bedrocktools/events/GameModeActionEvent.hpp>
 
 #include <pl/ModMenu.hpp>
