@@ -191,7 +191,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     formatNode.id = "m_exportFormat";
     formatNode.key = "m_exportFormat";
     formatNode.title = "Export format";
-    formatNode.description = "Choose readable plain text or structured JSON.";
+    formatNode.description = "Choose the format for timestamped manual exports. Rolling current-session and lifetime logs are always JSON.";
     formatNode.category = "diagnostics";
     formatNode.type = ConfigControlTypeV2::Choice;
     formatNode.choiceStyle = ConfigChoiceStyleV2::Segmented;
@@ -212,7 +212,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     autoNode.id = "m_autoExportEnabled";
     autoNode.key = "m_autoExportEnabled";
     autoNode.title = "Automatically export logs";
-    autoNode.description = "While Module Diagnostics is enabled, periodically refreshes one rolling file in Download/Bedaim without blocking the game thread.";
+    autoNode.description = "While enabled, refreshes bedaim_diagnostics_auto.json for the current session and merges new entries into bedaim_diagnostics_total.json across all sessions.";
     autoNode.category = "diagnostics";
     autoNode.type = ConfigControlTypeV2::Toggle;
     autoNode.defaultValue = "true";
@@ -376,17 +376,37 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
     const auto currentPath = outputDirectory / "bedaim_diagnostics_auto.json";
     const auto lifetimePath = outputDirectory / "bedaim_diagnostics_total.json";
     std::string archiveError;
+    bool rotationOk = true;
     {
-        // Serialize archive/delete against the rolling writer. The lifetime
-        // merge is idempotent, so a restart between merge and delete is safe.
+        // Serialize archive/delete against the rolling writer. Never delete the
+        // previous current-session file unless its entries were safely merged.
         std::lock_guard<std::mutex> fileLock(m_fileWriteMutex);
-        mergeCurrentSessionIntoLifetime(currentPath, lifetimePath, &archiveError);
-        std::error_code removeError;
-        std::filesystem::remove(currentPath, removeError);
-        if (removeError) archiveError = "could not replace current-session JSON: " +
-            removeError.message();
-        // Remove the old rolling text file too; auto-save is always JSON.
-        std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", removeError);
+        std::error_code existsError;
+        const bool hasCurrent = std::filesystem::exists(currentPath, existsError);
+        if (existsError) {
+            rotationOk = false;
+            archiveError = "cannot inspect current-session JSON: " + existsError.message();
+        } else if (hasCurrent) {
+            rotationOk = mergeCurrentSessionIntoLifetime(currentPath, lifetimePath, &archiveError);
+            if (rotationOk) {
+                std::error_code removeError;
+                std::filesystem::remove(currentPath, removeError);
+                if (removeError) {
+                    rotationOk = false;
+                    archiveError = "could not replace current-session JSON: " + removeError.message();
+                }
+            }
+        }
+        // Remove the obsolete rolling text file; auto-save is always JSON.
+        std::error_code staleError;
+        std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
+    }
+    if (!rotationOk) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+            "Diagnostics", "session rotation aborted to protect previous logs: " + archiveError);
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_lastExportStatus = "Session rotation aborted; previous logs preserved";
+        return;
     }
     // Keep only stable startup facts that are essential for diagnosing native
     // routes (especially AutoHit's attack hook and AutoTotem's offhand reader).
