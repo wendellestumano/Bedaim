@@ -1,5 +1,9 @@
 name: Build
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017, test/autohit-autototem-diagnostics-20261017]
