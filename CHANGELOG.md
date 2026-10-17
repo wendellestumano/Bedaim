@@ -2,7 +2,7 @@
 
 ## BedrockBounds movement fix, hitbox preview, and Bedaim keybind — 2026-10-16
 
-- Fixed the fixed-in-world hitbox regression by translating each saved native AABB by the actor's current position delta before restoring it. The next expansion snapshot is taken from the actor's current position, keeping the expanded bounds attached as the target moves.
+- Fixed the fixed-in-world hitbox regression by keeping the first unexpanded AABB and actor position as a stable baseline while the module is enabled. Every tick restores the baseline translated to the actor's current position, then applies expansion without re-snapshotting stale world coordinates.
 - Added the **Ver Hitbox** option to BedrockBounds. It draws the expanded client-side target bounds through the existing hitbox renderer and does not require enabling the standalone Hitbox module.
 - Restored an explicit **Bedaim toggle keybind** control in the Aim Assist schema so it is visible in the newer launcher configuration UI.
 - This remains a client-side target-query change; it does not change server-authoritative hit registration. Validate movement and visualization in Bedrock 26.52 before merging.
