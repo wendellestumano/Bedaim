@@ -218,6 +218,7 @@ void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
     j["m_clearLogsNow"] = false;
     j["m_autoExportEnabled"] = m_autoExportEnabled;
     j["m_autoExportIntervalSeconds"] = m_autoExportIntervalSeconds;
+    j.erase("m_autoExportIntervalMinutes");
     j["m_exportFormat"] = m_exportFormat;
 }
 
