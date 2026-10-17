@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, fix/hitbox-expander-native-aabb-20261016]
   pull_request:
   workflow_dispatch:
 
@@ -47,6 +47,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BedrockTools-levipack
+          name: BedrockTools-HitboxExpander-26.52-EXPERIMENTAL
           path: build/android/arm64-v8a/release/BedrockTools.levipack
           if-no-files-found: error
