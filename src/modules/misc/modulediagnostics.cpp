@@ -50,11 +50,21 @@ std::string intervalLabel(int seconds) {
     if (seconds % 60 == 0) return std::to_string(seconds / 60) + " min";
     return std::to_string(seconds / 60) + "m " + std::to_string(seconds % 60) + "s";
 }
+
+std::string compactLogText(std::string text, std::size_t maxLength = 105) {
+    std::replace(text.begin(), text.end(), '\n', ' ');
+    std::replace(text.begin(), text.end(), '\r', ' ');
+    if (text.size() > maxLength) {
+        if (maxLength > 3) text = text.substr(0, maxLength - 3) + "...";
+        else text.resize(maxLength);
+    }
+    return text;
+}
 }
 
 ModuleDiagnosticsModule::ModuleDiagnosticsModule()
     : Module("Module Diagnostics",
-             "Generates a JSON health report for registered modules and shows a compact status summary, and exports all diagnostic log levels.") {
+             "Generates a JSON health report for registered modules and shows recent runtime warnings/errors, and exports all diagnostic log levels.") {
     keybind = 0;
 }
 
@@ -62,7 +72,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
     schema.defaultCategory("diagnostics")
-        .category("diagnostics", "Diagnostics", "Module health report, Downloads export, and periodic runtime logs.");
+        .category("diagnostics", "Diagnostics", "Module health report, recent runtime warnings/errors, Downloads export, and periodic logs.");
 
     ConfigNodeV2 exportNode;
     exportNode.id = "m_exportLogsNow";
@@ -159,8 +169,6 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
     }
     if (key == "m_clearLogsNow") {
         if (requested) {
-            // Do not add a confirmation entry immediately after clearing the
-            // buffer; that would make "clear" leave a non-empty log.
             bedrocktools::diagnostics::clear();
         }
         return true;
@@ -217,7 +225,6 @@ void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
             m_autoExportIntervalSeconds = std::clamp(
                 j.value("m_autoExportIntervalSeconds", m_autoExportIntervalSeconds), 1, 300);
         } else if (j.contains("m_autoExportIntervalMinutes")) {
-            // Migrate settings from older builds, which stored the interval in minutes.
             const int oldMinutes = std::clamp(j.value("m_autoExportIntervalMinutes", 1), 1, 60);
             m_autoExportIntervalSeconds = std::clamp(oldMinutes * 60, 1, 300);
         }
@@ -257,9 +264,6 @@ void ModuleDiagnosticsModule::onDisable() {
 }
 
 void ModuleDiagnosticsModule::startFreshLogSession() {
-    // Keep only stable startup facts that are essential for diagnosing native
-    // routes (especially AutoHit's attack hook and AutoTotem's offhand reader).
-    // Old gameplay decisions/toggles are discarded so the new export is clean.
     const auto previousEntries = bedrocktools::diagnostics::snapshot();
     std::vector<bedrocktools::diagnostics::Entry> baselineEntries;
     baselineEntries.reserve(previousEntries.size());
@@ -289,9 +293,6 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
     }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
         "Diagnostics", "fresh gameplay log session started; previous gameplay entries cleared");
-
-    // The atomic exporter replaces the rolling file only after a successful
-    // write. Timestamped manual exports remain available as historical captures.
     const bool saved = exportLogs(true);
     if (saved) {
         std::lock_guard<std::mutex> lock(m_exportMutex);
@@ -323,15 +324,11 @@ void ModuleDiagnosticsModule::exportWorkerLoop() {
             return m_stopExportWorker || m_autoExportEnabled;
         });
         if (m_stopExportWorker) break;
-
-        // Save one snapshot immediately, then continue on the configured cadence.
-        // Filesystem I/O stays off the game/render thread.
         lock.unlock();
         exportLogs(true);
         lock.lock();
         if (m_stopExportWorker) break;
         if (!m_autoExportEnabled) continue;
-
         const int intervalSeconds = m_autoExportIntervalSeconds;
         const bool changed = m_exportCondition.wait_for(
             lock, std::chrono::seconds(intervalSeconds), [this, intervalSeconds] {
@@ -344,9 +341,6 @@ void ModuleDiagnosticsModule::exportWorkerLoop() {
 }
 
 bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
-    // Manual, periodic and fresh-session exports share the same rolling file.
-    // Serialize the snapshot/write pair so an older snapshot cannot overwrite
-    // a freshly reset session after it has been exported.
     std::lock_guard<std::mutex> fileLock(m_fileWriteMutex);
     std::string format;
     {
@@ -391,8 +385,6 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         ? bedrocktools::diagnostics::exportJsonTo(outputPath, &error)
         : bedrocktools::diagnostics::exportTo(outputPath, &error);
 
-    // Keep exactly one rolling auto-save format so switching TXT/JSON cannot
-    // leave a stale file that looks like the current gameplay's export.
     if (ok && automatic) {
         const std::string staleExtension = format == "json" ? "txt" : "json";
         std::error_code staleError;
@@ -420,7 +412,6 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
             m_lastSuccessfulExportTime = completedAt;
         } else {
             m_lastExportStatus = "Task failed (" + completedAt + "): " + error;
-            // Keep the last known-good path/time visible when a later save fails.
         }
     }
     return ok;
@@ -450,39 +441,87 @@ void ModuleDiagnosticsModule::onFrame() {
         lastSuccessfulTime = m_lastSuccessfulExportTime;
     }
 
+    const auto entries = bedrocktools::diagnostics::snapshot();
+    std::size_t logErrors = 0;
+    std::size_t logWarnings = 0;
+    std::size_t logCritical = 0;
+    std::size_t logInfo = 0;
+    std::size_t logDebug = 0;
+    for (const auto& entry : entries) {
+        switch (entry.level) {
+            case bedrocktools::diagnostics::Level::Warning: ++logWarnings; break;
+            case bedrocktools::diagnostics::Level::Error: ++logErrors; break;
+            case bedrocktools::diagnostics::Level::Critical: ++logCritical; break;
+            case bedrocktools::diagnostics::Level::Info: ++logInfo; break;
+            case bedrocktools::diagnostics::Level::Debug:
+            case bedrocktools::diagnostics::Level::Trace: ++logDebug; break;
+        }
+    }
+
+    // Render real runtime entries, not just registry consistency counters. The
+    // newest warnings/errors are included even if a lot of INFO auto-save lines
+    // are being produced in the background.
+    std::vector<bedrocktools::diagnostics::Entry> important;
+    important.reserve(4);
+    for (auto it = entries.rbegin(); it != entries.rend() && important.size() < 4; ++it) {
+        if (it->level == bedrocktools::diagnostics::Level::Warning ||
+            it->level == bedrocktools::diagnostics::Level::Error ||
+            it->level == bedrocktools::diagnostics::Level::Critical) {
+            important.push_back(*it);
+        }
+    }
+
     std::vector<PLModMenu_DrawCommand> commands;
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
-    const std::string line2 = "Logs: " + std::to_string(bedrocktools::diagnostics::count()) +
-        " | Registry warn: " + std::to_string(m_summary.warnings) +
-        " | err: " + std::to_string(m_summary.errors);
-    const std::string line3 = m_summary.written
-        ? "Health report: module_diagnostics.json"
-        : "Health report write failed (check config folder)";
+    const std::string line2 = "Runtime logs: " + std::to_string(entries.size()) +
+        " | ERR " + std::to_string(logErrors) + " | WARN " + std::to_string(logWarnings) +
+        " | CRIT " + std::to_string(logCritical);
+    const std::string line3 = "Registry checks: WARN " + std::to_string(m_summary.warnings) +
+        " | ERR " + std::to_string(m_summary.errors);
     const std::string line4 = autoExport
         ? "Auto-save: every " + intervalLabel(interval) + " | " + exportStatus
         : "Auto-save off | " + exportStatus;
-    const std::string line5 = "Last successful save: " + lastSuccessfulTime +
-        (exportPath.empty() ? " | Folder: Download/Bedaim" : " | " + exportPath);
+    const std::string line5 = "Last save: " + lastSuccessfulTime +
+        (exportPath.empty() ? " | Download/Bedaim" : " | " + exportPath);
 
-    auto addText = [&](const std::string& text, float y, std::uint32_t color) {
+    auto addText = [&](const std::string& text, float y, std::uint32_t color, float size = 12.0f) {
         PLModMenu_DrawCommand command{};
         command.type = PL_DRAW_TEXT;
         command.x = 8.0f;
         command.y = y;
-        command.w = 480.0f;
+        command.w = 520.0f;
         command.h = 16.0f;
-        command.size = 12.0f;
+        command.size = size;
         command.color = color;
         command.text = text.c_str();
         commands.push_back(command);
     };
 
     addText(line1, 8.0f, 0xFFFFFFFF);
-    addText(line2, 24.0f, (m_summary.errors || m_summary.warnings) ? 0xFFFFC060 : 0xFF80FF80);
-    addText(line3, 40.0f, m_summary.written ? 0xFF80FF80 : 0xFFFF7070);
+    addText(line2, 24.0f, (logErrors || logWarnings || logCritical) ? 0xFFFFC060 : 0xFF80FF80);
+    addText(line3, 40.0f, (m_summary.errors || m_summary.warnings) ? 0xFFFFC060 : 0xFFFFFFFF);
     addText(line4, 56.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
     addText(line5, 72.0f, 0xFFFFFFFF);
+
+    float y = 96.0f;
+    addText("Recent runtime warnings/errors:", y, 0xFFFFFFFF);
+    y += 16.0f;
+    if (important.empty()) {
+        addText("No warnings/errors captured in the current buffer.", y, 0xFF80FF80);
+        y += 16.0f;
+    } else {
+        for (const auto& entry : important) {
+            const bool error = entry.level == bedrocktools::diagnostics::Level::Error ||
+                entry.level == bedrocktools::diagnostics::Level::Critical;
+            const std::string prefix = error ? "[ERR] " : "[WARN] ";
+            const std::string line = prefix + entry.component + ": " + entry.message;
+            addText(compactLogText(line), y, error ? 0xFFFF7070 : 0xFFFFC060, 10.5f);
+            y += 16.0f;
+        }
+    }
+    addText("Info " + std::to_string(logInfo) + " | Debug/Trace " + std::to_string(logDebug),
+            y + 2.0f, 0xFFB0B0B0, 10.0f);
     submitDrawCommands(moduleId, commands);
 }
 
@@ -589,8 +628,6 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
     report["summary"]["warnings"] = summary.warnings;
     report["summary"]["errors"] = summary.errors;
 
-    // Include a compact tail of runtime events in the JSON report so the report
-    // can show both registry health and the most recent observed failure gates.
     const auto runtimeEvents = bedrocktools::diagnostics::snapshot();
     const std::size_t firstRuntimeEvent = runtimeEvents.size() > 128
         ? runtimeEvents.size() - 128 : 0;
