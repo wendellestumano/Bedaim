@@ -1,5 +1,6 @@
 #include "ConfigManager.hpp"
 #include "AtomicConfigWriter.hpp"
+#include "Diagnostics.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <pl/Logger.hpp>
 #include <filesystem>
@@ -33,6 +34,7 @@ void ConfigManager::setConfigPath(const std::string& path) {
 
 void ConfigManager::load() {
     std::string path = getConfigPath();
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Config", "loading configuration from " + path);
     if (!std::filesystem::exists(path)) {
         save();
         flush();
@@ -54,7 +56,11 @@ void ConfigManager::load() {
                 }
             }
         }
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Config", "configuration loaded");
+    } catch (const std::exception& ex) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config", std::string("configuration load failed: ") + ex.what());
     } catch (...) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config", "configuration load failed with unknown exception");
     }
 }
 
