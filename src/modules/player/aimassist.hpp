@@ -154,6 +154,8 @@ public:
     bedrocktools::sdk::AABB expandedTargetBounds(bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const;
     bool requiresLineOfSight() const;
     float queryExpansionMargin() const;
+    bool shouldShowHitbox() const;
+    bool expandsType(bool isPlayer) const;
     bool showInLegacyMenu(std::string_view key) const override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
@@ -165,12 +167,14 @@ public:
     bool m_expandPlayers = true;
     bool m_expandMobs = false;
     bool m_requireLineOfSight = true;
+    bool m_showHitbox = false;
 
 private:
     struct NativeBoundsSnapshot {
         void* component = nullptr;
         void* level = nullptr;
         bedrocktools::sdk::AABB originalBounds{};
+        bedrocktools::sdk::Vec3 originalActorPosition{};
     };
 
     void applyNativeBounds(bedrocktools::sdk::Player* player);
