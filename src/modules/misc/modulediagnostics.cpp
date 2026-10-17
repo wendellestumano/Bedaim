@@ -135,7 +135,8 @@ void ModuleDiagnosticsModule::onFrame() {
     std::vector<PLModMenu_DrawCommand> commands;
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
-    const std::string line2 = "Warnings: " + std::to_string(m_summary.warnings) +
+    const std::string line2 = "Logs: " + std::to_string(bedrocktools::diagnostics::count()) +
+        " | Warnings: " + std::to_string(m_summary.warnings) +
         " | Errors: " + std::to_string(m_summary.errors);
     const std::string line3 = m_summary.written
         ? "Report saved: module_diagnostics.json"
