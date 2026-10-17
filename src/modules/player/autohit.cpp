@@ -328,13 +328,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
         ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
     } syntheticAttackGuard;
     const bool attacked = core::gamehooks::attack(gameMode, target, true, &hitPoint);
-    if (attacked) {
+    {
         std::lock_guard<std::mutex> lock(m_stateMutex);
+        // CPS is an attempt-rate cap, not only a success-rate cap. Failed native
+        // dispatches must not bypass the selected weapon profile and retry at 10 Hz.
         m_nextAttack = now + std::chrono::milliseconds(
-            static_cast<int>(std::clamp(intervalMs, 80.0f, 1000.0f)));
-    } else {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_nextAttack = now + std::chrono::milliseconds(100);
+            static_cast<int>(std::clamp(intervalMs, 50.0f, 1000.0f)));
     }
     diagnostics::probe(attacked ? diagnostics::Level::Info : diagnostics::Level::Warning,
         "AutoHit", "attack_result", attacked ? "accepted" : "rejected",
