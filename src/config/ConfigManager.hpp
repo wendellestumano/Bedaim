@@ -19,7 +19,7 @@ public:
 
     void load();
     void save();
-    void flush();
+    bool flush();
 
     std::string getConfigPath() const;
     void setConfigPath(const std::string& path);
@@ -33,8 +33,11 @@ private:
 
     void ensureWorkerLocked();
     void workerLoop();
-    static void writePayload(const std::string& path, const std::string& payload);
+    static bool writePayload(const std::string& path, const std::string& payload);
 
+    // Serialize complete snapshots before enqueueing them. Concurrent save() calls
+    // must not let an older snapshot overwrite a newer one in the debounce queue.
+    std::mutex m_saveMutex;
     mutable std::mutex m_mutex;
     std::condition_variable m_condition;
     std::thread m_worker;
@@ -45,6 +48,7 @@ private:
     std::uint64_t m_queuedGeneration = 0;
     std::uint64_t m_completedGeneration = 0;
     bool m_hasPending = false;
+    bool m_lastWriteSucceeded = true;
     bool m_stopping = false;
 };
 

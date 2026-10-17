@@ -1,4 +1,11 @@
 #include "maceswapper.hpp"
+#include "MaceFallPolicy.hpp"
+#include "swapperstate.hpp"
+
+#include <pl/ModMenu.hpp>
+#include <cctype>
+#include <string>
+#include <utility>
 
 #include "aimassist.hpp"
 #include "core/InventoryAccess.hpp"
@@ -83,7 +90,10 @@ void MaceSwapperModule::onEnable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
+    m_peakY = 0.0f;
+    m_hasPeakY = false;
     m_nextAttack = {};
+    swapperstate::maceFallPriority.store(false, std::memory_order_release);
     m_pendingAttack = false;
     m_pendingMaceSlot = -1;
     m_pendingPreviousSlot = -1;
@@ -97,6 +107,8 @@ void MaceSwapperModule::onDisable() {
     // for the next player tick; it can safely restore only if the mace is still selected.
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
+    m_peakY = 0.0f;
+    m_hasPeakY = false;
     m_nextAttack = {};
 }
 
@@ -106,7 +118,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     if (!player) {
         m_hasLastPlayerY = false;
+        m_hasPeakY = false;
         m_pendingAttack = false;
+        swapperstate::maceFallPriority.store(false, std::memory_order_release);
         m_pendingTarget = nullptr;
         m_pendingPlayer = nullptr;
         return;
@@ -122,6 +136,15 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_lastPlayerY = playerPosition.y;
     m_hasLastPlayerY = true;
 
+    // Track the peak of the current airborne segment. Rebase on level/rising
+    // motion so an earlier jump cannot arm a later fall.
+    if (!m_hasPeakY || verticalDelta >= -0.025f) {
+        m_peakY = playerPosition.y;
+        m_hasPeakY = true;
+    }
+    if (playerPosition.y > m_peakY) m_peakY = playerPosition.y;
+    const float fallDistance = std::max(0.0f, m_peakY - playerPosition.y);
+
     auto& inventory = bedrocktools::core::InventoryAccess::get();
 
     // Finish a swap on the following tick. This gives vanilla a tick to observe
@@ -135,13 +158,14 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 inventory.selectHotbarSlot(player, m_pendingPreviousSlot);
             }
             m_pendingAttack = false;
+            swapperstate::maceFallPriority.store(false, std::memory_order_release);
             m_pendingMaceSlot = -1;
             m_pendingPreviousSlot = -1;
             m_pendingTarget = nullptr;
             m_pendingPlayer = nullptr;
         };
 
-        if (!enabled) {
+        if (!enabled || !m_enableMaceSwapper) {
             restoreIfStillSwapped();
             return;
         }
@@ -184,12 +208,12 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (attacked) {
             m_nextAttack = std::chrono::steady_clock::now() +
                 std::chrono::milliseconds(static_cast<int>(intervalMs));
-            aim->deferAutoHitFor(intervalMs);
         }
         return;
     }
 
-    if (!enabled || verticalDelta >= -0.025f) return;
+    if (!enabled || !m_enableMaceSwapper ||
+        !bedaim::macefall::shouldBeginMaceAction(verticalDelta, fallDistance, m_minimumFallDistance)) return;
 
     const auto now = std::chrono::steady_clock::now();
     if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) return;
@@ -218,15 +242,17 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_pendingTarget = target;
     m_pendingPlayer = player;
     m_pendingAttack = true;
+    swapperstate::maceFallPriority.store(true, std::memory_order_release);
 
     const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
-    aim->deferAutoHitFor(intervalMs);
 }
 
 void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_enableMaceSwapper = j.value("m_enableMaceSwapper", m_enableMaceSwapper);
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(j.value("m_minimumFallDistance", m_minimumFallDistance));
     m_attackIntervalMs = std::clamp(j.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
 }
@@ -234,7 +260,88 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
 void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    j["m_enableMaceSwapper"] = m_enableMaceSwapper;
     j["m_attackRange"] = m_attackRange;
+    j["m_minimumFallDistance"] = bedaim::macefall::normalizeMinimumFallDistance(m_minimumFallDistance);
     j["m_attackIntervalMs"] = m_attackIntervalMs;
     j["m_restoreSlot"] = m_restoreSlot;
+}
+
+void MaceSwapperModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    schema.defaultCategory("combat")
+        .category("combat", "Combat", "Mace swap and fall requirements");
+
+    auto slider = [&](const char* key, const char* title,
+                      const char* minimum, const char* maximum,
+                      const char* step, const char* unit) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.category = "combat";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.minValue = minimum;
+        node.maxValue = maximum;
+        node.step = step;
+        node.unit = unit;
+        schema.node(std::move(node));
+    };
+
+    ConfigNodeV2 enabledNode;
+    enabledNode.id = "m_enableMaceSwapper";
+    enabledNode.key = "m_enableMaceSwapper";
+    enabledNode.title = "Enable Mace Swapper";
+    enabledNode.category = "combat";
+    enabledNode.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(enabledNode));
+
+    slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks");
+    slider("m_minimumFallDistance", "Minimum fall distance", "0.30", "10.0", "0.10", " blocks");
+    slider("m_attackIntervalMs", "Attack interval", "80", "1000", "10", " ms");
+
+    ConfigNodeV2 restoreNode;
+    restoreNode.id = "m_restoreSlot";
+    restoreNode.key = "m_restoreSlot";
+    restoreNode.title = "Restore previous hotbar slot";
+    restoreNode.category = "combat";
+    restoreNode.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(restoreNode));
+
+    ConfigNodeV2 keybindNode;
+    keybindNode.id = "keybind";
+    keybindNode.key = "keybind";
+    keybindNode.title = "Keybind";
+    keybindNode.category = "combat";
+    keybindNode.type = ConfigControlTypeV2::Keybind;
+    schema.node(std::move(keybindNode));
+    pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
+}
+
+bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    if (key == "m_enableMaceSwapper" || key == "m_restoreSlot") {
+        const bool flag = value == "true" || value == "1" || value == "on";
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (key == "m_enableMaceSwapper") m_enableMaceSwapper = flag;
+        else m_restoreSlot = flag;
+        return true;
+    }
+    try {
+        std::size_t parsedLength = 0;
+        const std::string text(value);
+        const float number = std::stof(text, &parsedLength);
+        while (parsedLength < text.size() &&
+               std::isspace(static_cast<unsigned char>(text[parsedLength]))) ++parsedLength;
+        if (parsedLength != text.size() || !std::isfinite(number)) return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
+        else if (key == "m_minimumFallDistance")
+            m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(number);
+        else if (key == "m_attackIntervalMs") m_attackIntervalMs = std::clamp(number, 80.0f, 1000.0f);
+        else return false;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }

@@ -14,6 +14,7 @@
 #include "player/quickloot.hpp"
 #include "player/aimassist.hpp"
 #include "player/maceswapper.hpp"
+#include "player/swordswapper.hpp"
 #include "hud/reachcounter.hpp"
 #include "hud/breakindicator.hpp"
 #include "hud/playercoords.hpp"
@@ -114,7 +115,9 @@ void registerAllModules() {
     registry.emplace<QuickLootModule>();
     registry.emplace<AutoSprintModule>();
     registry.emplace<AimAssistModule>();
+    registry.emplace<HitboxExpanderModule>();
     registry.emplace<MaceSwapperModule>();
+    registry.emplace<SwordSwapperModule>();
     registry.emplace<WeatherChangerModule>();
     registry.emplace<NickModule>();
     registry.emplace<NoDisconnectModule>();

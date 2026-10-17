@@ -1,4 +1,6 @@
 #include "hitbox.hpp"
+#include "../ModuleRegistry.hpp"
+#include "../player/aimassist.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
@@ -141,7 +143,7 @@ struct AABB {
 };
 
 static void s_hitboxTickCallback(void* _this) {
-    if (!g_hitboxMod || !g_hitboxMod->enabled) return;
+    if (!_this) return;
     g_localPlayerPtr = _this;
     uintptr_t svc = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::Actor::mStateVectorComponent);
     if (svc != 0) {
@@ -206,7 +208,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         _renderLevel_orig(_this, screenContext, a3);
     }
 
-    if (!g_hitboxMod || !g_hitboxMod->enabled) return;
+    auto* expander = static_cast<HitboxExpanderModule*>(
+        ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
+    const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
+    const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
+    if (!nativeHitboxesEnabled && !showExpandedHitboxes) return;
     if (!g_localPlayerPtr) return;
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) return;
     if (!screenContext || (uintptr_t)screenContext < 0x1000) return;
@@ -307,8 +313,19 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         if (aabb.min.x == 0.f && aabb.min.y == 0.f && aabb.min.z == 0.f &&
             aabb.max.x == 0.f && aabb.max.y == 0.f && aabb.max.z == 0.f) return;
 
-        drawBox(aabb, g_hitboxMod->hitboxColor);
+        const bool isPlayer = s_actorIsPlayer && s_actorIsPlayer(ent);
+        const bool isExpandedTarget = showExpandedHitboxes && ent != g_localPlayerPtr &&
+            expander->expandsType(isPlayer);
+        if (!nativeHitboxesEnabled && !isExpandedTarget) return;
+        if (isExpandedTarget) {
+            const bedrocktools::sdk::AABB nativeBounds{aabb.min, aabb.max};
+            const auto expanded = expander->expandedTargetBounds(isPlayer, nativeBounds);
+            aabb = {expanded.min, expanded.max};
+        }
+        const uint32_t boxColor = g_hitboxMod ? g_hitboxMod->hitboxColor : 0xFF00FFFF;
+        drawBox(aabb, boxColor);
 
+        if (!nativeHitboxesEnabled) return;
         if (g_hitboxMod->showEyeLine) {
             float minX = aabb.min.x;
             float maxX = aabb.max.x;
@@ -352,7 +369,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
     };
 
-    if (g_hitboxMod->showSelf && isThirdPerson) {
+    if (nativeHitboxesEnabled && g_hitboxMod->showSelf && isThirdPerson) {
         renderActor(g_localPlayerPtr);
     }
 
@@ -370,9 +387,16 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                     isPlayer = s_actorIsPlayer(ent);
                 }
 
-                if (isPlayer && !g_hitboxMod->showPlayers) continue;
-
-                if (!isPlayer && (!g_hitboxMod->showEntities || !hasCategory(ent, 2))) continue;
+                if (nativeHitboxesEnabled) {
+                    if (isPlayer && !g_hitboxMod->showPlayers &&
+                        (!showExpandedHitboxes || !expander->expandsType(true))) continue;
+                    if (!isPlayer && !hasCategory(ent, 2)) continue;
+                    if (!isPlayer && !g_hitboxMod->showEntities &&
+                        (!showExpandedHitboxes || !expander->expandsType(false))) continue;
+                } else if (!showExpandedHitboxes || !expander->expandsType(isPlayer) ||
+                           (!isPlayer && !hasCategory(ent, 2))) {
+                    continue;
+                }
 
                 if (s_actorIsInvisible && s_actorIsInvisible(ent)) continue;
 
@@ -450,6 +474,9 @@ void HitboxModule::onInit() {
     if (afn) s_actorFetchNearby = (Actor_fetchNearbyActorsSorted_t)afn;
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_hitboxTickCallback(event.player); });
+    // Keep the renderer hook installed so BedrockBounds can preview its expanded
+    // target AABBs even when the standalone Hitbox module is disabled.
+    applyPatch();
 }
 
 void HitboxModule::applyPatch() {
