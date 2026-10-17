@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-17 — Downloads export and periodic diagnostics
+
+- Changed manual log export to create timestamped `.txt` or structured `.json` files in `/sdcard/Download/Bedaim/`.
+- Added configurable automatic export, with a 1–60 minute interval (default 5 minutes); the rolling auto-export runs on a worker thread and overwrites one file to avoid unbounded storage growth.
+- Added an export status/path to the diagnostics HUD and documented Android shared-storage permission failures.
+- Added host coverage for structured JSON log serialization.
+
 ## 2026-10-17 — Module Diagnostics
 
 - Added **Module Diagnostics**, which writes `module_diagnostics.json` with registry and activation-state checks and shows a compact HUD summary.
