@@ -213,7 +213,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     configuredCps = bedaim::autohit::weapon::normalizeCps(configuredCps);
     const float intervalMs = 1000.0f / configuredCps;
     diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
-        std::string("weapon=") + weaponClassName(weapon) + "; cps=" + std::to_string(configuredCps));
+        std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; cps=" + std::to_string(configuredCps));
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
