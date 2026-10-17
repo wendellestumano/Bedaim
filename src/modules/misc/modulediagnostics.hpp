@@ -2,6 +2,7 @@
 
 #include "../Module.hpp"
 #include <chrono>
+#include <cstdint>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -42,12 +43,13 @@ private:
     bool m_exportLogsNow = false;
     bool m_clearLogsNow = false;
     bool m_autoExportEnabled = true;
-    int m_autoExportIntervalMinutes = 1;
+    int m_autoExportIntervalSeconds = 5;
     std::string m_exportFormat = "txt";
     mutable std::mutex m_exportMutex;
     std::condition_variable m_exportCondition;
     std::thread m_exportWorker;
     bool m_stopExportWorker = true;
-    std::string m_lastExportStatus = "No log export yet";
+    std::string m_lastExportStatus = "No export attempted yet";
     std::string m_lastExportPath;
+    std::string m_lastSuccessfulExportTime = "never";
 };
