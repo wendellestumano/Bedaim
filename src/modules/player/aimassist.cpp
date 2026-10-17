@@ -2020,7 +2020,23 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
                 reinterpret_cast<std::uintptr_t>(currentComponent) > 0x1000) {
                 auto* currentBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(currentComponent) +
                     offsets::AABBShapeComponent::mAABB);
-                std::memcpy(currentBounds, &snapshot.originalBounds, sizeof(AABB));
+                const Vec3 currentPosition = reinterpret_cast<Actor*>(actor)->position();
+                if (finiteVec3(currentPosition) && finiteVec3(snapshot.originalActorPosition)) {
+                    const Vec3 delta{
+                        currentPosition.x - snapshot.originalActorPosition.x,
+                        currentPosition.y - snapshot.originalActorPosition.y,
+                        currentPosition.z - snapshot.originalActorPosition.z
+                    };
+                    const AABB translated{
+                        {snapshot.originalBounds.min.x + delta.x,
+                         snapshot.originalBounds.min.y + delta.y,
+                         snapshot.originalBounds.min.z + delta.z},
+                        {snapshot.originalBounds.max.x + delta.x,
+                         snapshot.originalBounds.max.y + delta.y,
+                         snapshot.originalBounds.max.z + delta.z}
+                    };
+                    if (validBounds(translated)) std::memcpy(currentBounds, &translated, sizeof(AABB));
+                }
             }
         }
         it = m_nativeBoundsOriginal.erase(it);
@@ -2068,7 +2084,8 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
         auto* nativeBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(component) +
             offsets::AABBShapeComponent::mAABB);
         const AABB original = *nativeBounds;
-        if (!validBounds(original)) continue;
+        const Vec3 actorPosition = reinterpret_cast<Actor*>(actor)->position();
+        if (!validBounds(original) || !finiteVec3(actorPosition)) continue;
         const AABB expanded = expandedTargetBounds(isPlayer, original);
         if (!validBounds(expanded) ||
             (expanded.min.x == original.min.x && expanded.min.y == original.min.y && expanded.min.z == original.min.z &&
@@ -2076,7 +2093,7 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
 
         std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
         if (m_nativeBoundsOriginal.find(actor) != m_nativeBoundsOriginal.end()) continue;
-        m_nativeBoundsOriginal.emplace(actor, NativeBoundsSnapshot{component, actorLevel, original});
+        m_nativeBoundsOriginal.emplace(actor, NativeBoundsSnapshot{component, actorLevel, original, actorPosition});
         std::memcpy(nativeBounds, &expanded, sizeof(AABB));
     }
 }
@@ -2131,6 +2148,16 @@ bool HitboxExpanderModule::requiresLineOfSight() const {
     return enabled && m_requireLineOfSight;
 }
 
+bool HitboxExpanderModule::shouldShowHitbox() const {
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    return enabled && m_showHitbox;
+}
+
+bool HitboxExpanderModule::expandsType(bool isPlayer) const {
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    return enabled && (isPlayer ? m_expandPlayers : m_expandMobs);
+}
+
 bool HitboxExpanderModule::showInLegacyMenu(std::string_view key) const {
     return key != "m_hitboxSize";
 }
@@ -2167,6 +2194,7 @@ void HitboxExpanderModule::loadConfig(const nlohmann::json& j) {
     m_expandPlayers = j.value("m_expandPlayers", m_expandPlayers);
     m_expandMobs = j.value("m_expandMobs", m_expandMobs);
     m_requireLineOfSight = j.value("m_requireLineOfSight", m_requireLineOfSight);
+    m_showHitbox = j.value("m_showHitbox", m_showHitbox);
 }
 
 void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
@@ -2178,4 +2206,5 @@ void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
     j["m_expandPlayers"] = m_expandPlayers;
     j["m_expandMobs"] = m_expandMobs;
     j["m_requireLineOfSight"] = m_requireLineOfSight;
+    j["m_showHitbox"] = m_showHitbox;
 }
