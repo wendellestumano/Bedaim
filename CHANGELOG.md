@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-17 — Local-player tick regression diagnostics
+
+- Recorded the confirmed regression from commit `12a9d6f`: the runtime's `ClientInstanceGetLocalPlayer` signature did not resolve, so the strict NormalTick identity filter suppressed local-player events consumed by Aim Assist and Hitbox Expander.
+- Split the diagnostic states into `client_instance_missing`, `getter_signature_unresolved`, `getter_returned_null`, and `ready` instead of conflating a missing signature with a null return.
+- Kept the identity filter fail-closed; no guessed vtable index, unverified native call, or arbitrary NormalTick actor is accepted as local player.
+- The diagnostics also show that native attack/UseItemAsAttack hooks are unavailable. AutoHit still cannot prove an attack route; immediate crosshair attacks must not bypass target freshness, hitbox intersection, or per-weapon CPS limits.
+- This is a diagnostic/safety correction on an isolated test branch, not a runtime fix for local-player lookup. A validated alternate source is still needed, followed by Android ARM64 build and in-game verification.
+
 ## 2026-10-17 — Diagnostics auto-save and combat failure visibility
 
 - Changed rolling diagnostics auto-save interval to a configurable **1–300 seconds** (default 5 seconds); migrated older minute-based settings safely.
