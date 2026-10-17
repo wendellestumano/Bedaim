@@ -29,8 +29,90 @@ bool validBounds(const bedrocktools::sdk::AABB& bounds) {
 bedrocktools::sdk::Vec3 eyePositionFor(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     if (!player) return {};
-    // Never let ShiftBlade override the mace while it owns a confirmed downward slam.
+    const Vec3 position = player->position();
+    const AABB bounds = player->bounds();
+    Vec3 eye = position;
+    if (validBounds(bounds)) {
+        eye.x = (bounds.min.x + bounds.max.x) * 0.5f;
+        eye.y = bounds.min.y + (bounds.max.y - bounds.min.y) * 0.85f;
+        eye.z = (bounds.min.z + bounds.max.z) * 0.5f;
+    } else {
+        eye.y += 1.5f;
+    }
+    return eye;
+}
 
+bool targetWithinRange(bedrocktools::sdk::Player* player,
+                       const bedrocktools::sdk::AABB& bounds, float range) {
+    if (!player || !validBounds(bounds)) return false;
+    const auto eye = eyePositionFor(player);
+    if (!finiteVec(eye)) return false;
+    const bedrocktools::sdk::Vec3 nearest{
+        std::clamp(eye.x, bounds.min.x, bounds.max.x),
+        std::clamp(eye.y, bounds.min.y, bounds.max.y),
+        std::clamp(eye.z, bounds.min.z, bounds.max.z)
+    };
+    const float dx = eye.x - nearest.x;
+    const float dy = eye.y - nearest.y;
+    const float dz = eye.z - nearest.z;
+    const float distanceSq = dx * dx + dy * dy + dz * dz;
+    const float safeRange = std::clamp(range, 2.0f, 6.0f);
+    return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
+}
+}
+
+SwordSwapperModule::SwordSwapperModule()
+    : Module("ShiftBlade", "Prioritizes a hotbar sword while a BedrockAim target is within range, yielding to consumables and manual slot choices.",
+             "Sword Swapper") {
+    keybind = 0;
+}
+
+void SwordSwapperModule::onInit() {
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+        [this](auto& event) { processPlayerTick(event.player); });
+}
+
+void SwordSwapperModule::onEnable() {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_userOverrodeSwap = false;
+    // Preserve ownership if the user re-enables the module before the next game
+    // tick has had a chance to restore the temporarily selected sword.
+}
+
+void SwordSwapperModule::onDisable() {
+    // Do not touch inventory from the UI callback thread. The next player tick
+    // restores the old slot if this module still owns the sword selection.
+}
+
+void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    auto& inventory = bedrocktools::core::InventoryAccess::get();
+
+    if (!player) {
+        m_ownsSwap = false;
+        m_swordSlot = -1;
+        m_previousSlot = -1;
+        return;
+    }
+
+    auto restoreIfOwned = [&]() {
+        const int current = inventory.selectedHotbarSlot(player);
+        if (m_ownsSwap && m_restoreSlot && current == m_swordSlot && m_previousSlot >= 0)
+            inventory.selectHotbarSlot(player, m_previousSlot);
+        m_ownsSwap = false;
+        m_swordSlot = -1;
+        m_previousSlot = -1;
+    };
+
+    if (!enabled) {
+        restoreIfOwned();
+        m_userOverrodeSwap = false;
+        m_foodUseOverride = false;
+        return;
+    }
+
+    // Never let ShiftBlade override the mace while it owns a confirmed downward slam.
     if (swapperstate::maceFallPriority.load(std::memory_order_acquire)) {
         restoreIfOwned();
         return;
