@@ -74,6 +74,11 @@ void SwordSwapperModule::onInit() {
 
 void SwordSwapperModule::onEnable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_lastPlayerY = 0.0f;
+    m_hasLastPlayerY = false;
+    m_lastGroundY = 0.0f;
+    m_hasGroundY = false;
+    m_groundedTicks = 0;
     m_userOverrodeSwap = false;
     // Preserve ownership if the user re-enables the module before the next game
     // tick has had a chance to restore the temporarily selected sword.
@@ -90,6 +95,11 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto& inventory = bedrocktools::core::InventoryAccess::get();
 
     if (!player) {
+        m_lastPlayerY = 0.0f;
+        m_hasLastPlayerY = false;
+        m_lastGroundY = 0.0f;
+        m_hasGroundY = false;
+        m_groundedTicks = 0;
         m_ownsSwap = false;
         m_swordSlot = -1;
         m_previousSlot = -1;
@@ -111,6 +121,35 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_foodUseOverride = false;
         return;
     }
+
+    const Vec3 position = player->position();
+    if (!finiteVec(position)) {
+        m_hasLastPlayerY = false;
+        m_hasGroundY = false;
+        m_groundedTicks = 0;
+        restoreIfOwned();
+        return;
+    }
+    const float dy = m_hasLastPlayerY ? position.y - m_lastPlayerY : 0.0f;
+    m_lastPlayerY = position.y;
+    m_hasLastPlayerY = true;
+    if (!m_hasGroundY) {
+        m_lastGroundY = position.y;
+        m_hasGroundY = true;
+    }
+
+    // Require several stable Y samples, but compare against the last confirmed
+    // ground level so pausing briefly at a jump apex is not treated as grounded.
+    if (std::fabs(dy) <= 0.02f)
+        m_groundedTicks = std::min(m_groundedTicks + 1, 6);
+    else
+        m_groundedTicks = 0;
+    const float allowedGroundDistance = std::clamp(m_groundDistance, 0.0f, 3.0f);
+    const float heightAboveGround = std::max(0.0f, position.y - m_lastGroundY);
+    const bool groundedOrNearGround =
+        m_groundedTicks >= 3 && dy >= -0.02f &&
+        heightAboveGround <= allowedGroundDistance + 0.02f;
+    if (groundedOrNearGround) m_lastGroundY = position.y;
 
     // Never let ShiftBlade override the mace while it owns a confirmed downward slam.
     if (swapperstate::maceFallPriority.load(std::memory_order_acquire)) {
@@ -182,7 +221,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto* aim = (aimBase && aimBase->enabled) ? static_cast<AimAssistModule*>(aimBase) : nullptr;
     bool shouldUseSword = false;
 
-    if (aim) {
+    if (groundedOrNearGround && aim) {
         void* target = nullptr;
         AABB bounds{};
         float aimRange = 0.0f;
@@ -215,6 +254,7 @@ void SwordSwapperModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_groundDistance = std::clamp(j.value("m_groundDistance", m_groundDistance), 0.0f, 3.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
 }
 
@@ -222,5 +262,6 @@ void SwordSwapperModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     j["m_attackRange"] = m_attackRange;
+    j["m_groundDistance"] = m_groundDistance;
     j["m_restoreSlot"] = m_restoreSlot;
 }
