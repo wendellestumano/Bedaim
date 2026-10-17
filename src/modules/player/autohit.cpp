@@ -54,7 +54,6 @@ Vec3 eyePosition(Player* player) {
     return eye;
 }
 
-const char* boolState(bool value) { return value ? "true" : "false"; }
 }
 
 AutoHitModule::AutoHitModule()
@@ -141,7 +140,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    auto* aimBase = modules::ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dependency", "bedrockaim_disabled",
             "enable BedrockAim to provide target tracking");
