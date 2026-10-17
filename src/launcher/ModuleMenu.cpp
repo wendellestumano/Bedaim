@@ -759,7 +759,7 @@ void registerModulesWithLauncher() {
                     return rank(a.key) < rank(b.key);
                 });
         } else if (mod->moduleId == "bedrocktools.Sword Swapper") {
-            const std::vector<std::string> priority = {"m_attackRange", "m_groundDistance", "m_restoreSlot"};
+            const std::vector<std::string> priority = {"m_attackRange", "m_groundDistance", "m_restoreSlot", "m_respectManualSlotChanges"};
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
                 return static_cast<std::size_t>(std::distance(priority.begin(), it));
