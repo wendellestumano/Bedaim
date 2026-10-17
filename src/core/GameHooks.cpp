@@ -6,6 +6,7 @@
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/AttackResultEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Core.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
@@ -429,12 +430,67 @@ std::string versionDetour(void* self) {
     return std::string("\xC2\xA7" "b") + std::string(bedrocktools::Name) + " v" + std::string(bedrocktools::Version) + " " + "\xC2\xA7" "fby " + "\xC2\xA7" "e" + std::string(bedrocktools::Author) + " " + "\xC2\xA7" "f- " + "\xC2\xA7" "r" + version;
 }
 
+void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
+    static std::atomic_bool loggedUnavailable{false};
+    if (!clientInstance || !isReadableMemory(clientInstance, sizeof(void*))) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "client_instance_unavailable");
+        return nullptr;
+    }
+    void** vtable = nullptr;
+    std::memcpy(&vtable, clientInstance, sizeof(vtable));
+    constexpr std::size_t getterIndex = bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
+    if (!vtable) return nullptr;
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + getterIndex * sizeof(void*);
+    if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "getter_vtable_slot_unreadable");
+        return nullptr;
+    }
+    void* getterAddress = nullptr;
+    std::memcpy(&getterAddress, reinterpret_cast<const void*>(slotAddress), sizeof(getterAddress));
+    if (!getterAddress || !isMinecraftFunction(getterAddress)) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "getter_slot_not_minecraft_code");
+        return nullptr;
+    }
+    using GetLocalPlayerFn = void* (*)(void*);
+    auto getter = reinterpret_cast<GetLocalPlayerFn>(getterAddress);
+    void* player = getter(clientInstance);
+    if (!player || !isReadableMemory(player, sizeof(void*))) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "getter_returned_unreadable_player");
+        return nullptr;
+    }
+    void** playerVtable = nullptr;
+    std::memcpy(&playerVtable, player, sizeof(playerVtable));
+    if (!playerVtable || !isReadableMemory(playerVtable, sizeof(void*))) return nullptr;
+    void* firstPlayerMethod = nullptr;
+    std::memcpy(&firstPlayerMethod, playerVtable, sizeof(firstPlayerMethod));
+    if (!firstPlayerMethod || !isMinecraftFunction(firstPlayerMethod)) return nullptr;
+    return player;
+}
+
 void tickDetour(void* actor) {
-    auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-    LocalPlayerPreTickEvent preEvent{player};
+    // Keep established raw actor events for BedrockAim/HitboxExpander.
+    // Only the verified event is consumed by inventory/combat modules.
+    auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    void* localPlayer = resolveLocalPlayerFromClientInstance(
+        currentClientInstance.load(std::memory_order_acquire));
+    const bool isVerifiedLocal = actor && localPlayer && actor == localPlayer;
+    LocalPlayerPreTickEvent preEvent{actorPlayer};
     bus().publish(preEvent);
+    if (isVerifiedLocal) {
+        VerifiedLocalPlayerPreTickEvent verifiedEvent{
+            reinterpret_cast<bedrocktools::sdk::Player*>(localPlayer)};
+        bus().publish(verifiedEvent);
+    }
     if (tickOriginal) tickOriginal(actor);
-    LocalPlayerTickEvent event{player};
+    LocalPlayerTickEvent event{actorPlayer};
     bus().publish(event);
 }
 
@@ -712,6 +768,11 @@ void uninstall() {
 
 void* clientInstance() {
     return currentClientInstance.load(std::memory_order_acquire);
+}
+
+void* localPlayer() {
+    return resolveLocalPlayerFromClientInstance(
+        currentClientInstance.load(std::memory_order_acquire));
 }
 
 void* gameMode() {
