@@ -146,6 +146,8 @@ bool ConfigManager::writePayload(const std::string& pathValue, const std::string
     if (!succeeded) {
         pl::log::Logger::getOrCreate("BedaimConfig").error(
             "Could not atomically save config to '{}'; previous config was preserved", pathValue);
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+            "could not atomically save config to '" + pathValue + "'; previous config was preserved");
     }
     return succeeded;
 }
