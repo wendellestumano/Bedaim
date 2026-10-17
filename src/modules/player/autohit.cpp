@@ -242,6 +242,22 @@ void AutoHitModule::processPlayerTick(Player* player) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
         return;
     }
+    // Check native dispatch availability before waiting for input. Otherwise an
+    // unsupported runtime looks like a broken input button forever, hiding the
+    // actual blocker from diagnostics. This check never performs an attack.
+    void* gameMode = core::gamehooks::gameModeForPlayer(player);
+    if (!gameMode) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
+        return;
+    }
+    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
+    if (!attackRouteAvailable) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable",
+            "public GameMode attack vtable/signature route failed runtime validation");
+        return;
+    }
+    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
+
     if (!attackHeld) {
         const std::string inputState = std::string("waiting_for_attack_input_button_") +
             std::to_string(attackButton) + (touchRepeatEnabled ? "_touch_repeat_on" : "_touch_repeat_off");
@@ -321,18 +337,6 @@ void AutoHitModule::processPlayerTick(Player* player) {
             return;
         }
     }
-
-    void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
-        return;
-    }
-    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
-    if (!attackRouteAvailable) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
 
     // Final native-free gate is shared with host tests. The earlier checks are
     // intentionally retained for precise per-stage diagnostics; this last gate
