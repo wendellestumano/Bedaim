@@ -101,17 +101,38 @@ void AutoHitModule::onInit() {
     // are explicitly ignored so AutoHit cannot re-arm itself.
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
         [this](auto& event) {
-            if (!enabled || event.action != bedrocktools::events::GameModeAction::Attack ||
-                g_autoHitSyntheticAttack ||
-                m_containerOpen.load(std::memory_order_acquire) ||
-                m_chatOpen.load(std::memory_order_acquire)) return;
+            const bool nativeAttack = event.action == bedrocktools::events::GameModeAction::Attack;
+            const bool itemAsAttack = event.action == bedrocktools::events::GameModeAction::UseItemAsAttack;
+            if (!nativeAttack && !itemAsAttack) return;
+
+            const char* actionName = nativeAttack ? "Attack" : "UseItemAsAttack";
+            if (!enabled) return;
+            if (g_autoHitSyntheticAttack) {
+                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
+                    "AutoHit", "touch_activation", "synthetic_action_ignored", actionName);
+                return;
+            }
+            if (m_containerOpen.load(std::memory_order_acquire) ||
+                m_chatOpen.load(std::memory_order_acquire)) {
+                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+                    "AutoHit", "touch_activation", "blocked_by_screen", actionName);
+                return;
+            }
+
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            if (!m_touchRepeatEnabled) return;
+            if (!m_touchRepeatEnabled) {
+                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                    "AutoHit", "touch_activation",
+                    nativeAttack ? "attack_seen_repeat_disabled" : "item_as_attack_seen_repeat_disabled",
+                    "native action was observed, but touchscreen repeat is disabled");
+                return;
+            }
             const auto window = std::chrono::milliseconds(std::clamp(m_touchRepeatWindowMs, 100, 1000));
             m_touchRepeatUntil = std::chrono::steady_clock::now() + window;
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                "AutoHit", "touch_input", "repeat_window_armed",
-                std::string("window_ms=") + std::to_string(window.count()));
+                "AutoHit", "touch_input",
+                nativeAttack ? "attack_repeat_window_armed" : "item_as_attack_repeat_window_armed",
+                std::string("source=") + actionName + "; window_ms=" + std::to_string(window.count()));
         });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "initialized",
