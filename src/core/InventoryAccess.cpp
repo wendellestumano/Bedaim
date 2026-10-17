@@ -217,13 +217,17 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
             total += countStack(reinterpret_cast<const void*>(begin + slot * ItemStackSize), identifierPart);
         }
     }
-    const void* offhand = m_getOffhandSlot &&
-        !m_offhandGetterQuarantined.load(std::memory_order_acquire)
-        ? m_getOffhandSlot(player) : nullptr;
-    const auto offhandAddress = reinterpret_cast<std::uintptr_t>(offhand);
-    const bool alreadyCounted = valid && begin && offhandAddress >= begin &&
-        offhandAddress - begin < size * ItemStackSize && (offhandAddress - begin) % ItemStackSize == 0;
-    if (!alreadyCounted) total += countStack(offhand, identifierPart);
+    // Never dereference the offhand getter directly here: the diagnostic logs
+    // showed that a signature-pattern fallback can return an unreadable pointer.
+    // Reuse the same validation/quarantine path as AutoTotem before counting it.
+    if (!identifierPart.empty() && m_getOffhandSlot &&
+        !m_offhandGetterQuarantined.load(std::memory_order_acquire)) {
+        std::string offhandId;
+        if (readOffhandIdentifier(player, offhandId, nullptr) &&
+            offhandId.find(identifierPart) != std::string::npos) {
+            ++total; // The offhand slot holds one stack; the item itself is validated.
+        }
+    }
     return total;
 }
 
