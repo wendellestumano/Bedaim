@@ -10,6 +10,7 @@
 #include <bedrocktools/sdk/offsets/Core.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
 #include <bedrocktools/sdk/offsets/World.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 #include <dlfcn.h>
 #include <EGL/egl.h>
 #include <algorithm>
@@ -78,6 +79,7 @@ ScreenFn chatOpenOriginal = nullptr;
 ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
+std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -469,12 +471,31 @@ std::string versionDetour(void* self) {
 }
 
 void tickDetour(void* actor) {
-    auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-    LocalPlayerPreTickEvent preEvent{player};
-    bus().publish(preEvent);
+    // NormalTick may be reached for non-local actors. Never publish an event
+    // named LocalPlayerTickEvent for an arbitrary actor: inventory modules can
+    // otherwise interpret a mob or stale object as the local Player.
+    void* localPlayer = currentLocalPlayer.load(std::memory_order_acquire);
+    const bool isLocalPlayer = actor && localPlayer && actor == localPlayer;
+
+    if (isLocalPlayer) {
+        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+        LocalPlayerPreTickEvent preEvent{player};
+        bus().publish(preEvent);
+    } else {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks", "local_player_tick",
+            localPlayer ? "non_local_actor_filtered" : "local_player_unavailable",
+            localPlayer ? "NormalTick actor did not match ClientInstance::getLocalPlayer"
+                        : "ClientInstance::getLocalPlayer has not yielded a player; module tick event suppressed");
+    }
+
     if (tickOriginal) tickOriginal(actor);
-    LocalPlayerTickEvent event{player};
-    bus().publish(event);
+
+    if (isLocalPlayer) {
+        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+        LocalPlayerTickEvent event{player};
+        bus().publish(event);
+    }
 }
 
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
@@ -608,6 +629,23 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
+
+    // Resolve the real local player from ClientInstance after its native update.
+    // This pointer identity is used only to filter NormalTick callbacks; we do not
+    // dereference a candidate actor just to decide whether it is the local player.
+    void* localPlayer = nullptr;
+    if (clientInstance) {
+        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
+        localPlayer = client->localPlayer();
+    }
+    currentLocalPlayer.store(localPlayer, std::memory_order_release);
+    bedrocktools::diagnostics::probe(
+        localPlayer ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "local_player_resolution",
+        localPlayer ? "ready" : "unavailable",
+        localPlayer ? "ClientInstance::getLocalPlayer returned a pointer"
+                    : "local-player tick events will be suppressed until the SDK getter resolves");
+
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
     return result;
@@ -738,6 +776,7 @@ void uninstall() {
     handleCount = 0;
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
+    currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
