@@ -169,13 +169,39 @@ InventoryAccess& InventoryAccess::get() {
 }
 
 void InventoryAccess::initialize() {
-    m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(
-        memory::resolve(memory::SignatureId::ActorGetOffhandSlot));
+    // Prefer exact exported accessors over the generic signature pattern. The
+    // old pattern could resolve on newer builds but return an unreadable pointer,
+    // which made AutoTotem mistake an unknown offhand state for an empty slot.
+    struct GetterSymbol { const char* name; const char* label; };
+    constexpr GetterSymbol candidates[] = {
+        {"_ZNK5Actor14getOffhandSlotEv", "Actor::getOffhandSlot const symbol"},
+        {"_ZN5Actor14getOffhandSlotEv", "Actor::getOffhandSlot symbol"},
+        {"_ZNK6Player14getOffhandSlotEv", "Player::getOffhandSlot const symbol"},
+        {"_ZN6Player14getOffhandSlotEv", "Player::getOffhandSlot symbol"},
+        {"_ZNK11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot const symbol"},
+        {"_ZN11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot symbol"}
+    };
+    m_getOffhandSlot = nullptr;
+    m_getOffhandSlotSource = "unresolved";
+    for (const auto& candidate : candidates) {
+        if (void* address = resolveMinecraftSymbol(candidate.name)) {
+            m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(address);
+            m_getOffhandSlotSource = candidate.label;
+            break;
+        }
+    }
+    if (!m_getOffhandSlot) {
+        m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(
+            memory::resolve(memory::SignatureId::ActorGetOffhandSlot));
+        if (m_getOffhandSlot) m_getOffhandSlotSource = "signature-pattern fallback (runtime pointer validation required)";
+    }
     bedrocktools::diagnostics::probe(
         m_getOffhandSlot ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
         "InventoryAccess", "offhand_reader",
         m_getOffhandSlot ? "ready" : "signature_unavailable",
-        m_getOffhandSlot ? "offhand reads enabled" : "offhand transfers will fail closed");
+        std::string("source=") + m_getOffhandSlotSource +
+            (m_getOffhandSlot ? "; returned ItemStack pointers are validated before use"
+                              : "; offhand transfers fail closed"));
 }
 
 int InventoryAccess::countItems(const sdk::Player* player, std::string_view identifierPart) const {
@@ -263,11 +289,37 @@ int InventoryAccess::findInventorySlot(const sdk::Player* player, std::string_vi
     return -1;
 }
 
-std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const {
-    if (!isReadableMemory(player, PlayerInventory + sizeof(void*)) || !m_getOffhandSlot) return {};
+bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
+                                                  std::string& identifier,
+                                                  std::string* error) const {
+    identifier.clear();
+    auto fail = [&](std::string message) {
+        if (error) *error = std::move(message);
+        return false;
+    };
+    if (!isReadableMemory(player, PlayerInventory + sizeof(void*)))
+        return fail("local Player pointer/required inventory field is unreadable");
+    if (!m_getOffhandSlot)
+        return fail("no validated Actor/Player::getOffhandSlot entry point is available");
+
     const void* offhand = m_getOffhandSlot(player);
-    if (!isReadableMemory(offhand, ItemStackSize)) return {};
-    return stackIdentifier(offhand);
+    if (!isReadableMemory(offhand, ItemStackSize)) {
+        char detail[256]{};
+        std::snprintf(detail, sizeof(detail),
+            "getter source=%s returned unreadable ItemStack pointer=%p",
+            m_getOffhandSlotSource.c_str(), offhand);
+        return fail(detail);
+    }
+
+    identifier = stackIdentifier(offhand);
+    if (error) error->clear();
+    return true;
+}
+
+std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const {
+    std::string identifier;
+    readOffhandIdentifier(player, identifier, nullptr);
+    return identifier;
 }
 
 int InventoryAccess::selectedHotbarSlot(const sdk::Player* player) const {
@@ -364,8 +416,11 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
 
     const auto offhandAddress = reinterpret_cast<std::uintptr_t>(m_getOffhandSlot(player));
     if (!isReadableMemory(reinterpret_cast<const void*>(offhandAddress), ItemStackSize)) {
-        return report(OffhandTransferResult::InvalidNativeState,
-                      "ActorGetOffhandSlot returned an unreadable ItemStack pointer");
+        char detail[256]{};
+        std::snprintf(detail, sizeof(detail),
+            "getter source=%s returned unreadable ItemStack pointer=%p",
+            m_getOffhandSlotSource.c_str(), reinterpret_cast<const void*>(offhandAddress));
+        return report(OffhandTransferResult::InvalidNativeState, detail);
     }
     const void* offhand = reinterpret_cast<const void*>(offhandAddress);
     const std::string offhandId = stackIdentifier(offhand);
