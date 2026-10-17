@@ -1955,23 +1955,20 @@ void HitboxExpanderModule::onInit() {
 }
 
 void HitboxExpanderModule::onDisable() {
-    restoreNativeBounds(m_lastLocalPlayer.load(std::memory_order_acquire));
+    // Avoid dereferencing a cached actor from a menu callback. The persistent pre-tick
+    // listener restores any active snapshots on the next valid in-world tick.
 }
 
 void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
-    if (player) m_lastLocalPlayer.store(player, std::memory_order_release);
-    restoreNativeBounds(player);
+    if (player) restoreNativeBounds(player);
 }
 
 void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
-    if (!player) return;
-    m_lastLocalPlayer.store(player, std::memory_order_release);
-    if (enabled) applyNativeBounds(player);
+    if (player && enabled) applyNativeBounds(player);
 }
 
 void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
-    if (!player) player = m_lastLocalPlayer.load(std::memory_order_acquire);
     if (!player || !g_fetchNearbyActors) return;
 
     std::vector<void*> trackedActors;
