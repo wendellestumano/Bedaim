@@ -37,6 +37,16 @@ int main() {
     const auto path = std::filesystem::temp_directory_path() / "bedaim_diagnostics_test.log";
     std::string error;
     assert(bedrocktools::diagnostics::exportTo(path.string(), &error));
+
+    const auto blockedPath = std::filesystem::temp_directory_path() / "bedaim_diagnostics_blocked";
+    std::error_code ec;
+    std::filesystem::remove_all(blockedPath, ec);
+    ec.clear();
+    assert(std::filesystem::create_directory(blockedPath, ec));
+    assert(!bedrocktools::diagnostics::exportTo(blockedPath.string(), &error));
+    assert(std::filesystem::is_directory(blockedPath));
+    assert(!std::filesystem::exists(blockedPath.string() + ".tmp"));
+    std::filesystem::remove_all(blockedPath, ec);
     std::ifstream in(path, std::ios::binary);
     const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     assert(content.find("TRACE") != std::string::npos);
@@ -45,9 +55,10 @@ int main() {
     assert(content.find("WARN") != std::string::npos);
     assert(content.find("ERROR") != std::string::npos);
     assert(content.find("CRITICAL") != std::string::npos);
-    std::error_code ec;
     std::filesystem::remove(path, ec);
     bedrocktools::diagnostics::clear();
     assert(bedrocktools::diagnostics::count() == 0);
+    bedrocktools::diagnostics::probe(Level::Debug, "ProbeTest", "target", "none");
+    assert(bedrocktools::diagnostics::count() == 1);
     return 0;
 }
