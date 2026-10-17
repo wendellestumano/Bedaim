@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include "../core/Diagnostics.hpp"
 #include <string>
 #include <string_view>
 #include <utility>
@@ -55,6 +56,9 @@ public:
         bool newState = masterEnabled && keybindActive;
         if (newState != enabled) {
             enabled = newState;
+            bedrocktools::diagnostics::log(
+                enabled ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Info,
+                moduleId, enabled ? "module enabled" : "module disabled");
             if (enabled) onEnable();
             else onDisable();
         }
