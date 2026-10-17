@@ -32,6 +32,7 @@
 ## 2026-10-17 — Diagnostic probes and safe report export
 
 - Added a state-change probe API that deduplicates repeated per-tick states without flooding the bounded log.
+- Embedded the most recent 128 runtime log entries in `module_diagnostics.json` alongside registry checks, and clarified that the HUD warning/error counts refer to registry checks.
 - Added host coverage for probe deduplication/reset and failed atomic export replacement; a failed write preserves the previous report.
 - Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
 - Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
