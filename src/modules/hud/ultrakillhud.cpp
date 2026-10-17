@@ -43,8 +43,19 @@ const void* carriedItemStack(Player* player) {
     return reinterpret_cast<GetCarriedItemFn>(vtable[index])(player);
 }
 
+// Prefer the selected hotbar slot, which is the source of truth for the item
+// shown in Bedrock's hotbar. Keep getCarriedItem as a fallback for builds where
+// the inventory offsets are unavailable or the selected slot cannot be read.
+std::string heldItemIdentifier(Player* player) {
+    if (!player) return {};
+    auto& inventory = bedrocktools::core::InventoryAccess::get();
+    const std::string selected = inventory.selectedHotbarIdentifier(player);
+    if (!selected.empty()) return selected;
+    return inventory.stackIdentifier(carriedItemStack(player));
+}
+
 std::string itemLabel(std::string identifier) {
-    if (identifier.empty()) return "EMPTY HAND";
+    if (identifier.empty()) return "ITEM UNKNOWN";
     const auto colon = identifier.find(':');
     if (colon != std::string::npos) identifier.erase(0, colon + 1);
     for (char& c : identifier) {
@@ -92,8 +103,7 @@ UltrakillHudModule::UltrakillHudModule()
 }
 
 bool UltrakillHudModule::isMaceEquipped(Player* player) const {
-    const auto identifier = bedrocktools::core::InventoryAccess::get().stackIdentifier(
-        carriedItemStack(player));
+    const auto identifier = heldItemIdentifier(player);
     return identifier.find("mace") != std::string::npos;
 }
 
@@ -130,8 +140,7 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     m_localPlayer.store(player, std::memory_order_release);
     if (!enabled) return;
 
-    const std::string itemId = bedrocktools::core::InventoryAccess::get().stackIdentifier(
-        carriedItemStack(player));
+    const std::string itemId = heldItemIdentifier(player);
     const float currentY = player->position().y;
     m_maceEquipped.store(itemId.find("mace") != std::string::npos, std::memory_order_relaxed);
 
@@ -408,8 +417,8 @@ void UltrakillHudModule::onFrame() {
                 line(12, 28, 15, -15); line(27, 13, 15, 15); line(42, 28, -15, 15); line(27, 43, -15, -15); line(27, 13, 0, 30);
             }
         };
-        drawItemGlyph(2.0f * scale, 1.0f * scale, kShadow, 5.0f);
-        drawItemGlyph(0.0f, 0.0f, accent, 1.8f);
+        drawItemGlyph(2.0f * scale, 1.0f * scale, kShadow, 5.0f * scale);
+        drawItemGlyph(0.0f, 0.0f, accent, 1.8f * scale);
     }
 
     // Upper-right style meter: rank, white progress, and gold FRESH tag.
