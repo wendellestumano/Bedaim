@@ -13,3 +13,11 @@
 - Fixed a Mace Swapper edge case where rapidly disabling and re-enabling during a pending swap could discard slot-restoration state; pending attacks are now cancelled and restoration is deferred safely to the next player tick.
 - Kept AutoHit and AutoTotem out of this integration.
 - Host regression tests and an Android ARM64 package build must pass on the final branch head before merging to `main`; in-game behavior still requires runtime testing.
+
+## 2026-10-17 — Diagnostics and ShiftBlade retry
+
+- Added a bounded 4,096-entry in-memory diagnostic buffer with TRACE, DEBUG, INFO, WARN, ERROR and CRITICAL levels.
+- Added Module Diagnostics settings actions to export `bedaim_diagnostics.log` beside `config.json`, or clear the current buffer.
+- Instrumented module enable/disable transitions, runtime setup, configuration loading, and ShiftBlade target/swap/consumption decisions.
+- Changed ShiftBlade to retry sword selection at most once per second while target and grounded/near-ground requirements remain valid.
+- Changed the consumable guard to use successful native UseItem events and a short consumption window; simply holding food no longer blocks sword selection.
