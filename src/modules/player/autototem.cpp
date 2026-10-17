@@ -85,6 +85,7 @@ void AutoTotemModule::onDisable() {
     std::lock_guard lock(m_stateMutex);
     m_pendingRefill = false;
     m_lastOffhandHadTotem = false;
+    m_transferBlocked = false;
     m_refillAfter = {};
 }
 
