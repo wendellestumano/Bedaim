@@ -825,8 +825,22 @@ bool install() {
     bedrocktools::diagnostics::log(
         installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
         "GameHooks", installed ? "required tick/client hooks installed" : "required tick/client hooks missing");
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
-        std::string("attack hook available: ") + (gameModeAttackOriginal ? "true" : "false"));
+    bedrocktools::diagnostics::probe(
+        publicAttackSignature || survivalAttackSignature
+            ? bedrocktools::diagnostics::Level::Info
+            : bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "public_attack_signature", 
+        publicAttackSignature || survivalAttackSignature ? "candidate_available" : "signatures_missing",
+        std::string("game_mode_public_signature=") + (publicAttackSignature ? "true" : "false") +
+            "; survival_public_signature=" + (survivalAttackSignature ? "true" : "false") +
+            "; exact live vtable match is still required before dispatch");
+
+    bedrocktools::diagnostics::probe(
+        gameModeAttackOriginal ? bedrocktools::diagnostics::Level::Info
+                               : bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "internal_attack_observer",
+        gameModeAttackOriginal ? "ready" : "unavailable",
+        "this is only the internal result/event observer; it does not by itself determine public attack route availability");
     return installed;
 }
 
