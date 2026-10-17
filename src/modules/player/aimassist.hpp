@@ -137,6 +137,7 @@ public:
     float queryExpansionMargin() const;
     bool shouldShowHitbox() const;
     bool expandsType(bool isPlayer) const;
+    bool showInLegacyMenu(std::string_view key) const override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
