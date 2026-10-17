@@ -33,11 +33,27 @@ bool isReadableMemory(const void* pointer, std::size_t size);
 bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size) {
     begin = 0;
     size = 0;
-    if (!player) return false;
+    if (!player || !isReadableMemory(player, sizeof(void*))) return false;
+
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    if (PlayerInventory > std::numeric_limits<std::uintptr_t>::max() - playerAddress) return false;
+    const auto* inventoryProxyField = reinterpret_cast<const void*>(playerAddress + PlayerInventory);
+    if (!isReadableMemory(inventoryProxyField, sizeof(void*))) return false;
     const void* proxy = read<const void*>(player, PlayerInventory);
-    if (!proxy) return false;
+    if (!proxy || !isReadableMemory(proxy, sizeof(void*))) return false;
+
+    const auto proxyAddress = reinterpret_cast<std::uintptr_t>(proxy);
+    if (PlayerInventoryContainer > std::numeric_limits<std::uintptr_t>::max() - proxyAddress) return false;
+    const auto* containerField = reinterpret_cast<const void*>(proxyAddress + PlayerInventoryContainer);
+    if (!isReadableMemory(containerField, sizeof(void*))) return false;
     const void* inventory = read<const void*>(proxy, PlayerInventoryContainer);
     if (!inventory) return false;
+
+    const auto inventoryAddress = reinterpret_cast<std::uintptr_t>(inventory);
+    if (FillingContainerItems > std::numeric_limits<std::uintptr_t>::max() - inventoryAddress) return false;
+    const auto* itemsVector = reinterpret_cast<const void*>(inventoryAddress + FillingContainerItems);
+    if (!isReadableMemory(itemsVector, 2 * sizeof(std::uintptr_t))) return false;
+
     begin = read<std::uintptr_t>(inventory, FillingContainerItems);
     const auto end = read<std::uintptr_t>(inventory, FillingContainerItems + sizeof(void*));
     if (!begin && !end) return true;
@@ -45,7 +61,12 @@ bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size
     const auto bytes = end - begin;
     if (bytes % ItemStackSize != 0) return false;
     size = bytes / ItemStackSize;
-    return size <= 64;
+    if (size > 64 || (bytes != 0 && !isReadableMemory(reinterpret_cast<const void*>(begin), bytes))) {
+        begin = 0;
+        size = 0;
+        return false;
+    }
+    return true;
 }
 
 constexpr std::size_t PlayerTransactionManagerOffset = 0xA28;
@@ -232,21 +253,31 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
 }
 
 std::string InventoryAccess::stackIdentifier(const void* stack) const {
-    // Match the known-working Bedrock 26.52 implementation. The newer strict
-    // library-origin check rejected valid Item::getDescriptionId virtual entries
-    // exposed through the active BedrockTools/LeviLamina runtime. That made every
-    // consumer see an empty item identifier: weapon filters, swappers, AutoTotem,
-    // and the ULTRAKILL HUD all depend on this shared lookup.
-    if (!stack || !read<std::uint8_t>(stack, ItemStackValid)) return {};
+    // Match the known-working Bedrock 26.52 implementation without requiring
+    // the description-id method to live specifically in libminecraftpe.so;
+    // valid virtual entries may be surfaced through the active loader runtime.
+    // Validate every nested pointer before following the ItemStack -> counter ->
+    // Item -> vtable chain, especially for the signature-pattern offhand fallback.
+    if (!stack || !isReadableMemory(stack, ItemStackSize) ||
+        !read<std::uint8_t>(stack, ItemStackValid)) return {};
     if (read<std::uint8_t>(stack, ItemStackCount) == 0) return {};
+
     const void* counter = read<const void*>(stack, ItemStackItemCounter);
-    const void* item = counter ? read<const void*>(counter, 0) : nullptr;
-    if (!item) return {};
+    if (!counter || !isReadableMemory(counter, sizeof(void*))) return {};
+    const void* item = read<const void*>(counter, 0);
+    if (!item || !isReadableMemory(item, sizeof(void*))) return {};
+
     const auto* vtable = read<const std::uintptr_t*>(item, 0);
-    if (!vtable || !vtable[ItemGetDescriptionIdVtableIndex]) return {};
+    constexpr auto methodIndex = ItemGetDescriptionIdVtableIndex;
+    if (!vtable || !isReadableMemory(vtable, (methodIndex + 1) * sizeof(std::uintptr_t))) return {};
+    const auto methodAddress = vtable[methodIndex];
+    const auto* method = reinterpret_cast<const void*>(methodAddress);
+    if (!methodAddress || !isReadableMemory(method, 1)) return {};
+    Dl_info methodInfo{};
+    if (dladdr(method, &methodInfo) == 0 || !methodInfo.dli_fname) return {};
+
     using GetDescriptionIdFn = const std::string& (*)(const void*);
-    const auto& identifier =
-        reinterpret_cast<GetDescriptionIdFn>(vtable[ItemGetDescriptionIdVtableIndex])(item);
+    const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(methodAddress)(item);
     if (identifier.empty() || identifier.size() > 128) return {};
     return identifier;
 }

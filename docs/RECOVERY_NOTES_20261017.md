@@ -23,6 +23,11 @@
 - Microsoft Bedrock Script API has `Entity.getEntitiesFromViewDirection` and managed `Container.moveItem/transferItem`; these inform behavior-level raycast/inventory expectations but are not native C++ symbols and must not be cast into Bedaim's ABI.
 - Native symbol names, vtable positions, and object layouts must match the target Bedrock version. Current-source reference alone is not a runtime proof.
 
+## Additional InventoryAccess hardening
+
+- Inventory slot scans now validate the player inventory field, inventory proxy/container pointers, slot-vector memory span, bounds, and slot count before iterating.
+- Item identifier reads validate each nested pointer in the ItemStack → counter → Item → vtable path and require the description-id entry to resolve inside a loaded native module. They intentionally do not require that function to come specifically from `libminecraftpe.so`, preserving loader-exposed virtual methods observed in the known-working Bedrock 26.52 path.
+
 ## Validation status
 
 - Build #469: host regression tests and Android ARM64 package creation succeeded for the stable Aim Assist / Hitbox Expander base.
