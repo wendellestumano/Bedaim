@@ -1,5 +1,6 @@
 #include "maceswapper.hpp"
 #include "MaceFallPolicy.hpp"
+#include "../core/Diagnostics.hpp"
 #include "swapperstate.hpp"
 
 #include <pl/ModMenu.hpp>
@@ -126,6 +127,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
 
     if (!player) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "MaceSwapper", "player", "missing");
         m_hasLastPlayerY = false;
         m_hasPeakY = false;
         m_pendingAttack = false;
@@ -140,6 +143,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const Vec3 playerPosition = player->position();
     if (!finiteVec(playerPosition)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "MaceSwapper", "player_position", "invalid");
         m_hasLastPlayerY = false;
         return;
     }
@@ -179,16 +184,22 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         };
 
         if (m_cancelPendingAttack || !enabled || !m_enableMaceSwapper) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+                "MaceSwapper", "pending_attack", "cancelled_or_disabled");
             restoreIfStillSwapped();
             return;
         }
         if (player != m_pendingPlayer || !stillHoldingMace) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "MaceSwapper", "pending_attack", "player_or_slot_changed");
             restoreIfStillSwapped();
             return;
         }
 
         auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
         if (!aimModuleBase || !aimModuleBase->enabled) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "MaceSwapper", "aim_dependency", "disabled_during_pending_attack");
             restoreIfStillSwapped();
             return;
         }
@@ -199,12 +210,16 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (!aim->currentTargetSnapshot(currentTarget, targetBounds, aimRange) ||
             currentTarget != m_pendingTarget ||
             !targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "MaceSwapper", "pending_target", "missing_stale_or_out_of_range");
             restoreIfStillSwapped();
             return;
         }
 
         void* gameMode = bedrocktools::core::gamehooks::gameMode();
         if (!gameMode) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "MaceSwapper", "gamemode", "unavailable");
             restoreIfStillSwapped();
             return;
         }
@@ -217,6 +232,10 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         };
         const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
         const bool attacked = bedrocktools::core::gamehooks::attack(gameMode, currentTarget, true, &hitPoint);
+        bedrocktools::diagnostics::probe(attacked ? bedrocktools::diagnostics::Level::Info :
+                bedrocktools::diagnostics::Level::Warning,
+            "MaceSwapper", "attack_result", attacked ? "accepted" : "rejected",
+            "native attack wrapper result after deferred mace selection");
         restoreIfStillSwapped();
         if (attacked) {
             m_nextAttack = std::chrono::steady_clock::now() +
@@ -225,31 +244,75 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    if (!enabled || !m_enableMaceSwapper ||
-        !bedaim::macefall::shouldBeginMaceAction(verticalDelta, fallDistance, m_minimumFallDistance)) return;
+    if (!enabled || !m_enableMaceSwapper) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "action_gate", "disabled");
+        return;
+    }
+    if (!bedaim::macefall::shouldBeginMaceAction(verticalDelta, fallDistance, m_minimumFallDistance)) {
+        const char* fallState = verticalDelta >= -0.025f ? "not_descending" : "fall_below_minimum";
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "fall_gate", fallState,
+            std::string("fall_distance=") + std::to_string(fallDistance));
+        return;
+    }
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "MaceSwapper", "fall_gate", "armed");
 
     const auto now = std::chrono::steady_clock::now();
-    if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) return;
+    if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "cooldown", "waiting");
+        return;
+    }
 
     auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimModuleBase || !aimModuleBase->enabled) return;
+    if (!aimModuleBase || !aimModuleBase->enabled) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "MaceSwapper", "aim_dependency", "disabled");
+        return;
+    }
     auto* aim = static_cast<AimAssistModule*>(aimModuleBase);
 
     void* target = nullptr;
     AABB targetBounds{};
     float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange)) return;
-    if (!aim->currentTargetInCrosshair(player, target)) return;
-    if (!targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) return;
+    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "target", "missing_or_stale");
+        return;
+    }
+    if (!aim->currentTargetInCrosshair(player, target)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "crosshair", "target_not_centered");
+        return;
+    }
+    if (!targetWithinRange(player, targetBounds, std::min(m_attackRange, aimRange))) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "range", "out_of_range");
+        return;
+    }
 
     void* gameMode = bedrocktools::core::gamehooks::gameMode();
-    if (!gameMode) return;
+    if (!gameMode) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "MaceSwapper", "gamemode", "unavailable");
+        return;
+    }
 
     const int maceSlot = inventory.findHotbarSlot(player, "mace");
     const int previousSlot = inventory.selectedHotbarSlot(player);
-    if (maceSlot < 0 || previousSlot < 0) return;
+    if (maceSlot < 0 || previousSlot < 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "MaceSwapper", "inventory", "mace_or_selected_slot_unavailable");
+        return;
+    }
 
-    if (previousSlot != maceSlot && !inventory.selectHotbarSlot(player, maceSlot)) return;
+    if (previousSlot != maceSlot && !inventory.selectHotbarSlot(player, maceSlot)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "MaceSwapper", "inventory", "mace_selection_failed");
+        return;
+    }
     m_pendingMaceSlot = maceSlot;
     m_pendingPreviousSlot = previousSlot;
     m_cancelPendingAttack = false;
@@ -257,8 +320,10 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     m_pendingPlayer = player;
     m_pendingAttack = true;
     swapperstate::maceFallPriority.store(true, std::memory_order_release);
-
-    const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "MaceSwapper", "pending_attack", "armed",
+        std::string("mace_slot=") + std::to_string(maceSlot) +
+        ", previous_slot=" + std::to_string(previousSlot));
 }
 
 void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
