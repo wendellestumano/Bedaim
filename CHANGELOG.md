@@ -1,5 +1,11 @@
 # Changelog
 
+## Native client AABB expansion for Hitbox Expander — 2026-10-16
+
+- Added a temporary client-side expansion of nearby eligible actors’ `AABBShapeComponent` bounds, so the engine’s own local target queries can inspect the expanded box instead of only Bedaim’s AimAssist math using it.
+- Original bounds are snapshotted and restored before the next local-player tick and when the module is disabled; actor/component references are checked against a fresh nearby-actor snapshot before restoration.
+- This is still client-side only: it does not modify the server’s hitboxes or bypass server-side reach/hit validation. In-game testing on Bedrock 26.52 is required before treating it as working.
+
 ## BedrockAim steering correction and module identity — 2026-10-16
 
 - Fixed weapon Y aim profiles to use the selected height as a stable vertical anchor; the Smooth hitbox slide now changes horizontal X/Z only, so sliding no longer pulls the aim back toward the box center vertically.
