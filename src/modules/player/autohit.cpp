@@ -194,23 +194,16 @@ void AutoHitModule::processPlayerTick(Player* player) {
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
     const auto weapon = bedaim::autohit::weapon::classify(heldItem);
-    bool weaponAllowed = false;
-    float configuredCps = 0.0f;
-    switch (weapon) {
-        case bedaim::autohit::weapon::Class::Sword: weaponAllowed = swordEnabled; configuredCps = swordCps; break;
-        case bedaim::autohit::weapon::Class::Axe: weaponAllowed = axeEnabled; configuredCps = axeCps; break;
-        case bedaim::autohit::weapon::Class::Mace: weaponAllowed = maceEnabled; configuredCps = maceCps; break;
-        case bedaim::autohit::weapon::Class::Trident: weaponAllowed = tridentEnabled; configuredCps = tridentCps; break;
-        case bedaim::autohit::weapon::Class::Unsupported: break;
-    }
-    if (!weaponAllowed || !std::isfinite(configuredCps)) {
-        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile",
-            weaponAllowed ? "invalid_cps" : "blocked",
+    const auto profile = bedaim::autohit::weapon::resolve(
+        weapon, swordEnabled, swordCps, axeEnabled, axeCps,
+        maceEnabled, maceCps, tridentEnabled, tridentCps);
+    if (!profile.enabled) {
+        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile", "blocked",
             std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; item=" +
                 (heldItem.empty() ? "empty_or_unreadable" : heldItem));
         return;
     }
-    configuredCps = bedaim::autohit::weapon::normalizeCps(configuredCps);
+    const float configuredCps = profile.cps;
     const float intervalMs = 1000.0f / configuredCps;
     diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
         std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; cps=" + std::to_string(configuredCps));
