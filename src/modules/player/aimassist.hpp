@@ -159,7 +159,7 @@ private:
     };
 
     void applyNativeBounds(bedrocktools::sdk::Player* player);
-    void restoreNativeBounds(bedrocktools::sdk::Player* player);
+    void restoreNativeBounds(bedrocktools::sdk::Player* player, bool onlyStale = false);
 
     mutable std::mutex m_expandMutex;
     std::mutex m_nativeBoundsMutex;
