@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-17 — Local-player event recovery candidate
+
+- Restored the intact `GameHooks.cpp` baseline and added a guarded SDK virtual-getter fallback for `ClientInstance::getLocalPlayer` when the signature-based getter is unresolved or returns no valid player.
+- Kept the strict identity check between the resolved local player and `NormalTick` actor; invalid/unverified candidates still suppress player events.
+- Added reason-coded `local_player_resolution` states so the next in-game diagnostics distinguish signature success, virtual fallback success, and fallback failure.
+- Candidate only: a successful build does not prove the target runtime vtable ABI. In-game logs must confirm `ready` or `ready_vtable_fallback` and local-player ticks before considering Aim Assist and Hitbox Expander recovered.
+
 ## 2026-10-17 — LeviLamina local-player interface lead
 
 - Researched versioned LeviLamina client headers and found `IClientInstance::getLocalPlayer() const` plus the `ClientInstance` override at commit `917f0defa15ffb34599eb4522da1617a4a55b42b`.
