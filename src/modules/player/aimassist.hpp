@@ -163,5 +163,8 @@ private:
 
     mutable std::mutex m_expandMutex;
     std::mutex m_nativeBoundsMutex;
+    bool m_hasAppliedExpansionTypes = false;
+    bool m_lastAppliedExpandPlayers = true;
+    bool m_lastAppliedExpandMobs = false;
     std::unordered_map<void*, NativeBoundsSnapshot> m_nativeBoundsOriginal;
 };
