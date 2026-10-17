@@ -387,11 +387,13 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 }
 
                 if (nativeHitboxesEnabled) {
-                    if (isPlayer && !g_hitboxMod->showPlayers) continue;
-                    if (!isPlayer && (!g_hitboxMod->showEntities || !hasCategory(ent, 2))) {
-                        if (!showExpandedHitboxes || !expander->expandsType(isPlayer)) continue;
-                    }
-                } else if (!showExpandedHitboxes || !expander->expandsType(isPlayer)) {
+                    if (isPlayer && !g_hitboxMod->showPlayers &&
+                        (!showExpandedHitboxes || !expander->expandsType(true))) continue;
+                    if (!isPlayer && !hasCategory(ent, 2)) continue;
+                    if (!isPlayer && !g_hitboxMod->showEntities &&
+                        (!showExpandedHitboxes || !expander->expandsType(false))) continue;
+                } else if (!showExpandedHitboxes || !expander->expandsType(isPlayer) ||
+                           (!isPlayer && !hasCategory(ent, 2))) {
                     continue;
                 }
 
