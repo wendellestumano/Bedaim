@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-17 — LeviLamina local-player interface lead
+
+- Researched versioned LeviLamina client headers and found `IClientInstance::getLocalPlayer() const` plus the `ClientInstance` override at commit `917f0defa15ffb34599eb4522da1617a4a55b42b`.
+- Added the exact source references to the research note as a concrete candidate for cross-checking the unresolved Bedaim getter signature.
+- Did not apply a vtable-index workaround: that declaration alone does not prove ABI/index/layout compatibility with the current Android Bedrock build.
+
 ## 2026-10-17 — Bedrock Add-On and LeviLamina interoperability research
 
 - Added `docs/BEDROCK_ADDON_LEVILAMINA_RESEARCH.md` summarizing official Mojang/Microsoft Add-On samples, Script API raycast and inventory patterns, and LeviLamina's C++ ScriptActor wrapper.
