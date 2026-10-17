@@ -630,21 +630,35 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
 
-    // Resolve the real local player from ClientInstance after its native update.
-    // This pointer identity is used only to filter NormalTick callbacks; we do not
-    // dereference a candidate actor just to decide whether it is the local player.
+    // A failed signature match must stay visible: resolveAll() succeeds when any
+    // signature resolves, not when every optional function is present. Keep the
+    // local-player filter strict and diagnose the exact prerequisite instead of
+    // switching to an unvalidated vtable index or treating an arbitrary actor
+    // from NormalTick as the local player.
+    const auto localPlayerGetter =
+        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
     void* localPlayer = nullptr;
-    if (clientInstance) {
+    if (!clientInstance) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "local_player_resolution", "client_instance_missing");
+    } else if (!localPlayerGetter) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Error, "GameHooks",
+            "local_player_resolution", "getter_signature_unresolved",
+            "ClientInstanceGetLocalPlayer signature resolved to null; local-player events remain safely suppressed");
+    } else {
         auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
         localPlayer = client->localPlayer();
+        bedrocktools::diagnostics::probe(
+            localPlayer ? bedrocktools::diagnostics::Level::Info :
+                          bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "local_player_resolution",
+            localPlayer ? "ready" : "getter_returned_null",
+            localPlayer ? "ClientInstanceGetLocalPlayer returned a candidate pointer"
+                        : "resolved getter returned null; local-player events remain safely suppressed");
     }
     currentLocalPlayer.store(localPlayer, std::memory_order_release);
-    bedrocktools::diagnostics::probe(
-        localPlayer ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
-        "GameHooks", "local_player_resolution",
-        localPlayer ? "ready" : "unavailable",
-        localPlayer ? "ClientInstance::getLocalPlayer returned a pointer"
-                    : "local-player tick events will be suppressed until the SDK getter resolves");
 
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
