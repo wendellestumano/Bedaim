@@ -1,5 +1,6 @@
 #include "aimassist.hpp"
 #include "AimAssistMath.hpp"
+#include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
@@ -405,6 +406,19 @@ void AimAssistModule::onInit() {
     g_applyLocalPlayerTurnDelta = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
 
+    const bool targetQueryReady = g_fetchNearbyActors != nullptr;
+    const bool targetClassificationReady = g_actorIsPlayer != nullptr;
+    const bool cameraControlReady = g_applyLocalPlayerTurnDelta != nullptr;
+    const bool requiredReady = targetQueryReady && targetClassificationReady && cameraControlReady;
+    bedrocktools::diagnostics::probe(
+        requiredReady ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+        "BedrockAim", "native_dependencies", requiredReady ? "ready" : "partial",
+        std::string("nearby_query=") + (targetQueryReady ? "ok" : "missing") +
+        ", actor_classification=" + (targetClassificationReady ? "ok" : "missing") +
+        ", camera_control=" + (cameraControlReady ? "ok" : "missing") +
+        ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
+        ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
+
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
             if (g_aimAssist && g_aimAssist->enabled) {
@@ -618,9 +632,17 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     using namespace bedrocktools::sdk;
 
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
+        const char* reason = !enabled ? "disabled" : !player ? "missing_local_player" :
+            !g_fetchNearbyActors ? "nearby_query_unavailable" : "all_target_categories_disabled";
+        bedrocktools::diagnostics::probe(
+            !player || !g_fetchNearbyActors ? bedrocktools::diagnostics::Level::Warning :
+                bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "tracking_gate", reason);
         resetTrackingState();
         return;
     }
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "BedrockAim", "tracking_gate", "ready");
 
     m_lastPlayer = player;
     m_localPlayerGliding = actorIsGliding(player);
@@ -893,6 +915,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     if (!bestTarget) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "target_selection", "none",
+            "no eligible actor in the scan radius passed the current filters");
         // Keep the last target briefly while it crosses the player's immediate
         // area or the native nearby-actor list skips one tick. Do not dereference
         // the cached entity or auto-hit it while it is missing from the list.
@@ -979,6 +1004,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (targetChanged) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = {};
+    }
+    if (targetChanged) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "BedrockAim", "target_selection", bestTargetIsPlayer ? "player" : "mob",
+            "new target selected; target bounds passed validation");
     }
     m_lastTarget = bestTarget;
     m_lastTargetIsPlayer = bestTargetIsPlayer;
