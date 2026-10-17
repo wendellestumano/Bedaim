@@ -779,7 +779,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // GameMode::attack is the public three-argument wrapper; it prepares the
     // native context before invoking the internal body. Only dispatch through it
     // when the vtable entry matches a resolved public signature for this build.
-    const auto publicEntry = publicAttackVirtualEntry(gameMode);
+    std::size_t matchedAttackSlot = 0;
+    const auto publicEntry = publicAttackVirtualEntry(gameMode, nullptr, &matchedAttackSlot);
     if (publicEntry == 0) {
         static std::atomic_bool loggedUnavailable{false};
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel)) {
@@ -788,9 +789,12 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
                     "GameHooks",
                     "attack_validation=implausible_gamemode: object/vtable did not pass the libminecraftpe validation");
             } else {
-                auto** vtable = *reinterpret_cast<void***>(gameMode);
-                constexpr std::size_t kKnownAttackSlot = 16;
-                const auto vtableEntry = reinterpret_cast<std::uintptr_t>(vtable[kKnownAttackSlot]);
+                void** vtable = nullptr;
+                std::memcpy(&vtable, gameMode, sizeof(vtable));
+                std::uintptr_t vtableEntry = 0;
+                const auto diagnosticSlot = reinterpret_cast<std::uintptr_t>(vtable) + 16 * sizeof(void*);
+                if (vtable && isReadableMemory(reinterpret_cast<const void*>(diagnosticSlot), sizeof(void*)))
+                    std::memcpy(&vtableEntry, reinterpret_cast<const void*>(diagnosticSlot), sizeof(vtableEntry));
                 const auto publicSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
                 const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
                 char detail[320]{};
@@ -806,9 +810,11 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         }
         return false;
     }
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    constexpr std::size_t kKnownAttackSlot = 16;
-    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[kKnownAttackSlot]);
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + matchedAttackSlot * sizeof(void*);
+    if (!vtable || !isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) return false;
+    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[matchedAttackSlot]);
     if (!publicAttack) return false;
 
     struct AttackGuard {
