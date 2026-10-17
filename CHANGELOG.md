@@ -96,3 +96,9 @@
 - Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
 - Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
 - Added `docs/MODULE_DIAGNOSTICS.md` with export instructions, log interpretation, and runtime-validation limits.
+
+## 2026-10-17 — Validated local-player getter fallback candidate
+
+- Kept strict local-player identity filtering while adding a fallback through the SDK-declared ClientInstance getter slot when the signature scanner fails.
+- Added readable-memory and code-image checks plus reason-coded diagnostics; fallback failure still suppresses tick events.
+- This is a runtime-validation candidate, not proof that the target Bedrock build uses the same ABI. Do not merge before CI and in-game validation.

@@ -638,25 +638,56 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
     const auto localPlayerGetter =
         bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
     void* localPlayer = nullptr;
+    bool usedVtableFallback = false;
     if (!clientInstance) {
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Warning, "GameHooks",
             "local_player_resolution", "client_instance_missing");
-    } else if (!localPlayerGetter) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Error, "GameHooks",
-            "local_player_resolution", "getter_signature_unresolved",
-            "ClientInstanceGetLocalPlayer signature resolved to null; local-player events remain safely suppressed");
     } else {
         auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-        localPlayer = client->localPlayer();
+        if (localPlayerGetter) localPlayer = client->localPlayer();
+
+        // The signature scanner can fail on stripped/newer libminecraftpe builds.
+        // Fall back only to the SDK's explicit ClientInstance getter slot (index 32),
+        // and validate both the slot's code image and the returned player's vtable.
+        // Never accept the NormalTick actor as a substitute for a verified local player.
+        if (!localPlayer &&
+            isReadableMemory(clientInstance, sizeof(void*))) {
+            constexpr std::size_t getterSlot =
+                bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
+            auto** clientVtable = *reinterpret_cast<void***>(clientInstance);
+            if (clientVtable &&
+                isReadableMemory(clientVtable, (getterSlot + 1) * sizeof(void*))) {
+                void* getterAddress = clientVtable[getterSlot];
+                if (isMinecraftFunction(getterAddress)) {
+                    using LocalPlayerGetterFn = void* (*)(void*);
+                    void* candidate =
+                        reinterpret_cast<LocalPlayerGetterFn>(getterAddress)(clientInstance);
+                    if (candidate && isReadableMemory(candidate, sizeof(void*))) {
+                        auto** playerVtable = *reinterpret_cast<void***>(candidate);
+                        if (playerVtable &&
+                            isReadableMemory(playerVtable, sizeof(void*)) &&
+                            isMinecraftFunction(playerVtable[0])) {
+                            localPlayer = candidate;
+                            usedVtableFallback = true;
+                        }
+                    }
+                }
+            }
+        }
+
         bedrocktools::diagnostics::probe(
             localPlayer ? bedrocktools::diagnostics::Level::Info :
-                          bedrocktools::diagnostics::Level::Warning,
+                          bedrocktools::diagnostics::Level::Error,
             "GameHooks", "local_player_resolution",
-            localPlayer ? "ready" : "getter_returned_null",
-            localPlayer ? "ClientInstanceGetLocalPlayer returned a candidate pointer"
-                        : "resolved getter returned null; local-player events remain safely suppressed");
+            localPlayer ? (usedVtableFallback ? "ready_vtable_fallback" : "ready")
+                        : (!localPlayerGetter ? "getter_signature_unresolved_fallback_failed"
+                                              : "getter_returned_null_fallback_failed"),
+            localPlayer
+                ? (usedVtableFallback
+                    ? "SDK-declared ClientInstance getter vtable slot validated; returned player vtable is in libminecraftpe.so"
+                    : "ClientInstanceGetLocalPlayer returned a candidate pointer")
+                : "No validated local player was returned; local-player events remain safely suppressed");
     }
     currentLocalPlayer.store(localPlayer, std::memory_order_release);
 
