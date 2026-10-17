@@ -1,6 +1,11 @@
 #include "swordswapper.hpp"
 #include "swapperstate.hpp"
 
+#include <pl/ModMenu.hpp>
+#include <cctype>
+#include <string_view>
+#include <utility>
+
 #include "aimassist.hpp"
 #include "core/InventoryAccess.hpp"
 #include "../ModuleRegistry.hpp"
@@ -268,4 +273,83 @@ void SwordSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_groundDistance"] = m_groundDistance;
     j["m_restoreSlot"] = m_restoreSlot;
     j["m_respectManualSlotChanges"] = m_respectManualSlotChanges;
+}
+
+void SwordSwapperModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    schema.defaultCategory("combat")
+        .category("combat", "Combat", "ShiftBlade targeting and hotbar behavior");
+
+    auto slider = [&](const char* key, const char* title,
+                      const char* minimum, const char* maximum,
+                      const char* step, const char* unit) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.category = "combat";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.minValue = minimum;
+        node.maxValue = maximum;
+        node.step = step;
+        node.unit = unit;
+        schema.node(std::move(node));
+    };
+
+    slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks");
+    slider("m_groundDistance", "Allowed distance above ground", "0", "3", "0.05", " blocks");
+
+    ConfigNodeV2 restoreNode;
+    restoreNode.id = "m_restoreSlot";
+    restoreNode.key = "m_restoreSlot";
+    restoreNode.title = "Restore previous hotbar slot";
+    restoreNode.category = "combat";
+    restoreNode.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(restoreNode));
+
+    ConfigNodeV2 manualNode;
+    manualNode.id = "m_respectManualSlotChanges";
+    manualNode.key = "m_respectManualSlotChanges";
+    manualNode.title = "Respect manual hotbar changes";
+    manualNode.category = "combat";
+    manualNode.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(manualNode));
+
+    ConfigNodeV2 keybindNode;
+    keybindNode.id = "keybind";
+    keybindNode.key = "keybind";
+    keybindNode.title = "Keybind";
+    keybindNode.category = "combat";
+    keybindNode.type = ConfigControlTypeV2::Keybind;
+    schema.node(std::move(keybindNode));
+
+    pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
+}
+
+bool SwordSwapperModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    if (key == "m_restoreSlot" || key == "m_respectManualSlotChanges") {
+        const bool flag = value == "true" || value == "1" || value == "on";
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (key == "m_restoreSlot") m_restoreSlot = flag;
+        else m_respectManualSlotChanges = flag;
+        return true;
+    }
+
+    try {
+        std::size_t parsedLength = 0;
+        const std::string text(value);
+        const float number = std::stof(text, &parsedLength);
+        while (parsedLength < text.size() &&
+               std::isspace(static_cast<unsigned char>(text[parsedLength]))) ++parsedLength;
+        if (parsedLength != text.size() || !std::isfinite(number)) return false;
+
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
+        else if (key == "m_groundDistance") m_groundDistance = std::clamp(number, 0.0f, 3.0f);
+        else return false;
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
