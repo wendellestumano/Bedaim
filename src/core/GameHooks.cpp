@@ -357,106 +357,63 @@ void resolvePlayerGameTypeApi() {
 }
 
 bool plausibleGameMode(void* gameMode) {
-    if (!gameMode) return false;
-    static std::atomic<void*> lastValidatedGameMode{nullptr};
-
-    // A pointer validated once is not guaranteed to remain alive after respawn,
-    // world unload, or GameMode replacement. Re-check mappings and its vtable
-    // before every native call; neither success nor failure is cached as truth.
-    constexpr std::size_t kKnownAttackSlot = 16;
-    if (!isReadableMemory(gameMode, sizeof(void*))) {
-        lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        return false;
-    }
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    if (!vtable || !isReadableMemory(vtable, (kKnownAttackSlot + 1) * sizeof(void*)) ||
-        !vtable[kKnownAttackSlot]) {
-        lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        return false;
-    }
-
-    Dl_info info{};
-    if (!dladdr(vtable[kKnownAttackSlot], &info) || !info.dli_fname ||
-        std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
-        lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        return false;
-    }
-
-    lastValidatedGameMode.store(gameMode, std::memory_order_release);
-    return true;
+    if (!gameMode || !isReadableMemory(gameMode, sizeof(void*))) return false;
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    if (!vtable || !isReadableMemory(vtable, 8 * sizeof(void*))) return false;
+    void* first = nullptr;
+    std::memcpy(&first, vtable, sizeof(first));
+    return first && isMinecraftFunction(first);
 }
 
-// GameMode::attack is the public wrapper at vtable slot 16. Its validated
-// signature is a 3-argument wrapper (this, target, hit-position) which prepares
-// the internal 4-argument call itself. Never call the internal body directly:
-// doing so bypasses that setup and previously caused the game to stall.
-std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr) {
+// Find the exact public wrapper in the object's live vtable rather than
+// assuming every patched Bedrock build keeps GameMode::attack at index 16.
+std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr,
+                                        std::size_t* matchedSlot = nullptr) {
     if (!plausibleGameMode(gameMode)) return 0;
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    constexpr std::size_t kKnownAttackSlot = 16;
-    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable[kKnownAttackSlot]);
-    const auto publicGameModeAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-    const auto publicSurvivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-
-    if (publicSurvivalAttack && slotAddress == publicSurvivalAttack) {
-        if (kind) *kind = AttackKind::SurvivalMode;
-        return slotAddress;
-    }
-    if (publicGameModeAttack && slotAddress == publicGameModeAttack) {
-        if (kind) *kind = AttackKind::GameMode;
-        return slotAddress;
-    }
-
-    // Signature patterns can resolve the internal attack body on builds where
-    // the public virtual wrapper has a different prologue. Prefer exact exported
-    // C++ method symbols as a fallback, but still require the live vtable slot to
-    // equal the resolved symbol before dispatching through it.
-    struct PublicAttackSymbols {
-        std::uintptr_t gameMode{};
-        std::uintptr_t survivalMode{};
-    };
-    static const PublicAttackSymbols exportedSymbols = [] {
-        PublicAttackSymbols result{};
-        constexpr const char* gameModeNames[] = {
-            "_ZN8GameMode6attackEP5ActorRK4Vec3",
-            "_ZN8GameMode6attackER5ActorRK4Vec3",
-            "_ZN8GameMode7$attackEP5ActorRK4Vec3",
-            "_ZN8GameMode7$attackER5ActorRK4Vec3"
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    const auto baseSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+    const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
+    struct Exported { std::uintptr_t base{}; std::uintptr_t survival{}; };
+    static const Exported symbols = [] {
+        Exported out{};
+        constexpr const char* baseNames[] = {
+            "_ZN8GameMode6attackEP5ActorRK4Vec3", "_ZN8GameMode6attackER5ActorRK4Vec3",
+            "_ZN8GameMode7$attackEP5ActorRK4Vec3", "_ZN8GameMode7$attackER5ActorRK4Vec3"
         };
-        constexpr const char* survivalModeNames[] = {
-            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3",
-            "_ZN12SurvivalMode6attackER5ActorRK4Vec3",
-            "_ZN12SurvivalMode7$attackEP5ActorRK4Vec3",
-            "_ZN12SurvivalMode7$attackER5ActorRK4Vec3"
+        constexpr const char* survivalNames[] = {
+            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3", "_ZN12SurvivalMode6attackER5ActorRK4Vec3",
+            "_ZN12SurvivalMode7$attackEP5ActorRK4Vec3", "_ZN12SurvivalMode7$attackER5ActorRK4Vec3"
         };
-        for (const char* name : gameModeNames) {
-            if (void* address = resolveMinecraftFunction(name)) {
-                result.gameMode = reinterpret_cast<std::uintptr_t>(address);
-                break;
-            }
-        }
-        for (const char* name : survivalModeNames) {
-            if (void* address = resolveMinecraftFunction(name)) {
-                result.survivalMode = reinterpret_cast<std::uintptr_t>(address);
-                break;
-            }
-        }
-        return result;
+        for (const char* name : baseNames) if (void* p = resolveMinecraftFunction(name)) { out.base = reinterpret_cast<std::uintptr_t>(p); break; }
+        for (const char* name : survivalNames) if (void* p = resolveMinecraftFunction(name)) { out.survival = reinterpret_cast<std::uintptr_t>(p); break; }
+        return out;
     }();
-    if (exportedSymbols.survivalMode && slotAddress == exportedSymbols.survivalMode) {
-        if (kind) *kind = AttackKind::SurvivalMode;
-        static std::atomic_bool loggedSymbolFallback{false};
-        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack wrapper via exact exported SurvivalMode::attack symbol.");
-        return slotAddress;
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
+        if (!isReadableMemory(slot, sizeof(void*))) break;
+        std::uintptr_t address = 0;
+        std::memcpy(&address, slot, sizeof(address));
+        if (!address) break;
+        AttackKind found = AttackKind::GameMode;
+        bool match = false;
+        if ((survivalSignature && address == survivalSignature) || (symbols.survival && address == symbols.survival)) {
+            found = AttackKind::SurvivalMode; match = true;
+        } else if ((baseSignature && address == baseSignature) || (symbols.base && address == symbols.base)) {
+            found = AttackKind::GameMode; match = true;
+        }
+        if (!match) continue;
+        if (kind) *kind = found;
+        if (matchedSlot) *matchedSlot = i;
+        static std::atomic_bool loggedMatch{false};
+        if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
+            gameHooksLogger().info("Validated public attack through exact vtable match at slot {}.", i);
+        return address;
     }
-    if (exportedSymbols.gameMode && slotAddress == exportedSymbols.gameMode) {
-        if (kind) *kind = AttackKind::GameMode;
-        static std::atomic_bool loggedSymbolFallback{false};
-        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack wrapper via exact exported GameMode::attack symbol.");
-        return slotAddress;
-    }
+    static std::atomic_bool loggedMiss{false};
+    if (!loggedMiss.exchange(true, std::memory_order_acq_rel))
+        gameHooksLogger().warn("No exact public GameMode::attack method found in the live vtable.");
     return 0;
 }
 
