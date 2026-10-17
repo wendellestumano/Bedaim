@@ -18,6 +18,7 @@ public:
     float m_attackRange = 3.0f;
     float m_groundDistance = 0.0f;
     bool m_restoreSlot = true;
+    bool m_respectManualSlotChanges = false;
 
 private:
     void processPlayerTick(bedrocktools::sdk::Player* player);
