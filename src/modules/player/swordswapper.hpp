@@ -36,7 +36,7 @@ private:
     bool m_ownsSwap = false;
     bool m_userOverrodeSwap = false;
     bool m_consumptionGuardActive = false;
-    std::chrono::steady_clock::time_point m_lastSuccessfulUseItem{};
+    std::chrono::steady_clock::time_point m_lastUseItemAction{};
     std::chrono::steady_clock::time_point m_nextSwordAttempt{};
     int m_swordSlot = -1;
     int m_previousSlot = -1;
