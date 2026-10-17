@@ -1,6 +1,8 @@
 #include "Diagnostics.hpp"
+#include "../config/AtomicConfigWriter.hpp"
 
 #include <algorithm>
+#include <unordered_map>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -19,6 +21,8 @@ constexpr std::size_t kCapacity = 4096;
 std::mutex gMutex;
 std::vector<Entry> gEntries;
 std::uint64_t gNextSequence = 1;
+std::mutex gProbeMutex;
+std::unordered_map<std::string, std::string> gProbeStates;
 
 std::int64_t nowMs() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -36,6 +40,49 @@ std::string safeField(std::string_view value) {
     }
     return out;
 }
+}
+
+void probe(Level level, std::string_view component, std::string_view key,
+           std::string_view state, std::string_view detail) noexcept {
+    try {
+        std::string composite;
+        composite.reserve(component.size() + key.size() + 1);
+        composite.append(component);
+        composite.push_back('\x1f');
+        composite.append(key);
+
+        bool changed = false;
+        {
+            std::lock_guard<std::mutex> lock(gProbeMutex);
+            const auto it = gProbeStates.find(composite);
+            if (it == gProbeStates.end() || it->second != state) {
+                gProbeStates[composite] = std::string(state);
+                changed = true;
+            }
+        }
+        if (!changed) return;
+
+        std::string message;
+        message.reserve(key.size() + state.size() + detail.size() + 4);
+        message.append(key);
+        message.push_back('=');
+        message.append(state);
+        if (!detail.empty()) {
+            message.append(": ");
+            message.append(detail);
+        }
+        log(level, component, message);
+    } catch (...) {
+        // Probe bookkeeping is best-effort and must never affect game execution.
+    }
+}
+
+void resetProbes() noexcept {
+    try {
+        std::lock_guard<std::mutex> lock(gProbeMutex);
+        gProbeStates.clear();
+    } catch (...) {
+    }
 }
 
 void log(Level level, std::string_view component, std::string_view message) noexcept {
@@ -72,8 +119,11 @@ std::size_t count() noexcept {
 
 void clear() noexcept {
     try {
-        std::lock_guard<std::mutex> lock(gMutex);
-        gEntries.clear();
+        {
+            std::lock_guard<std::mutex> lock(gMutex);
+            gEntries.clear();
+        }
+        resetProbes();
     } catch (...) {
     }
 }
@@ -97,46 +147,21 @@ bool exportTo(const std::string& path, std::string* error) noexcept {
             return false;
         }
         const auto entries = snapshot();
-        const std::filesystem::path output(path);
-        if (!output.parent_path().empty())
-            std::filesystem::create_directories(output.parent_path());
-
-        const std::string temporary = path + ".tmp";
-        {
-            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-            if (!file) {
-                if (error) *error = "could not open temporary log file";
-                return false;
-            }
-            file << "# Bedaim diagnostics export\n";
-            file << "# entries=" << entries.size() << " capacity=" << kCapacity << "\n";
-            file << "# Fields: timestamp_ms | sequence | level | component | message\n";
-            for (const auto& entry : entries) {
-                file << entry.timestampMs << " | " << entry.sequence << " | "
-                     << levelName(entry.level) << " | " << entry.component << " | "
-                     << entry.message << '\n';
-            }
-            file.flush();
-            if (!file) {
-                if (error) *error = "failed while writing diagnostics";
-                file.close();
-                std::error_code ec;
-                std::filesystem::remove(temporary, ec);
-                return false;
-            }
+        std::ostringstream payload;
+        payload << "# Bedaim diagnostics export\n";
+        payload << "# entries=" << entries.size() << " capacity=" << kCapacity << "\n";
+        payload << "# Fields: timestamp_ms | sequence | level | component | message\n";
+        for (const auto& entry : entries) {
+            payload << entry.timestampMs << " | " << entry.sequence << " | "
+                    << levelName(entry.level) << " | " << entry.component << " | "
+                    << entry.message << '\n';
         }
 
-        std::error_code ec;
-        std::filesystem::rename(temporary, output, ec);
-        if (ec) {
-            // Android filesystems can reject rename-over-existing; replace safely.
-            std::filesystem::remove(output, ec);
-            ec.clear();
-            std::filesystem::rename(temporary, output, ec);
-        }
-        if (ec) {
-            if (error) *error = "could not finalize exported log: " + ec.message();
-            std::filesystem::remove(temporary, ec);
+        // Reuse the config writer's safe same-filesystem replacement. If rename
+        // fails, the old report remains intact; diagnostics must not destroy the
+        // previous export while trying to write a new one.
+        if (!bedrocktools::config::writePayloadAtomically(path, payload.str())) {
+            if (error) *error = "could not atomically replace exported log";
             return false;
         }
         if (error) error->clear();
