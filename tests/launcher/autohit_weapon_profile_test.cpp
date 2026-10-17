@@ -22,6 +22,13 @@ int main() {
     assert(normalizeCps(40.0f) == 20.0f);
     assert(normalizeCps(std::numeric_limits<float>::quiet_NaN()) == 1.0f);
 
+    using bedaim::autohit::weapon::attemptIntervalMs;
+    assert(attemptIntervalMs(20.0f) == 50);
+    assert(attemptIntervalMs(10.0f) == 100);
+    assert(attemptIntervalMs(1.0f) == 1000);
+    assert(attemptIntervalMs(0.0f) == 1000);
+    assert(attemptIntervalMs(std::numeric_limits<float>::infinity()) == 1000);
+
     using bedaim::autohit::weapon::resolve;
     auto profile = resolve(Class::Sword, true, 8.0f, false, 4.0f,
                            false, 2.0f, false, 3.0f);
