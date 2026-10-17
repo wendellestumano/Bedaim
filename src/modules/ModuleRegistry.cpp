@@ -1,4 +1,5 @@
 #include "ModuleRegistry.hpp"
+#include "misc/diagnostics.hpp"
 #include "visual/fullbright.hpp"
 #include "visual/motionblur.hpp"
 #include "visual/fpsunlocker.hpp"
@@ -93,6 +94,7 @@ bool ModuleRegistry::keybindBlocked() const {
 void registerAllModules() {
     auto& registry = ModuleRegistry::get();
     if (!registry.modules().empty()) return;
+    registry.emplace<DiagnosticsModule>();
     registry.emplace<FullbrightModule>();
     registry.emplace<MotionBlurModule>();
     registry.emplace<FogColorModule>();
