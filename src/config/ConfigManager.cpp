@@ -1,5 +1,6 @@
 #include "ConfigManager.hpp"
 #include "AtomicConfigWriter.hpp"
+#include "Diagnostics.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <pl/Logger.hpp>
 #include <filesystem>
@@ -33,6 +34,7 @@ void ConfigManager::setConfigPath(const std::string& path) {
 
 void ConfigManager::load() {
     std::string path = getConfigPath();
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Config", "loading configuration from " + path);
     if (!std::filesystem::exists(path)) {
         save();
         flush();
@@ -54,7 +56,11 @@ void ConfigManager::load() {
                 }
             }
         }
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Config", "configuration loaded");
+    } catch (const std::exception& ex) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config", std::string("configuration load failed: ") + ex.what());
     } catch (...) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config", "configuration load failed with unknown exception");
     }
 }
 
@@ -140,6 +146,8 @@ bool ConfigManager::writePayload(const std::string& pathValue, const std::string
     if (!succeeded) {
         pl::log::Logger::getOrCreate("BedaimConfig").error(
             "Could not atomically save config to '{}'; previous config was preserved", pathValue);
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+            "could not atomically save config to '" + pathValue + "'; previous config was preserved");
     }
     return succeeded;
 }
