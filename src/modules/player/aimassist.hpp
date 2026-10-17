@@ -178,5 +178,4 @@ private:
     mutable std::mutex m_expandMutex;
     std::mutex m_nativeBoundsMutex;
     std::unordered_map<void*, NativeBoundsSnapshot> m_nativeBoundsOriginal;
-    std::atomic<bedrocktools::sdk::Player*> m_lastLocalPlayer{nullptr};
 };
