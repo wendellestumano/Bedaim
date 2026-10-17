@@ -649,6 +649,28 @@ void ModuleDiagnosticsModule::onFrame() {
     addText(line3, 40.0f, m_summary.written ? 0xFF80FF80 : 0xFFFF7070);
     addText(line4, 56.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
     addText(line5, 72.0f, 0xFFFFFFFF);
+
+    // Show actual runtime warnings/errors, not just registry consistency counts.
+    // Scan newest-first, then display chronologically so a failure gate is visible
+    // in the overlay without opening the JSON export.
+    const auto runtimeEntries = bedrocktools::diagnostics::snapshot();
+    std::vector<std::string> recentAlerts;
+    recentAlerts.reserve(4);
+    for (auto it = runtimeEntries.rbegin(); it != runtimeEntries.rend() && recentAlerts.size() < 4; ++it) {
+        if (it->level != bedrocktools::diagnostics::Level::Warning &&
+            it->level != bedrocktools::diagnostics::Level::Error &&
+            it->level != bedrocktools::diagnostics::Level::Critical) continue;
+        const char* tag = it->level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
+            it->level == bedrocktools::diagnostics::Level::Critical ? "CRIT" : "ERR";
+        std::string message = std::string("[") + tag + "] " + it->component + ": " + it->message;
+        constexpr std::size_t maxOverlayChars = 76;
+        if (message.size() > maxOverlayChars) message = message.substr(0, maxOverlayChars - 3) + "...";
+        recentAlerts.push_back(std::move(message));
+    }
+    std::reverse(recentAlerts.begin(), recentAlerts.end());
+    for (std::size_t i = 0; i < recentAlerts.size(); ++i) {
+        addText(recentAlerts[i], 92.0f + static_cast<float>(i) * 16.0f, 0xFFFF7070);
+    }
     submitDrawCommands(moduleId, commands);
 }
 
