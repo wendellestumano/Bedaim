@@ -31,6 +31,9 @@ private:
     int m_heldButton = -1;
     int m_attackButton = 0;
     float m_attackRange = 3.2f;
+    bool m_touchRepeatEnabled = true;
+    int m_touchRepeatWindowMs = 300;
+    std::chrono::steady_clock::time_point m_touchRepeatUntil{};
 
     // Weapon profiles default to swords only. Each category has its own
     // enable switch and CPS cap; unknown/non-weapon items never dispatch attacks.
