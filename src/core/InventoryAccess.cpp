@@ -305,8 +305,10 @@ bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
         if (error) *error = std::move(message);
         return false;
     };
-    if (!player || !isReadableMemory(player, sizeof(void*)))
-        return fail("local Player pointer is null or unreadable");
+    if (!player)
+        return fail("LocalPlayerTickEvent supplied a null Player pointer");
+    if (!isReadableMemory(player, sizeof(void*)))
+        return fail("LocalPlayerTickEvent Player pointer is not in a readable memory region");
 
     // Validate the actual pointer-sized fields, not the entire byte span from
     // the start of Player to the inventory offset. Player objects may cross
