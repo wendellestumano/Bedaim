@@ -1,5 +1,7 @@
 #include "swordswapper.hpp"
 #include "swapperstate.hpp"
+#include "../core/Diagnostics.hpp"
+#include <bedrocktools/events/GameModeActionEvent.hpp>
 
 #include <pl/ModMenu.hpp>
 #include <cctype>
@@ -16,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 
 namespace {
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
@@ -75,6 +78,15 @@ SwordSwapperModule::SwordSwapperModule()
 void SwordSwapperModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
+        [this](auto& event) {
+            if (event.action != bedrocktools::events::GameModeAction::UseItem ||
+                !event.hasNativeResult || !event.nativeResult) return;
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_lastSuccessfulUseItem = std::chrono::steady_clock::now();
+        });
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, moduleId,
+        "initialized; sword retries use a 1-second cooldown and consumption guard listens for successful UseItem actions");
 }
 
 void SwordSwapperModule::onEnable() {
@@ -85,6 +97,9 @@ void SwordSwapperModule::onEnable() {
     m_hasGroundY = false;
     m_groundedTicks = 0;
     m_userOverrodeSwap = false;
+    m_consumptionGuardActive = false;
+    m_nextSwordAttempt = {};
+    m_lastSuccessfulUseItem = {};
     // Preserve ownership if the user re-enables the module before the next game
     // tick has had a chance to restore the temporarily selected sword.
 }
@@ -123,7 +138,8 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!enabled) {
         restoreIfOwned();
         m_userOverrodeSwap = false;
-        m_foodUseOverride = false;
+        m_consumptionGuardActive = false;
+        m_nextSwordAttempt = {};
         return;
     }
 
@@ -174,9 +190,6 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
-    // Give food and drink a hard priority over auto-swapping. Bedrock's public
-    // Actor wrapper does not expose a stable "currently consuming" flag, so we
-    // conservatively preserve any selected consumable instead of interrupting it.
     const bool holdingConsumable =
         heldIdentifier.find("apple") != std::string::npos ||
         heldIdentifier.find("carrot") != std::string::npos ||
@@ -204,17 +217,26 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         heldIdentifier.find("rotten_flesh") != std::string::npos ||
         heldIdentifier.find("spider_eye") != std::string::npos ||
         heldIdentifier.find("chorus_fruit") != std::string::npos;
-    if (holdingConsumable) {
+
+    // Merely holding food no longer blocks ShiftBlade. We pause only when the
+    // native UseItem hook succeeded recently while a consumable is selected.
+    const auto now = std::chrono::steady_clock::now();
+    const bool activelyConsuming = holdingConsumable &&
+        m_lastSuccessfulUseItem.time_since_epoch().count() != 0 &&
+        now - m_lastSuccessfulUseItem < std::chrono::milliseconds(1800);
+    if (activelyConsuming) {
         restoreIfOwned();
-        m_userOverrodeSwap = true;
-        m_foodUseOverride = true;
+        if (!m_consumptionGuardActive) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
+                "paused sword swap: successful UseItem detected while a consumable is selected");
+        }
+        m_consumptionGuardActive = true;
         return;
     }
-    if (m_foodUseOverride) {
-        // Clear only the override introduced by the food guard; unrelated
-        // manual hotbar overrides retain the existing behavior.
-        m_foodUseOverride = false;
-        m_userOverrodeSwap = false;
+    if (m_consumptionGuardActive) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
+            "consumption guard ended; sword swap can resume");
+        m_consumptionGuardActive = false;
     }
     if (heldIdentifier.find("wind_charge") != std::string::npos) {
         // Explicit user selection beats the automatic sword swap. Keep the
@@ -240,20 +262,43 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!shouldUseSword) {
         restoreIfOwned();
         m_userOverrodeSwap = false;
+        m_nextSwordAttempt = {};
         return;
     }
     if (m_userOverrodeSwap) return;
 
-    const int swordSlot = inventory.findHotbarSlot(player, "_sword");
     const int selected = inventory.selectedHotbarSlot(player);
-    if (swordSlot < 0 || selected < 0) return;
-    if (selected == swordSlot) return;
+    if (selected < 0) return;
+    const int swordSlot = inventory.findHotbarSlot(player, "_sword");
+    if (swordSlot < 0) {
+        if (now >= m_nextSwordAttempt) {
+            m_nextSwordAttempt = now + std::chrono::seconds(1);
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
+                "target is in range but no sword was found in the hotbar");
+        }
+        return;
+    }
+    if (selected == swordSlot) {
+        m_nextSwordAttempt = now + std::chrono::seconds(1);
+        return;
+    }
+    if (now < m_nextSwordAttempt) return;
 
-    if (!m_ownsSwap && inventory.selectHotbarSlot(player, swordSlot) &&
-        inventory.selectedHotbarSlot(player) == swordSlot) {
+    // Retry at most once per second while the target/ground conditions remain valid.
+    m_nextSwordAttempt = now + std::chrono::seconds(1);
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
+        "attempting to equip sword; target range and ground conditions are valid");
+    const bool selectedSword = inventory.selectHotbarSlot(player, swordSlot) &&
+                               inventory.selectedHotbarSlot(player) == swordSlot;
+    if (selectedSword) {
         m_ownsSwap = true;
         m_swordSlot = swordSlot;
         m_previousSlot = selected;
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, moduleId,
+            "sword equipped successfully");
+    } else {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, moduleId,
+            "failed to equip sword; retry scheduled in 1 second");
     }
 }
 
