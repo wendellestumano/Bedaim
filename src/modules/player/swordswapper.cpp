@@ -149,7 +149,8 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const bool groundedOrNearGround =
         m_groundedTicks >= 3 && dy >= -0.02f &&
         heightAboveGround <= allowedGroundDistance + 0.02f;
-    if (groundedOrNearGround) m_lastGroundY = position.y;
+    if (groundedOrNearGround && heightAboveGround <= 0.02f)
+        m_lastGroundY = position.y;
 
     // Never let ShiftBlade override the mace while it owns a confirmed downward slam.
     if (swapperstate::maceFallPriority.load(std::memory_order_acquire)) {
