@@ -1,1 +1,0 @@
-Restoration requested from the validated pre-fallback branch source.
