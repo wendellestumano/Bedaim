@@ -80,13 +80,15 @@ void SwordSwapperModule::onInit() {
         [this](auto& event) { processPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
         [this](auto& event) {
-            if (event.action != bedrocktools::events::GameModeAction::UseItem ||
-                !event.hasNativeResult || !event.nativeResult) return;
+            if (event.action != bedrocktools::events::GameModeAction::UseItem) return;
+            // A use action may start the eating animation even when the native
+            // boolean result is false. Treat the action itself as the signal;
+            // the tick path only applies the guard while a consumable is selected.
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_lastSuccessfulUseItem = std::chrono::steady_clock::now();
+            m_lastUseItemAction = std::chrono::steady_clock::now();
         });
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, moduleId,
-        "initialized; sword retries use a 1-second cooldown and consumption guard listens for successful UseItem actions");
+        "initialized; sword retries use a 1-second cooldown and consumption guard tracks UseItem actions, including false native results");
 }
 
 void SwordSwapperModule::onEnable() {
@@ -99,7 +101,7 @@ void SwordSwapperModule::onEnable() {
     m_userOverrodeSwap = false;
     m_consumptionGuardActive = false;
     m_nextSwordAttempt = {};
-    m_lastSuccessfulUseItem = {};
+    m_lastUseItemAction = {};
     // Preserve ownership if the user re-enables the module before the next game
     // tick has had a chance to restore the temporarily selected sword.
 }
@@ -235,7 +237,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         now - m_lastSuccessfulUseItem < std::chrono::milliseconds(1800);
     if (activelyConsuming) {
         restoreIfOwned();
-        reportStatus("paused: successful UseItem detected while a consumable is selected");
+        reportStatus("paused: UseItem action detected while a consumable is selected");
         m_consumptionGuardActive = true;
         return;
     }
