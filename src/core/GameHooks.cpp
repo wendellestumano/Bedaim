@@ -764,8 +764,28 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     const auto publicEntry = publicAttackVirtualEntry(gameMode);
     if (publicEntry == 0) {
         static std::atomic_bool loggedUnavailable{false};
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel)) {
+            if (!plausibleGameMode(gameMode)) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+                    "GameHooks",
+                    "attack_validation=implausible_gamemode: object/vtable did not pass the libminecraftpe validation");
+            } else {
+                auto** vtable = *reinterpret_cast<void***>(gameMode);
+                constexpr std::size_t kKnownAttackSlot = 16;
+                const auto vtableEntry = reinterpret_cast<std::uintptr_t>(vtable[kKnownAttackSlot]);
+                const auto publicSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+                const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
+                char detail[320]{};
+                std::snprintf(detail, sizeof(detail),
+                    "attack_validation=vtable_mismatch: slot16=%p public_signature=%p survival_signature=%p",
+                    reinterpret_cast<void*>(vtableEntry),
+                    reinterpret_cast<void*>(publicSignature),
+                    reinterpret_cast<void*>(survivalSignature));
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+                    "GameHooks", detail);
+            }
             gameHooksLogger().error("Synthetic attack refused: public GameMode::attack is not validated for this runtime.");
+        }
         return false;
     }
     auto** vtable = *reinterpret_cast<void***>(gameMode);
