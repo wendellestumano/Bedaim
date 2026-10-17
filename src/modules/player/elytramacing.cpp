@@ -9,6 +9,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <pl/ModMenu.hpp>
@@ -17,6 +18,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <cstdio>
+#include <limits>
+#include <vector>
+#include <chrono>
 #include <string>
 #include <utility>
 
@@ -24,6 +29,49 @@ namespace {
 using bedrocktools::sdk::AABB;
 using bedrocktools::sdk::Player;
 using bedrocktools::sdk::Vec3;
+
+struct ReadableRegion {
+    std::uintptr_t begin{};
+    std::uintptr_t end{};
+};
+
+// Local readable-map probe: the SDK Memory header in this dependency version
+// does not expose isReadableMemory. Cache /proc/self/maps briefly to keep the
+// per-tick glide-state validation from repeatedly parsing the entire map list.
+bool isReadableMemory(const void* pointer, std::size_t size) {
+    if (!pointer || size == 0) return false;
+    const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
+    if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
+    const auto end = begin + size;
+    thread_local std::vector<ReadableRegion> regions;
+    thread_local std::chrono::steady_clock::time_point refreshed{};
+    thread_local bool cacheValid = false;
+    const auto now = std::chrono::steady_clock::now();
+    if (!cacheValid || now < refreshed || now - refreshed > std::chrono::milliseconds(50)) {
+        std::vector<ReadableRegion> next;
+        std::FILE* maps = std::fopen("/proc/self/maps", "r");
+        if (!maps) { regions.clear(); cacheValid = false; return false; }
+        char line[512]{};
+        while (std::fgets(line, sizeof(line), maps)) {
+            unsigned long long lo = 0, hi = 0;
+            char permissions[5]{};
+            if (std::sscanf(line, "%llx-%llx %4s", &lo, &hi, permissions) == 3 &&
+                permissions[0] == 'r' && hi > lo) {
+                next.push_back({static_cast<std::uintptr_t>(lo), static_cast<std::uintptr_t>(hi)});
+            }
+        }
+        std::fclose(maps);
+        if (next.empty()) { regions.clear(); cacheValid = false; return false; }
+        regions.swap(next);
+        refreshed = now;
+        cacheValid = true;
+    }
+    const auto it = std::upper_bound(regions.begin(), regions.end(), begin,
+        [](std::uintptr_t address, const ReadableRegion& region) { return address < region.begin; });
+    if (it == regions.begin()) return false;
+    const auto& region = *std::prev(it);
+    return begin >= region.begin && end <= region.end;
+}
 
 bool finiteVec(const Vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
