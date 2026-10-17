@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-17 — Bedrock Add-On and LeviLamina interoperability research
+
+- Added `docs/BEDROCK_ADDON_LEVILAMINA_RESEARCH.md` summarizing official Mojang/Microsoft Add-On samples, Script API raycast and inventory patterns, and LeviLamina's C++ ScriptActor wrapper.
+- Identified `getEntitiesFromViewDirection` as a behavioral reference for ray/AABB selection, not as a drop-in native function or validated attack route.
+- Documented that Script API lifetime-managed entities/containers are not equivalent to the native client LocalPlayer/GameMode/offhand pointers used by Bedaim.
+- Proposed pure C++ ray/AABB regression tests and version-matched local-player symbol research before native behavior changes.
+- Build #619 succeeded, including host regression tests and Android ARM64 package creation; runtime functionality remains unverified.
+
 ## 2026-10-17 — Local-player tick regression diagnostics
 
 - Recorded the confirmed regression from commit `12a9d6f`: the runtime's `ClientInstanceGetLocalPlayer` signature did not resolve, so the strict NormalTick identity filter suppressed local-player events consumed by Aim Assist and Hitbox Expander.
