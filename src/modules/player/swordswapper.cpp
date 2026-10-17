@@ -281,11 +281,11 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_nextSwordAttempt = {};
         return;
     }
-    reportStatus("active: valid target is in range; sword equip retry is enabled", bedrocktools::diagnostics::Level::Info);
     if (m_userOverrodeSwap) {
         reportStatus("paused: manual hotbar override is enabled");
         return;
     }
+    reportStatus("active: valid target is in range; sword equip retry is enabled", bedrocktools::diagnostics::Level::Info);
 
     const int selected = inventory.selectedHotbarSlot(player);
     if (selected < 0) return;
