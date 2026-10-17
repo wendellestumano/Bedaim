@@ -1,6 +1,6 @@
 #include "maceswapper.hpp"
 #include "MaceFallPolicy.hpp"
-#include "../core/Diagnostics.hpp"
+#include "../../core/Diagnostics.hpp"
 #include "swapperstate.hpp"
 
 #include <pl/ModMenu.hpp>
