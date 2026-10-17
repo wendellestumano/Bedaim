@@ -738,7 +738,7 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
     }
 
     currentLocalPlayer.store(localPlayer, std::memory_order_release);
-    ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
+    ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(resolvedClientInstance)};
     bus().publish(event);
     return result;
 }
