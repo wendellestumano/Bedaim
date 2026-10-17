@@ -28,6 +28,7 @@ target("diagnostics_test")
     set_kind("binary")
     add_files("launcher/diagnostics_test.cpp", "../src/core/Diagnostics.cpp", "../src/config/AtomicConfigWriter.cpp")
     add_includedirs("../src")
+    add_packages("nlohmann_json")
 target_end()
 
 target("autohit_guards_test")
