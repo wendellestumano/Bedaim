@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-17 — Diagnostics autosave and AutoHit weapon profiles
+
+- Added automatic TXT/JSON diagnostic exports to `/sdcard/Download/Bedaim/`, enabled by default while Module Diagnostics is enabled, with an immediate initial snapshot and a rolling autosave every minute by default.
+- Kept file writes on a worker thread and retained manual timestamped exports plus export status in the diagnostics HUD.
+- Added configurable per-weapon AutoHit profiles (enable/disable and CPS cap for swords, axes, maces and tridents) on the isolated experimental branch; unsupported/non-weapon items block attack attempts.
+- Kept AutoHit and AutoTotem experimental; this branch does not promote either module to `main`.
+
 ## 2026-10-17 — Module Diagnostics
 
 - Added **Module Diagnostics**, which writes `module_diagnostics.json` with registry and activation-state checks and shows a compact HUD summary.
