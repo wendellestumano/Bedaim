@@ -99,9 +99,20 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         "AutoTotem", "tick_gate", "ready");
 
     auto& inventory = bedrocktools::core::InventoryAccess::get();
-    const std::string offhandId = inventory.offhandIdentifier(player);
+    std::string offhandId;
+    std::string offhandReadError;
+    if (!inventory.readOffhandIdentifier(player, offhandId, &offhandReadError)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
+            "AutoTotem", "offhand_state", "unreadable", offhandReadError);
+        // An unreadable slot is not the same as an empty slot. Never begin a
+        // transfer unless the offhand accessor returns a readable ItemStack.
+        return;
+    }
     const bool offhandHasTotem = containsTotem(offhandId);
     const bool offhandEmpty = offhandId.empty();
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "AutoTotem", "offhand_read", "valid",
+        std::string("identifier=") + (offhandId.empty() ? "<empty>" : offhandId));
     const auto now = std::chrono::steady_clock::now();
 
     std::lock_guard lock(m_stateMutex);
@@ -165,6 +176,9 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const bool containerOpen = m_containerOpen.load(std::memory_order_acquire);
     const int totemSlot = inventory.findInventorySlot(player, "totem");
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "AutoTotem", "totem_search", totemSlot >= 0 ? "found" : "not_found",
+        std::string("source_slot=") + std::to_string(totemSlot));
     const bool delayElapsed =
         m_refillAfter.time_since_epoch().count() == 0 || now >= m_refillAfter;
     const bedaim::autototem::Inputs input{
