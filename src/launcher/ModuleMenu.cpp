@@ -180,6 +180,9 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Maximum angular search region.");
     slider("m_range", "Detection range", "aim", "2", "80", "0.5", "blocks",
            "How far the target scanner searches.");
+    addNode("keybind", "Bedaim toggle keybind", "aim", ConfigControlTypeV2::Keybind,
+            "", "", "", "", "Simple keyboard shortcut to toggle Bedaim on or off.",
+            false, {}, ConfigChoiceStyleV2::Auto);
 
     toggle("m_targetPlayers", "Target players", "targeting", "Include player entities.");
     toggle("m_targetMobs", "Target mobs", "targeting", "Include supported mob entities.");
@@ -325,6 +328,8 @@ static void registerHitboxExpanderConfigSchema(std::string_view moduleId,
         "", "", "", "", "Apply expanded target geometry to supported mobs.");
     add("m_requireLineOfSight", "Require line of sight", ConfigControlTypeV2::Toggle,
         "", "", "", "", "Require a clear block ray for expanded target checks.");
+    add("m_showHitbox", "Ver Hitbox", ConfigControlTypeV2::Toggle,
+        "", "", "", "", "Draw the expanded target hitbox while BedrockBounds is enabled.");
     if (!setConfigSchemaJson(moduleId, schema.toJson())) {
         // Legacy menu controls remain available on loaders without V2 schema support.
     }
