@@ -1,6 +1,7 @@
 #include "autohit.hpp"
 
 #include "aimassist.hpp"
+#include "AutoHitGuards.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/GameHooks.hpp"
 #include "modules/ModuleRegistry.hpp"
@@ -197,11 +198,35 @@ void AutoHitModule::processPlayerTick(Player* player) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
         return;
     }
-    if (!core::gamehooks::attackAvailable(gameMode)) {
+    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
+    if (!attackRouteAvailable) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable");
         return;
     }
     diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
+
+    // Final native-free gate is shared with host tests. The earlier checks are
+    // intentionally retained for precise per-stage diagnostics; this last gate
+    // ensures no dispatch occurs if any prerequisite becomes invalid.
+    const bedaim::autohit::Inputs dispatchFacts{
+        enabled,
+        player != nullptr,
+        target != nullptr,
+        validBounds(targetBounds),
+        true, // currentTargetSnapshot rejects stale target data
+        gameMode != nullptr,
+        attackRouteAvailable,
+        finiteVec(hitPoint),
+        true, // cooldown was checked immediately before resolving GameMode
+        std::sqrt(distanceSq),
+        maxRange
+    };
+    const auto dispatchDecision = bedaim::autohit::evaluate(dispatchFacts);
+    if (dispatchDecision != bedaim::autohit::Decision::Ready) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "final_guard",
+            "blocked", "native dispatch prerequisites changed or failed validation");
+        return;
+    }
 
     const bool attacked = core::gamehooks::attack(gameMode, target, true, &hitPoint);
     if (attacked) {
