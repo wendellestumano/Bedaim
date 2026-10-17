@@ -29,3 +29,16 @@ target("diagnostics_test")
     add_files("launcher/diagnostics_test.cpp", "../src/core/Diagnostics.cpp", "../src/config/AtomicConfigWriter.cpp")
     add_includedirs("../src")
 target_end()
+
+target("autohit_guards_test")
+    set_kind("binary")
+    add_files("launcher/autohit_guards_test.cpp", "../src/modules/player/AutoHitGuards.cpp")
+    add_includedirs("../src")
+target_end()
+
+target("autototem_policy_test")
+    set_kind("binary")
+    add_files("launcher/autototem_policy_test.cpp", "../src/modules/player/AutoTotemPolicy.cpp")
+    add_includedirs("../src")
+target_end()
+
