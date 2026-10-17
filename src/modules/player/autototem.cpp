@@ -74,6 +74,14 @@ void AutoTotemModule::onInit() {
 }
 
 void AutoTotemModule::onEnable() {
+    // Re-resolve the native offhand reader when the user explicitly retries.
+    // readOffhandIdentifier quarantines a getter after an invalid pointer; without
+    // initialize() here, the UI's "toggle off/on to retry" message was false:
+    // the quarantine remained set for the rest of the process.
+    bedrocktools::core::InventoryAccess::get().initialize();
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "AutoTotem", "offhand_reader", "retry_requested",
+        "reinitialized native reader after AutoTotem was enabled");
     std::lock_guard lock(m_stateMutex);
     m_pendingRefill = false;
     m_lastOffhandHadTotem = false;
