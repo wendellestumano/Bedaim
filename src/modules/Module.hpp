@@ -17,10 +17,11 @@ public:
     bool hideInHudEditor = false;
     int keybind = 0;
 
-    // Display names can evolve independently from saved configuration IDs.
-    Module(const char* n, const char* d, const char* stableId = nullptr)
+    // Keep the stable internal ID independent from the user-facing module name.
+    // This lets modules be branded without breaking other modules or saved configs.
+    Module(const char* n, const char* d, const char* idName = nullptr)
         : name(n), description(d),
-          moduleId(std::string("bedrocktools.") + (stableId ? stableId : n)) {}
+          moduleId(std::string("bedrocktools.") + (idName ? idName : n)) {}
     virtual ~Module() = default;
 
     virtual void onInit()     {}

@@ -2,6 +2,7 @@
 #include <EGL/egl.h>
 #include <time.h>
 #include <errno.h>
+#include <algorithm>
 
 FPSUnlockerModule::FPSUnlockerModule()
     : Module("FPS Unlocker", "Unlocks frame rate beyond VSync. Set target FPS or 0 for unlimited.") {}
@@ -44,19 +45,32 @@ void FPSUnlockerModule::onFrame() {
     clock_gettime(CLOCK_MONOTONIC, &now);
 
     if (m_hasLastFrame) {
-        long long frameDurationNs = 1000000000LL / targetFPS;
+        // Keep pacing stable without trying to "catch up" from a deadline that
+        // is already in the past. Catch-up deadlines can cause several frames to
+        // run back-to-back after a slow frame and produce uneven pacing.
+        const int safeTargetFPS = std::clamp(targetFPS, 1, 1000);
+        const long long frameDurationNs = 1000000000LL / safeTargetFPS;
 
-        struct timespec deadline;
-        deadline.tv_sec = m_lastFrameTime.tv_sec;
-        deadline.tv_nsec = m_lastFrameTime.tv_nsec + frameDurationNs;
-
+        struct timespec deadline = m_lastFrameTime;
+        deadline.tv_nsec += frameDurationNs;
         while (deadline.tv_nsec >= 1000000000L) {
-            deadline.tv_sec++;
+            ++deadline.tv_sec;
             deadline.tv_nsec -= 1000000000L;
         }
 
-        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, nullptr) == EINTR) {
+        const bool deadlinePassed = deadline.tv_sec < now.tv_sec ||
+            (deadline.tv_sec == now.tv_sec && deadline.tv_nsec <= now.tv_nsec);
+        if (deadlinePassed) {
+            // This frame has already exceeded its budget; rebase at the current
+            // time rather than repeatedly issuing sleeps for past deadlines.
+            m_lastFrameTime = now;
+            return;
         }
+
+        int sleepResult = 0;
+        do {
+            sleepResult = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, nullptr);
+        } while (sleepResult == EINTR);
 
         m_lastFrameTime = deadline;
     } else {
@@ -67,7 +81,9 @@ void FPSUnlockerModule::onFrame() {
 
 void FPSUnlockerModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
-    if (j.contains("targetFPS")) targetFPS = j["targetFPS"].get<int>();
+    if (j.contains("targetFPS") && j["targetFPS"].is_number_integer()) {
+        targetFPS = std::clamp(j["targetFPS"].get<int>(), 0, 1000);
+    }
 }
 
 void FPSUnlockerModule::saveConfig(nlohmann::json& j) {

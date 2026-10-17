@@ -3,6 +3,7 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include "core/GameHooks.hpp"
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <regex>
@@ -31,22 +32,28 @@ static void* (*sendToServer)(void* sender, void* packet) = nullptr;
 static void* (*getPacketSender)(void* clientInstance) = nullptr;
 static std::shared_ptr<void> (*createPacket)(int id) = nullptr;
 
-static bool canSendReQ() {
+static bool reQCooldownReady() {
     if (!AutoReQ::instance || !AutoReQ::instance->enabled) return false;
     std::lock_guard<std::mutex> lock(sTimeMutex);
-    auto now = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - sLastReQTime).count();
-    if (elapsed < AutoReQ::instance->cooldownMs) {
-        return false;
-    }
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - sLastReQTime).count();
+    return elapsed >= std::max(0, AutoReQ::instance->cooldownMs);
+}
+
+static bool reserveReQCooldown() {
+    if (!AutoReQ::instance || !AutoReQ::instance->enabled) return false;
+    std::lock_guard<std::mutex> lock(sTimeMutex);
+    const auto now = std::chrono::steady_clock::now();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - sLastReQTime).count();
+    if (elapsed < std::max(0, AutoReQ::instance->cooldownMs)) return false;
     sLastReQTime = now;
     return true;
 }
 
 static void sendReQCommand() {
-    if (!canSendReQ()) return;
-    
-    
+    // Check readiness before preparing a packet, but reserve the cooldown only
+    // once all prerequisites are available and a send can actually be attempted.
+    if (!reQCooldownReady()) return;
     if (sCurrentGameMode.empty()) return;
     
     if (!sendToServer) sendToServer = (decltype(sendToServer)) bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LoopbackPacketSenderSendToServer);
@@ -72,7 +79,7 @@ static void sendReQCommand() {
     *reinterpret_cast<bool*>(payload + bedrocktools::sdk::offsets::CommandRequestPacketPayload::mInternalSource) = true;
     
     void* sender = getPacketSender(bedrocktools::core::gamehooks::clientInstance());
-    if (sender) {
+    if (sender && reserveReQCooldown()) {
         sendToServer(sender, pkt);
     }
 }
