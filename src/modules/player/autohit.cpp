@@ -4,6 +4,7 @@
 #include "AutoHitGuards.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/GameHooks.hpp"
+#include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
@@ -25,6 +26,29 @@ using bedrocktools::sdk::Vec3;
 
 bool finiteVec(const Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+enum class WeaponClass { Sword, Axe, Mace, Trident, Unsupported };
+
+WeaponClass classifyWeapon(std::string identifier) {
+    std::transform(identifier.begin(), identifier.end(), identifier.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (identifier.find("sword") != std::string::npos) return WeaponClass::Sword;
+    if (identifier.find("axe") != std::string::npos) return WeaponClass::Axe;
+    if (identifier.find("mace") != std::string::npos) return WeaponClass::Mace;
+    if (identifier.find("trident") != std::string::npos) return WeaponClass::Trident;
+    return WeaponClass::Unsupported;
+}
+
+const char* weaponClassName(WeaponClass weapon) {
+    switch (weapon) {
+        case WeaponClass::Sword: return "sword";
+        case WeaponClass::Axe: return "axe";
+        case WeaponClass::Mace: return "mace";
+        case WeaponClass::Trident: return "trident";
+        case WeaponClass::Unsupported: return "unsupported";
+    }
+    return "unsupported";
 }
 
 bool validBounds(const AABB& bounds) {
@@ -65,6 +89,7 @@ AutoHitModule::AutoHitModule()
 }
 
 void AutoHitModule::onInit() {
+    bedrocktools::core::InventoryAccess::get().initialize();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
@@ -152,13 +177,21 @@ void AutoHitModule::processPlayerTick(Player* player) {
     bool attackHeld = false;
     int attackButton = 0;
     float configuredRange = 3.2f;
-    float intervalMs = 180.0f;
+    bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
+    float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         attackHeld = m_attackHeld;
         attackButton = m_attackButton;
         configuredRange = m_attackRange;
-        intervalMs = m_attackIntervalMs;
+        swordEnabled = m_swordEnabled;
+        swordCps = m_swordCps;
+        axeEnabled = m_axeEnabled;
+        axeCps = m_axeCps;
+        maceEnabled = m_maceEnabled;
+        maceCps = m_maceCps;
+        tridentEnabled = m_tridentEnabled;
+        tridentCps = m_tridentCps;
     }
 
     if (!enabled) {
@@ -179,6 +212,30 @@ void AutoHitModule::processPlayerTick(Player* player) {
             std::string("configured_button=") + std::to_string(attackButton));
         return;
     }
+
+    auto& inventory = core::InventoryAccess::get();
+    const std::string heldItem = inventory.selectedHotbarIdentifier(player);
+    const WeaponClass weapon = classifyWeapon(heldItem);
+    bool weaponAllowed = false;
+    float configuredCps = 0.0f;
+    switch (weapon) {
+        case WeaponClass::Sword: weaponAllowed = swordEnabled; configuredCps = swordCps; break;
+        case WeaponClass::Axe: weaponAllowed = axeEnabled; configuredCps = axeCps; break;
+        case WeaponClass::Mace: weaponAllowed = maceEnabled; configuredCps = maceCps; break;
+        case WeaponClass::Trident: weaponAllowed = tridentEnabled; configuredCps = tridentCps; break;
+        case WeaponClass::Unsupported: break;
+    }
+    if (!weaponAllowed || !std::isfinite(configuredCps)) {
+        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile",
+            weaponAllowed ? "invalid_cps" : "blocked",
+            std::string("weapon=") + weaponClassName(weapon) + "; item=" +
+                (heldItem.empty() ? "empty_or_unreadable" : heldItem));
+        return;
+    }
+    configuredCps = std::clamp(configuredCps, 1.0f, 20.0f);
+    const float intervalMs = 1000.0f / configuredCps;
+    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
+        std::string("weapon=") + weaponClassName(weapon) + "; cps=" + std::to_string(configuredCps));
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
@@ -286,7 +343,16 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), 0, 16);
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
-    m_attackIntervalMs = std::clamp(json.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
+    const float legacyInterval = std::clamp(json.value("m_attackIntervalMs", 180.0f), 80.0f, 1000.0f);
+    const float legacySwordCps = std::clamp(1000.0f / legacyInterval, 1.0f, 20.0f);
+    m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
+    m_swordCps = std::clamp(json.value("m_swordCps", legacySwordCps), 1.0f, 20.0f);
+    m_axeEnabled = json.value("m_axeEnabled", m_axeEnabled);
+    m_axeCps = std::clamp(json.value("m_axeCps", m_axeCps), 1.0f, 20.0f);
+    m_maceEnabled = json.value("m_maceEnabled", m_maceEnabled);
+    m_maceCps = std::clamp(json.value("m_maceCps", m_maceCps), 1.0f, 20.0f);
+    m_tridentEnabled = json.value("m_tridentEnabled", m_tridentEnabled);
+    m_tridentCps = std::clamp(json.value("m_tridentCps", m_tridentCps), 1.0f, 20.0f);
 }
 
 void AutoHitModule::saveConfig(nlohmann::json& json) {
@@ -294,21 +360,32 @@ void AutoHitModule::saveConfig(nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     json["m_attackButton"] = m_attackButton;
     json["m_attackRange"] = m_attackRange;
-    json["m_attackIntervalMs"] = m_attackIntervalMs;
+    json["m_attackIntervalMs"] = 1000.0f / m_swordCps; // legacy config compatibility
+    json["m_swordEnabled"] = m_swordEnabled;
+    json["m_swordCps"] = m_swordCps;
+    json["m_axeEnabled"] = m_axeEnabled;
+    json["m_axeCps"] = m_axeCps;
+    json["m_maceEnabled"] = m_maceEnabled;
+    json["m_maceCps"] = m_maceCps;
+    json["m_tridentEnabled"] = m_tridentEnabled;
+    json["m_tridentCps"] = m_tridentCps;
 }
 
 void AutoHitModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
     schema.defaultCategory("combat")
-        .category("combat", "Combat", "Experimental held-input attack");
-    auto buttonNode = [&](const char* key, const char* title, const char* minimum,
-                          const char* maximum, const char* step, const char* unit) {
+        .category("combat", "Combat", "Experimental held-input attack and per-weapon CPS profiles")
+        .category("weapon_profiles", "Weapon Profiles", "Choose which held weapons may activate AutoHit and their CPS cap");
+
+    auto slider = [&](const char* key, const char* title, const char* category,
+                      const char* minimum, const char* maximum,
+                      const char* step, const char* unit) {
         ConfigNodeV2 node;
         node.id = key;
         node.key = key;
         node.title = title;
-        node.category = "combat";
+        node.category = category;
         node.type = ConfigControlTypeV2::SliderFloat;
         node.minValue = minimum;
         node.maxValue = maximum;
@@ -316,9 +393,27 @@ void AutoHitModule::onMenuRegistered() {
         node.unit = unit;
         schema.node(std::move(node));
     };
-    buttonNode("m_attackButton", "Mouse button index", "0", "16", "1", "");
-    buttonNode("m_attackRange", "Attack range", "2", "6", "0.1", " blocks");
-    buttonNode("m_attackIntervalMs", "Attack interval", "80", "1000", "10", " ms");
+    auto toggle = [&](const char* key, const char* title) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.category = "weapon_profiles";
+        node.type = ConfigControlTypeV2::Toggle;
+        schema.node(std::move(node));
+    };
+
+    slider("m_attackButton", "Mouse button index", "combat", "0", "16", "1", "");
+    slider("m_attackRange", "Attack range", "combat", "2", "6", "0.1", " blocks");
+    toggle("m_swordEnabled", "Enable sword profile");
+    slider("m_swordCps", "Sword CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    toggle("m_axeEnabled", "Enable axe profile");
+    slider("m_axeCps", "Axe CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    toggle("m_maceEnabled", "Enable mace profile");
+    slider("m_maceCps", "Mace CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    toggle("m_tridentEnabled", "Enable trident profile");
+    slider("m_tridentCps", "Trident CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+
     ConfigNodeV2 keybindNode;
     keybindNode.id = "keybind";
     keybindNode.key = "keybind";
@@ -331,6 +426,20 @@ void AutoHitModule::onMenuRegistered() {
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
+    if (key == "m_swordEnabled" || key == "m_axeEnabled" ||
+        key == "m_maceEnabled" || key == "m_tridentEnabled") {
+        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
+        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
+        if (!on && !off) return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (key == "m_swordEnabled") m_swordEnabled = on;
+        else if (key == "m_axeEnabled") m_axeEnabled = on;
+        else if (key == "m_maceEnabled") m_maceEnabled = on;
+        else m_tridentEnabled = on;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "weapon_profile", std::string(key) + (on ? "_enabled" : "_disabled"));
+        return true;
+    }
     try {
         const std::string raw(value);
         std::size_t parsed = 0;
@@ -340,7 +449,10 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (key == "m_attackButton") m_attackButton = std::clamp(static_cast<int>(std::lround(number)), 0, 16);
         else if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
-        else if (key == "m_attackIntervalMs") m_attackIntervalMs = std::clamp(number, 80.0f, 1000.0f);
+        else if (key == "m_swordCps") m_swordCps = std::clamp(number, 1.0f, 20.0f);
+        else if (key == "m_axeCps") m_axeCps = std::clamp(number, 1.0f, 20.0f);
+        else if (key == "m_maceCps") m_maceCps = std::clamp(number, 1.0f, 20.0f);
+        else if (key == "m_tridentCps") m_tridentCps = std::clamp(number, 1.0f, 20.0f);
         else return false;
         return true;
     } catch (...) {
