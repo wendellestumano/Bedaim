@@ -199,6 +199,9 @@ void AutoHitModule::processPlayerTick(Player* player) {
     using namespace bedrocktools;
     bool attackHeld = false;
     int attackButton = 0;
+    int heldButton = -1;
+    bool touchRepeatEnabled = false;
+    int touchWindowRemainingMs = 0;
     float configuredRange = 3.2f;
     bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
     float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
@@ -209,6 +212,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
             (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
              tickNow < m_touchRepeatUntil);
         attackButton = m_attackButton;
+        heldButton = m_heldButton;
+        touchRepeatEnabled = m_touchRepeatEnabled;
+        if (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil) {
+            touchWindowRemainingMs = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                m_touchRepeatUntil - tickNow).count());
+        }
         configuredRange = m_attackRange;
         swordEnabled = m_swordEnabled;
         swordCps = m_swordCps;
@@ -234,8 +243,13 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
     if (!attackHeld) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "waiting_for_attack_input",
-            std::string("configured_button=") + std::to_string(attackButton));
+        const std::string inputState = std::string("waiting_for_attack_input_button_") +
+            std::to_string(attackButton) + (touchRepeatEnabled ? "_touch_repeat_on" : "_touch_repeat_off");
+        const std::string inputDetail = std::string("configured_button=") + std::to_string(attackButton) +
+            "; held_button=" + std::to_string(heldButton) +
+            "; touch_repeat=" + (touchRepeatEnabled ? "enabled" : "disabled") +
+            "; repeat_window_remaining_ms=" + std::to_string(touchWindowRemainingMs);
+        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", inputState, inputDetail);
         return;
     }
 
