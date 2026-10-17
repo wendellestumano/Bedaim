@@ -1,5 +1,5 @@
 #include "GameHooks.hpp"
-#include "Diagnostics.hpp"
+#include "modules/player/AutoHitGuards.hpp"
 #include "modules/player/PlayerGameType.hpp"
 #include <bedrocktools/Version.hpp>
 
@@ -53,6 +53,8 @@ using ClientInstanceUpdateFn = void*(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
 using EglSwapBuffersFn = EGLBoolean(*)(EGLDisplay, EGLSurface);
+using OpenInventoryScreenFn = void(*)(void*);
+using CloseInventoryScreenFn = void(*)(void*, std::int8_t);
 
 VersionStringFn versionOriginal = nullptr;
 NormalTickFn tickOriginal = nullptr;
@@ -88,6 +90,10 @@ thread_local std::uint32_t gameModeActionDepth = 0;
 thread_local bool syntheticAttackDispatchActive = false;
 thread_local bool syntheticAttackResultObserved = false;
 thread_local bool syntheticAttackNativeResult = false;
+std::mutex inventoryUiApiMutex;
+OpenInventoryScreenFn openInventoryScreenOriginal = nullptr;
+CloseInventoryScreenFn closeInventoryScreenOriginal = nullptr;
+bool inventoryUiApiResolved = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
 PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
@@ -98,6 +104,8 @@ std::atomic_bool playerSetGameTypeHookInstalled{false};
 std::atomic_bool playerSetGameTypeSeen{false};
 std::mutex playerGameTypeCacheMutex;
 std::unordered_map<const void*, std::int32_t> playerGameTypeCache;
+bool inventoryUiApiWarningLogged = false;
+bool openInventoryViaVtable = false;
 
 template <class Function>
 bool hookSignature(SignatureId id, void* detour, Function** original) {
@@ -148,48 +156,8 @@ bool itemStackHasItem(const void* itemStack) {
     return *reinterpret_cast<void* const*>(counter) != nullptr;
 }
 
-class DiagnosticGameHooksLogger {
-public:
-    template <typename... Args>
-    void info(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Info, format, args...);
-        native().info(format, std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    void debug(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Debug, format, args...);
-        native().debug(format, std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    void warn(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Warning, format, args...);
-        native().warn(format, std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    void error(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Error, format, args...);
-        native().error(format, std::forward<Args>(args)...);
-    }
-private:
-    static pl::log::Logger& native() {
-        static auto& logger = pl::log::Logger::getOrCreate("Bedaim-GameHooks");
-        return logger;
-    }
-    template <typename... Args>
-    static void mirror(bedrocktools::diagnostics::Level level, std::string_view format, Args&&... args) {
-        try {
-            const auto message = fmt::vformat(fmt::string_view(format.data(), format.size()),
-                                             fmt::make_format_args(args...));
-            bedrocktools::diagnostics::log(level, "GameHooks", message);
-        } catch (...) {
-            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
-                "GameHooks", "failed to format native logger message");
-        }
-    }
-};
-
-DiagnosticGameHooksLogger& gameHooksLogger() {
-    static DiagnosticGameHooksLogger logger;
+pl::log::Logger& autoHitLogger() {
+    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AutoHit");
     return logger;
 }
 
@@ -206,7 +174,7 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
     if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
     const auto end = begin + size;
 
-    // GameMode validation can happen on every attack attempt. A thread-local
+    // GameMode validation can happen on every AutoHit attempt. A thread-local
     // 50 ms readable-map snapshot makes those checks O(log mappings), instead of
     // opening/parsing /proc/self/maps on every call. No pointer is considered
     // valid solely because it was validated earlier; address containment is
@@ -329,15 +297,15 @@ bool installPlayerSetGameTypeHook() {
         }
         handles[handleCount++] = handle;
         playerSetGameTypeHookInstalled.store(true, std::memory_order_release);
-        gameHooksLogger().info(
+        autoHitLogger().info(
             "Installed a trusted Player::setPlayerGameType observer; remote player modes can be cached when the engine updates them.");
         return true;
     }
     return false;
 }
 
-void resolvePlayerGameTypeApi() {
-    std::lock_guard<std::mutex> apiLock(playerGameTypeCacheMutex);
+void resolveInventoryUiApi() {
+    std::lock_guard<std::mutex> apiLock(inventoryUiApiMutex);
     const auto resolveNow = std::chrono::steady_clock::now();
     if (!playerGetGameTypeOriginal && resolveNow >= playerGameTypeNextResolve) {
         playerGameTypeNextResolve = resolveNow + std::chrono::seconds(1);
@@ -353,7 +321,63 @@ void resolvePlayerGameTypeApi() {
         playerSetGameTypeNextResolve = resolveNow + std::chrono::seconds(1);
         installPlayerSetGameTypeHook();
     }
+    if (inventoryUiApiResolved) return;
 
+    // Do not use call_once here: BedrockTools/LeviLamina can load its support
+    // runtime after Bedaim initialization. Retry until a trusted API pair exists.
+    openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+        resolveMinecraftFunction("_ZN11LocalPlayer13openInventoryEv"));
+    if (!openInventoryScreenOriginal) {
+        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+            resolveMinecraftFunction("_ZN6Player13openInventoryEv"));
+    }
+    // Some LeviLamina distributions expose the generated callable wrapper in a
+    // trusted client runtime even when the original Minecraft symbol is stripped.
+    if (!openInventoryScreenOriginal) {
+        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+            resolveLoadedClientSupportFunction("_ZN11LocalPlayer14$openInventoryEv"));
+    }
+    if (!openInventoryScreenOriginal) {
+        openInventoryScreenOriginal = reinterpret_cast<OpenInventoryScreenFn>(
+            resolveLoadedClientSupportFunction("_ZN6Player14$openInventoryEv"));
+    }
+
+    // openInventory is virtual. If no callable wrapper is exported, the known
+    // Player vtable slot is checked against libminecraftpe.so at call time.
+    openInventoryViaVtable = openInventoryScreenOriginal == nullptr;
+
+    // Prefer the native LocalPlayer/Player method when this build exports it.
+    // The previous resolver only searched globally-loaded client helpers, so a
+    // valid close method exported directly by libminecraftpe.so was missed and
+    // AutoTotem never attempted its visible inventory sequence.
+    closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
+        resolveMinecraftFunction(
+            "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+    if (!closeInventoryScreenOriginal) {
+        closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
+            resolveMinecraftFunction(
+                "_ZN6Player20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+    }
+    if (!closeInventoryScreenOriginal) {
+        closeInventoryScreenOriginal = reinterpret_cast<CloseInventoryScreenFn>(
+            resolveLoadedClientSupportFunction(
+                "_ZN11LocalPlayer20closeContainerScreenEN11SharedTypes6Legacy13ContainerTypeE"));
+    }
+    // Require trusted exported open/close functions; vtable-only UI calls are
+    // rejected because an incorrect slot can crash the client.
+    inventoryUiApiResolved = openInventoryScreenOriginal && closeInventoryScreenOriginal;
+
+    if (!inventoryUiApiResolved) {
+        if (!inventoryUiApiWarningLogged) {
+            autoHitLogger().warn(
+                "AutoTotem UI sequence not available yet (open={}, close={}); will retry when the runtime loads its inventory helpers.",
+                openInventoryScreenOriginal != nullptr, closeInventoryScreenOriginal != nullptr);
+            inventoryUiApiWarningLogged = true;
+        }
+    } else {
+        inventoryUiApiWarningLogged = false;
+        autoHitLogger().info("AutoTotem resolved a trusted inventory UI open/close pair.");
+    }
 }
 
 bool plausibleGameMode(void* gameMode) {
@@ -523,7 +547,7 @@ bool survivalModeInteractDetour(void* gameMode, void* target, const void* locati
 bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     static std::atomic_bool loggedNativeAttack{false};
     if (!loggedNativeAttack.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Native attack detour received its first call (target={}, hitPosition={}, trampoline={}).",
+        autoHitLogger().info("Native attack detour received its first call (target={}, hitPosition={}, trampoline={}).",
             target != nullptr, hitPosition != nullptr, gameModeAttackOriginal != nullptr);
 
     const AttackKind kind = attackKindFor(gameMode);
@@ -539,7 +563,7 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
         }
         static std::atomic_bool loggedCancelled{false};
         if (!loggedCancelled.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("The first native attack was cancelled by an AttackEvent listener.");
+            autoHitLogger().warn("The first native attack was cancelled by an AttackEvent listener.");
         return false;
     }
     const bool result = gameModeAttackOriginal
@@ -551,7 +575,7 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     }
     static std::atomic_bool loggedNativeResult{false};
     if (!loggedNativeResult.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("First native attack trampoline result: {}.", result);
+        autoHitLogger().info("First native attack trampoline result: {}.", result);
     // Publish after native processing so the HUD can react to the actual attack result.
     AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
     bus().publish(resultEvent);
@@ -630,7 +654,6 @@ bool hookEgl() {
 bool install() {
     std::lock_guard lock(installMutex);
     if (installed) return true;
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", "starting hook installation");
     hookSignature(SignatureId::VersionString, reinterpret_cast<void*>(versionDetour), &versionOriginal);
     hookSignature(SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
     hookSignature(SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
@@ -648,13 +671,13 @@ bool install() {
     hookSignature(SignatureId::SurvivalModeInteract, reinterpret_cast<void*>(survivalModeInteractDetour), &survivalModeInteractOriginal);
     const bool internalAttackHooked = hookSignature(
         SignatureId::GameModeAttackInternal, reinterpret_cast<void*>(gameModeAttackDetour), &gameModeAttackOriginal);
-    const bool publicAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0;
-    const bool survivalAttackSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0;
-    const bool internalAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0;
-    gameHooksLogger().info(
+    autoHitLogger().info(
         "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
-        publicAttackSignature, survivalAttackSignature, internalAttackSignature,
-        internalAttackHooked, gameModeAttackOriginal != nullptr);
+        bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0,
+        bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0,
+        bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0,
+        internalAttackHooked,
+        gameModeAttackOriginal != nullptr);
     hookSignature(SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
@@ -662,13 +685,8 @@ bool install() {
     hookSignature(SignatureId::ChatScreenDtor, reinterpret_cast<void*>(chatCloseDetour), &chatCloseOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOnContainerSlotSelected, reinterpret_cast<void*>(containerSlotSelectedDetour), &containerSlotSelectedOriginal);
     const bool eglHooked = hookEgl();
-    gameHooksLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
+    autoHitLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
     installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
-    bedrocktools::diagnostics::log(
-        installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
-        "GameHooks", installed ? "required tick/client hooks installed" : "required tick/client hooks missing");
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
-        std::string("attack hook available: ") + (gameModeAttackOriginal ? "true" : "false"));
     return installed;
 }
 
@@ -709,7 +727,7 @@ void* gameModeForPlayer(void* player) {
     void* observed = currentGameMode.load(std::memory_order_acquire);
     if (observed && publicAttackVirtualEntry(observed) != 0) return observed;
 
-    // Some game sessions have not yet produced a GameMode callback when native attack dispatch
+    // Some game sessions have not yet produced a GameMode callback when AutoHit
     // first becomes active. The Player SDK already documents the owned mGameMode
     // field, but reading a version-sensitive offset is only acceptable after
     // validating the storage mapping and then matching vtable slot 16 exactly to
@@ -728,14 +746,14 @@ void* gameModeForPlayer(void* player) {
     if (!candidate || publicAttackVirtualEntry(candidate) == 0) {
         static std::atomic_bool loggedNoVerifiedGameMode{false};
         if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Could not validate a local Player-owned GameMode; no native attack was dispatched.");
+            autoHitLogger().warn("AutoHit could not validate a local Player-owned GameMode; no native attack was dispatched.");
         return nullptr;
     }
 
     currentGameMode.store(candidate, std::memory_order_release);
     static std::atomic_bool loggedPlayerGameModeFallback{false};
     if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Recovered the Player-owned GameMode using a readable field and exact public attack signature match.");
+        autoHitLogger().info("AutoHit recovered the Player-owned GameMode using a readable field and exact public attack signature match.");
     return candidate;
 }
 
@@ -743,11 +761,12 @@ bool attackAvailable(void* gameMode) {
     // Dispatch safety comes from validating the actual public GameMode vtable
     // entry against the resolved public signatures. The internal hook is only
     // used to observe the result/events; requiring it here silently disables
-    // native attack dispatch on builds where that secondary signature is unavailable.
+    // AutoHit on builds where that secondary signature is unavailable.
     if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
         return false;
     AttackKind ignored = AttackKind::GameMode;
-    return publicAttackVirtualEntry(gameMode, &ignored) != 0;
+    return bedaim::autohit::publicAttackRouteAvailable(
+        publicAttackVirtualEntry(gameMode, &ignored) != 0);
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
@@ -762,10 +781,10 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // native context before invoking the internal body. Only dispatch through it
     // when the vtable entry matches a resolved public signature for this build.
     const auto publicEntry = publicAttackVirtualEntry(gameMode);
-    if (publicEntry == 0) {
+    if (!bedaim::autohit::publicAttackRouteAvailable(publicEntry != 0)) {
         static std::atomic_bool loggedUnavailable{false};
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().error("Synthetic attack refused: public GameMode::attack is not validated for this runtime.");
+            autoHitLogger().error("Synthetic attack refused: public GameMode::attack is not validated for this runtime.");
         return false;
     }
     auto** vtable = *reinterpret_cast<void***>(gameMode);
@@ -795,7 +814,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
     static std::atomic_bool loggedPublicRoute{false};
     if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Combat dispatch selected the validated public GameMode::attack wrapper.");
+        autoHitLogger().info("Combat dispatch selected the validated public GameMode::attack wrapper.");
 
     // The public wrapper calls the hooked internal body, where the standard
     // AttackEvent/GameModeAction/AttackResultEvent pipeline already runs.
@@ -804,17 +823,17 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     if (!canObserveNativeResult) {
         // The call went through a validated public engine entry, but this build
         // lacks the internal observer required to read the native bool result.
-        // Return "dispatched" so callers can rate-limit/retry; this is not proof
+        // Return "dispatched" so AutoHit can rate-limit/retry; this is not proof
         // that the target took damage.
         static std::atomic_bool loggedUnobservedDispatch{false};
         if (!loggedUnobservedDispatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Native attack used the validated public GameMode::attack entry, but the internal result hook is unavailable; damage confirmation is not observable.");
+            autoHitLogger().warn("AutoHit dispatched through the validated public GameMode::attack entry, but the internal result hook is unavailable; damage confirmation is not observable.");
         return true;
     }
     if (!syntheticAttackResultObserved) {
         static std::atomic_bool loggedMissingInternalDispatch{false};
         if (!loggedMissingInternalDispatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().error("Validated public attack returned without reaching the installed internal observer; dispatch result is unknown.");
+            autoHitLogger().error("Validated public attack returned without reaching the installed internal observer; dispatch result is unknown.");
         return true;
     }
     return syntheticAttackNativeResult;
@@ -827,7 +846,7 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
         std::chrono::steady_clock::now() >= playerGameTypeNextResolve) {
         // Retry the exported getter and setter observer at a bounded cadence. The
         // resolver owns the separate retry schedule for the setter hook.
-        resolvePlayerGameTypeApi();
+        resolveInventoryUiApi();
     }
 
     if (playerGetGameTypeOriginal) {
@@ -841,7 +860,7 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
         }
         static std::atomic_bool loggedUnknownNativeGameType{false};
         if (!loggedUnknownNativeGameType.exchange(true, std::memory_order_acq_rel)) {
-            gameHooksLogger().warn(
+            autoHitLogger().warn(
                 "Player::getPlayerGameType returned unrecognized native value {}; checking the observed setter cache instead of guessing.",
                 nativeValue);
         }
@@ -858,7 +877,7 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
 
     static std::atomic_bool loggedMissingGameType{false};
     if (!loggedMissingGameType.exchange(true, std::memory_order_acq_rel)) {
-        gameHooksLogger().warn(
+        autoHitLogger().warn(
             "No native GameType getter result or setter-cache entry is available yet (getter={}, setterHook={}, setterObserved={}); this player's mode remains Unknown until the engine updates a cached player or a matching-build packet hook is added.",
             playerGetGameTypeOriginal != nullptr,
             playerSetGameTypeHookInstalled.load(std::memory_order_acquire),
@@ -867,5 +886,40 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     return false;
 }
 
+bool inventoryUiSequenceAvailable() {
+    resolveInventoryUiApi();
+    return inventoryUiApiResolved;
+}
+
+bool openPlayerInventoryScreen(void* player) {
+    if (!player || !isReadableMemory(player, sizeof(void*)) || !inventoryUiSequenceAvailable())
+        return false;
+    if (openInventoryScreenOriginal) {
+        openInventoryScreenOriginal(player);
+        return true;
+    }
+    if (!openInventoryViaVtable) return false;
+
+    auto** vtable = *reinterpret_cast<void***>(player);
+    constexpr auto carriedSlot = bedrocktools::sdk::offsets::VTable::PlayerGetCarriedItem;
+    constexpr auto openSlot = bedrocktools::sdk::offsets::VTable::PlayerOpenInventory;
+    if (!vtable || !isReadableMemory(vtable, (openSlot + 1) * sizeof(void*))) return false;
+    const auto carriedFn = vtable[carriedSlot];
+    const auto openFn = vtable[openSlot];
+    if (!isMinecraftFunction(carriedFn) || !isMinecraftFunction(openFn)) return false;
+    reinterpret_cast<OpenInventoryScreenFn>(openFn)(player);
+    return true;
+}
+
+bool closePlayerInventoryScreen(void* player) {
+    if (!player || !isReadableMemory(player, sizeof(void*))) return false;
+    // The manual AutoTotem button opens with KEYCODE_E; a missing native open
+    // wrapper must not disable a separately verified native close method.
+    if (!closeInventoryScreenOriginal) resolveInventoryUiApi();
+    if (!closeInventoryScreenOriginal) return false;
+    // SharedTypes::Legacy::ContainerType::Inventory == -1 (signed-char enum).
+    closeInventoryScreenOriginal(player, static_cast<std::int8_t>(-1));
+    return true;
+}
 
 }

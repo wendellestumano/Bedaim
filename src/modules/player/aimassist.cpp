@@ -1,6 +1,7 @@
 #include "aimassist.hpp"
+#include "AutoHitKeyBinding.hpp"
 #include "AimAssistMath.hpp"
-#include "../../core/Diagnostics.hpp"
+#include "AutoHitGuards.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
@@ -8,7 +9,6 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
-#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
@@ -26,8 +26,8 @@
 #include <limits>
 #include <atomic>
 #include <string_view>
-#include <unordered_set>
 #include <pl/Logger.hpp>
+#include <pl/Input.hpp>
 #include <pl/ModMenu.hpp>
 
 
@@ -53,36 +53,33 @@ struct ActorVector {
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
 
 AimAssistModule* g_aimAssist = nullptr;
+std::once_flag g_autoHitInputCallbackOnce;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
-HitboxExpanderModule* g_hitboxExpander = nullptr;
-std::once_flag g_hitboxExpanderEventOnce;
-
-bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& out) {
-    if (!origin || !g_fetchNearbyActors || !std::isfinite(radius) || radius <= 0.0f) return false;
-    bedrocktools::sdk::Vec3 extent{radius, radius, radius};
-    ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
-        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 16384) return false;
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        if (entry->actor && reinterpret_cast<std::uintptr_t>(entry->actor) > 0x1000)
-            out.insert(entry->actor);
-    }
-    return true;
-}
 std::atomic_bool g_loggedGameTypeUnavailable{false};
 
-pl::log::Logger& aimAssistLogger() {
-    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AimAssist");
+pl::log::Logger& autoHitLogger() {
+    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AutoHit");
     return logger;
 }
+
+void logAutoHitOnce(std::atomic_bool& alreadyLogged, std::string_view message) {
+    if (!alreadyLogged.exchange(true, std::memory_order_acq_rel))
+        autoHitLogger().info("{}", message);
+}
+
+std::atomic_bool g_loggedAutoHitNoTarget{false};
+std::atomic_bool g_loggedAutoHitStaleTarget{false};
+std::atomic_bool g_loggedAutoHitNoGameMode{false};
+std::atomic_bool g_loggedAutoHitOutOfRange{false};
+std::atomic_bool g_loggedAutoHitBlocked{false};
+std::atomic_bool g_loggedAutoHitInvalidPosition{false};
+std::atomic_bool g_loggedAutoHitResult{false};
+std::atomic_bool g_loggedAutoHitNoAttackRoute{false};
 
 constexpr float kPi = 3.14159265358979323846f;
 constexpr float kRadToDeg = 180.0f / kPi;
@@ -392,6 +389,21 @@ void AimAssistModule::resetTrackingState() {
 }
 
 void AimAssistModule::onInit() {
+    // The launcher Input API observes real/virtual Android key events. It does
+    // not synthesize them from native code; the floating Hold button below is
+    // the supported way to emit a configurable key into the game's input path.
+    std::call_once(g_autoHitInputCallbackOnce, [] {
+        pl::input::registerKeyCallback([](const pl::input::KeyEvent& event) {
+            auto* module = g_aimAssist;
+            if (!module) return false;
+            const int configuredKey = module->m_autoHitKeyCode.load(std::memory_order_acquire);
+            if (configuredKey > 0 && event.keyCode == configuredKey) {
+                module->m_autoHitPhysicalKeyDown.store(event.isKeyDown, std::memory_order_release);
+            }
+            return false;
+        });
+    });
+
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
     // GameType lookup is centralized and retried by GameHooks after runtime load.
@@ -405,19 +417,6 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
     g_applyLocalPlayerTurnDelta = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
-
-    const bool targetQueryReady = g_fetchNearbyActors != nullptr;
-    const bool targetClassificationReady = g_actorIsPlayer != nullptr;
-    const bool cameraControlReady = g_applyLocalPlayerTurnDelta != nullptr;
-    const bool requiredReady = targetQueryReady && targetClassificationReady && cameraControlReady;
-    bedrocktools::diagnostics::probe(
-        requiredReady ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
-        "BedrockAim", "native_dependencies", requiredReady ? "ready" : "partial",
-        std::string("nearby_query=") + (targetQueryReady ? "ok" : "missing") +
-        ", actor_classification=" + (targetClassificationReady ? "ok" : "missing") +
-        ", camera_control=" + (cameraControlReady ? "ok" : "missing") +
-        ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
-        ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
@@ -439,26 +438,52 @@ void AimAssistModule::onInit() {
 }
 
 void AimAssistModule::onEnable() {
+    m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
+    m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+    m_autoHitMouseButtonDown.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
 void AimAssistModule::onDisable() {
+    m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
+    m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+    m_autoHitMouseButtonDown.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
+bool AimAssistModule::showInLegacyMenu(std::string_view key) const {
+    return key != "m_autoHitKeyCode";
+}
+
+bool AimAssistModule::onMouseEvent(int button, bool isDown) {
+    if (!enabled) return false;
+    const int configuredButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+    if (configuredButton > 0 && button == configuredButton) {
+        m_autoHitMouseButtonDown.store(isDown, std::memory_order_release);
+    }
+    // Never consume the user's mouse event; AutoHit observes it passively.
+    return false;
+}
+
 void AimAssistModule::onMenuRegistered() {
+    m_menuRegistered.store(true, std::memory_order_release);
+    refreshAutoHitKeyButton();
     if (!m_numericSettingsRegistered.exchange(true, std::memory_order_acq_rel)) {
         using namespace pl::modmenu;
         ModuleBuilder settings("bedaim.aimassist.write_settings", "Aim Assist Write Settings");
         settings.modId("Bedaim")
             .description("Enter exact numeric values for Aim Assist without dragging sliders.")
             .defaultEnabled(true)
+            .config("showAutoHitButton", "Show AutoHit Floating Button", ConfigType::Toggle,
+                    m_autoHitButtonEnabled ? "true" : "false")
             .config("rotationSpeed", "Rotation Speed (exact)", ConfigType::Text, "1.00")
             .config("aimSpeed", "Aim Speed (exact)", ConfigType::Text, "5.00")
             .config("fov", "FOV (exact)", ConfigType::Text, "35.00")
             .config("range", "Aim Range (exact)", ConfigType::Text, "5.50")
+            .config("autoHitRange", "AutoHit Range (exact)", ConfigType::Text, "3.00")
+            .config("autoHitDelayMs", "AutoHit Delay ms (exact)", ConfigType::Text, "150.00")
             .config("strength", "Strength (exact)", ConfigType::Text, "0.25")
             .config("hitboxScale", "Hitbox Area (exact)", ConfigType::Text, "1.00")
             .config("hitboxDistanceGrowth", "Hitbox Growth (exact)", ConfigType::Text, "5.00")
@@ -482,6 +507,15 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
             return number;
         } catch (...) { return std::nullopt; }
     };
+    if (key == "m_autoHitButtonEnabled" || key == "showAutoHitButton") {
+        const bool visible = value == "true" || value == "1" || value == "on";
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_autoHitButtonEnabled = visible;
+        }
+        if (m_menuRegistered.load(std::memory_order_acquire)) refreshAutoHitKeyButton();
+        return true;
+    }
     const auto parsed = parseNumber();
     if (!parsed) return false;
     const float number = *parsed;
@@ -490,6 +524,8 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "aimSpeed") m_aimSpeed = std::clamp(number, 0.1f, 10.0f);
     else if (key == "fov") m_fov = std::clamp(number, 1.0f, 360.0f);
     else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
+    else if (key == "autoHitRange") m_autoHitRange = std::clamp(number, 2.0f, 6.0f);
+    else if (key == "autoHitDelayMs") m_autoHitDelayMs = std::clamp(number, 80.0f, 1000.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
     else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
@@ -507,6 +543,58 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     return true;
 }
 
+void AimAssistModule::refreshAutoHitKeyButton() {
+    using namespace pl::modmenu;
+    constexpr std::string_view ButtonId = "bedaim.aimassist.autohit_key";
+    unregisterButton(ButtonId);
+
+    const int keyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
+    const int mouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+    if (!m_autoHitButtonEnabled || ((keyCode <= 0 || keyCode > 288) && (mouseButton <= 0 || mouseButton > 16))) return;
+
+    std::string label;
+    if (mouseButton > 0) {
+        label = "AUTO HIT / BUTTON " + std::to_string(mouseButton);
+    } else {
+        std::string keyLabel = bedaim::autohitkey::format(keyCode);
+        std::transform(keyLabel.begin(), keyLabel.end(), keyLabel.begin(),
+            [](unsigned char ch) { return static_cast<char>(std::toupper(ch)); });
+        if (keyCode >= 7 && keyCode <= 16) {
+            keyLabel = std::to_string(keyCode == 7 ? 0 : keyCode - 6);
+        } else if (keyCode >= 29 && keyCode <= 54) {
+            keyLabel.assign(1, static_cast<char>('A' + (keyCode - 29)));
+        } else if (keyCode >= 188 && keyCode <= 203) {
+            keyLabel = "BUTTON" + std::to_string(keyCode - 187);
+        } else if (keyCode == 62) {
+            keyLabel = "SPACE";
+        } else if (keyCode == 66) {
+            keyLabel = "ENTER";
+        } else if (keyCode == 111) {
+            keyLabel = "ESC";
+        }
+        label = "AUTO HIT / KEY " + keyLabel;
+    }
+
+    ButtonBuilder button(std::string(ButtonId), "AutoHit Key");
+    button.moduleId(moduleId)
+        .modId("BedrockTools")
+        .label(label)
+        .behavior(ButtonBehavior::Hold)
+        .defaultVisible(true)
+        .stylePreset(ButtonStylePreset::Keycap);
+    // Preserve the previously working launcher path: a keyboard-bound floating
+    // Hold control injects the configured Android key into Bedrock's input stream.
+    // The control is rebuilt after a binding change.
+    if (mouseButton <= 0 && keyCode > 0) button.androidKeyCode(keyCode);
+    button.onEvent([this, mouseButton](std::string_view, ButtonEvent event, float) {
+        const bool down = event == ButtonEvent::Down;
+        if (mouseButton > 0)
+            m_autoHitMouseButtonDown.store(down, std::memory_order_release);
+        else
+            m_autoHitVirtualKeyDown.store(down, std::memory_order_release);
+    }).registerButton();
+}
+
 
 
 
@@ -522,19 +610,8 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     target = nullptr;
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
-    const auto now = std::chrono::steady_clock::now();
-    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent ||
-        !validBounds(m_lastTargetBounds) ||
-        m_lastTargetSeen.time_since_epoch().count() == 0 ||
-        now < m_lastTargetSeen ||
-        now - m_lastTargetSeen > std::chrono::milliseconds(250)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "target_snapshot", "stale_or_missing");
-        return false;
-    }
+    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
     target = m_lastTarget;
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "BedrockAim", "target_snapshot", "fresh");
     bounds = m_lastTargetBounds;
     return true;
 }
@@ -575,16 +652,8 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
 bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
-    const auto now = std::chrono::steady_clock::now();
     if (!enabled || !player || player != m_lastPlayer || !target ||
-        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds) ||
-        m_lastTargetSeen.time_since_epoch().count() == 0 ||
-        now < m_lastTargetSeen ||
-        now - m_lastTargetSeen > std::chrono::milliseconds(250)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "crosshair_check", "stale_or_invalid_target");
-        return false;
-    }
+        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
 
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent) return false;
@@ -647,21 +716,20 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
     return true;
 }
 
+void AimAssistModule::deferAutoHitFor(float delayMs) {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    const auto requested = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(static_cast<int>(std::clamp(delayMs, 80.0f, 1000.0f)));
+    if (m_nextAutoHit < requested) m_nextAutoHit = requested;
+}
+
 void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
-        const char* reason = !enabled ? "disabled" : !player ? "missing_local_player" :
-            !g_fetchNearbyActors ? "nearby_query_unavailable" : "all_target_categories_disabled";
-        bedrocktools::diagnostics::probe(
-            !player || !g_fetchNearbyActors ? bedrocktools::diagnostics::Level::Warning :
-                bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "tracking_gate", reason);
         resetTrackingState();
         return;
     }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "BedrockAim", "tracking_gate", "ready");
 
     m_lastPlayer = player;
     m_localPlayerGliding = actorIsGliding(player);
@@ -684,7 +752,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
             m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee);
     // Keep target geometry fresh for Sword/Mace Swapper even when the currently
-    // held weapon is filtered out. Camera movement and automatic attack still respect the filter.
+    // held weapon is filtered out. Camera movement and AutoHit still respect the filter.
 
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent) {
@@ -751,7 +819,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
     const float range = std::clamp(m_range, 2.0f, 80.0f);
     const float expansionMargin = expander ? expander->queryExpansionMargin() : 0.0f;
-    const float scanRange = std::clamp(range + expansionMargin, 2.0f, 80.0f);
+    const float scanRange = bedaim::autohit::effectiveScanRange(range, m_autoHit, m_autoHitRange, expansionMargin);
     Vec3 extent{scanRange, scanRange, scanRange};
     // The native nearby-actors function returns the actual candidate snapshot;
     // don't gate it on Level::mActorManager, an unused offset that can vary by build.
@@ -786,6 +854,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         : std::clamp(m_targetRetentionRadius, 0.5f, 5.0f);
     const float retentionRadiusSq = retentionRadius * retentionRadius;
     const float maxDistanceSq = range * range;
+    const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
+    const float maxAutoHitDistanceSq = autoHitRange * autoHitRange;
     // Experimental full-range FOV. Range, entity type, visibility, and valid bounds
     // remain required even when the angular limit is set to 360 degrees.
     const float maxFov = std::clamp(m_fov, 1.0f, 360.0f);
@@ -810,7 +880,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                 if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
                     if (gameType == 1 || gameType == 3) continue;
                 } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                    aimAssistLogger().warn("Creative/Spectator filter unavailable: no verified GameType export; those players may still be eligible.");
+                    autoHitLogger().warn("Creative/Spectator filter unavailable: no verified GameType export; those players may still be eligible.");
                 }
             }
         } else {
@@ -826,7 +896,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
 
         // Aim at a stable point on the native bounds but allow the bounded
-        // expanded client box to participate in target acquisition and automatic attack range.
+        // expanded client box to participate in target acquisition and AutoHit range.
         const AABB selectionBounds = expander
             ? expander->expandedTargetBounds(isPlayer, targetBounds) : targetBounds;
         const Vec3 centerAimPoint{
@@ -853,7 +923,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // its center; the box itself still cannot exceed the configured size limits.
         const bool inAimAssistRange = std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxDistanceSq;
-        if (!std::isfinite(d2) || !inAimAssistRange) continue;
+        const bool inAutoHitRange = m_autoHit && std::isfinite(selectionDistanceSq) &&
+            selectionDistanceSq <= maxAutoHitDistanceSq;
+        if (!std::isfinite(d2) || (!inAimAssistRange && !inAutoHitRange)) continue;
 
         // If the current target is right beside/around the player, keep it locked
         // while it crosses behind the camera. Measure distance to the target AABB,
@@ -934,9 +1006,6 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     if (!bestTarget) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "target_selection", "none",
-            "no eligible actor in the scan radius passed the current filters");
         // Keep the last target briefly while it crosses the player's immediate
         // area or the native nearby-actor list skips one tick. Do not dereference
         // the cached entity or auto-hit it while it is missing from the list.
@@ -1024,16 +1093,13 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         m_hasAimPoint = false;
         m_lastRotationUpdate = {};
     }
-    if (targetChanged) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "BedrockAim", "target_selection", bestTargetIsPlayer ? "player" : "mob",
-            "new target selected; target bounds passed validation");
-    }
     m_lastTarget = bestTarget;
     m_lastTargetIsPlayer = bestTargetIsPlayer;
     m_targetPresent = true;
     m_lastTargetBounds = bestTargetBounds;
     m_lastTargetSeen = motionSampleTime;
+    // Also check Auto Hit here so it is independent of the client-frame render hook.
+    processAutoHitLocked(player);
 }
 
 
@@ -1041,7 +1107,7 @@ void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     auto* player = m_lastPlayer;
     if (!enabled || !player || !m_lastTarget || !m_targetPresent ||
-        !m_weaponFilterAllowsCurrent || !g_applyLocalPlayerTurnDelta) return;
+        !m_weaponFilterAllowsCurrent || (!g_applyLocalPlayerTurnDelta && !m_autoHit)) return;
 
     // Candidate scanning is performed once per player tick. Re-running the native
     // nearby-actor query on every render frame caused duplicate 80-block scans and
@@ -1055,6 +1121,192 @@ void AimAssistModule::processPlayerFrame() {
     }
 
     applyAimStepLocked(player);
+}
+
+void AimAssistModule::processAutoHitLocked(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+
+    // Attack only the target chosen from this tick's native actor snapshot. Do not
+    // require a second camera-angle/crosshair test here: that duplicate gate caused
+    // AutoHit to stop during camera convergence and when targets moved below the player.
+    if (!m_autoHit || !enabled || !player || player != m_lastPlayer ||
+        !m_weaponFilterAllowsCurrent) return;
+    const int configuredKey = m_autoHitKeyCode.load(std::memory_order_acquire);
+    const int configuredMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+    const bool physicalKeyDown = m_autoHitPhysicalKeyDown.load(std::memory_order_acquire);
+    const bool virtualKeyDown = m_autoHitVirtualKeyDown.load(std::memory_order_acquire);
+    const bool mouseButtonDown = m_autoHitMouseButtonDown.load(std::memory_order_acquire);
+    // A mouse alias may carry both its Android BUTTON_n key code and its
+    // physical/touch mouse-button identity. Treat those as alternative ways to
+    // hold the same binding, not two separate inputs that must be held together.
+    // Native AutoHit is automatic whenever its module toggle is enabled.
+    // Physical keys and the optional floating Hold button are input conveniences,
+    // not prerequisites for dispatch.
+    (void)configuredKey;
+    (void)configuredMouseButton;
+    (void)physicalKeyDown;
+    (void)virtualKeyDown;
+    (void)mouseButtonDown;
+    if (!m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) {
+        logAutoHitOnce(g_loggedAutoHitNoTarget,
+            "AutoHit is enabled but Aim Assist has no valid target snapshot. Check target filters and detection range.");
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (m_lastTargetSeen.time_since_epoch().count() == 0 ||
+        now - m_lastTargetSeen > std::chrono::milliseconds(150)) {
+        logAutoHitOnce(g_loggedAutoHitStaleTarget,
+            "AutoHit skipped an expired target snapshot (>150 ms old).");
+        return;
+    }
+    if (m_nextAutoHit.time_since_epoch().count() != 0 && now < m_nextAutoHit) return;
+
+    // processAutoHitLocked is called synchronously at the end of the same
+    // LocalPlayerTickEvent that selected m_lastTarget from a validated native actor
+    // vector. Re-querying/sorting an 80-block actor cube here duplicates the most
+    // expensive native scan every tick and was a major mobile frame-time cost.
+    // Use the already validated current-tick target and its type/bounds snapshot.
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expander = (expanderBase && expanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
+    auto* liveTarget = reinterpret_cast<Actor*>(m_lastTarget);
+    const Vec3 liveTargetPosition = liveTarget->position();
+    const AABB liveTargetBounds = liveTarget->bounds();
+    if (!finiteVec3(liveTargetPosition) || !validBounds(liveTargetBounds)) {
+        logAutoHitOnce(g_loggedAutoHitInvalidPosition,
+            "AutoHit skipped a tick-selected target with invalid position or bounds.");
+        m_nextAutoHit = now + std::chrono::milliseconds(100);
+        return;
+    }
+    m_lastTargetBounds = liveTargetBounds;
+    const bool liveTargetIsPlayer = m_lastTargetIsPlayer;
+
+    const Vec3 playerPosition = player->position();
+    const AABB playerBounds = player->bounds();
+    if (!finiteVec3(playerPosition)) {
+        logAutoHitOnce(g_loggedAutoHitInvalidPosition,
+            "AutoHit skipped a non-finite local-player position.");
+        return;
+    }
+
+    Vec3 eyePosition = playerPosition;
+    if (validBounds(playerBounds)) {
+        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
+        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+
+    AABB bounds = liveTargetBounds;
+    if (expander && g_actorIsPlayer) {
+        bounds = expander->expandedTargetBounds(liveTargetIsPlayer, bounds);
+    }
+    const Vec3 targetCenter{
+        (bounds.min.x + bounds.max.x) * 0.5f,
+        bounds.min.y + (bounds.max.y - bounds.min.y) * 0.55f,
+        (bounds.min.z + bounds.max.z) * 0.5f
+    };
+    const float centerDistanceSq = distanceSquared(eyePosition, targetCenter);
+    if (!std::isfinite(centerDistanceSq)) {
+        logAutoHitOnce(g_loggedAutoHitInvalidPosition,
+            "AutoHit skipped non-finite eye/target coordinates.");
+        return;
+    }
+
+    // Choose the nearest point on the target bounds. If the player's eye happens to
+    // overlap the AABB, use the target center rather than producing a zero-length hit.
+    Vec3 hitPoint{
+        std::clamp(eyePosition.x, bounds.min.x, bounds.max.x),
+        std::clamp(eyePosition.y, bounds.min.y, bounds.max.y),
+        std::clamp(eyePosition.z, bounds.min.z, bounds.max.z)
+    };
+    float hitDistanceSq = distanceSquared(eyePosition, hitPoint);
+    if (!std::isfinite(hitDistanceSq)) {
+        logAutoHitOnce(g_loggedAutoHitInvalidPosition,
+            "AutoHit skipped non-finite hit-point coordinates.");
+        return;
+    }
+    if (hitDistanceSq < 0.01f) {
+        hitPoint = targetCenter;
+        hitDistanceSq = centerDistanceSq;
+    }
+
+    const float autoHitRange = std::clamp(m_autoHitRange, 2.0f, 6.0f);
+    if (hitDistanceSq > autoHitRange * autoHitRange) {
+        logAutoHitOnce(g_loggedAutoHitOutOfRange,
+            "AutoHit found a target, but its hitbox is beyond the configured AutoHit range.");
+        return;
+    }
+
+    if (m_cantSeeThroughBlocks || (expander && expander->requiresLineOfSight())) {
+        auto* dimension = player->dimension();
+        void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
+        if (blockSource && g_isSolidBlockingBlock &&
+            !hasClearLineOfSight(blockSource, eyePosition, hitPoint)) {
+            logAutoHitOnce(g_loggedAutoHitBlocked,
+                "AutoHit is blocked by the line-of-sight setting.");
+            return;
+        }
+    }
+
+    // Resolve the native receiver only after cheap geometry and visibility gates
+    // pass. When no engine-owned GameMode has been observed yet, throttle this
+    // lookup instead of checking mappings on every player tick.
+    void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
+    if (!gameMode) {
+        logAutoHitOnce(g_loggedAutoHitNoGameMode,
+            "AutoHit has a target but no valid GameMode pointer has been observed from a real engine callback yet.");
+        m_nextAutoHit = now + std::chrono::milliseconds(250);
+        return;
+    }
+
+    const bool attackRouteAvailable =
+        bedrocktools::core::gamehooks::attackAvailable(gameMode);
+    const float hitDistance = std::sqrt(hitDistanceSq);
+    const bool targetFresh =
+        m_lastTargetSeen.time_since_epoch().count() != 0 &&
+        now >= m_lastTargetSeen &&
+        now - m_lastTargetSeen <= std::chrono::milliseconds(150);
+    const bool cooldownReady =
+        m_nextAutoHit.time_since_epoch().count() == 0 || now >= m_nextAutoHit;
+
+    const bedaim::autohit::Inputs guardInput{
+        m_autoHit && enabled,
+        player != nullptr && player == m_lastPlayer,
+        m_lastTarget != nullptr && m_targetPresent,
+        validBounds(m_lastTargetBounds),
+        targetFresh,
+        gameMode != nullptr,
+        attackRouteAvailable,
+        finiteVec3(hitPoint) && std::isfinite(hitDistance),
+        cooldownReady,
+        hitDistance,
+        autoHitRange
+    };
+    const auto guardDecision = bedaim::autohit::evaluate(guardInput);
+    if (guardDecision != bedaim::autohit::Decision::Ready) {
+        if (guardDecision == bedaim::autohit::Decision::MissingAttackRoute) {
+            logAutoHitOnce(g_loggedAutoHitNoAttackRoute,
+                "AutoHit skipped: no validated public GameMode::attack vtable/signature route is available.");
+            m_nextAutoHit = now + std::chrono::milliseconds(250);
+        }
+        return;
+    }
+
+    const float delayMs = std::clamp(m_autoHitDelayMs, 80.0f, 1000.0f);
+    const bool dispatched = bedrocktools::core::gamehooks::attack(
+        gameMode, m_lastTarget, true, &hitPoint);
+    if (!g_loggedAutoHitResult.exchange(true, std::memory_order_acq_rel)) {
+        autoHitLogger().info(
+            "First AutoHit native attack attempt returned {}; hitDistance={:.3f}, range={:.3f}, targetIsPlayer={}.",
+            dispatched, hitDistance, autoHitRange, liveTargetIsPlayer);
+    }
+    // Even a native rejection is rate-limited; use a short retry so a transient
+    // false return doesn't permanently disable attacks for the selected target.
+    const float nextDelayMs = dispatched ? delayMs : std::min(delayMs, 120.0f);
+    m_nextAutoHit = now + std::chrono::milliseconds(static_cast<int>(nextDelayMs));
 }
 
 void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
@@ -1156,7 +1408,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     }
 
     // Prediction translates the point we aim toward; it does not modify the
-    // target's stored/native bounds used by automatic attack range checks.
+    // target's stored/native bounds used by AutoHit range checks.
     AABB targetAimBounds{
         {nativeBounds.min.x + predictionOffset.x, nativeBounds.min.y + predictionOffset.y,
          nativeBounds.min.z + predictionOffset.z},
@@ -1427,6 +1679,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::unique_lock<std::mutex> stateLock(m_stateMutex);
+    const int previousAutoHitKeyCode = m_autoHitKeyCode.load(std::memory_order_acquire);
+    const int previousAutoHitMouseButton = m_autoHitMouseButton.load(std::memory_order_acquire);
+    const bool previousAutoHitButtonEnabled = m_autoHitButtonEnabled;
     m_targetPlayers = j.value("m_targetPlayers", m_targetPlayers);
     m_targetMobs = j.value("m_targetMobs", m_targetMobs);
     m_ignoreCreativeSpectator = j.value("m_ignoreCreativeSpectator", m_ignoreCreativeSpectator);
@@ -1540,6 +1795,50 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_spearAimMultiplier = std::clamp(j.value("m_spearAimMultiplier", m_spearAimMultiplier), 0.2f, 10.0f);
     m_otherMeleeAimMultiplier = std::clamp(j.value("m_otherMeleeAimMultiplier", m_otherMeleeAimMultiplier), 0.2f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
+    m_autoHit = j.value("m_autoHit", m_autoHit);
+    m_autoHitButtonEnabled = j.value("m_autoHitButtonEnabled", m_autoHitButtonEnabled);
+    m_autoHitRange = std::clamp(j.value("m_autoHitRange", m_autoHitRange), 2.0f, 6.0f);
+    m_autoHitDelayMs = std::clamp(j.value("m_autoHitDelayMs", m_autoHitDelayMs), 80.0f, 1000.0f);
+    int configuredKey = previousAutoHitKeyCode;
+    int configuredMouseButton = previousAutoHitMouseButton;
+    if (j.contains("m_autoHitKeyBinding") && j["m_autoHitKeyBinding"].is_string()) {
+        m_autoHitKeyBinding = j.value("m_autoHitKeyBinding", m_autoHitKeyBinding);
+        const auto parsedMouseButton = bedaim::autohitkey::parseMouseButton(m_autoHitKeyBinding);
+        const auto parsedBinding = bedaim::autohitkey::parse(m_autoHitKeyBinding);
+        if (parsedMouseButton.has_value()) {
+            // Keep both identities: Android BUTTON_n supports the launcher input
+            // bridge, while the mouse-button id lets desktop/OTG mouse events and
+            // the floating Hold control activate the same binding.
+            configuredKey = *bedaim::autohitkey::androidButtonKeyCode(*parsedMouseButton);
+            configuredMouseButton = *parsedMouseButton;
+        } else if (parsedBinding.has_value()) {
+            configuredKey = *parsedBinding;
+            configuredMouseButton = 0;
+        }
+        // Text edits are partial values. Unknown/incomplete aliases keep the last
+        // valid binding until a complete key or mouse alias is entered.
+    } else {
+        configuredKey = std::clamp(j.value("m_autoHitKeyCode", previousAutoHitKeyCode), 0, 288);
+        configuredMouseButton = 0;
+        m_autoHitKeyBinding = bedaim::autohitkey::format(configuredKey);
+    }
+    m_autoHitKeyCode.store(configuredKey, std::memory_order_release);
+    m_autoHitMouseButton.store(configuredMouseButton, std::memory_order_release);
+
+    const bool keyChanged = previousAutoHitKeyCode != configuredKey;
+    const bool bindingChanged = keyChanged || previousAutoHitMouseButton != configuredMouseButton;
+    const bool buttonVisibilityChanged = previousAutoHitButtonEnabled != m_autoHitButtonEnabled;
+    if (bindingChanged) {
+        m_autoHitPhysicalKeyDown.store(false, std::memory_order_release);
+        m_autoHitVirtualKeyDown.store(false, std::memory_order_release);
+        m_autoHitMouseButtonDown.store(false, std::memory_order_release);
+    }
+    stateLock.unlock();
+    // Mouse-button bindings keep Android keyCode at zero, so they must refresh
+    // the touch Hold control when the mouse-button selection changes too.
+    if ((bindingChanged || buttonVisibilityChanged) && m_menuRegistered.load(std::memory_order_acquire)) {
+        refreshAutoHitKeyButton();
+    }
 }
 
 void AimAssistModule::saveConfig(nlohmann::json& j) {
@@ -1596,308 +1895,20 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_predictionMode"] = m_predictionMode;
     j["m_predictionLeadMs"] = m_predictionLeadMs;
     j["m_whitelistNames"] = m_whitelistNames;
+    j["m_autoHit"] = m_autoHit;
+    j["m_autoHitButtonEnabled"] = m_autoHitButtonEnabled;
+    j["m_autoHitRange"] = m_autoHitRange;
+    j["m_autoHitDelayMs"] = m_autoHitDelayMs;
+    j["m_autoHitKeyCode"] = m_autoHitKeyCode.load(std::memory_order_acquire);
+    j["m_autoHitKeyBinding"] = m_autoHitKeyBinding;
 }
 
  
 HitboxExpanderModule::HitboxExpanderModule()
     : Module("BedrockBounds",
-             "Temporarily expands client-side actor bounds for native target queries; the server still validates reach and hits.",
+             "Expands client-side target selection, crosshair and AutoHit bounds; the server still validates reach and hits.",
              "Hitbox Expander") {
     keybind = 0;
-    g_hitboxExpander = this;
-}
-
-void HitboxExpanderModule::onInit() {
-    if (!g_fetchNearbyActors) {
-        g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
-            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
-    }
-    if (!g_actorIsPlayer) {
-        g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
-            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
-    }
-    const bool queryReady = g_fetchNearbyActors != nullptr;
-    const bool actorTypeReady = g_actorIsPlayer != nullptr;
-    bedrocktools::diagnostics::probe(
-        queryReady && actorTypeReady ? bedrocktools::diagnostics::Level::Info :
-            bedrocktools::diagnostics::Level::Warning,
-        "HitboxExpander", "native_dependencies",
-        queryReady && actorTypeReady ? "ready" : "partial",
-        std::string("nearby_query=") + (queryReady ? "ok" : "missing") +
-        ", actor_classification=" + (actorTypeReady ? "ok" : "missing"));
-
-    std::call_once(g_hitboxExpanderEventOnce, [] {
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
-            [](auto& event) {
-                if (g_hitboxExpander) g_hitboxExpander->processPreTick(event.player);
-            });
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
-            [](auto& event) {
-                if (g_hitboxExpander) g_hitboxExpander->processPostTick(event.player);
-            });
-    });
-}
-
-void HitboxExpanderModule::onDisable() {
-    // Avoid dereferencing a cached actor from a menu callback. The persistent pre-tick
-    // listener restores any active snapshots on the next valid in-world tick.
-}
-
-void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
-    // Keep in-range expanded AABBs stable. Restore only actors that left the
-    // active query radius while enabled; restore everything when the module is off.
-    if (!player) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "player", "missing");
-        return;
-    }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "restore_policy", enabled ? "restore_stale_only" : "restore_all");
-    restoreNativeBounds(player, enabled);
-}
-
-void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
-    if (!enabled) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "HitboxExpander", "state", "disabled");
-        return;
-    }
-    if (!player) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "player", "missing");
-        return;
-    }
-    applyNativeBounds(player);
-}
-
-void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player, bool onlyStale) {
-    using namespace bedrocktools::sdk;
-    if (!player || !g_fetchNearbyActors) return;
-
-    std::vector<void*> trackedActors;
-    {
-        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
-        if (m_nativeBoundsOriginal.empty()) return;
-        trackedActors.reserve(m_nativeBoundsOriginal.size());
-        for (const auto& entry : m_nativeBoundsOriginal) trackedActors.push_back(entry.first);
-    }
-
-    // "Active" is the normal 32-block extension query. When enabled, only boxes
-    // outside this set are restored so actors no longer handled by the expander do
-    // not retain stale expanded bounds. The wider live set below is for pointer safety.
-    std::unordered_set<void*> activeActors;
-    if (onlyStale && !collectNearbyActors(player, 32.0f, activeActors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "restore_query", "active_actor_query_failed");
-        return;
-    }
-
-    std::unordered_set<void*> liveActors;
-    if (!collectNearbyActors(player, 64.0f, liveActors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "restore_query", "live_actor_query_failed");
-        return;
-    }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "restore_query", "ready");
-    const auto hasMissingTrackedActor = [&] {
-        for (void* actor : trackedActors) {
-            if (liveActors.find(actor) == liveActors.end()) return true;
-        }
-        return false;
-    };
-
-    bool missingActorsResolved = !hasMissingTrackedActor();
-    if (!missingActorsResolved) {
-        if (!collectNearbyActors(player, 256.0f, liveActors)) return;
-        missingActorsResolved = !hasMissingTrackedActor();
-        if (!missingActorsResolved) {
-            if (!collectNearbyActors(player, 512.0f, liveActors)) return;
-            missingActorsResolved = true;
-        }
-    }
-
-    std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
-    for (auto it = m_nativeBoundsOriginal.begin(); it != m_nativeBoundsOriginal.end();) {
-        void* actor = it->first;
-        const auto snapshot = it->second;
-        if (liveActors.find(actor) == liveActors.end()) {
-            // A successful broad query is required before dropping an unseen actor.
-            // Never dereference a pointer that the current level no longer reports.
-            if (missingActorsResolved) it = m_nativeBoundsOriginal.erase(it);
-            else ++it;
-            continue;
-        }
-
-        if (onlyStale && activeActors.find(actor) != activeActors.end()) {
-            // This actor is still inside the expander's active radius; keep its
-            // enlarged AABB untouched to avoid per-tick native/expanded oscillation.
-            ++it;
-            continue;
-        }
-
-        const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-        if (actorAddress <= 0x1000) {
-            it = m_nativeBoundsOriginal.erase(it);
-            continue;
-        }
-
-        auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
-            offsets::BuiltInActorComponents::mAABBShapeComponent);
-        void* currentComponent = *componentSlot;
-        auto* actorObject = reinterpret_cast<Actor*>(actor);
-        void* currentLevel = actorObject->level();
-        const Vec3 currentPosition = actorObject->position();
-        if (currentComponent != snapshot.component || currentLevel != snapshot.level ||
-            reinterpret_cast<std::uintptr_t>(currentComponent) <= 0x1000 ||
-            !finiteVec3(currentPosition) || !finiteVec3(snapshot.originalActorPosition)) {
-            it = m_nativeBoundsOriginal.erase(it);
-            continue;
-        }
-
-        const Vec3 delta{
-            currentPosition.x - snapshot.originalActorPosition.x,
-            currentPosition.y - snapshot.originalActorPosition.y,
-            currentPosition.z - snapshot.originalActorPosition.z
-        };
-        const AABB translated{
-            {snapshot.originalBounds.min.x + delta.x,
-             snapshot.originalBounds.min.y + delta.y,
-             snapshot.originalBounds.min.z + delta.z},
-            {snapshot.originalBounds.max.x + delta.x,
-             snapshot.originalBounds.max.y + delta.y,
-             snapshot.originalBounds.max.z + delta.z}
-        };
-        auto* currentBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(currentComponent) +
-            offsets::AABBShapeComponent::mAABB);
-        if (validBounds(translated)) std::memcpy(currentBounds, &translated, sizeof(AABB));
-
-        // Keep the first unexpanded snapshot while enabled. Re-capturing the box
-        // after each movement tick would bake any stale world position into the
-        // next snapshot and make the hitbox lag behind the actor.
-        if (enabled && !onlyStale) ++it;
-        else it = m_nativeBoundsOriginal.erase(it);
-    }
-}
-
-void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) {
-    using namespace bedrocktools::sdk;
-    if (!enabled || !player || !g_fetchNearbyActors || !g_actorIsPlayer) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "apply_gate", !enabled ? "disabled" :
-                !player ? "missing_player" : "native_dependency_missing");
-        return;
-    }
-
-    Vec3 extent{32.0f, 32.0f, 32.0f};
-    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
-        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 8192) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "actor_snapshot", "malformed");
-        return;
-    }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "actor_snapshot", "valid");
-
-    bool expandPlayers = false;
-    bool expandMobs = false;
-    {
-        std::lock_guard<std::mutex> lock(m_expandMutex);
-        expandPlayers = m_expandPlayers;
-        expandMobs = m_expandMobs;
-    }
-
-    bool expansionTypesChanged = false;
-    {
-        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
-        expansionTypesChanged = m_hasAppliedExpansionTypes &&
-            (m_lastAppliedExpandPlayers != expandPlayers || m_lastAppliedExpandMobs != expandMobs);
-        m_lastAppliedExpandPlayers = expandPlayers;
-        m_lastAppliedExpandMobs = expandMobs;
-        m_hasAppliedExpansionTypes = true;
-    }
-
-    // If the selected actor types change, restore their original translated boxes
-    // once before reapplying the new policy. If expansion is fully disabled by
-    // configuration, restore all tracked boxes but retain snapshots for re-enable.
-    const std::string policy = std::string(expandPlayers ? "players+" : "players-") +
-        (expandMobs ? "_mobs+" : "_mobs-");
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "HitboxExpander", "expansion_policy", policy);
-    if (expansionTypesChanged) restoreNativeBounds(player);
-    if (!expandPlayers && !expandMobs) return;
-
-    void* playerLevel = reinterpret_cast<Actor*>(player)->level();
-    if (!playerLevel) return;
-
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        void* actor = entry->actor;
-        if (!actor || actor == player || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000) continue;
-
-        const bool isPlayer = g_actorIsPlayer(actor);
-        if (isPlayer ? !expandPlayers : (!expandMobs || !categoryHasMobBit(actor))) continue;
-
-        const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-        auto* actorObject = reinterpret_cast<Actor*>(actor);
-        void* actorLevel = actorObject->level();
-        if (!actorLevel || actorLevel != playerLevel) continue;
-        auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
-            offsets::BuiltInActorComponents::mAABBShapeComponent);
-        void* component = *componentSlot;
-        if (reinterpret_cast<std::uintptr_t>(component) <= 0x1000) continue;
-
-        auto* nativeBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(component) +
-            offsets::AABBShapeComponent::mAABB);
-        const Vec3 actorPosition = actorObject->position();
-        if (!finiteVec3(actorPosition)) continue;
-
-        AABB baseBounds = *nativeBounds;
-        {
-            std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
-            auto snapshotIt = m_nativeBoundsOriginal.find(actor);
-            if (snapshotIt != m_nativeBoundsOriginal.end() &&
-                (snapshotIt->second.component != component || snapshotIt->second.level != actorLevel)) {
-                m_nativeBoundsOriginal.erase(snapshotIt);
-                snapshotIt = m_nativeBoundsOriginal.end();
-            }
-
-            if (snapshotIt == m_nativeBoundsOriginal.end()) {
-                if (!validBounds(baseBounds)) continue;
-                snapshotIt = m_nativeBoundsOriginal.emplace(
-                    actor, NativeBoundsSnapshot{component, actorLevel, baseBounds, actorPosition}).first;
-            }
-
-            const auto& snapshot = snapshotIt->second;
-            if (!validBounds(snapshot.originalBounds) || !finiteVec3(snapshot.originalActorPosition)) continue;
-            const Vec3 delta{
-                actorPosition.x - snapshot.originalActorPosition.x,
-                actorPosition.y - snapshot.originalActorPosition.y,
-                actorPosition.z - snapshot.originalActorPosition.z
-            };
-            baseBounds = {
-                {snapshot.originalBounds.min.x + delta.x,
-                 snapshot.originalBounds.min.y + delta.y,
-                 snapshot.originalBounds.min.z + delta.z},
-                {snapshot.originalBounds.max.x + delta.x,
-                 snapshot.originalBounds.max.y + delta.y,
-                 snapshot.originalBounds.max.z + delta.z}
-            };
-        }
-
-        if (!validBounds(baseBounds)) continue;
-        const AABB expanded = expandedTargetBounds(isPlayer, baseBounds);
-        if (!validBounds(expanded) ||
-            (expanded.min.x == baseBounds.min.x && expanded.min.y == baseBounds.min.y && expanded.min.z == baseBounds.min.z &&
-             expanded.max.x == baseBounds.max.x && expanded.max.y == baseBounds.max.y && expanded.max.z == baseBounds.max.z)) {
-            std::memcpy(nativeBounds, &baseBounds, sizeof(AABB));
-            continue;
-        }
-        std::memcpy(nativeBounds, &expanded, sizeof(AABB));
-    }
 }
 
 bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
@@ -1950,16 +1961,6 @@ bool HitboxExpanderModule::requiresLineOfSight() const {
     return enabled && m_requireLineOfSight;
 }
 
-bool HitboxExpanderModule::shouldShowHitbox() const {
-    std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && m_showHitbox;
-}
-
-bool HitboxExpanderModule::expandsType(bool isPlayer) const {
-    std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && (isPlayer ? m_expandPlayers : m_expandMobs);
-}
-
 bool HitboxExpanderModule::showInLegacyMenu(std::string_view key) const {
     return key != "m_hitboxSize";
 }
@@ -1996,7 +1997,6 @@ void HitboxExpanderModule::loadConfig(const nlohmann::json& j) {
     m_expandPlayers = j.value("m_expandPlayers", m_expandPlayers);
     m_expandMobs = j.value("m_expandMobs", m_expandMobs);
     m_requireLineOfSight = j.value("m_requireLineOfSight", m_requireLineOfSight);
-    m_showHitbox = j.value("m_showHitbox", m_showHitbox);
 }
 
 void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
@@ -2008,5 +2008,4 @@ void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
     j["m_expandPlayers"] = m_expandPlayers;
     j["m_expandMobs"] = m_expandMobs;
     j["m_requireLineOfSight"] = m_requireLineOfSight;
-    j["m_showHitbox"] = m_showHitbox;
 }
