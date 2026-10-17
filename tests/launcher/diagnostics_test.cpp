@@ -74,6 +74,9 @@ int main() {
     // A rolling export must replace the previous session, not append old entries.
     bedrocktools::diagnostics::clear();
     log(Level::Info, "Test", "fresh gameplay session only");
+    const auto freshEntries = bedrocktools::diagnostics::snapshot();
+    assert(freshEntries.size() == 1);
+    assert(freshEntries.front().sequence == 1);
     assert(bedrocktools::diagnostics::exportTo(path.string(), &error));
     {
         std::ifstream freshIn(path, std::ios::binary);
