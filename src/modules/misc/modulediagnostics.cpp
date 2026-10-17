@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <cstddef>
 #include <cstdint>
@@ -157,11 +158,12 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
         try {
             std::size_t parsedLength = 0;
             const std::string text(value);
-            const int parsed = std::stoi(text, &parsedLength);
-            if (parsedLength != text.size()) return false;
+            const float parsed = std::stof(text, &parsedLength);
+            if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
             {
                 std::lock_guard<std::mutex> lock(m_exportMutex);
-                m_autoExportIntervalMinutes = std::clamp(parsed, 1, 60);
+                m_autoExportIntervalMinutes = std::clamp(
+                    static_cast<int>(std::lround(parsed)), 1, 60);
             }
             m_exportCondition.notify_all();
             return true;
