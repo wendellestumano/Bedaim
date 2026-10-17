@@ -79,7 +79,6 @@ ScreenFn chatOpenOriginal = nullptr;
 ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
-std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -471,31 +470,15 @@ std::string versionDetour(void* self) {
 }
 
 void tickDetour(void* actor) {
-    // NormalTick may be reached for non-local actors. Never publish an event
-    // named LocalPlayerTickEvent for an arbitrary actor: inventory modules can
-    // otherwise interpret a mob or stale object as the local Player.
-    void* localPlayer = currentLocalPlayer.load(std::memory_order_acquire);
-    const bool isLocalPlayer = actor && localPlayer && actor == localPlayer;
-
-    if (isLocalPlayer) {
-        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-        LocalPlayerPreTickEvent preEvent{player};
-        bus().publish(preEvent);
-    } else {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Warning, "GameHooks", "local_player_tick",
-            localPlayer ? "non_local_actor_filtered" : "local_player_unavailable",
-            localPlayer ? "NormalTick actor did not match ClientInstance::getLocalPlayer"
-                        : "ClientInstance::getLocalPlayer has not yielded a player; module tick event suppressed");
-    }
-
+    // The known-good BedrockTools 1.5.7 package publishes the NormalTick
+    // actor directly. Requiring a separate ClientInstance getter here
+    // suppresses both player-tick events when that unrelated getter fails.
+    auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    LocalPlayerPreTickEvent preEvent{player};
+    bus().publish(preEvent);
     if (tickOriginal) tickOriginal(actor);
-
-    if (isLocalPlayer) {
-        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-        LocalPlayerTickEvent event{player};
-        bus().publish(event);
-    }
+    LocalPlayerTickEvent event{player};
+    bus().publish(event);
 }
 
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
@@ -629,37 +612,6 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
-
-    // A failed signature match must stay visible: resolveAll() succeeds when any
-    // signature resolves, not when every optional function is present. Keep the
-    // local-player filter strict and diagnose the exact prerequisite instead of
-    // switching to an unvalidated vtable index or treating an arbitrary actor
-    // from NormalTick as the local player.
-    const auto localPlayerGetter =
-        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
-    void* localPlayer = nullptr;
-    if (!clientInstance) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Warning, "GameHooks",
-            "local_player_resolution", "client_instance_missing");
-    } else if (!localPlayerGetter) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Error, "GameHooks",
-            "local_player_resolution", "getter_signature_unresolved",
-            "ClientInstanceGetLocalPlayer signature resolved to null; local-player events remain safely suppressed");
-    } else {
-        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-        localPlayer = client->localPlayer();
-        bedrocktools::diagnostics::probe(
-            localPlayer ? bedrocktools::diagnostics::Level::Info :
-                          bedrocktools::diagnostics::Level::Warning,
-            "GameHooks", "local_player_resolution",
-            localPlayer ? "ready" : "getter_returned_null",
-            localPlayer ? "ClientInstanceGetLocalPlayer returned a candidate pointer"
-                        : "resolved getter returned null; local-player events remain safely suppressed");
-    }
-    currentLocalPlayer.store(localPlayer, std::memory_order_release);
-
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
     return result;
@@ -790,7 +742,6 @@ void uninstall() {
     handleCount = 0;
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
-    currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
