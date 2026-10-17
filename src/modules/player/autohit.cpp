@@ -111,11 +111,13 @@ void AutoHitModule::onDisable() {
 }
 
 bool AutoHitModule::onMouseEvent(int button, bool isDown) {
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
-        "AutoHit", "raw_mouse_input",
-        std::string("button_") + std::to_string(button) + (isDown ? "_down" : "_up"),
-        "raw button index observed by the launcher input bridge");
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (enabled) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
+            "AutoHit", "raw_mouse_input",
+            std::string("button_") + std::to_string(button) + (isDown ? "_down" : "_up"),
+            "raw button index observed by the launcher input bridge");
+    }
     const bool screenBlocked = m_containerOpen.load(std::memory_order_acquire) ||
         m_chatOpen.load(std::memory_order_acquire);
     if (screenBlocked) {
