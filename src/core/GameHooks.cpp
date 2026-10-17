@@ -79,7 +79,6 @@ ScreenFn chatOpenOriginal = nullptr;
 ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
-std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -471,31 +470,15 @@ std::string versionDetour(void* self) {
 }
 
 void tickDetour(void* actor) {
-    // NormalTick may be reached for non-local actors. Never publish an event
-    // named LocalPlayerTickEvent for an arbitrary actor: inventory modules can
-    // otherwise interpret a mob or stale object as the local Player.
-    void* localPlayer = currentLocalPlayer.load(std::memory_order_acquire);
-    const bool isLocalPlayer = actor && localPlayer && actor == localPlayer;
-
-    if (isLocalPlayer) {
-        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-        LocalPlayerPreTickEvent preEvent{player};
-        bus().publish(preEvent);
-    } else {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Warning, "GameHooks", "local_player_tick",
-            localPlayer ? "non_local_actor_filtered" : "local_player_unavailable",
-            localPlayer ? "NormalTick actor did not match ClientInstance::getLocalPlayer"
-                        : "ClientInstance::getLocalPlayer has not yielded a player; module tick event suppressed");
-    }
-
+    // The known-good BedrockTools 1.5.7 package publishes the NormalTick
+    // actor directly. Requiring a separate ClientInstance getter here
+    // suppresses both player-tick events when that unrelated getter fails.
+    auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    LocalPlayerPreTickEvent preEvent{player};
+    bus().publish(preEvent);
     if (tickOriginal) tickOriginal(actor);
-
-    if (isLocalPlayer) {
-        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-        LocalPlayerTickEvent event{player};
-        bus().publish(event);
-    }
+    LocalPlayerTickEvent event{player};
+    bus().publish(event);
 }
 
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
@@ -626,78 +609,9 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     return result;
 }
 
-bool isTrustedClientInstanceCandidate(void* candidate) {
-    if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
-    auto** table = *reinterpret_cast<void***>(candidate);
-    return table && isReadableMemory(table, sizeof(void*)) && isMinecraftFunction(table[0]);
-}
-
-bool isTrustedLocalPlayerCandidate(void* candidate) {
-    if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
-    auto** table = *reinterpret_cast<void***>(candidate);
-    return table && isReadableMemory(table, sizeof(void*)) && isMinecraftFunction(table[0]);
-}
-
-void* resolveLocalPlayerFromClient(void* clientInstance, bool& usedVirtualGetter) {
-    usedVirtualGetter = false;
-    if (!isTrustedClientInstanceCandidate(clientInstance)) return nullptr;
-
-    const auto signatureGetter =
-        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
-    if (signatureGetter) {
-        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-        void* candidate = client->localPlayer();
-        if (isTrustedLocalPlayerCandidate(candidate)) return candidate;
-    }
-
-    // SDK slot 32 is the declared IClientInstance/ClientInstance local-player getter.
-    // Check the entire vtable range and the code image before making a native call.
-    constexpr std::size_t slot =
-        bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
-    auto** table = *reinterpret_cast<void***>(clientInstance);
-    if (!table || !isReadableMemory(table, (slot + 1) * sizeof(void*))) return nullptr;
-    void* entry = table[slot];
-    if (!isMinecraftFunction(entry)) return nullptr;
-
-    using Getter = void* (*)(const void*);
-    void* candidate = reinterpret_cast<Getter>(entry)(clientInstance);
-    if (!isTrustedLocalPlayerCandidate(candidate)) return nullptr;
-    usedVirtualGetter = true;
-    return candidate;
-}
-
 void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
-
-    bool usedVirtualGetter = false;
-    void* localPlayer = resolveLocalPlayerFromClient(clientInstance, usedVirtualGetter);
-    const bool signatureResolved =
-        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer) != 0;
-
-    const char* state;
-    std::string detail;
-    bedrocktools::diagnostics::Level level = bedrocktools::diagnostics::Level::Error;
-    if (localPlayer) {
-        state = usedVirtualGetter ? "ready_vtable_fallback" : "ready";
-        detail = usedVirtualGetter
-            ? "signature getter unavailable or null; SDK virtual getter returned a validated local-player candidate"
-            : "signature getter returned a validated local-player candidate";
-        level = bedrocktools::diagnostics::Level::Info;
-    } else if (!isTrustedClientInstanceCandidate(clientInstance)) {
-        state = "client_instance_invalid";
-        detail = "client instance failed readable-memory or vtable-image validation";
-    } else if (!signatureResolved) {
-        state = "getter_signature_unresolved_fallback_failed";
-        detail = "signature getter unresolved and validated SDK virtual getter did not return a player";
-    } else {
-        state = "getter_returned_null_fallback_failed";
-        detail = "signature getter returned no validated player and SDK virtual fallback failed";
-    }
-
-    bedrocktools::diagnostics::probe(level, "GameHooks", "local_player_resolution", state, detail);
-    currentLocalPlayer.store(localPlayer, std::memory_order_release);
-
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
     return result;
@@ -828,7 +742,6 @@ void uninstall() {
     handleCount = 0;
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
-    currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
