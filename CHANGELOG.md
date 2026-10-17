@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-17 — Module recovery (isolated branch)
+
+- Restored the last CI-passing BedrockAim/AABB implementation from `integrate/bedaim-shiftblade-hitbox-20261017` (Build #469) in `src/modules/player/aimassist.cpp`; this file contains both Aim Assist and Hitbox Expander behavior.
+- Kept Module Diagnostics and its periodic rolling export worker from the diagnostic-autosave branch. No diagnostic collection/export files were removed from this recovery.
+- Added a guarded ClientInstance vtable fallback for local-player identity resolution. It is attempted only when the signature result is absent, null, or fails pointer plausibility checks; the object, vtable slot, module origin, and returned player's vtable are checked before enabling player tick events.
+- Retained strict local-player identity filtering. No arbitrary NormalTick actor is accepted as the local player.
+- AutoHit and AutoTotem remain wired to player tick events and keep their existing fail-closed guards. The new branch must pass CI and then be tested in Minecraft; this commit does not claim that native attack dispatch or offhand transfer has been confirmed in a live session.
+
 ## 2026-10-17 — LeviLamina local-player interface lead
 
 - Researched versioned LeviLamina client headers and found `IClientInstance::getLocalPlayer() const` plus the `ClientInstance` override at commit `917f0defa15ffb34599eb4522da1617a4a55b42b`.
