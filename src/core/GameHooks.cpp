@@ -148,8 +148,48 @@ bool itemStackHasItem(const void* itemStack) {
     return *reinterpret_cast<void* const*>(counter) != nullptr;
 }
 
-pl::log::Logger& gameHooksLogger() {
-    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-GameHooks");
+class DiagnosticGameHooksLogger {
+public:
+    template <typename... Args>
+    void info(std::string_view format, Args&&... args) const {
+        mirror(bedrocktools::diagnostics::Level::Info, format, args...);
+        native().info(format, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void debug(std::string_view format, Args&&... args) const {
+        mirror(bedrocktools::diagnostics::Level::Debug, format, args...);
+        native().debug(format, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void warn(std::string_view format, Args&&... args) const {
+        mirror(bedrocktools::diagnostics::Level::Warning, format, args...);
+        native().warn(format, std::forward<Args>(args)...);
+    }
+    template <typename... Args>
+    void error(std::string_view format, Args&&... args) const {
+        mirror(bedrocktools::diagnostics::Level::Error, format, args...);
+        native().error(format, std::forward<Args>(args)...);
+    }
+private:
+    static pl::log::Logger& native() {
+        static auto& logger = pl::log::Logger::getOrCreate("Bedaim-GameHooks");
+        return logger;
+    }
+    template <typename... Args>
+    static void mirror(bedrocktools::diagnostics::Level level, std::string_view format, Args&&... args) {
+        try {
+            const auto message = fmt::vformat(fmt::string_view(format.data(), format.size()),
+                                             fmt::make_format_args(args...));
+            bedrocktools::diagnostics::log(level, "GameHooks", message);
+        } catch (...) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+                "GameHooks", "failed to format native logger message");
+        }
+    }
+};
+
+DiagnosticGameHooksLogger& gameHooksLogger() {
+    static DiagnosticGameHooksLogger logger;
     return logger;
 }
 
@@ -615,12 +655,6 @@ bool install() {
         "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
         publicAttackSignature, survivalAttackSignature, internalAttackSignature,
         internalAttackHooked, gameModeAttackOriginal != nullptr);
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
-        std::string("attack setup: public=") + (publicAttackSignature ? "1" : "0") +
-        " survival=" + (survivalAttackSignature ? "1" : "0") +
-        " internal=" + (internalAttackSignature ? "1" : "0") +
-        " hook=" + (internalAttackHooked ? "1" : "0") +
-        " trampoline=" + (gameModeAttackOriginal ? "1" : "0"));
     hookSignature(SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
@@ -629,8 +663,6 @@ bool install() {
     hookSignature(SignatureId::ContainerScreenControllerOnContainerSlotSelected, reinterpret_cast<void*>(containerSlotSelectedDetour), &containerSlotSelectedOriginal);
     const bool eglHooked = hookEgl();
     gameHooksLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks",
-        std::string("frame event hook installed=") + (eglHooked ? "true" : "false"));
     installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
     bedrocktools::diagnostics::log(
         installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
