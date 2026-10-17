@@ -435,7 +435,6 @@ void AimAssistModule::onDisable() {
 }
 
 void AimAssistModule::onMenuRegistered() {
-    m_menuRegistered.store(true, std::memory_order_release);
     if (!m_numericSettingsRegistered.exchange(true, std::memory_order_acq_rel)) {
         using namespace pl::modmenu;
         ModuleBuilder settings("bedaim.aimassist.write_settings", "Aim Assist Write Settings");
