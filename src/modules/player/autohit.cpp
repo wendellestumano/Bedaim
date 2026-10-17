@@ -231,7 +231,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
     const float configuredCps = profile.cps;
-    const float intervalMs = 1000.0f / configuredCps;
+    const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(configuredCps);
     diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
         std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; cps=" + std::to_string(configuredCps));
 
@@ -333,7 +333,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         // CPS is an attempt-rate cap, not only a success-rate cap. Failed native
         // dispatches must not bypass the selected weapon profile and retry at 10 Hz.
         m_nextAttack = now + std::chrono::milliseconds(
-            static_cast<int>(std::clamp(intervalMs, 50.0f, 1000.0f)));
+            std::clamp(intervalMs, 50, 1000));
     }
     diagnostics::probe(attacked ? diagnostics::Level::Info : diagnostics::Level::Warning,
         "AutoHit", "attack_result", attacked ? "accepted" : "rejected",
