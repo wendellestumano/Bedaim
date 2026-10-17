@@ -19,10 +19,20 @@ int main() {
     log(Level::Critical, "Test", "critical message");
 
     assert(bedrocktools::diagnostics::count() == 6);
+
+    bedrocktools::diagnostics::probe(Level::Debug, "ProbeTest", "target", "none");
+    assert(bedrocktools::diagnostics::count() == 7);
+    bedrocktools::diagnostics::probe(Level::Debug, "ProbeTest", "target", "none");
+    assert(bedrocktools::diagnostics::count() == 7);
+    bedrocktools::diagnostics::probe(Level::Warning, "ProbeTest", "target", "missing",
+                                     "native query returned no actor");
+    assert(bedrocktools::diagnostics::count() == 8);
     const auto entries = bedrocktools::diagnostics::snapshot();
     assert(entries.size() == 6);
     assert(entries.front().level == Level::Trace);
-    assert(entries.back().level == Level::Critical);
+    assert(entries[6].message == "target=none");
+    assert(entries.back().message == "target=missing: native query returned no actor");
+    assert(entries.back().level == Level::Warning);
 
     const auto path = std::filesystem::temp_directory_path() / "bedaim_diagnostics_test.log";
     std::string error;
