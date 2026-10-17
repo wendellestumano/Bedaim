@@ -88,7 +88,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     autoNode.description = "While Module Diagnostics is enabled, periodically refreshes one rolling file in Download/Bedaim without blocking the game thread.";
     autoNode.category = "diagnostics";
     autoNode.type = ConfigControlTypeV2::Toggle;
-    autoNode.defaultValue = "false";
+    autoNode.defaultValue = "true";
     autoNode.currentValue = m_autoExportEnabled ? "true" : "false";
     autoNode.hasCurrentValue = true;
     schema.node(std::move(autoNode));
@@ -97,14 +97,14 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     intervalNode.id = "m_autoExportIntervalMinutes";
     intervalNode.key = "m_autoExportIntervalMinutes";
     intervalNode.title = "Automatic export interval";
-    intervalNode.description = "Time between automatic exports; minimum 1 minute, maximum 60 minutes.";
+    intervalNode.description = "Time between automatic exports; minimum 1 minute, maximum 60 minutes. Defaults to every minute for useful failure diagnostics.";
     intervalNode.category = "diagnostics";
     intervalNode.type = ConfigControlTypeV2::SliderFloat;
     intervalNode.minValue = "1";
     intervalNode.maxValue = "60";
     intervalNode.step = "1";
     intervalNode.unit = " min";
-    intervalNode.defaultValue = "5";
+    intervalNode.defaultValue = "1";
     intervalNode.currentValue = std::to_string(m_autoExportIntervalMinutes);
     intervalNode.hasCurrentValue = true;
     schema.node(std::move(intervalNode));
@@ -241,6 +241,14 @@ void ModuleDiagnosticsModule::exportWorkerLoop() {
         });
         if (m_stopExportWorker) break;
 
+        // Save an initial snapshot immediately, then keep one rolling file fresh
+        // on the configured cadence. Filesystem I/O stays off the game/render thread.
+        lock.unlock();
+        exportLogs(true);
+        lock.lock();
+        if (m_stopExportWorker) break;
+        if (!m_autoExportEnabled) continue;
+
         const int intervalMinutes = m_autoExportIntervalMinutes;
         const bool changed = m_exportCondition.wait_for(
             lock, std::chrono::minutes(intervalMinutes), [this, intervalMinutes] {
@@ -249,10 +257,6 @@ void ModuleDiagnosticsModule::exportWorkerLoop() {
             });
         if (m_stopExportWorker) break;
         if (changed) continue;
-
-        lock.unlock();
-        exportLogs(true);
-        lock.lock();
     }
 }
 
