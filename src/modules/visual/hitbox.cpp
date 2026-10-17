@@ -208,7 +208,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         _renderLevel_orig(_this, screenContext, a3);
     }
 
-    auto* expander = dynamic_cast<HitboxExpanderModule*>(
+    auto* expander = static_cast<HitboxExpanderModule*>(
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
