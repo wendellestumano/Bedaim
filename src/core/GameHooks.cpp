@@ -685,8 +685,13 @@ bool install() {
     hookSignature(SignatureId::GameModeStopDestroyBlock, reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal);
     hookSignature(SignatureId::GameModeStartBuildBlock, reinterpret_cast<void*>(gameModeStartBuildBlockDetour), &gameModeStartBuildBlockOriginal);
     hookSignature(SignatureId::SurvivalModeStartBuildBlock, reinterpret_cast<void*>(survivalModeStartBuildBlockDetour), &survivalModeStartBuildBlockOriginal);
-    hookSignature(SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
-    hookSignature(SignatureId::SurvivalModeUseItem, reinterpret_cast<void*>(survivalModeUseItemDetour), &survivalModeUseItemOriginal);
+    const bool gameModeUseItemHooked = hookSignature(
+        SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
+    const bool survivalModeUseItemHooked = hookSignature(
+        SignatureId::SurvivalModeUseItem, reinterpret_cast<void*>(survivalModeUseItemDetour), &survivalModeUseItemOriginal);
+    gameHooksLogger().info(
+        "Consumption detection hooks: GameMode::useItem={}, SurvivalMode::useItem={}",
+        gameModeUseItemHooked, survivalModeUseItemHooked);
     const bool gameModeUseItemAsAttackHooked = hookSignature(
         SignatureId::GameModeUseItemAsAttack, reinterpret_cast<void*>(gameModeUseItemAsAttackDetour), &gameModeUseItemAsAttackOriginal);
     const bool survivalUseItemAsAttackHooked = hookSignature(
