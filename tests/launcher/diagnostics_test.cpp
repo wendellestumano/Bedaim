@@ -1,4 +1,4 @@
-#include "../core/Diagnostics.hpp"
+#include "core/Diagnostics.hpp"
 
 #include <cassert>
 #include <filesystem>
