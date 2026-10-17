@@ -28,7 +28,7 @@ int main() {
                                      "native query returned no actor");
     assert(bedrocktools::diagnostics::count() == 8);
     const auto entries = bedrocktools::diagnostics::snapshot();
-    assert(entries.size() == 6);
+    assert(entries.size() == 8);
     assert(entries.front().level == Level::Trace);
     assert(entries[6].message == "target=none");
     assert(entries.back().message == "target=missing: native query returned no actor");
