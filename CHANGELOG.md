@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-17 — Native symbol aliases and configurable ShiftBlade delay
+- AutoHit/GameHooks now also checks the exact exported `$attack` wrapper symbol variants. Dispatch still requires an exact match against the active GameMode vtable entry; the native safety validation is unchanged.
+- AutoTotem's offhand accessor and setter resolution now tries the matching exact exported `$getOffhandSlot`/`$setOffhandSlot` variants before the existing signature fallback. Returned pointers and post-transfer inventory state remain validated.
+- ShiftBlade's sword retry interval is now configurable in local-player ticks (0–100; default 20). All existing target selection, ownership, restore, manual override, and consumption behavior is retained.
+
 ## 2026-10-17 — Diagnostics auto-save and combat failure visibility
 
 - Changed rolling diagnostics auto-save interval to a configurable **1–300 seconds** (default 5 seconds); migrated older minute-based settings safely.

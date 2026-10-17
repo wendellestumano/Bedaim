@@ -419,11 +419,15 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         PublicAttackSymbols result{};
         constexpr const char* gameModeNames[] = {
             "_ZN8GameMode6attackEP5ActorRK4Vec3",
-            "_ZN8GameMode6attackER5ActorRK4Vec3"
+            "_ZN8GameMode6attackER5ActorRK4Vec3",
+            "_ZN8GameMode7$attackEP5ActorRK4Vec3",
+            "_ZN8GameMode7$attackER5ActorRK4Vec3"
         };
         constexpr const char* survivalModeNames[] = {
             "_ZN12SurvivalMode6attackEP5ActorRK4Vec3",
-            "_ZN12SurvivalMode6attackER5ActorRK4Vec3"
+            "_ZN12SurvivalMode6attackER5ActorRK4Vec3",
+            "_ZN12SurvivalMode7$attackEP5ActorRK4Vec3",
+            "_ZN12SurvivalMode7$attackER5ActorRK4Vec3"
         };
         for (const char* name : gameModeNames) {
             if (void* address = resolveMinecraftFunction(name)) {

@@ -178,10 +178,16 @@ void InventoryAccess::initialize() {
     constexpr GetterSymbol candidates[] = {
         {"_ZNK5Actor14getOffhandSlotEv", "Actor::getOffhandSlot const symbol"},
         {"_ZN5Actor14getOffhandSlotEv", "Actor::getOffhandSlot symbol"},
+        {"_ZNK5Actor15$getOffhandSlotEv", "Actor::$getOffhandSlot const symbol"},
+        {"_ZN5Actor15$getOffhandSlotEv", "Actor::$getOffhandSlot symbol"},
         {"_ZNK6Player14getOffhandSlotEv", "Player::getOffhandSlot const symbol"},
         {"_ZN6Player14getOffhandSlotEv", "Player::getOffhandSlot symbol"},
+        {"_ZNK6Player15$getOffhandSlotEv", "Player::$getOffhandSlot const symbol"},
+        {"_ZN6Player15$getOffhandSlotEv", "Player::$getOffhandSlot symbol"},
         {"_ZNK11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot const symbol"},
-        {"_ZN11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot symbol"}
+        {"_ZN11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot symbol"},
+        {"_ZNK11LocalPlayer15$getOffhandSlotEv", "LocalPlayer::$getOffhandSlot const symbol"},
+        {"_ZN11LocalPlayer15$getOffhandSlotEv", "LocalPlayer::$getOffhandSlot symbol"}
     };
     m_getOffhandSlot = nullptr;
     m_getOffhandSlotSource = "unresolved";
@@ -540,11 +546,23 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         resolveMinecraftSymbol("_ZN5Actor14setOffhandSlotERK9ItemStack"));
     if (!setOffhand) {
         setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN5Actor15$setOffhandSlotERK9ItemStack"));
+    }
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
             resolveMinecraftSymbol("_ZN6Player14setOffhandSlotERK9ItemStack"));
     }
     if (!setOffhand) {
         setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN6Player15$setOffhandSlotERK9ItemStack"));
+    }
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
             resolveMinecraftSymbol("_ZN11LocalPlayer14setOffhandSlotERK9ItemStack"));
+    }
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN11LocalPlayer15$setOffhandSlotERK9ItemStack"));
     }
 
     if (!actionCtor || !actionDtor || !addAction || !removeItem || !setOffhand) {

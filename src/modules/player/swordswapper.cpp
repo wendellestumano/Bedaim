@@ -88,7 +88,7 @@ void SwordSwapperModule::onInit() {
             m_lastUseItemAction = std::chrono::steady_clock::now();
         });
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, moduleId,
-        "initialized; sword retries use a 1-second cooldown and consumption guard tracks UseItem actions, including false native results");
+        "initialized; sword equip retry uses the configurable player-tick delay; consumption guard tracks UseItem actions, including false native results");
 }
 
 void SwordSwapperModule::onEnable() {
@@ -100,7 +100,8 @@ void SwordSwapperModule::onEnable() {
     m_groundedTicks = 0;
     m_userOverrodeSwap = false;
     m_consumptionGuardActive = false;
-    m_nextSwordAttempt = {};
+    m_playerTickCounter = 0;
+    m_nextSwordAttemptTick = 0;
     m_lastUseItemAction = {};
     // Preserve ownership if the user re-enables the module before the next game
     // tick has had a chance to restore the temporarily selected sword.
@@ -115,6 +116,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> lock(m_stateMutex);
     auto& inventory = bedrocktools::core::InventoryAccess::get();
+    ++m_playerTickCounter;
     auto reportStatus = [this](std::string status, bedrocktools::diagnostics::Level level = bedrocktools::diagnostics::Level::Debug) {
         if (status == m_lastStatus) return;
         m_lastStatus = status;
@@ -148,7 +150,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         restoreIfOwned();
         m_userOverrodeSwap = false;
         m_consumptionGuardActive = false;
-        m_nextSwordAttempt = {};
+        m_nextSwordAttemptTick = 0;
         return;
     }
 
@@ -280,7 +282,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!targetInRange || !groundedOrNearGround || !aim) {
         restoreIfOwned();
         m_userOverrodeSwap = false;
-        m_nextSwordAttempt = {};
+        m_nextSwordAttemptTick = 0;
         return;
     }
     if (m_userOverrodeSwap) {
@@ -292,22 +294,24 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const int selected = inventory.selectedHotbarSlot(player);
     if (selected < 0) return;
     const int swordSlot = inventory.findHotbarSlot(player, "_sword");
+    const auto retryDelay = static_cast<std::uint64_t>(std::max(1, m_equipDelayTicks));
     if (swordSlot < 0) {
-        if (now >= m_nextSwordAttempt) {
-            m_nextSwordAttempt = now + std::chrono::seconds(1);
+        if (m_playerTickCounter >= m_nextSwordAttemptTick) {
+            m_nextSwordAttemptTick = m_playerTickCounter + retryDelay;
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
-                "target is in range but no sword was found in the hotbar");
+                "target is in range but no sword was found in the hotbar; retry delayed by " +
+                    std::to_string(m_equipDelayTicks) + " tick(s)");
         }
         return;
     }
     if (selected == swordSlot) {
-        m_nextSwordAttempt = now + std::chrono::seconds(1);
+        m_nextSwordAttemptTick = m_playerTickCounter + retryDelay;
         return;
     }
-    if (now < m_nextSwordAttempt) return;
+    if (m_playerTickCounter < m_nextSwordAttemptTick) return;
 
-    // Retry at most once per second while the target/ground conditions remain valid.
-    m_nextSwordAttempt = now + std::chrono::seconds(1);
+    // Retry after the configured number of local-player ticks while conditions remain valid.
+    m_nextSwordAttemptTick = m_playerTickCounter + retryDelay;
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
         "attempting to equip sword; target range and ground conditions are valid");
     const bool selectedSword = inventory.selectHotbarSlot(player, swordSlot) &&
@@ -320,7 +324,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             "sword equipped successfully");
     } else {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, moduleId,
-            "failed to equip sword; retry scheduled in 1 second");
+            "failed to equip sword; retry scheduled after " + std::to_string(m_equipDelayTicks) + " tick(s)");
     }
 }
 
@@ -329,6 +333,7 @@ void SwordSwapperModule::loadConfig(const nlohmann::json& j) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_groundDistance = std::clamp(j.value("m_groundDistance", m_groundDistance), 0.0f, 3.0f);
+    m_equipDelayTicks = std::clamp(j.value("m_equipDelayTicks", m_equipDelayTicks), 0, 100);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
     m_respectManualSlotChanges = j.value("m_respectManualSlotChanges", m_respectManualSlotChanges);
 }
@@ -338,6 +343,7 @@ void SwordSwapperModule::saveConfig(nlohmann::json& j) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     j["m_attackRange"] = m_attackRange;
     j["m_groundDistance"] = m_groundDistance;
+    j["m_equipDelayTicks"] = m_equipDelayTicks;
     j["m_restoreSlot"] = m_restoreSlot;
     j["m_respectManualSlotChanges"] = m_respectManualSlotChanges;
 }
@@ -366,6 +372,7 @@ void SwordSwapperModule::onMenuRegistered() {
 
     slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks");
     slider("m_groundDistance", "Allowed distance above ground", "0", "3", "0.05", " blocks");
+    slider("m_equipDelayTicks", "Sword equip retry delay", "0", "100", "1", " ticks");
 
     ConfigNodeV2 restoreNode;
     restoreNode.id = "m_restoreSlot";
@@ -414,6 +421,7 @@ bool SwordSwapperModule::onMenuConfigChanged(std::string_view key, std::string_v
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
         else if (key == "m_groundDistance") m_groundDistance = std::clamp(number, 0.0f, 3.0f);
+        else if (key == "m_equipDelayTicks") m_equipDelayTicks = std::clamp(static_cast<int>(std::lround(number)), 0, 100);
         else return false;
         return true;
     } catch (...) {
