@@ -137,8 +137,8 @@ void ModuleDiagnosticsModule::onFrame() {
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
     const std::string line2 = "Logs: " + std::to_string(bedrocktools::diagnostics::count()) +
-        " | Warnings: " + std::to_string(m_summary.warnings) +
-        " | Errors: " + std::to_string(m_summary.errors);
+        " | Registry warn: " + std::to_string(m_summary.warnings) +
+        " | err: " + std::to_string(m_summary.errors);
     const std::string line3 = m_summary.written
         ? "Report saved: module_diagnostics.json"
         : "Report write failed (check config folder)";
@@ -264,6 +264,28 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
 
     report["summary"]["warnings"] = summary.warnings;
     report["summary"]["errors"] = summary.errors;
+
+    // Include a compact tail of runtime events in the JSON report so the report
+    // can show both registry health and the most recent observed failure gates.
+    const auto runtimeEvents = bedrocktools::diagnostics::snapshot();
+    const std::size_t firstRuntimeEvent = runtimeEvents.size() > 128
+        ? runtimeEvents.size() - 128 : 0;
+    report["runtime_log"] = {
+        {"buffered_entries", runtimeEvents.size()},
+        {"capacity", 4096},
+        {"recent_entries", json::array()}
+    };
+    for (std::size_t i = firstRuntimeEvent; i < runtimeEvents.size(); ++i) {
+        const auto& entry = runtimeEvents[i];
+        report["runtime_log"]["recent_entries"].push_back({
+            {"timestamp_ms", entry.timestampMs},
+            {"sequence", entry.sequence},
+            {"level", bedrocktools::diagnostics::levelName(entry.level)},
+            {"component", entry.component},
+            {"message", entry.message}
+        });
+    }
+
     report["limitations"] = json::array({
         "This report checks registration, metadata, duplicate IDs, and activation-state consistency.",
         "It cannot prove that a module's game hooks or behavior work at runtime; module-specific probes and in-game tests are required."
