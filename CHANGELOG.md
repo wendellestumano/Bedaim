@@ -64,7 +64,7 @@
 
 ## 2026-10-17 — Combat module recovery candidate
 
-- Restored the last green integration snapshot of `GameHooks.cpp`, `aimassist.cpp/.hpp`, and `AimAssistMath.cpp/.hpp` on an isolated recovery branch while retaining Module Diagnostics, automatic rolling log export, AutoHit, AutoTotem, and host tests.
-- The recovery restores the known-good `NormalTick` event path instead of allowing an unresolved local-player getter to suppress every `LocalPlayerPreTickEvent` and `LocalPlayerTickEvent`. The event actor must still be confirmed in-game as the local player before calling the recovery complete.
+- Restored the last green integration snapshot of `aimassist.cpp/.hpp` and `AimAssistMath.cpp/.hpp` on an isolated recovery branch while preserving the newer GameHooks implementation, including diagnostics mirroring and public attack-symbol validation, plus Module Diagnostics, automatic rolling log export, AutoHit, AutoTotem, and host tests.
+- This recovery keeps the current `NormalTick` event path and restores the last-green Aim Assist/Hitbox Expander implementation. Runtime diagnostics must still confirm that the event actor is the local player.
 - AutoHit and AutoTotem remain fail-closed: no guessed attack entry, arbitrary vtable index, or unverified inventory transfer was added. Their runtime behavior depends on valid tick delivery and verified native attack/inventory routes.
 - This is a recovery candidate, not a claim that all modules are fixed. CI and live runtime diagnostics must pass before merging.

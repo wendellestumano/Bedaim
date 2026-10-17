@@ -6,7 +6,7 @@ Recover Aim Assist and Hitbox Expander from the last green integration snapshot 
 ## Findings grounded in the repository
 - Last known green integration: commit `78449d76c04e488475b0ecb108bd8d7fb3659fea`, Build #469: https://github.com/wendellestumano/Bedaim/actions/runs/39001837405
 - Experimental combat branch base: `77254f0bcc952c4c5cc6c32c508cdd72acddc868`, Build #589: https://github.com/wendellestumano/Bedaim/actions/runs/39030960327
-- Previous diagnostics identified an unresolved local-player getter that suppressed player tick events. The recovery candidate restores the known-green `NormalTick` event path rather than weakening an identity check by accepting an arbitrary actor.
+- Previous diagnostics identified an unresolved local-player getter on a separate experimental branch. This candidate keeps the GameHooks implementation from the AutoHit/AutoTotem base branch and restores only the last-green Aim Assist/Hitbox Expander implementation. Live diagnostics must still confirm that the hook actor is the local player.
 - AutoHit requires a fresh Aim Assist target snapshot, crosshair/range validation, and a validated `gameModeForPlayer` / `attackAvailable` route.
 - AutoTotem requires a readable offhand, valid source slot, verified native transfer API, and post-transfer verification. Managed Add-On APIs are behavioral references, not native client APIs.
 
