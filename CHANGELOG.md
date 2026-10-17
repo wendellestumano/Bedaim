@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-17 — Build #614 recovery baseline and separated diagnostic sessions
+
+- Created an isolated recovery branch from Build #614 (`7778763e`), the user's preferred last-known-good baseline for Aim Assist and the existing sword/mace modules; the `main` branch is untouched.
+- Keep the Build #614 `GameHooks.cpp`, `InventoryAccess.cpp`, Aim Assist/Hitbox implementation, and the module set intact while applying follow-up changes on top of this baseline.
+- Split rolling diagnostics into `bedaim_diagnostics_auto.json` (current gameplay only) and `bedaim_diagnostics_total.json` (deduplicated lifetime history across gameplays).
+- Start a clean current-session log when Module Diagnostics is enabled; archive/merge the prior current JSON before deleting it, and abort rotation if archival fails to avoid losing the previous log.
+- Keep automatic logs in JSON regardless of the manual-export format selector; timestamped manual TXT/JSON exports remain available.
+
+
 ## 2026-10-17 — Diagnostics auto-save and combat failure visibility
 
 - Changed rolling diagnostics auto-save interval to a configurable **1–300 seconds** (default 5 seconds); migrated older minute-based settings safely.
