@@ -140,6 +140,12 @@ void AutoHitModule::onInit() {
 }
 
 void AutoHitModule::onEnable() {
+    // Re-resolve selected-hotbar accessors on explicit retry. This does not
+    // dispatch attacks or alter Aim Assist; it refreshes the weapon reader.
+    bedrocktools::core::InventoryAccess::get().initialize();
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "AutoHit", "inventory_reader", "retry_requested",
+        "reinitialized native inventory accessors on enable");
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackHeld = false;
     m_heldButton = -1;
