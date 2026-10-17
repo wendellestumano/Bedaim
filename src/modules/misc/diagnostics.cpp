@@ -62,6 +62,8 @@ bool DiagnosticsModule::onMenuConfigChanged(std::string_view key, std::string_vi
         const auto configPath = bedrocktools::config::ConfigManager::get().getConfigPath();
         const auto exportPath = (std::filesystem::path(configPath).parent_path() /
                                  "bedaim_diagnostics.log").string();
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Diagnostics",
+            "log export requested; destination=" + exportPath);
         std::string error;
         const bool ok = bedrocktools::diagnostics::exportTo(exportPath, &error);
         bedrocktools::diagnostics::log(
