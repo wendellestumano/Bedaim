@@ -230,6 +230,38 @@ void AutoTotemModule::saveConfig(nlohmann::json& json) {
     json["m_keepTotemEquipped"] = m_keepTotemEquipped;
 }
 
+bool AutoTotemModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    if (key == "m_combatOnly" || key == "m_keepTotemEquipped") {
+        const bool enabledValue = value == "true" || value == "1" || value == "on" || value == "yes";
+        const bool disabledValue = value == "false" || value == "0" || value == "off" || value == "no";
+        if (!enabledValue && !disabledValue) return false;
+        std::lock_guard lock(m_stateMutex);
+        if (key == "m_combatOnly") m_combatOnly = enabledValue;
+        else m_keepTotemEquipped = enabledValue;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoTotem", key, enabledValue ? "enabled" : "disabled");
+        return true;
+    }
+
+    if (key == "m_delayMs") {
+        try {
+            const std::string raw(value);
+            std::size_t parsed = 0;
+            const float number = std::stof(raw, &parsed);
+            while (parsed < raw.size() && std::isspace(static_cast<unsigned char>(raw[parsed]))) ++parsed;
+            if (parsed != raw.size() || !std::isfinite(number)) return false;
+            std::lock_guard lock(m_stateMutex);
+            m_delayMs = bedaim::autototem::normalizeDelayMs(number);
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "AutoTotem", "refill_delay_ms", std::to_string(static_cast<int>(m_delayMs)));
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
+    return false;
+}
+
 void AutoTotemModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
