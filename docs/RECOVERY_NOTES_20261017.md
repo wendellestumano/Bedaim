@@ -26,6 +26,7 @@
 ## Additional InventoryAccess hardening
 
 - Inventory slot scans now validate the player inventory field, inventory proxy/container pointers, slot-vector memory span, bounds, and slot count before iterating.
+- Offhand getter/setter resolution also tries version-matched `$` direct-thunk symbol names from the LeviLamina-generated MCAPI headers. The lookup accepts exact addresses in `libminecraftpe.so`, validates the returned `ItemStack`, and does not guess the `setOffhandSlot` vtable index.
 - Item identifier reads validate each nested pointer in the ItemStack → counter → Item → vtable path and require the description-id entry to resolve inside a loaded native module. They intentionally do not require that function to come specifically from `libminecraftpe.so`, preserving loader-exposed virtual methods observed in the known-working Bedrock 26.52 path.
 
 ## Runtime diagnostics added
