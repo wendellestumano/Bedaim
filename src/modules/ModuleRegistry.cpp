@@ -15,6 +15,7 @@
 #include "player/quickloot.hpp"
 #include "player/aimassist.hpp"
 #include "player/maceswapper.hpp"
+#include "player/elytramacing.hpp"
 #include "player/swordswapper.hpp"
 #include "player/autohit.hpp"
 #include "player/autototem.hpp"
@@ -130,6 +131,7 @@ void registerAllModules() {
     registry.emplace<AimAssistModule>();
     registry.emplace<HitboxExpanderModule>();
     registry.emplace<MaceSwapperModule>();
+    registry.emplace<ElytraMacingModule>();
     registry.emplace<SwordSwapperModule>();
     registry.emplace<AutoHitModule>();
     registry.emplace<AutoTotemModule>();
