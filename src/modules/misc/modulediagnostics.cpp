@@ -277,10 +277,6 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
     if (outputPath.empty()) return summary;
 
     summary.outputPath = outputPath.string();
-    std::error_code ec;
-    std::filesystem::create_directories(outputPath.parent_path(), ec);
-    if (ec) return summary;
-
     const std::string payload = report.dump(2) + "\n";
     summary.written = bedrocktools::config::writePayloadAtomically(
         outputPath.string(), payload);
