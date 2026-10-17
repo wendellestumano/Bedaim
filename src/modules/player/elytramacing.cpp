@@ -8,7 +8,7 @@
 #include "../../core/InventoryAccess.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -155,7 +155,7 @@ ElytraMacingModule::ElytraMacingModule()
     keybind=0;
 }
 void ElytraMacingModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
         [this](auto& e){ processPlayerTick(e.player); });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "ElytraMacing","lifecycle","initialized","independent settings; does not write shared module state");
@@ -218,7 +218,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         const float range=std::min(m_attackRange,aimRange);
         if(!std::isfinite(range)||range<=0.0f||distanceSquared(eye,center)>range*range||
            (m_requireCrosshair&&!aim->currentTargetInCrosshair(player,target,m_crosshairTolerance))) { restore(); return; }
-        void* gm=bedrocktools::core::gamehooks::gameMode();
+        void* gm=bedrocktools::core::gamehooks::gameModeForPlayer(player);
         if(!gm) { restore(); return; }
         const Vec3 hit{std::clamp(eye.x,bounds.min.x,bounds.max.x),
             std::clamp(eye.y,bounds.min.y,bounds.max.y),std::clamp(eye.z,bounds.min.z,bounds.max.z)};
