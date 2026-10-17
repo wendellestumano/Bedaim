@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 class AimAssistModule final : public Module {
 public:
@@ -146,6 +147,10 @@ private:
 class HitboxExpanderModule final : public Module {
 public:
     HitboxExpanderModule();
+    void onInit() override;
+    void onDisable() override;
+    void processPreTick(bedrocktools::sdk::Player* player);
+    void processPostTick(bedrocktools::sdk::Player* player);
     bedrocktools::sdk::AABB expandedTargetBounds(bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const;
     bool requiresLineOfSight() const;
     float queryExpansionMargin() const;
@@ -162,5 +167,16 @@ public:
     bool m_requireLineOfSight = true;
 
 private:
+    struct NativeBoundsSnapshot {
+        void* component = nullptr;
+        bedrocktools::sdk::AABB originalBounds{};
+    };
+
+    void applyNativeBounds(bedrocktools::sdk::Player* player);
+    void restoreNativeBounds(bedrocktools::sdk::Player* player);
+
     mutable std::mutex m_expandMutex;
+    std::mutex m_nativeBoundsMutex;
+    std::unordered_map<void*, NativeBoundsSnapshot> m_nativeBoundsOriginal;
+    std::atomic<bedrocktools::sdk::Player*> m_lastLocalPlayer{nullptr};
 };
