@@ -3,6 +3,7 @@
 #include "../Module.hpp"
 #include <chrono>
 #include <mutex>
+#include <string_view>
 
 namespace bedrocktools::sdk { class Player; }
 
