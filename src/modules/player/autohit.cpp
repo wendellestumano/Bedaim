@@ -8,6 +8,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <pl/ModMenu.hpp>
 
@@ -66,6 +67,26 @@ AutoHitModule::AutoHitModule()
 void AutoHitModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
+        [this](auto& event) {
+            if (event.screen == bedrocktools::events::ScreenKind::Container) {
+                const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
+                m_containerOpen.store(opened, std::memory_order_release);
+                if (opened) {
+                    std::lock_guard<std::mutex> lock(m_stateMutex);
+                    m_attackHeld = false;
+                    m_heldButton = -1;
+                }
+            } else if (event.screen == bedrocktools::events::ScreenKind::Chat) {
+                const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
+                m_chatOpen.store(opened, std::memory_order_release);
+                if (opened) {
+                    std::lock_guard<std::mutex> lock(m_stateMutex);
+                    m_attackHeld = false;
+                    m_heldButton = -1;
+                }
+            }
+        });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "initialized",
         "held-input mode; module is disabled by default in the isolated test branch");
@@ -133,6 +154,11 @@ void AutoHitModule::processPlayerTick(Player* player) {
     }
     if (!player) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dispatch_gate", "missing_player");
+        return;
+    }
+    if (m_containerOpen.load(std::memory_order_acquire) ||
+        m_chatOpen.load(std::memory_order_acquire)) {
+        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
         return;
     }
     if (!attackHeld) {
