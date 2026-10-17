@@ -1,5 +1,6 @@
 #include "modulediagnostics.hpp"
 #include "../../core/Diagnostics.hpp"
+#include "../../config/AtomicConfigWriter.hpp"
 #include <pl/ModMenu.hpp>
 
 #include "modules/ModuleRegistry.hpp"
@@ -90,9 +91,9 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
     }
     if (key == "m_clearLogsNow") {
         if (requested) {
+            // Do not add a confirmation entry immediately after clearing the
+            // buffer; that would make "clear" leave a non-empty log.
             bedrocktools::diagnostics::clear();
-            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Diagnostics",
-                "in-memory diagnostic log cleared from settings");
         }
         return true;
     }
@@ -276,34 +277,12 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
     if (outputPath.empty()) return summary;
 
     summary.outputPath = outputPath.string();
-    const std::filesystem::path tempPath = outputPath.string() + ".tmp";
     std::error_code ec;
     std::filesystem::create_directories(outputPath.parent_path(), ec);
     if (ec) return summary;
 
-    {
-        std::ofstream output(tempPath, std::ios::binary | std::ios::trunc);
-        if (!output) return summary;
-        const std::string payload = report.dump(2) + "\n";
-        output.write(payload.data(), static_cast<std::streamsize>(payload.size()));
-        output.flush();
-        if (!output.good()) {
-            output.close();
-            std::filesystem::remove(tempPath, ec);
-            return summary;
-        }
-    }
-
-    std::filesystem::rename(tempPath, outputPath, ec);
-    if (ec) {
-        // Some filesystems do not replace an existing file atomically; fall back to
-        // a remove-and-rename sequence while keeping the temporary report intact.
-        std::error_code removeError;
-        std::filesystem::remove(outputPath, removeError);
-        ec.clear();
-        std::filesystem::rename(tempPath, outputPath, ec);
-    }
-    summary.written = !ec;
-    if (ec) std::filesystem::remove(tempPath, ec);
+    const std::string payload = report.dump(2) + "\n";
+    summary.written = bedrocktools::config::writePayloadAtomically(
+        outputPath.string(), payload);
     return summary;
 }
