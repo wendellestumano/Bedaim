@@ -1728,8 +1728,7 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     // If the selected actor types change, restore their original translated boxes
     // once before reapplying the new policy. If expansion is fully disabled by
     // configuration, restore all tracked boxes but retain snapshots for re-enable.
-    if (expansionTypesChanged || (!expandPlayers && !expandMobs))
-        restoreNativeBounds(player);
+    if (expansionTypesChanged) restoreNativeBounds(player);
     if (!expandPlayers && !expandMobs) return;
 
     void* playerLevel = reinterpret_cast<Actor*>(player)->level();
