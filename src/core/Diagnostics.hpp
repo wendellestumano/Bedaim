@@ -26,6 +26,11 @@ struct Entry {
 };
 
 void log(Level level, std::string_view component, std::string_view message) noexcept;
+// Emit a log entry only when a named probe changes state; useful for per-tick
+// module gates without flooding the bounded log buffer with identical messages.
+void probe(Level level, std::string_view component, std::string_view key,
+           std::string_view state, std::string_view detail = {}) noexcept;
+void resetProbes() noexcept;
 std::vector<Entry> snapshot();
 std::size_t count() noexcept;
 void clear() noexcept;
