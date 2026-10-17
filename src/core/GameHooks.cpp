@@ -1,5 +1,4 @@
 #include "GameHooks.hpp"
-#include "Diagnostics.hpp"
 #include "modules/player/PlayerGameType.hpp"
 #include <bedrocktools/Version.hpp>
 
@@ -148,48 +147,8 @@ bool itemStackHasItem(const void* itemStack) {
     return *reinterpret_cast<void* const*>(counter) != nullptr;
 }
 
-class DiagnosticGameHooksLogger {
-public:
-    template <typename... Args>
-    void info(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Info, format, args...);
-        native().info(format, std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    void debug(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Debug, format, args...);
-        native().debug(format, std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    void warn(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Warning, format, args...);
-        native().warn(format, std::forward<Args>(args)...);
-    }
-    template <typename... Args>
-    void error(std::string_view format, Args&&... args) const {
-        mirror(bedrocktools::diagnostics::Level::Error, format, args...);
-        native().error(format, std::forward<Args>(args)...);
-    }
-private:
-    static pl::log::Logger& native() {
-        static auto& logger = pl::log::Logger::getOrCreate("Bedaim-GameHooks");
-        return logger;
-    }
-    template <typename... Args>
-    static void mirror(bedrocktools::diagnostics::Level level, std::string_view format, Args&&... args) {
-        try {
-            const auto message = fmt::vformat(fmt::string_view(format.data(), format.size()),
-                                             fmt::make_format_args(args...));
-            bedrocktools::diagnostics::log(level, "GameHooks", message);
-        } catch (...) {
-            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
-                "GameHooks", "failed to format native logger message");
-        }
-    }
-};
-
-DiagnosticGameHooksLogger& gameHooksLogger() {
-    static DiagnosticGameHooksLogger logger;
+pl::log::Logger& gameHooksLogger() {
+    static auto& logger = pl::log::Logger::getOrCreate("Bedaim-GameHooks");
     return logger;
 }
 
@@ -404,53 +363,6 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     }
     if (publicGameModeAttack && slotAddress == publicGameModeAttack) {
         if (kind) *kind = AttackKind::GameMode;
-        return slotAddress;
-    }
-
-    // Signature patterns can resolve the internal attack body on builds where
-    // the public virtual wrapper has a different prologue. Prefer exact exported
-    // C++ method symbols as a fallback, but still require the live vtable slot to
-    // equal the resolved symbol before dispatching through it.
-    struct PublicAttackSymbols {
-        std::uintptr_t gameMode{};
-        std::uintptr_t survivalMode{};
-    };
-    static const PublicAttackSymbols exportedSymbols = [] {
-        PublicAttackSymbols result{};
-        constexpr const char* gameModeNames[] = {
-            "_ZN8GameMode6attackEP5ActorRK4Vec3",
-            "_ZN8GameMode6attackER5ActorRK4Vec3"
-        };
-        constexpr const char* survivalModeNames[] = {
-            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3",
-            "_ZN12SurvivalMode6attackER5ActorRK4Vec3"
-        };
-        for (const char* name : gameModeNames) {
-            if (void* address = resolveMinecraftFunction(name)) {
-                result.gameMode = reinterpret_cast<std::uintptr_t>(address);
-                break;
-            }
-        }
-        for (const char* name : survivalModeNames) {
-            if (void* address = resolveMinecraftFunction(name)) {
-                result.survivalMode = reinterpret_cast<std::uintptr_t>(address);
-                break;
-            }
-        }
-        return result;
-    }();
-    if (exportedSymbols.survivalMode && slotAddress == exportedSymbols.survivalMode) {
-        if (kind) *kind = AttackKind::SurvivalMode;
-        static std::atomic_bool loggedSymbolFallback{false};
-        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack wrapper via exact exported SurvivalMode::attack symbol.");
-        return slotAddress;
-    }
-    if (exportedSymbols.gameMode && slotAddress == exportedSymbols.gameMode) {
-        if (kind) *kind = AttackKind::GameMode;
-        static std::atomic_bool loggedSymbolFallback{false};
-        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack wrapper via exact exported GameMode::attack symbol.");
         return slotAddress;
     }
     return 0;
@@ -677,7 +589,6 @@ bool hookEgl() {
 bool install() {
     std::lock_guard lock(installMutex);
     if (installed) return true;
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", "starting hook installation");
     hookSignature(SignatureId::VersionString, reinterpret_cast<void*>(versionDetour), &versionOriginal);
     hookSignature(SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
     hookSignature(SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
@@ -695,13 +606,13 @@ bool install() {
     hookSignature(SignatureId::SurvivalModeInteract, reinterpret_cast<void*>(survivalModeInteractDetour), &survivalModeInteractOriginal);
     const bool internalAttackHooked = hookSignature(
         SignatureId::GameModeAttackInternal, reinterpret_cast<void*>(gameModeAttackDetour), &gameModeAttackOriginal);
-    const bool publicAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0;
-    const bool survivalAttackSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0;
-    const bool internalAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0;
     gameHooksLogger().info(
         "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
-        publicAttackSignature, survivalAttackSignature, internalAttackSignature,
-        internalAttackHooked, gameModeAttackOriginal != nullptr);
+        bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0,
+        bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0,
+        bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0,
+        internalAttackHooked,
+        gameModeAttackOriginal != nullptr);
     hookSignature(SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
@@ -711,11 +622,6 @@ bool install() {
     const bool eglHooked = hookEgl();
     gameHooksLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
     installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
-    bedrocktools::diagnostics::log(
-        installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
-        "GameHooks", installed ? "required tick/client hooks installed" : "required tick/client hooks missing");
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
-        std::string("attack hook available: ") + (gameModeAttackOriginal ? "true" : "false"));
     return installed;
 }
 
@@ -811,28 +717,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     const auto publicEntry = publicAttackVirtualEntry(gameMode);
     if (publicEntry == 0) {
         static std::atomic_bool loggedUnavailable{false};
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel)) {
-            if (!plausibleGameMode(gameMode)) {
-                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
-                    "GameHooks",
-                    "attack_validation=implausible_gamemode: object/vtable did not pass the libminecraftpe validation");
-            } else {
-                auto** vtable = *reinterpret_cast<void***>(gameMode);
-                constexpr std::size_t kKnownAttackSlot = 16;
-                const auto vtableEntry = reinterpret_cast<std::uintptr_t>(vtable[kKnownAttackSlot]);
-                const auto publicSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-                const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-                char detail[320]{};
-                std::snprintf(detail, sizeof(detail),
-                    "attack_validation=vtable_mismatch: slot16=%p public_signature=%p survival_signature=%p",
-                    reinterpret_cast<void*>(vtableEntry),
-                    reinterpret_cast<void*>(publicSignature),
-                    reinterpret_cast<void*>(survivalSignature));
-                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
-                    "GameHooks", detail);
-            }
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
             gameHooksLogger().error("Synthetic attack refused: public GameMode::attack is not validated for this runtime.");
-        }
         return false;
     }
     auto** vtable = *reinterpret_cast<void***>(gameMode);

@@ -1,6 +1,5 @@
 #include "aimassist.hpp"
 #include "AimAssistMath.hpp"
-#include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
@@ -406,19 +405,6 @@ void AimAssistModule::onInit() {
     g_applyLocalPlayerTurnDelta = reinterpret_cast<LocalPlayerApplyTurnDeltaFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LocalPlayerApplyTurnDelta));
 
-    const bool targetQueryReady = g_fetchNearbyActors != nullptr;
-    const bool targetClassificationReady = g_actorIsPlayer != nullptr;
-    const bool cameraControlReady = g_applyLocalPlayerTurnDelta != nullptr;
-    const bool requiredReady = targetQueryReady && targetClassificationReady && cameraControlReady;
-    bedrocktools::diagnostics::probe(
-        requiredReady ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
-        "BedrockAim", "native_dependencies", requiredReady ? "ready" : "partial",
-        std::string("nearby_query=") + (targetQueryReady ? "ok" : "missing") +
-        ", actor_classification=" + (targetClassificationReady ? "ok" : "missing") +
-        ", camera_control=" + (cameraControlReady ? "ok" : "missing") +
-        ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
-        ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
-
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
             if (g_aimAssist && g_aimAssist->enabled) {
@@ -522,19 +508,8 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     target = nullptr;
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
-    const auto now = std::chrono::steady_clock::now();
-    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent ||
-        !validBounds(m_lastTargetBounds) ||
-        m_lastTargetSeen.time_since_epoch().count() == 0 ||
-        now < m_lastTargetSeen ||
-        now - m_lastTargetSeen > std::chrono::milliseconds(250)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "target_snapshot", "stale_or_missing");
-        return false;
-    }
+    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
     target = m_lastTarget;
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "BedrockAim", "target_snapshot", "fresh");
     bounds = m_lastTargetBounds;
     return true;
 }
@@ -575,16 +550,8 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
 bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
-    const auto now = std::chrono::steady_clock::now();
     if (!enabled || !player || player != m_lastPlayer || !target ||
-        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds) ||
-        m_lastTargetSeen.time_since_epoch().count() == 0 ||
-        now < m_lastTargetSeen ||
-        now - m_lastTargetSeen > std::chrono::milliseconds(250)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "crosshair_check", "stale_or_invalid_target");
-        return false;
-    }
+        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
 
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent) return false;
@@ -651,17 +618,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     using namespace bedrocktools::sdk;
 
     if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
-        const char* reason = !enabled ? "disabled" : !player ? "missing_local_player" :
-            !g_fetchNearbyActors ? "nearby_query_unavailable" : "all_target_categories_disabled";
-        bedrocktools::diagnostics::probe(
-            !player || !g_fetchNearbyActors ? bedrocktools::diagnostics::Level::Warning :
-                bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "tracking_gate", reason);
         resetTrackingState();
         return;
     }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "BedrockAim", "tracking_gate", "ready");
 
     m_lastPlayer = player;
     m_localPlayerGliding = actorIsGliding(player);
@@ -934,9 +893,6 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     if (!bestTarget) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "target_selection", "none",
-            "no eligible actor in the scan radius passed the current filters");
         // Keep the last target briefly while it crosses the player's immediate
         // area or the native nearby-actor list skips one tick. Do not dereference
         // the cached entity or auto-hit it while it is missing from the list.
@@ -1023,11 +979,6 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (targetChanged) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = {};
-    }
-    if (targetChanged) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "BedrockAim", "target_selection", bestTargetIsPlayer ? "player" : "mob",
-            "new target selected; target bounds passed validation");
     }
     m_lastTarget = bestTarget;
     m_lastTargetIsPlayer = bestTargetIsPlayer;
@@ -1616,15 +1567,6 @@ void HitboxExpanderModule::onInit() {
         g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
             bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     }
-    const bool queryReady = g_fetchNearbyActors != nullptr;
-    const bool actorTypeReady = g_actorIsPlayer != nullptr;
-    bedrocktools::diagnostics::probe(
-        queryReady && actorTypeReady ? bedrocktools::diagnostics::Level::Info :
-            bedrocktools::diagnostics::Level::Warning,
-        "HitboxExpander", "native_dependencies",
-        queryReady && actorTypeReady ? "ready" : "partial",
-        std::string("nearby_query=") + (queryReady ? "ok" : "missing") +
-        ", actor_classification=" + (actorTypeReady ? "ok" : "missing"));
 
     std::call_once(g_hitboxExpanderEventOnce, [] {
         bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
@@ -1646,28 +1588,11 @@ void HitboxExpanderModule::onDisable() {
 void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
     // Keep in-range expanded AABBs stable. Restore only actors that left the
     // active query radius while enabled; restore everything when the module is off.
-    if (!player) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "player", "missing");
-        return;
-    }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "restore_policy", enabled ? "restore_stale_only" : "restore_all");
-    restoreNativeBounds(player, enabled);
+    if (player) restoreNativeBounds(player, enabled);
 }
 
 void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
-    if (!enabled) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "HitboxExpander", "state", "disabled");
-        return;
-    }
-    if (!player) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "player", "missing");
-        return;
-    }
-    applyNativeBounds(player);
+    if (player && enabled) applyNativeBounds(player);
 }
 
 void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player, bool onlyStale) {
@@ -1686,20 +1611,10 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
     // outside this set are restored so actors no longer handled by the expander do
     // not retain stale expanded bounds. The wider live set below is for pointer safety.
     std::unordered_set<void*> activeActors;
-    if (onlyStale && !collectNearbyActors(player, 32.0f, activeActors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "restore_query", "active_actor_query_failed");
-        return;
-    }
+    if (onlyStale && !collectNearbyActors(player, 32.0f, activeActors)) return;
 
     std::unordered_set<void*> liveActors;
-    if (!collectNearbyActors(player, 64.0f, liveActors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "restore_query", "live_actor_query_failed");
-        return;
-    }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "restore_query", "ready");
+    if (!collectNearbyActors(player, 64.0f, liveActors)) return;
     const auto hasMissingTrackedActor = [&] {
         for (void* actor : trackedActors) {
             if (liveActors.find(actor) == liveActors.end()) return true;
@@ -1782,12 +1697,7 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
 
 void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
-    if (!enabled || !player || !g_fetchNearbyActors || !g_actorIsPlayer) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "apply_gate", !enabled ? "disabled" :
-                !player ? "missing_player" : "native_dependency_missing");
-        return;
-    }
+    if (!enabled || !player || !g_fetchNearbyActors || !g_actorIsPlayer) return;
 
     Vec3 extent{32.0f, 32.0f, 32.0f};
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
@@ -1795,13 +1705,7 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
     if (!begin || !end || end < begin ||
         (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 8192) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "actor_snapshot", "malformed");
-        return;
-    }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "actor_snapshot", "valid");
+        (end - begin) / sizeof(DistanceSortedActor) > 8192) return;
 
     bool expandPlayers = false;
     bool expandMobs = false;
@@ -1824,10 +1728,6 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     // If the selected actor types change, restore their original translated boxes
     // once before reapplying the new policy. If expansion is fully disabled by
     // configuration, restore all tracked boxes but retain snapshots for re-enable.
-    const std::string policy = std::string(expandPlayers ? "players+" : "players-") +
-        (expandMobs ? "_mobs+" : "_mobs-");
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "HitboxExpander", "expansion_policy", policy);
     if (expansionTypesChanged) restoreNativeBounds(player);
     if (!expandPlayers && !expandMobs) return;
 

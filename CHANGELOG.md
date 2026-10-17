@@ -61,3 +61,10 @@
 - Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
 - Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
 - Added `docs/MODULE_DIAGNOSTICS.md` with export instructions, log interpretation, and runtime-validation limits.
+
+## 2026-10-17 — Combat module recovery candidate
+
+- Restored the last green integration snapshot of `GameHooks.cpp`, `aimassist.cpp/.hpp`, and `AimAssistMath.cpp/.hpp` on an isolated recovery branch while retaining Module Diagnostics, automatic rolling log export, AutoHit, AutoTotem, and host tests.
+- The recovery restores the known-good `NormalTick` event path instead of allowing an unresolved local-player getter to suppress every `LocalPlayerPreTickEvent` and `LocalPlayerTickEvent`. The event actor must still be confirmed in-game as the local player before calling the recovery complete.
+- AutoHit and AutoTotem remain fail-closed: no guessed attack entry, arbitrary vtable index, or unverified inventory transfer was added. Their runtime behavior depends on valid tick delivery and verified native attack/inventory routes.
+- This is a recovery candidate, not a claim that all modules are fixed. CI and live runtime diagnostics must pass before merging.
