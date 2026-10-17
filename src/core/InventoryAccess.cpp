@@ -305,8 +305,33 @@ bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
         if (error) *error = std::move(message);
         return false;
     };
-    if (!isReadableMemory(player, PlayerInventory + sizeof(void*)))
-        return fail("local Player pointer/required inventory field is unreadable");
+    if (!player || !isReadableMemory(player, sizeof(void*)))
+        return fail("local Player pointer is null or unreadable");
+
+    // Validate the actual pointer-sized fields, not the entire byte span from
+    // the start of Player to the inventory offset. Player objects may cross
+    // mapping/page boundaries, so validating that whole span falsely rejects
+    // valid objects even when the target field itself is readable.
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    if (PlayerInventory > std::numeric_limits<std::uintptr_t>::max() - playerAddress)
+        return fail("Player inventory field address overflowed");
+    const auto* inventoryField = reinterpret_cast<const void*>(playerAddress + PlayerInventory);
+    if (!isReadableMemory(inventoryField, sizeof(void*)))
+        return fail("Player inventory pointer field is unreadable");
+    const void* inventoryProxy = read<const void*>(player, PlayerInventory);
+    if (!inventoryProxy || !isReadableMemory(inventoryProxy, sizeof(void*)))
+        return fail("Player inventory proxy pointer is null or unreadable");
+
+    const auto proxyAddress = reinterpret_cast<std::uintptr_t>(inventoryProxy);
+    if (PlayerInventoryContainer > std::numeric_limits<std::uintptr_t>::max() - proxyAddress)
+        return fail("inventory container field address overflowed");
+    const auto* containerField = reinterpret_cast<const void*>(proxyAddress + PlayerInventoryContainer);
+    if (!isReadableMemory(containerField, sizeof(void*)))
+        return fail("inventory container pointer field is unreadable");
+    const void* container = read<const void*>(inventoryProxy, PlayerInventoryContainer);
+    if (!container || !isReadableMemory(container, sizeof(void*)))
+        return fail("inventory container pointer is null or unreadable");
+
     if (!m_getOffhandSlot)
         return fail("no validated Actor/Player::getOffhandSlot entry point is available");
     if (m_offhandGetterQuarantined.load(std::memory_order_acquire))
