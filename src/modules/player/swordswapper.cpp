@@ -113,8 +113,14 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> lock(m_stateMutex);
     auto& inventory = bedrocktools::core::InventoryAccess::get();
+    auto reportStatus = [this](std::string status, bedrocktools::diagnostics::Level level = bedrocktools::diagnostics::Level::Debug) {
+        if (status == m_lastStatus) return;
+        m_lastStatus = status;
+        bedrocktools::diagnostics::log(level, moduleId, status);
+    };
 
     if (!player) {
+        reportStatus("waiting: local player pointer unavailable", bedrocktools::diagnostics::Level::Warning);
         m_lastPlayerY = 0.0f;
         m_hasLastPlayerY = false;
         m_lastGroundY = 0.0f;
@@ -136,6 +142,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     };
 
     if (!enabled) {
+        reportStatus("inactive: module disabled");
         restoreIfOwned();
         m_userOverrodeSwap = false;
         m_consumptionGuardActive = false;
@@ -145,6 +152,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const Vec3 position = player->position();
     if (!finiteVec(position)) {
+        reportStatus("blocked: player position is not finite", bedrocktools::diagnostics::Level::Warning);
         m_hasLastPlayerY = false;
         m_hasGroundY = false;
         m_groundedTicks = 0;
@@ -175,6 +183,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     // Never let ShiftBlade override the mace while it owns a confirmed downward slam.
     if (swapperstate::maceFallPriority.load(std::memory_order_acquire)) {
+        reportStatus("paused: Mace Swapper has slam priority");
         restoreIfOwned();
         return;
     }
@@ -226,16 +235,12 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         now - m_lastSuccessfulUseItem < std::chrono::milliseconds(1800);
     if (activelyConsuming) {
         restoreIfOwned();
-        if (!m_consumptionGuardActive) {
-            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
-                "paused sword swap: successful UseItem detected while a consumable is selected");
-        }
+        reportStatus("paused: successful UseItem detected while a consumable is selected");
         m_consumptionGuardActive = true;
         return;
     }
     if (m_consumptionGuardActive) {
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, moduleId,
-            "consumption guard ended; sword swap can resume");
+        reportStatus("consumption ended; sword swap can resume");
         m_consumptionGuardActive = false;
     }
     if (heldIdentifier.find("wind_charge") != std::string::npos) {
@@ -248,24 +253,39 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     auto* aim = (aimBase && aimBase->enabled) ? static_cast<AimAssistModule*>(aimBase) : nullptr;
-    bool shouldUseSword = false;
+    bool hasTarget = false;
+    bool targetInRange = false;
 
     if (groundedOrNearGround && aim) {
         void* target = nullptr;
         AABB bounds{};
         float aimRange = 0.0f;
-        shouldUseSword =
-            aim->currentTargetSnapshot(target, bounds, aimRange) &&
+        hasTarget = aim->currentTargetSnapshot(target, bounds, aimRange);
+        targetInRange = hasTarget &&
             targetWithinRange(player, bounds, std::min(m_attackRange, aimRange));
     }
 
-    if (!shouldUseSword) {
+    if (!groundedOrNearGround) {
+        reportStatus("waiting: player is not grounded or within allowed ground distance");
+    } else if (!aim) {
+        reportStatus("blocked: BedrockAim/Aim Assist is disabled or unavailable");
+    } else if (!hasTarget) {
+        reportStatus("waiting: BedrockAim has no valid target snapshot");
+    } else if (!targetInRange) {
+        reportStatus("waiting: target is outside ShiftBlade range");
+    }
+
+    if (!targetInRange || !groundedOrNearGround || !aim) {
         restoreIfOwned();
         m_userOverrodeSwap = false;
         m_nextSwordAttempt = {};
         return;
     }
-    if (m_userOverrodeSwap) return;
+    reportStatus("active: valid target is in range; sword equip retry is enabled", bedrocktools::diagnostics::Level::Info);
+    if (m_userOverrodeSwap) {
+        reportStatus("paused: manual hotbar override is enabled");
+        return;
+    }
 
     const int selected = inventory.selectedHotbarSlot(player);
     if (selected < 0) return;
