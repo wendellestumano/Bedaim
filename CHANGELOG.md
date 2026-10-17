@@ -1,11 +1,11 @@
 # Changelog
 
-## 2026-10-17 — Local-player event recovery candidate
+## 2026-10-17 — Restore known-good player tick dispatch
 
-- Restored the intact `GameHooks.cpp` baseline and added a guarded SDK virtual-getter fallback for `ClientInstance::getLocalPlayer` when the signature-based getter is unresolved or returns no valid player.
-- Kept the strict identity check between the resolved local player and `NormalTick` actor; invalid/unverified candidates still suppress player events.
-- Added reason-coded `local_player_resolution` states so the next in-game diagnostics distinguish signature success, virtual fallback success, and fallback failure.
-- Candidate only: a successful build does not prove the target runtime vtable ABI. In-game logs must confirm `ready` or `ready_vtable_fallback` and local-player ticks before considering Aim Assist and Hitbox Expander recovered.
+- Compared the supplied BedrockTools 1.5.7 `.levipack` with the current source. The working implementation publishes `LocalPlayerPreTickEvent` and `LocalPlayerTickEvent` directly from the `NormalTick` hook.
+- The regressed implementation gated both events on a separately resolved `ClientInstance::getLocalPlayer` pointer. The supplied runtime log reports `client_instance_invalid` and `local_player_unavailable`, so that gate suppressed the events consumed by Aim Assist and Hitbox Expander.
+- Restored the 1.5.7 event-dispatch behavior and removed the speculative local-player vtable fallback. `clientUpdateDetour` again only stores the client pointer and publishes the update event.
+- Validation still required: host regression tests, Android ARM64 package build, and in-game confirmation that Aim Assist target updates and Hitbox Expander apply/restore callbacks run.
 
 ## 2026-10-17 — LeviLamina local-player interface lead
 
