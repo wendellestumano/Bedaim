@@ -7,7 +7,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <pl/ModMenu.hpp>
 #include <pl/Logger.hpp>
@@ -63,7 +63,7 @@ void AutoTotemModule::onInit() {
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoTotem", "lifecycle", "initialized", "inventory and screen-state hooks subscribed");
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
