@@ -37,4 +37,24 @@ inline float normalizeCps(float cps) noexcept {
     return std::isfinite(cps) ? std::clamp(cps, 1.0f, 20.0f) : 1.0f;
 }
 
+struct Profile {
+    bool enabled = false;
+    float cps = 0.0f;
+};
+
+inline Profile resolve(Class weapon,
+                       bool swordEnabled, float swordCps,
+                       bool axeEnabled, float axeCps,
+                       bool maceEnabled, float maceCps,
+                       bool tridentEnabled, float tridentCps) noexcept {
+    switch (weapon) {
+        case Class::Sword: return {swordEnabled, normalizeCps(swordCps)};
+        case Class::Axe: return {axeEnabled, normalizeCps(axeCps)};
+        case Class::Mace: return {maceEnabled, normalizeCps(maceCps)};
+        case Class::Trident: return {tridentEnabled, normalizeCps(tridentCps)};
+        case Class::Unsupported: return {false, 0.0f};
+    }
+    return {false, 0.0f};
+}
+
 } // namespace bedaim::autohit::weapon
