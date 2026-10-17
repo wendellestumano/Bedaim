@@ -34,7 +34,9 @@ private:
     int m_groundedTicks = 0;
     bool m_ownsSwap = false;
     bool m_userOverrodeSwap = false;
-    bool m_foodUseOverride = false;
+    bool m_consumptionGuardActive = false;
+    std::chrono::steady_clock::time_point m_lastSuccessfulUseItem{};
+    std::chrono::steady_clock::time_point m_nextSwordAttempt{};
     int m_swordSlot = -1;
     int m_previousSlot = -1;
 };
