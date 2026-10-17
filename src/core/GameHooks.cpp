@@ -797,13 +797,26 @@ void* gameMode() {
 }
 
 void* gameModeForPlayer(void* player) {
-    if (!player) return nullptr;
+    if (!player) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "missing_player");
+        return nullptr;
+    }
 
     // Prefer the receiver captured by a real engine callback, but require the
     // exact resolved public attack signature instead of merely a plausible game
     // vtable. This avoids accidentally retaining a neighboring polymorphic object.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (observed && publicAttackVirtualEntry(observed) != 0) return observed;
+    if (observed) {
+        if (publicAttackVirtualEntry(observed) != 0) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "GameHooks", "game_mode_resolution", "ready_from_observed_action");
+            return observed;
+        }
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "observed_instance_unverified",
+            "observed action receiver did not match the public attack wrapper");
+    }
 
     // Some game sessions have not yet produced a GameMode callback when native attack dispatch
     // first becomes active. The Player SDK already documents the owned mGameMode
@@ -814,24 +827,36 @@ void* gameModeForPlayer(void* player) {
     currentGameMode.store(nullptr, std::memory_order_release);
     const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
     constexpr auto gameModeOffset = bedrocktools::sdk::offsets::Player::mGameMode;
-    if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - gameModeOffset)
+    if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - gameModeOffset) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
+            "GameHooks", "game_mode_resolution", "player_field_address_overflow");
         return nullptr;
+    }
     const auto slotAddress = playerAddress + gameModeOffset;
     const auto* slot = reinterpret_cast<const void*>(slotAddress);
-    if (!isReadableMemory(slot, sizeof(void*))) return nullptr;
+    if (!isReadableMemory(slot, sizeof(void*))) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "player_field_unreadable",
+            "Player::mGameMode storage is outside a readable memory region");
+        return nullptr;
+    }
 
     void* candidate = *reinterpret_cast<void* const*>(slot);
-    if (!candidate || publicAttackVirtualEntry(candidate) == 0) {
-        static std::atomic_bool loggedNoVerifiedGameMode{false};
-        if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Could not validate a local Player-owned GameMode; no native attack was dispatched.");
+    if (!candidate) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "player_field_null");
+        return nullptr;
+    }
+    if (publicAttackVirtualEntry(candidate) == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "player_field_candidate_unverified",
+            "candidate did not match a validated GameMode/SurvivalMode public attack vtable entry");
         return nullptr;
     }
 
     currentGameMode.store(candidate, std::memory_order_release);
-    static std::atomic_bool loggedPlayerGameModeFallback{false};
-    if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Recovered the Player-owned GameMode using a readable field and exact public attack signature match.");
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "GameHooks", "game_mode_resolution", "ready_from_player_field");
     return candidate;
 }
 
