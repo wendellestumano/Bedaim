@@ -8,7 +8,7 @@
 #include "../../core/InventoryAccess.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -155,7 +155,7 @@ ElytraMacingModule::ElytraMacingModule()
     keybind=0;
 }
 void ElytraMacingModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [this](auto& e){ processPlayerTick(e.player); });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "ElytraMacing","lifecycle","initialized","independent settings; does not write shared module state");
