@@ -1,4 +1,5 @@
 #include "InventoryAccess.hpp"
+#include "Diagnostics.hpp"
 
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
@@ -170,6 +171,11 @@ InventoryAccess& InventoryAccess::get() {
 void InventoryAccess::initialize() {
     m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(
         memory::resolve(memory::SignatureId::ActorGetOffhandSlot));
+    bedrocktools::diagnostics::probe(
+        m_getOffhandSlot ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+        "InventoryAccess", "offhand_reader",
+        m_getOffhandSlot ? "ready" : "signature_unavailable",
+        m_getOffhandSlot ? "offhand reads enabled" : "offhand transfers will fail closed");
 }
 
 int InventoryAccess::countItems(const sdk::Player* player, std::string_view identifierPart) const {
@@ -325,31 +331,51 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
 }
 
 OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* player, int slot) const {
-    if (!player) return OffhandTransferResult::InvalidPlayer;
-    if (slot < 0 || slot >= 64) return OffhandTransferResult::InvalidSlot;
-    if (!m_getOffhandSlot) return OffhandTransferResult::RuntimeApiUnavailable;
+    auto report = [](OffhandTransferResult result) {
+        const char* state = "unknown";
+        using R = OffhandTransferResult;
+        switch (result) {
+            case R::Success: state = "success"; break;
+            case R::AlreadyEquipped: state = "already_equipped"; break;
+            case R::InvalidPlayer: state = "invalid_player"; break;
+            case R::InvalidSlot: state = "invalid_slot"; break;
+            case R::ItemUnavailable: state = "totem_unavailable"; break;
+            case R::OffhandOccupied: state = "offhand_occupied"; break;
+            case R::RuntimeApiUnavailable: state = "native_api_unavailable"; break;
+            case R::InvalidNativeState: state = "native_state_invalid"; break;
+            case R::VerificationFailed: state = "verification_failed"; break;
+        }
+        const bool safeNonError = result == R::Success || result == R::AlreadyEquipped;
+        bedrocktools::diagnostics::probe(
+            safeNonError ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+            "InventoryAccess", "offhand_transfer", state);
+        return result;
+    };
+    if (!player) return report(OffhandTransferResult::InvalidPlayer);
+    if (slot < 0 || slot >= 64) return report(OffhandTransferResult::InvalidSlot);
+    if (!m_getOffhandSlot) return report(OffhandTransferResult::RuntimeApiUnavailable);
 
     std::uintptr_t slotsBegin = 0;
     std::size_t slotCount = 0;
     if (!inventorySlots(player, slotsBegin, slotCount) || !slotsBegin ||
         static_cast<std::size_t>(slot) >= slotCount) {
-        return OffhandTransferResult::InvalidSlot;
+        return report(OffhandTransferResult::InvalidSlot);
     }
 
     const auto offhandAddress = reinterpret_cast<std::uintptr_t>(m_getOffhandSlot(player));
     if (!isReadableMemory(reinterpret_cast<const void*>(offhandAddress), ItemStackSize)) {
-        return OffhandTransferResult::RuntimeApiUnavailable;
+        return report(OffhandTransferResult::RuntimeApiUnavailable);
     }
     const void* offhand = reinterpret_cast<const void*>(offhandAddress);
     const std::string offhandId = stackIdentifier(offhand);
-    if (offhandId.find("totem") != std::string::npos) return OffhandTransferResult::AlreadyEquipped;
-    if (!offhandId.empty()) return OffhandTransferResult::OffhandOccupied;
+    if (offhandId.find("totem") != std::string::npos) return report(OffhandTransferResult::AlreadyEquipped);
+    if (!offhandId.empty()) return report(OffhandTransferResult::OffhandOccupied);
 
     const auto sourceAddress = slotsBegin + static_cast<std::size_t>(slot) * ItemStackSize;
     const void* sourceItem = reinterpret_cast<const void*>(sourceAddress);
     if (stackIdentifier(sourceItem).find("totem") == std::string::npos ||
         countStack(sourceItem, "totem") <= 0) {
-        return OffhandTransferResult::ItemUnavailable;
+        return report(OffhandTransferResult::ItemUnavailable);
     }
 
     // Player::mTransactionManager is at 0xA28 in the target's current Player layout.
@@ -358,7 +384,7 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         reinterpret_cast<std::uintptr_t>(player) + PlayerTransactionManagerOffset);
     if (!isReadableMemory(manager, TransactionManagerSize) ||
         read<const void*>(manager, 0) != player || !validExpectedActionsVector(manager)) {
-        return OffhandTransferResult::InvalidNativeState;
+        return report(OffhandTransferResult::InvalidNativeState);
     }
 
     const void* playerInventory = read<const void*>(player, PlayerInventory);
@@ -366,7 +392,7 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         ? const_cast<void*>(read<const void*>(playerInventory, PlayerInventoryContainer))
         : nullptr;
     if (!container || !isReadableMemory(container, sizeof(void*))) {
-        return OffhandTransferResult::InvalidNativeState;
+        return report(OffhandTransferResult::InvalidNativeState);
     }
 
     void** containerVtable = nullptr;
@@ -375,7 +401,7 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     }
     if (!containerVtable ||
         !isReadableMemory(containerVtable, (ContainerRemoveItemVTable + 1) * sizeof(void*))) {
-        return OffhandTransferResult::RuntimeApiUnavailable;
+        return report(OffhandTransferResult::RuntimeApiUnavailable);
     }
 
     using InventoryActionCtorFn = void (*)(void*, NativeInventorySource, std::uint32_t, const void*, const void*);
@@ -416,7 +442,7 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     }
 
     if (!actionCtor || !actionDtor || !addAction || !removeItem || !setOffhand) {
-        return OffhandTransferResult::RuntimeApiUnavailable;
+        return report(OffhandTransferResult::RuntimeApiUnavailable);
     }
 
     // ItemStack members inside InventoryAction are real engine-constructed
@@ -446,7 +472,7 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         setOffhand(player, emptyOffhandSnapshot);
         actionDtor(inventoryAction.data());
         actionDtor(offhandAction.data());
-        return OffhandTransferResult::VerificationFailed;
+        return report(OffhandTransferResult::VerificationFailed);
     }
 
     removeItem(container, slot, 1);
@@ -471,14 +497,14 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         }
         actionDtor(inventoryAction.data());
         actionDtor(offhandAction.data());
-        return OffhandTransferResult::VerificationFailed;
+        return report(OffhandTransferResult::VerificationFailed);
     }
 
     addAction(manager, inventoryAction.data(), false);
     addAction(manager, offhandAction.data(), false);
     actionDtor(inventoryAction.data());
     actionDtor(offhandAction.data());
-    return OffhandTransferResult::Success;
+    return report(OffhandTransferResult::Success);
 }
 
 }

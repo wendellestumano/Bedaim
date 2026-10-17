@@ -4,6 +4,7 @@
 #include "launcher/ModuleMenu.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "core/memory/Hooks.hpp"
+#include "core/Diagnostics.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <pl/Input.hpp>
@@ -72,6 +73,8 @@ bool Runtime::resolveSignatures() {
     ResolveGuard guard;
     const bool ok = bedrocktools::memory::resolveAll("libminecraftpe.so");
     resolved.store(ok, std::memory_order_release);
+    bedrocktools::diagnostics::log(ok ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
+        "Runtime", ok ? "Minecraft signatures resolved" : "Minecraft signature resolution failed");
     return ok;
 }
 
@@ -100,13 +103,18 @@ bool Runtime::install() {
     std::lock_guard lock(installMutex);
     if (installed.load(std::memory_order_acquire)) return true;
     if (!resolved.load(std::memory_order_acquire) && !resolveSignatures()) return false;
-    if (!gamehooks::install()) return false;
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "installing game hooks and modules");
+    if (!gamehooks::install()) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Runtime", "game hook installation failed");
+        return false;
+    }
     registerAllModules();
     wireEvents();
     ModuleRegistry::get().initialize();
     bedrocktools::config::ConfigManager::get().load();
     registerModulesWithLauncher();
     installed.store(true, std::memory_order_release);
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "runtime installed and launcher modules registered");
     return true;
 }
 
@@ -117,6 +125,7 @@ void Runtime::minecraftLoaded() {
 
 bool Runtime::load(pl::mod::ModContext& context) {
     mResourceDirectory = context.resourceDir();
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "Bedaim load requested");
     bedrocktools::config::ConfigManager::get().setConfigPath((context.configDir() / "config.json").string());
     if (!launcherContext()) return true;
     void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
