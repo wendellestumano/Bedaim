@@ -136,7 +136,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         if(!aimBase||!aimBase->enabled) { restore(); return; }
         auto* aim=static_cast<AimAssistModule*>(aimBase);
         void* target=nullptr; AABB bounds{}; float aimRange=0.0f;
-        if(!aim->currentTargetSnapshot(target,bounds,aimRange)||target!=m_pendingTarget||!validBounds(bounds)) {
+        if(!aim->currentTargetSnapshot(target,bounds,aimRange)||target!=m_pendingTarget||!validBounds(bounds)||!std::isfinite(aimRange)||aimRange<=0.0f) {
             restore(); return;
         }
         const Vec3 eye=eyePosition(player);
