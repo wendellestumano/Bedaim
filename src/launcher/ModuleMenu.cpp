@@ -525,8 +525,9 @@ void registerModulesWithLauncher() {
                 else if (k == "m_restoreSlot") displayName = "MACEFALL > Restore previous slot";
             }
             if (mod->moduleId == "bedrocktools.Sword Swapper") {
-                if (k == "m_attackRange") displayName = "BLADESHIFT > Attack range";
-                else if (k == "m_restoreSlot") displayName = "BLADESHIFT > Restore previous slot";
+                if (k == "m_attackRange") displayName = "SHIFTBLADE > Attack range";
+                else if (k == "m_groundDistance") displayName = "SHIFTBLADE > Allowed distance above ground (blocks)";
+                else if (k == "m_restoreSlot") displayName = "SHIFTBLADE > Restore previous slot";
             }
             if (mod->moduleId == "bedrocktools.Hitbox Expander") {
                 if (k == "m_hitboxWidth") displayName = "BEDROCK BOUNDS > Width / depth (blocks)";
@@ -624,6 +625,9 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_attackrange") {
                     minVal = 1.0f;
                     maxVal = 16.0f;
+                } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_grounddistance") {
+                    minVal = 0.0f;
+                    maxVal = 3.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_minimumfalldistance") {
                     minVal = 0.30f;
                     maxVal = 10.0f;
@@ -755,7 +759,7 @@ void registerModulesWithLauncher() {
                     return rank(a.key) < rank(b.key);
                 });
         } else if (mod->moduleId == "bedrocktools.Sword Swapper") {
-            const std::vector<std::string> priority = {"m_attackRange", "m_restoreSlot"};
+            const std::vector<std::string> priority = {"m_attackRange", "m_groundDistance", "m_restoreSlot"};
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
                 return static_cast<std::size_t>(std::distance(priority.begin(), it));
