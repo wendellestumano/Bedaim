@@ -159,12 +159,13 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     if (m_ownsSwap && inventory.selectedHotbarSlot(player) != m_swordSlot) {
-        // User changed the slot manually. Stop owning the slot and honor the override
-        // until the current target leaves the configured range.
+        // A changed slot can be a manual choice or a transient inventory selection
+        // update. By default ShiftBlade keeps its sword equipped while the target is
+        // in range; users who prefer manual hotbar control can opt out in settings.
         m_ownsSwap = false;
         m_swordSlot = -1;
         m_previousSlot = -1;
-        m_userOverrodeSwap = true;
+        if (m_respectManualSlotChanges) m_userOverrodeSwap = true;
     }
 
     const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
@@ -257,6 +258,7 @@ void SwordSwapperModule::loadConfig(const nlohmann::json& j) {
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_groundDistance = std::clamp(j.value("m_groundDistance", m_groundDistance), 0.0f, 3.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
+    m_respectManualSlotChanges = j.value("m_respectManualSlotChanges", m_respectManualSlotChanges);
 }
 
 void SwordSwapperModule::saveConfig(nlohmann::json& j) {
@@ -265,4 +267,5 @@ void SwordSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_attackRange"] = m_attackRange;
     j["m_groundDistance"] = m_groundDistance;
     j["m_restoreSlot"] = m_restoreSlot;
+    j["m_respectManualSlotChanges"] = m_respectManualSlotChanges;
 }
