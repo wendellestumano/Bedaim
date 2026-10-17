@@ -1,4 +1,5 @@
 #include "ModuleRegistry.hpp"
+#include "../core/Diagnostics.hpp"
 #include "visual/fullbright.hpp"
 #include "visual/motionblur.hpp"
 #include "visual/fpsunlocker.hpp"
@@ -69,8 +70,16 @@ const std::vector<Module*>& ModuleRegistry::modules() const {
 
 void ModuleRegistry::initialize() {
     if (mInitialized) return;
-    for (auto* module : mView) module->onInit();
+    for (auto* module : mView) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug,
+            "ModuleRegistry", std::string("initializing module: ") + module->moduleId);
+        module->onInit();
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Trace,
+            "ModuleRegistry", std::string("module initialized: ") + module->moduleId);
+    }
     mInitialized = true;
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "ModuleRegistry", std::string("registered modules initialized: ") + std::to_string(mView.size()));
 }
 
 void ModuleRegistry::onFrame() {
