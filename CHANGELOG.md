@@ -28,3 +28,11 @@
 - Added host tests covering all levels, snapshot, clear and export.
 - ShiftBlade retries equipping a hotbar sword once per second while the target remains in range and the existing stable-ground requirement is met.
 - Merely holding food no longer blocks ShiftBlade; it pauses for a short window after a successful native `UseItem` event while a consumable is selected.
+
+## 2026-10-17 — Diagnostic probes and safe report export
+
+- Added a state-change probe API that deduplicates repeated per-tick states without flooding the bounded log.
+- Added host coverage for probe deduplication/reset and failed atomic export replacement; a failed write preserves the previous report.
+- Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
+- Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
+- Added `docs/MODULE_DIAGNOSTICS.md` with export instructions, log interpretation, and runtime-validation limits.
