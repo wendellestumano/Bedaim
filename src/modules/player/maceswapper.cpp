@@ -93,18 +93,27 @@ void MaceSwapperModule::onEnable() {
     m_peakY = 0.0f;
     m_hasPeakY = false;
     m_nextAttack = {};
-    swapperstate::maceFallPriority.store(false, std::memory_order_release);
-    m_pendingAttack = false;
-    m_pendingMaceSlot = -1;
-    m_pendingPreviousSlot = -1;
-    m_pendingTarget = nullptr;
-    m_pendingPlayer = nullptr;
+
+    // A rapid disable/re-enable can happen before the next player tick. Preserve
+    // pending slot ownership so that tick can restore the old slot; never drop
+    // the restoration state in a UI callback.
+    if (m_pendingAttack) {
+        m_cancelPendingAttack = true;
+    } else {
+        swapperstate::maceFallPriority.store(false, std::memory_order_release);
+        m_pendingMaceSlot = -1;
+        m_pendingPreviousSlot = -1;
+        m_pendingTarget = nullptr;
+        m_pendingPlayer = nullptr;
+        m_cancelPendingAttack = false;
+    }
 }
 
 void MaceSwapperModule::onDisable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    // If we were between the hotbar change and the hit, leave restoration pending
-    // for the next player tick; it can safely restore only if the mace is still selected.
+    // If we were between the hotbar change and the hit, cancel the hit but leave
+    // restoration pending for the next player tick.
+    if (m_pendingAttack) m_cancelPendingAttack = true;
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
     m_peakY = 0.0f;
@@ -120,6 +129,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_hasLastPlayerY = false;
         m_hasPeakY = false;
         m_pendingAttack = false;
+        m_cancelPendingAttack = false;
+        m_pendingMaceSlot = -1;
+        m_pendingPreviousSlot = -1;
         swapperstate::maceFallPriority.store(false, std::memory_order_release);
         m_pendingTarget = nullptr;
         m_pendingPlayer = nullptr;
@@ -158,6 +170,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 inventory.selectHotbarSlot(player, m_pendingPreviousSlot);
             }
             m_pendingAttack = false;
+            m_cancelPendingAttack = false;
             swapperstate::maceFallPriority.store(false, std::memory_order_release);
             m_pendingMaceSlot = -1;
             m_pendingPreviousSlot = -1;
@@ -165,7 +178,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             m_pendingPlayer = nullptr;
         };
 
-        if (!enabled || !m_enableMaceSwapper) {
+        if (m_cancelPendingAttack || !enabled || !m_enableMaceSwapper) {
             restoreIfStillSwapped();
             return;
         }
@@ -239,6 +252,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (previousSlot != maceSlot && !inventory.selectHotbarSlot(player, maceSlot)) return;
     m_pendingMaceSlot = maceSlot;
     m_pendingPreviousSlot = previousSlot;
+    m_cancelPendingAttack = false;
     m_pendingTarget = target;
     m_pendingPlayer = player;
     m_pendingAttack = true;
