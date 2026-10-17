@@ -136,6 +136,18 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     clearNode.currentValue = "false";
     clearNode.hasCurrentValue = true;
     schema.node(std::move(clearNode));
+
+    ConfigNodeV2 freshSessionNode;
+    freshSessionNode.id = "m_startFreshLogSession";
+    freshSessionNode.key = "m_startFreshLogSession";
+    freshSessionNode.title = "Start fresh gameplay log session";
+    freshSessionNode.description = "Clears in-memory logs and atomically replaces the rolling auto-save with only the new session. Timestamped manual exports are preserved.";
+    freshSessionNode.category = "diagnostics";
+    freshSessionNode.type = ConfigControlTypeV2::Toggle;
+    freshSessionNode.defaultValue = "false";
+    freshSessionNode.currentValue = "false";
+    freshSessionNode.hasCurrentValue = true;
+    schema.node(std::move(freshSessionNode));
     pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -151,6 +163,10 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             // buffer; that would make "clear" leave a non-empty log.
             bedrocktools::diagnostics::clear();
         }
+        return true;
+    }
+    if (key == "m_startFreshLogSession") {
+        if (requested) startFreshLogSession();
         return true;
     }
     if (key == "m_autoExportEnabled") {
@@ -216,6 +232,7 @@ void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
     std::lock_guard<std::mutex> lock(m_exportMutex);
     j["m_exportLogsNow"] = false;
     j["m_clearLogsNow"] = false;
+    j["m_startFreshLogSession"] = false;
     j["m_autoExportEnabled"] = m_autoExportEnabled;
     j["m_autoExportIntervalSeconds"] = m_autoExportIntervalSeconds;
     j.erase("m_autoExportIntervalMinutes");
@@ -237,6 +254,20 @@ void ModuleDiagnosticsModule::onDisable() {
     stopExportWorker();
     m_reportReady = false;
     submitDrawCommands(moduleId, {});
+}
+
+void ModuleDiagnosticsModule::startFreshLogSession() {
+    // Clear only the in-memory session and immediately replace the rolling
+    // auto-save. The atomic exporter preserves the last good file if writing
+    // the new session fails; timestamped manual exports remain untouched.
+    bedrocktools::diagnostics::clear();
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "Diagnostics", "fresh gameplay log session started; previous in-memory entries cleared");
+    const bool saved = exportLogs(true);
+    if (saved) {
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_lastExportStatus = "Fresh session saved (" + localClockLabel() + ")";
+    }
 }
 
 void ModuleDiagnosticsModule::startExportWorker() {
@@ -284,6 +315,10 @@ void ModuleDiagnosticsModule::exportWorkerLoop() {
 }
 
 bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
+    // Manual, periodic and fresh-session exports share the same rolling file.
+    // Serialize the snapshot/write pair so an older snapshot cannot overwrite
+    // a freshly reset session after it has been exported.
+    std::lock_guard<std::mutex> fileLock(m_fileWriteMutex);
     std::string format;
     {
         std::lock_guard<std::mutex> lock(m_exportMutex);
@@ -326,6 +361,20 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
     const bool ok = format == "json"
         ? bedrocktools::diagnostics::exportJsonTo(outputPath, &error)
         : bedrocktools::diagnostics::exportTo(outputPath, &error);
+
+    // Keep exactly one rolling auto-save format so switching TXT/JSON cannot
+    // leave a stale file that looks like the current gameplay's export.
+    if (ok && automatic) {
+        const std::string staleExtension = format == "json" ? "txt" : "json";
+        std::error_code staleError;
+        std::filesystem::remove(outputDirectory /
+            ("bedaim_diagnostics_auto." + staleExtension), staleError);
+        if (staleError) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+                "Diagnostics", "could not remove stale rolling export: " + staleError.message());
+        }
+    }
+
     bedrocktools::diagnostics::log(ok ? bedrocktools::diagnostics::Level::Info :
         bedrocktools::diagnostics::Level::Error, "Diagnostics",
         ok ? "diagnostic logs exported to " + outputPath :
