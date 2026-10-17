@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-17 — Autosave defaults for Module Diagnostics
+
+- Enabled automatic diagnostic log export by default while **Module Diagnostics** is enabled.
+- Save the first snapshot immediately and refresh the rolling TXT/JSON export every minute by default, on a worker thread rather than the game/render thread.
+- The interval remains configurable from 1 to 60 minutes, and autosave can be disabled in settings.
+
 ## 2026-10-17 — Downloads export and periodic diagnostics
 
 - Changed manual log export to create timestamped `.txt` or structured `.json` files in `/sdcard/Download/Bedaim/`.
