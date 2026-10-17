@@ -2003,43 +2003,54 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
         void* actor = it->first;
         const auto snapshot = it->second;
         if (liveActors.find(actor) == liveActors.end()) {
-            // Only discard an unseen actor after a successful broad query. Never
-            // dereference an actor/component pointer that the engine no longer lists.
+            // A successful broad query is required before dropping an unseen actor.
+            // Never dereference a pointer that the current level no longer reports.
             if (missingActorsResolved) it = m_nativeBoundsOriginal.erase(it);
             else ++it;
             continue;
         }
 
         const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-        if (actorAddress > 0x1000) {
-            auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
-                offsets::BuiltInActorComponents::mAABBShapeComponent);
-            void* currentComponent = *componentSlot;
-            void* currentLevel = reinterpret_cast<Actor*>(actor)->level();
-            if (currentComponent == snapshot.component && currentLevel && currentLevel == snapshot.level &&
-                reinterpret_cast<std::uintptr_t>(currentComponent) > 0x1000) {
-                auto* currentBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(currentComponent) +
-                    offsets::AABBShapeComponent::mAABB);
-                const Vec3 currentPosition = reinterpret_cast<Actor*>(actor)->position();
-                if (finiteVec3(currentPosition) && finiteVec3(snapshot.originalActorPosition)) {
-                    const Vec3 delta{
-                        currentPosition.x - snapshot.originalActorPosition.x,
-                        currentPosition.y - snapshot.originalActorPosition.y,
-                        currentPosition.z - snapshot.originalActorPosition.z
-                    };
-                    const AABB translated{
-                        {snapshot.originalBounds.min.x + delta.x,
-                         snapshot.originalBounds.min.y + delta.y,
-                         snapshot.originalBounds.min.z + delta.z},
-                        {snapshot.originalBounds.max.x + delta.x,
-                         snapshot.originalBounds.max.y + delta.y,
-                         snapshot.originalBounds.max.z + delta.z}
-                    };
-                    if (validBounds(translated)) std::memcpy(currentBounds, &translated, sizeof(AABB));
-                }
-            }
+        if (actorAddress <= 0x1000) {
+            it = m_nativeBoundsOriginal.erase(it);
+            continue;
         }
-        it = m_nativeBoundsOriginal.erase(it);
+
+        auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
+            offsets::BuiltInActorComponents::mAABBShapeComponent);
+        void* currentComponent = *componentSlot;
+        auto* actorObject = reinterpret_cast<Actor*>(actor);
+        void* currentLevel = actorObject->level();
+        const Vec3 currentPosition = actorObject->position();
+        if (currentComponent != snapshot.component || currentLevel != snapshot.level ||
+            reinterpret_cast<std::uintptr_t>(currentComponent) <= 0x1000 ||
+            !finiteVec3(currentPosition) || !finiteVec3(snapshot.originalActorPosition)) {
+            it = m_nativeBoundsOriginal.erase(it);
+            continue;
+        }
+
+        const Vec3 delta{
+            currentPosition.x - snapshot.originalActorPosition.x,
+            currentPosition.y - snapshot.originalActorPosition.y,
+            currentPosition.z - snapshot.originalActorPosition.z
+        };
+        const AABB translated{
+            {snapshot.originalBounds.min.x + delta.x,
+             snapshot.originalBounds.min.y + delta.y,
+             snapshot.originalBounds.min.z + delta.z},
+            {snapshot.originalBounds.max.x + delta.x,
+             snapshot.originalBounds.max.y + delta.y,
+             snapshot.originalBounds.max.z + delta.z}
+        };
+        auto* currentBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(currentComponent) +
+            offsets::AABBShapeComponent::mAABB);
+        if (validBounds(translated)) std::memcpy(currentBounds, &translated, sizeof(AABB));
+
+        // Keep the first unexpanded snapshot while enabled. Re-capturing the box
+        // after each movement tick would bake any stale world position into the
+        // next snapshot and make the hitbox lag behind the actor.
+        if (enabled) ++it;
+        else it = m_nativeBoundsOriginal.erase(it);
     }
 }
 
@@ -2074,7 +2085,8 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
         if (isPlayer ? !expandPlayers : (!expandMobs || !categoryHasMobBit(actor))) continue;
 
         const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-        void* actorLevel = reinterpret_cast<Actor*>(actor)->level();
+        auto* actorObject = reinterpret_cast<Actor*>(actor);
+        void* actorLevel = actorObject->level();
         if (!actorLevel || actorLevel != playerLevel) continue;
         auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
             offsets::BuiltInActorComponents::mAABBShapeComponent);
@@ -2083,17 +2095,50 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
 
         auto* nativeBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(component) +
             offsets::AABBShapeComponent::mAABB);
-        const AABB original = *nativeBounds;
-        const Vec3 actorPosition = reinterpret_cast<Actor*>(actor)->position();
-        if (!validBounds(original) || !finiteVec3(actorPosition)) continue;
-        const AABB expanded = expandedTargetBounds(isPlayer, original);
-        if (!validBounds(expanded) ||
-            (expanded.min.x == original.min.x && expanded.min.y == original.min.y && expanded.min.z == original.min.z &&
-             expanded.max.x == original.max.x && expanded.max.y == original.max.y && expanded.max.z == original.max.z)) continue;
+        const Vec3 actorPosition = actorObject->position();
+        if (!finiteVec3(actorPosition)) continue;
 
-        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
-        if (m_nativeBoundsOriginal.find(actor) != m_nativeBoundsOriginal.end()) continue;
-        m_nativeBoundsOriginal.emplace(actor, NativeBoundsSnapshot{component, actorLevel, original, actorPosition});
+        AABB baseBounds = *nativeBounds;
+        {
+            std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+            auto snapshotIt = m_nativeBoundsOriginal.find(actor);
+            if (snapshotIt != m_nativeBoundsOriginal.end() &&
+                (snapshotIt->second.component != component || snapshotIt->second.level != actorLevel)) {
+                m_nativeBoundsOriginal.erase(snapshotIt);
+                snapshotIt = m_nativeBoundsOriginal.end();
+            }
+
+            if (snapshotIt == m_nativeBoundsOriginal.end()) {
+                if (!validBounds(baseBounds)) continue;
+                snapshotIt = m_nativeBoundsOriginal.emplace(
+                    actor, NativeBoundsSnapshot{component, actorLevel, baseBounds, actorPosition}).first;
+            }
+
+            const auto& snapshot = snapshotIt->second;
+            if (!validBounds(snapshot.originalBounds) || !finiteVec3(snapshot.originalActorPosition)) continue;
+            const Vec3 delta{
+                actorPosition.x - snapshot.originalActorPosition.x,
+                actorPosition.y - snapshot.originalActorPosition.y,
+                actorPosition.z - snapshot.originalActorPosition.z
+            };
+            baseBounds = {
+                {snapshot.originalBounds.min.x + delta.x,
+                 snapshot.originalBounds.min.y + delta.y,
+                 snapshot.originalBounds.min.z + delta.z},
+                {snapshot.originalBounds.max.x + delta.x,
+                 snapshot.originalBounds.max.y + delta.y,
+                 snapshot.originalBounds.max.z + delta.z}
+            };
+        }
+
+        if (!validBounds(baseBounds)) continue;
+        const AABB expanded = expandedTargetBounds(isPlayer, baseBounds);
+        if (!validBounds(expanded) ||
+            (expanded.min.x == baseBounds.min.x && expanded.min.y == baseBounds.min.y && expanded.min.z == baseBounds.min.z &&
+             expanded.max.x == baseBounds.max.x && expanded.max.y == baseBounds.max.y && expanded.max.z == baseBounds.max.z)) {
+            std::memcpy(nativeBounds, &baseBounds, sizeof(AABB));
+            continue;
+        }
         std::memcpy(nativeBounds, &expanded, sizeof(AABB));
     }
 }
