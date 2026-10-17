@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-17 — Module Diagnostics
+
+- Added **Module Diagnostics**, which writes `module_diagnostics.json` with registry and activation-state checks and shows a compact HUD summary.
+- Reports duplicate IDs, invalid module metadata, empty registries, and activation-state inconsistencies.
+- The report explicitly notes that generic checks do not prove game-time functionality; module-specific probes and in-game tests are still required.
+
 ## 2026-10-17 — BedrockAim, BedrockBounds and ShiftBlade integration
 
 - Integrated the BedrockAim target-tracking updates and BedrockBounds native AABB expansion on a branch based directly on `main`, without merging the divergent experimental history.
