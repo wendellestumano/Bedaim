@@ -28,6 +28,13 @@
 - Inventory slot scans now validate the player inventory field, inventory proxy/container pointers, slot-vector memory span, bounds, and slot count before iterating.
 - Item identifier reads validate each nested pointer in the ItemStack → counter → Item → vtable path and require the description-id entry to resolve inside a loaded native module. They intentionally do not require that function to come specifically from `libminecraftpe.so`, preserving loader-exposed virtual methods observed in the known-working Bedrock 26.52 path.
 
+## Runtime diagnostics added
+
+- A one-time positive probe confirms when a NormalTick actor matches the validated local player and actual player tick events begin publishing.
+- Aim Assist records dependency readiness, player-tick gates, actor-query validity, target presence/pointer changes, and successful camera-turn submissions.
+- Hitbox Expander records tick readiness, malformed nearby-actor vectors, active/config-disabled states, and actual native AABB expansion writes.
+- Probes are state-deduplicated by component/key/state, so unchanged per-tick states do not fill the ring buffer.
+
 ## Validation status
 
 - Build #469: host regression tests and Android ARM64 package creation succeeded for the stable Aim Assist / Hitbox Expander base.

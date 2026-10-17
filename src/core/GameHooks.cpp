@@ -478,6 +478,13 @@ void tickDetour(void* actor) {
     const bool isLocalPlayer = actor && localPlayer && actor == localPlayer;
 
     if (isLocalPlayer) {
+        static std::atomic_bool loggedFirstMatchingPlayerTick{false};
+        if (!loggedFirstMatchingPlayerTick.exchange(true, std::memory_order_acq_rel)) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Info, "GameHooks",
+                "local_player_tick", "ready",
+                "NormalTick actor matches the validated ClientInstance local player; player events are being published");
+        }
         auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
         LocalPlayerPreTickEvent preEvent{player};
         bus().publish(preEvent);

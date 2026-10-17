@@ -7,6 +7,7 @@
 - Added a guarded ClientInstance vtable fallback for local-player identity resolution. It is attempted only when the signature result is absent, null, or fails pointer plausibility checks; the object, vtable slot, module origin, and returned player's vtable are checked before enabling player tick events.
 - Retained strict local-player identity filtering. No arbitrary NormalTick actor is accepted as the local player.
 - Hardened InventoryAccess bounds checks for the player inventory proxy/container/slot-vector and validated every nested pointer in ItemStack → item counter → Item → description-id vtable before calling it. The description-id function is not restricted to libminecraftpe.so because loader-exposed valid methods must remain supported.
+- Added state-deduplicated Module Diagnostics probes for the first verified player tick, Aim Assist dependency/tick/target/camera gates, and Hitbox Expander tick/vector/actual AABB writes. Probe detail changes do not spam the log unless the named state changes.
 - AutoHit and AutoTotem remain wired to player tick events and keep their existing fail-closed guards. The new branch must pass CI and then be tested in Minecraft; this commit does not claim that native attack dispatch or offhand transfer has been confirmed in a live session.
 
 ## 2026-10-17 — LeviLamina local-player interface lead

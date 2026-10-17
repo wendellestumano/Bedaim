@@ -278,8 +278,14 @@ std::string InventoryAccess::stackIdentifier(const void* stack) const {
 
     using GetDescriptionIdFn = const std::string& (*)(const void*);
     const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(methodAddress)(item);
-    if (identifier.empty() || identifier.size() > 128) return {};
-    return identifier;
+    // A vtable target being mapped is not enough: validate the returned string
+    // reference and character span before std::string reads its internals.
+    if (!isReadableMemory(&identifier, sizeof(identifier))) return {};
+    const auto identifierSize = identifier.size();
+    if (identifierSize == 0 || identifierSize > 128) return {};
+    const char* identifierData = identifier.data();
+    if (!identifierData || !isReadableMemory(identifierData, identifierSize + 1)) return {};
+    return std::string(identifierData, identifierSize);
 }
 
 int InventoryAccess::countStack(const void* stack, std::string_view identifierPart) const {
@@ -509,8 +515,12 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
 
     // Player::mTransactionManager is at 0xA28 in the target's current Player layout.
     // Verify the embedded Player& before calling any native transaction method.
-    auto* manager = reinterpret_cast<void*>(
-        reinterpret_cast<std::uintptr_t>(player) + PlayerTransactionManagerOffset);
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    if (PlayerTransactionManagerOffset > std::numeric_limits<std::uintptr_t>::max() - playerAddress) {
+        return report(OffhandTransferResult::InvalidNativeState,
+                      "Player transaction-manager field address overflowed");
+    }
+    auto* manager = reinterpret_cast<void*>(playerAddress + PlayerTransactionManagerOffset);
     if (!isReadableMemory(manager, TransactionManagerSize) ||
         read<const void*>(manager, 0) != player || !validExpectedActionsVector(manager)) {
         return report(OffhandTransferResult::InvalidNativeState,
