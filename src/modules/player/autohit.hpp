@@ -26,6 +26,9 @@ private:
 
     std::mutex m_stateMutex;
     bool m_attackHeld = false;
+    // Mobile-friendly default: valid targets and weapon profiles can drive AutoHit
+    // without relying on the launcher mouse bridge. Desktop users may require input.
+    bool m_requireAttackInput = false;
     std::atomic_bool m_containerOpen{false};
     std::atomic_bool m_chatOpen{false};
     int m_heldButton = -1;

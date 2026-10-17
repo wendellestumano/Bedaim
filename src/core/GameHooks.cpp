@@ -10,6 +10,7 @@
 #include <bedrocktools/sdk/offsets/Core.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
 #include <bedrocktools/sdk/offsets/World.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 #include <dlfcn.h>
 #include <EGL/egl.h>
 #include <algorithm>
@@ -78,6 +79,7 @@ ScreenFn chatOpenOriginal = nullptr;
 ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
+std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -469,12 +471,31 @@ std::string versionDetour(void* self) {
 }
 
 void tickDetour(void* actor) {
-    auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-    LocalPlayerPreTickEvent preEvent{player};
-    bus().publish(preEvent);
+    // NormalTick may be reached for non-local actors. Never publish an event
+    // named LocalPlayerTickEvent for an arbitrary actor: inventory modules can
+    // otherwise interpret a mob or stale object as the local Player.
+    void* localPlayer = currentLocalPlayer.load(std::memory_order_acquire);
+    const bool isLocalPlayer = actor && localPlayer && actor == localPlayer;
+
+    if (isLocalPlayer) {
+        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+        LocalPlayerPreTickEvent preEvent{player};
+        bus().publish(preEvent);
+    } else {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks", "local_player_tick",
+            localPlayer ? "non_local_actor_filtered" : "local_player_unavailable",
+            localPlayer ? "NormalTick actor did not match ClientInstance::getLocalPlayer"
+                        : "ClientInstance::getLocalPlayer has not yielded a player; module tick event suppressed");
+    }
+
     if (tickOriginal) tickOriginal(actor);
-    LocalPlayerTickEvent event{player};
-    bus().publish(event);
+
+    if (isLocalPlayer) {
+        auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+        LocalPlayerTickEvent event{player};
+        bus().publish(event);
+    }
 }
 
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
@@ -608,6 +629,23 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
+
+    // Resolve the real local player from ClientInstance after its native update.
+    // This pointer identity is used only to filter NormalTick callbacks; we do not
+    // dereference a candidate actor just to decide whether it is the local player.
+    void* localPlayer = nullptr;
+    if (clientInstance) {
+        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
+        localPlayer = client->localPlayer();
+    }
+    currentLocalPlayer.store(localPlayer, std::memory_order_release);
+    bedrocktools::diagnostics::probe(
+        localPlayer ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "local_player_resolution",
+        localPlayer ? "ready" : "unavailable",
+        localPlayer ? "ClientInstance::getLocalPlayer returned a pointer"
+                    : "local-player tick events will be suppressed until the SDK getter resolves");
+
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
     return result;
@@ -685,10 +723,20 @@ bool install() {
     hookSignature(SignatureId::GameModeStopDestroyBlock, reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal);
     hookSignature(SignatureId::GameModeStartBuildBlock, reinterpret_cast<void*>(gameModeStartBuildBlockDetour), &gameModeStartBuildBlockOriginal);
     hookSignature(SignatureId::SurvivalModeStartBuildBlock, reinterpret_cast<void*>(survivalModeStartBuildBlockDetour), &survivalModeStartBuildBlockOriginal);
-    hookSignature(SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
-    hookSignature(SignatureId::SurvivalModeUseItem, reinterpret_cast<void*>(survivalModeUseItemDetour), &survivalModeUseItemOriginal);
-    hookSignature(SignatureId::GameModeUseItemAsAttack, reinterpret_cast<void*>(gameModeUseItemAsAttackDetour), &gameModeUseItemAsAttackOriginal);
-    hookSignature(SignatureId::SurvivalModeUseItemAsAttack, reinterpret_cast<void*>(survivalModeUseItemAsAttackDetour), &survivalModeUseItemAsAttackOriginal);
+    const bool gameModeUseItemHooked = hookSignature(
+        SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
+    const bool survivalModeUseItemHooked = hookSignature(
+        SignatureId::SurvivalModeUseItem, reinterpret_cast<void*>(survivalModeUseItemDetour), &survivalModeUseItemOriginal);
+    gameHooksLogger().info(
+        "Consumption detection hooks: GameMode::useItem={}, SurvivalMode::useItem={}",
+        gameModeUseItemHooked, survivalModeUseItemHooked);
+    const bool gameModeUseItemAsAttackHooked = hookSignature(
+        SignatureId::GameModeUseItemAsAttack, reinterpret_cast<void*>(gameModeUseItemAsAttackDetour), &gameModeUseItemAsAttackOriginal);
+    const bool survivalUseItemAsAttackHooked = hookSignature(
+        SignatureId::SurvivalModeUseItemAsAttack, reinterpret_cast<void*>(survivalModeUseItemAsAttackDetour), &survivalModeUseItemAsAttackOriginal);
+    gameHooksLogger().info(
+        "Touch activation hooks: GameMode::useItemAsAttack={}, SurvivalMode::useItemAsAttack={}",
+        gameModeUseItemAsAttackHooked, survivalUseItemAsAttackHooked);
     hookSignature(SignatureId::GameModeUseItemOn, reinterpret_cast<void*>(gameModeUseItemOnDetour), &gameModeUseItemOnOriginal);
     hookSignature(SignatureId::SurvivalModeUseItemOn, reinterpret_cast<void*>(survivalModeUseItemOnDetour), &survivalModeUseItemOnOriginal);
     hookSignature(SignatureId::GameModeInteract, reinterpret_cast<void*>(gameModeInteractDetour), &gameModeInteractOriginal);
@@ -728,6 +776,7 @@ void uninstall() {
     handleCount = 0;
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
+    currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
@@ -748,13 +797,26 @@ void* gameMode() {
 }
 
 void* gameModeForPlayer(void* player) {
-    if (!player) return nullptr;
+    if (!player) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "missing_player");
+        return nullptr;
+    }
 
     // Prefer the receiver captured by a real engine callback, but require the
     // exact resolved public attack signature instead of merely a plausible game
     // vtable. This avoids accidentally retaining a neighboring polymorphic object.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (observed && publicAttackVirtualEntry(observed) != 0) return observed;
+    if (observed) {
+        if (publicAttackVirtualEntry(observed) != 0) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "GameHooks", "game_mode_resolution", "ready_from_observed_action");
+            return observed;
+        }
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "observed_instance_unverified",
+            "observed action receiver did not match the public attack wrapper");
+    }
 
     // Some game sessions have not yet produced a GameMode callback when native attack dispatch
     // first becomes active. The Player SDK already documents the owned mGameMode
@@ -765,24 +827,36 @@ void* gameModeForPlayer(void* player) {
     currentGameMode.store(nullptr, std::memory_order_release);
     const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
     constexpr auto gameModeOffset = bedrocktools::sdk::offsets::Player::mGameMode;
-    if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - gameModeOffset)
+    if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - gameModeOffset) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
+            "GameHooks", "game_mode_resolution", "player_field_address_overflow");
         return nullptr;
+    }
     const auto slotAddress = playerAddress + gameModeOffset;
     const auto* slot = reinterpret_cast<const void*>(slotAddress);
-    if (!isReadableMemory(slot, sizeof(void*))) return nullptr;
+    if (!isReadableMemory(slot, sizeof(void*))) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "player_field_unreadable",
+            "Player::mGameMode storage is outside a readable memory region");
+        return nullptr;
+    }
 
     void* candidate = *reinterpret_cast<void* const*>(slot);
-    if (!candidate || publicAttackVirtualEntry(candidate) == 0) {
-        static std::atomic_bool loggedNoVerifiedGameMode{false};
-        if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Could not validate a local Player-owned GameMode; no native attack was dispatched.");
+    if (!candidate) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "player_field_null");
+        return nullptr;
+    }
+    if (publicAttackVirtualEntry(candidate) == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "game_mode_resolution", "player_field_candidate_unverified",
+            "candidate did not match a validated GameMode/SurvivalMode public attack vtable entry");
         return nullptr;
     }
 
     currentGameMode.store(candidate, std::memory_order_release);
-    static std::atomic_bool loggedPlayerGameModeFallback{false};
-    if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Recovered the Player-owned GameMode using a readable field and exact public attack signature match.");
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "GameHooks", "game_mode_resolution", "ready_from_player_field");
     return candidate;
 }
 

@@ -99,9 +99,20 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         "AutoTotem", "tick_gate", "ready");
 
     auto& inventory = bedrocktools::core::InventoryAccess::get();
-    const std::string offhandId = inventory.offhandIdentifier(player);
+    std::string offhandId;
+    std::string offhandReadError;
+    if (!inventory.readOffhandIdentifier(player, offhandId, &offhandReadError)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
+            "AutoTotem", "offhand_state", "unreadable", offhandReadError);
+        // An unreadable slot is not the same as an empty slot. Never begin a
+        // transfer unless the offhand accessor returns a readable ItemStack.
+        return;
+    }
     const bool offhandHasTotem = containsTotem(offhandId);
     const bool offhandEmpty = offhandId.empty();
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "AutoTotem", "offhand_read", "valid",
+        std::string("identifier=") + (offhandId.empty() ? "<empty>" : offhandId));
     const auto now = std::chrono::steady_clock::now();
 
     std::lock_guard lock(m_stateMutex);
@@ -165,8 +176,26 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const bool containerOpen = m_containerOpen.load(std::memory_order_acquire);
     const int totemSlot = inventory.findInventorySlot(player, "totem");
+    const std::string totemSearchState = totemSlot >= 0
+        ? "found_slot_" + std::to_string(totemSlot) : "not_found";
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "AutoTotem", "totem_search", totemSearchState,
+        std::string("source_slot=") + std::to_string(totemSlot));
     const bool delayElapsed =
         m_refillAfter.time_since_epoch().count() == 0 || now >= m_refillAfter;
+    const int delayRemainingMs = !delayElapsed && m_refillAfter.time_since_epoch().count() != 0
+        ? static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(m_refillAfter - now).count())
+        : 0;
+    const std::string contextState = std::string("combat_") + (inCombat ? "yes" : "no") +
+        "_container_" + (containerOpen ? "open" : "closed") +
+        "_delay_" + (delayElapsed ? "elapsed" : "waiting") +
+        "_pending_" + (m_pendingRefill ? "yes" : "no");
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "AutoTotem", "refill_context", contextState,
+        std::string("combat_only=") + (m_combatOnly ? "true" : "false") +
+            "; keep_totem_equipped=" + (m_keepTotemEquipped ? "true" : "false") +
+            "; source_slot=" + std::to_string(totemSlot) +
+            "; delay_remaining_ms=" + std::to_string(delayRemainingMs));
     const bedaim::autototem::Inputs input{
         enabled,
         m_pendingRefill,

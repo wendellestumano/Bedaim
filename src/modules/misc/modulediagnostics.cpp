@@ -34,6 +34,22 @@ std::string moduleStatus(const Module* module) {
     if (!module->masterEnabled) return "disabled";
     return "inactive";
 }
+
+
+std::string localClockLabel() {
+    const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm local{};
+    if (localtime_r(&now, &local) == nullptr) return "--:--";
+    char buffer[8]{};
+    if (std::strftime(buffer, sizeof(buffer), "%H:%M", &local) == 0) return "--:--";
+    return buffer;
+}
+
+std::string intervalLabel(int seconds) {
+    if (seconds < 60) return std::to_string(seconds) + " s";
+    if (seconds % 60 == 0) return std::to_string(seconds / 60) + " min";
+    return std::to_string(seconds / 60) + "m " + std::to_string(seconds % 60) + "s";
+}
 }
 
 ModuleDiagnosticsModule::ModuleDiagnosticsModule()
@@ -94,18 +110,18 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     schema.node(std::move(autoNode));
 
     ConfigNodeV2 intervalNode;
-    intervalNode.id = "m_autoExportIntervalMinutes";
-    intervalNode.key = "m_autoExportIntervalMinutes";
-    intervalNode.title = "Automatic export interval";
-    intervalNode.description = "Time between automatic exports; minimum 1 minute, maximum 60 minutes. Defaults to every minute for useful failure diagnostics.";
+    intervalNode.id = "m_autoExportIntervalSeconds";
+    intervalNode.key = "m_autoExportIntervalSeconds";
+    intervalNode.title = "Automatic save interval";
+    intervalNode.description = "Time between rolling auto-saves. Minimum 1 second, maximum 5 minutes. Defaults to every 5 seconds for useful diagnostics without excessive file writes.";
     intervalNode.category = "diagnostics";
     intervalNode.type = ConfigControlTypeV2::SliderFloat;
     intervalNode.minValue = "1";
-    intervalNode.maxValue = "60";
+    intervalNode.maxValue = "300";
     intervalNode.step = "1";
-    intervalNode.unit = " min";
-    intervalNode.defaultValue = "1";
-    intervalNode.currentValue = std::to_string(m_autoExportIntervalMinutes);
+    intervalNode.unit = " s";
+    intervalNode.defaultValue = "5";
+    intervalNode.currentValue = std::to_string(m_autoExportIntervalSeconds);
     intervalNode.hasCurrentValue = true;
     schema.node(std::move(intervalNode));
 
@@ -120,6 +136,18 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     clearNode.currentValue = "false";
     clearNode.hasCurrentValue = true;
     schema.node(std::move(clearNode));
+
+    ConfigNodeV2 freshSessionNode;
+    freshSessionNode.id = "m_startFreshLogSession";
+    freshSessionNode.key = "m_startFreshLogSession";
+    freshSessionNode.title = "Start fresh gameplay log session";
+    freshSessionNode.description = "Clears previous gameplay entries, keeps essential startup/hook diagnostics, and atomically replaces the rolling auto-save. Timestamped manual exports are preserved.";
+    freshSessionNode.category = "diagnostics";
+    freshSessionNode.type = ConfigControlTypeV2::Toggle;
+    freshSessionNode.defaultValue = "false";
+    freshSessionNode.currentValue = "false";
+    freshSessionNode.hasCurrentValue = true;
+    schema.node(std::move(freshSessionNode));
     pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -135,6 +163,10 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             // buffer; that would make "clear" leave a non-empty log.
             bedrocktools::diagnostics::clear();
         }
+        return true;
+    }
+    if (key == "m_startFreshLogSession") {
+        if (requested) startFreshLogSession();
         return true;
     }
     if (key == "m_autoExportEnabled") {
@@ -154,16 +186,16 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
         m_exportCondition.notify_all();
         return true;
     }
-    if (key == "m_autoExportIntervalMinutes") {
+    if (key == "m_autoExportIntervalSeconds") {
         try {
             std::size_t parsedLength = 0;
             const std::string text(value);
             const float parsed = std::stof(text, &parsedLength);
             if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
+            const float bounded = std::clamp(parsed, 1.0f, 300.0f);
             {
                 std::lock_guard<std::mutex> lock(m_exportMutex);
-                m_autoExportIntervalMinutes = std::clamp(
-                    static_cast<int>(std::lround(parsed)), 1, 60);
+                m_autoExportIntervalSeconds = static_cast<int>(std::lround(bounded));
             }
             m_exportCondition.notify_all();
             return true;
@@ -181,8 +213,14 @@ void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
         m_exportLogsNow = false;
         m_clearLogsNow = false;
         m_autoExportEnabled = j.value("m_autoExportEnabled", m_autoExportEnabled);
-        m_autoExportIntervalMinutes = std::clamp(
-            j.value("m_autoExportIntervalMinutes", m_autoExportIntervalMinutes), 1, 60);
+        if (j.contains("m_autoExportIntervalSeconds")) {
+            m_autoExportIntervalSeconds = std::clamp(
+                j.value("m_autoExportIntervalSeconds", m_autoExportIntervalSeconds), 1, 300);
+        } else if (j.contains("m_autoExportIntervalMinutes")) {
+            // Migrate settings from older builds, which stored the interval in minutes.
+            const int oldMinutes = std::clamp(j.value("m_autoExportIntervalMinutes", 1), 1, 60);
+            m_autoExportIntervalSeconds = std::clamp(oldMinutes * 60, 1, 300);
+        }
         const auto format = j.value("m_exportFormat", m_exportFormat);
         m_exportFormat = (format == "json") ? "json" : "txt";
     }
@@ -194,8 +232,10 @@ void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
     std::lock_guard<std::mutex> lock(m_exportMutex);
     j["m_exportLogsNow"] = false;
     j["m_clearLogsNow"] = false;
+    j["m_startFreshLogSession"] = false;
     j["m_autoExportEnabled"] = m_autoExportEnabled;
-    j["m_autoExportIntervalMinutes"] = m_autoExportIntervalMinutes;
+    j["m_autoExportIntervalSeconds"] = m_autoExportIntervalSeconds;
+    j.erase("m_autoExportIntervalMinutes");
     j["m_exportFormat"] = m_exportFormat;
 }
 
@@ -214,6 +254,49 @@ void ModuleDiagnosticsModule::onDisable() {
     stopExportWorker();
     m_reportReady = false;
     submitDrawCommands(moduleId, {});
+}
+
+void ModuleDiagnosticsModule::startFreshLogSession() {
+    // Keep only stable startup facts that are essential for diagnosing native
+    // routes (especially AutoHit's attack hook and AutoTotem's offhand reader).
+    // Old gameplay decisions/toggles are discarded so the new export is clean.
+    const auto previousEntries = bedrocktools::diagnostics::snapshot();
+    std::vector<bedrocktools::diagnostics::Entry> baselineEntries;
+    baselineEntries.reserve(previousEntries.size());
+    for (const auto& entry : previousEntries) {
+        const bool keep =
+            entry.component == "Runtime" ||
+            entry.component == "GameHooks" ||
+            entry.component == "InventoryAccess" ||
+            entry.component == "Config" ||
+            (entry.component == "ModuleRegistry" &&
+                entry.message.rfind("registered modules initialized:", 0) == 0) ||
+            ((entry.component == "AutoHit" || entry.component == "AutoTotem") &&
+                entry.message.rfind("lifecycle=initialized", 0) == 0) ||
+            ((entry.component == "BedrockAim" || entry.component == "HitboxExpander") &&
+                entry.message.rfind("native_dependencies=ready", 0) == 0);
+        if (keep) baselineEntries.push_back(entry);
+    }
+
+    bedrocktools::diagnostics::clear();
+    for (const auto& entry : baselineEntries) {
+        std::string message = entry.message;
+        constexpr std::string_view baselinePrefix = "baseline: ";
+        if (message.rfind(baselinePrefix, 0) == 0)
+            message.erase(0, baselinePrefix.size());
+        bedrocktools::diagnostics::log(entry.level, entry.component,
+            std::string(baselinePrefix) + message);
+    }
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "Diagnostics", "fresh gameplay log session started; previous gameplay entries cleared");
+
+    // The atomic exporter replaces the rolling file only after a successful
+    // write. Timestamped manual exports remain available as historical captures.
+    const bool saved = exportLogs(true);
+    if (saved) {
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_lastExportStatus = "Fresh session saved (" + localClockLabel() + ")";
+    }
 }
 
 void ModuleDiagnosticsModule::startExportWorker() {
@@ -249,11 +332,11 @@ void ModuleDiagnosticsModule::exportWorkerLoop() {
         if (m_stopExportWorker) break;
         if (!m_autoExportEnabled) continue;
 
-        const int intervalMinutes = m_autoExportIntervalMinutes;
+        const int intervalSeconds = m_autoExportIntervalSeconds;
         const bool changed = m_exportCondition.wait_for(
-            lock, std::chrono::minutes(intervalMinutes), [this, intervalMinutes] {
+            lock, std::chrono::seconds(intervalSeconds), [this, intervalSeconds] {
                 return m_stopExportWorker || !m_autoExportEnabled ||
-                       m_autoExportIntervalMinutes != intervalMinutes;
+                       m_autoExportIntervalSeconds != intervalSeconds;
             });
         if (m_stopExportWorker) break;
         if (changed) continue;
@@ -261,6 +344,10 @@ void ModuleDiagnosticsModule::exportWorkerLoop() {
 }
 
 bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
+    // Manual, periodic and fresh-session exports share the same rolling file.
+    // Serialize the snapshot/write pair so an older snapshot cannot overwrite
+    // a freshly reset session after it has been exported.
+    std::lock_guard<std::mutex> fileLock(m_fileWriteMutex);
     std::string format;
     {
         std::lock_guard<std::mutex> lock(m_exportMutex);
@@ -274,8 +361,7 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         const std::string reason = "Cannot access /sdcard/Download/Bedaim; check Android storage access";
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Diagnostics", reason);
         std::lock_guard<std::mutex> lock(m_exportMutex);
-        m_lastExportStatus = "Export failed: Downloads unavailable";
-        m_lastExportPath.clear();
+        m_lastExportStatus = "Task failed (" + localClockLabel() + "): Downloads unavailable";
         return false;
     }
 
@@ -304,6 +390,20 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
     const bool ok = format == "json"
         ? bedrocktools::diagnostics::exportJsonTo(outputPath, &error)
         : bedrocktools::diagnostics::exportTo(outputPath, &error);
+
+    // Keep exactly one rolling auto-save format so switching TXT/JSON cannot
+    // leave a stale file that looks like the current gameplay's export.
+    if (ok && automatic) {
+        const std::string staleExtension = format == "json" ? "txt" : "json";
+        std::error_code staleError;
+        std::filesystem::remove(outputDirectory /
+            ("bedaim_diagnostics_auto." + staleExtension), staleError);
+        if (staleError) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+                "Diagnostics", "could not remove stale rolling export: " + staleError.message());
+        }
+    }
+
     bedrocktools::diagnostics::log(ok ? bedrocktools::diagnostics::Level::Info :
         bedrocktools::diagnostics::Level::Error, "Diagnostics",
         ok ? "diagnostic logs exported to " + outputPath :
@@ -311,10 +411,17 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
 
     {
         std::lock_guard<std::mutex> lock(m_exportMutex);
-        m_lastExportStatus = ok
-            ? (automatic ? "Auto-export succeeded" : "Export succeeded")
-            : ("Export failed: " + error);
-        m_lastExportPath = ok ? outputPath : std::string{};
+        const std::string completedAt = localClockLabel();
+        if (ok) {
+            m_lastExportStatus = automatic
+                ? "Task completed successfully (" + completedAt + ")"
+                : "Manual export completed (" + completedAt + ")";
+            m_lastExportPath = outputPath;
+            m_lastSuccessfulExportTime = completedAt;
+        } else {
+            m_lastExportStatus = "Task failed (" + completedAt + "): " + error;
+            // Keep the last known-good path/time visible when a later save fails.
+        }
     }
     return ok;
 }
@@ -333,12 +440,14 @@ void ModuleDiagnosticsModule::onFrame() {
     std::string exportPath;
     bool autoExport;
     int interval;
+    std::string lastSuccessfulTime;
     {
         std::lock_guard<std::mutex> lock(m_exportMutex);
         exportStatus = m_lastExportStatus;
         exportPath = m_lastExportPath;
         autoExport = m_autoExportEnabled;
-        interval = m_autoExportIntervalMinutes;
+        interval = m_autoExportIntervalSeconds;
+        lastSuccessfulTime = m_lastSuccessfulExportTime;
     }
 
     std::vector<PLModMenu_DrawCommand> commands;
@@ -351,10 +460,10 @@ void ModuleDiagnosticsModule::onFrame() {
         ? "Health report: module_diagnostics.json"
         : "Health report write failed (check config folder)";
     const std::string line4 = autoExport
-        ? "Auto-export: every " + std::to_string(interval) + " min | " + exportStatus
-        : "Auto-export off | " + exportStatus;
-    const std::string line5 = exportPath.empty() ? "Logs folder: Download/Bedaim"
-        : "Last export: " + exportPath;
+        ? "Auto-save: every " + intervalLabel(interval) + " | " + exportStatus
+        : "Auto-save off | " + exportStatus;
+    const std::string line5 = "Last successful save: " + lastSuccessfulTime +
+        (exportPath.empty() ? " | Folder: Download/Bedaim" : " | " + exportPath);
 
     auto addText = [&](const std::string& text, float y, std::uint32_t color) {
         PLModMenu_DrawCommand command{};

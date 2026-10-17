@@ -101,17 +101,38 @@ void AutoHitModule::onInit() {
     // are explicitly ignored so AutoHit cannot re-arm itself.
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
         [this](auto& event) {
-            if (!enabled || event.action != bedrocktools::events::GameModeAction::Attack ||
-                g_autoHitSyntheticAttack ||
-                m_containerOpen.load(std::memory_order_acquire) ||
-                m_chatOpen.load(std::memory_order_acquire)) return;
+            const bool nativeAttack = event.action == bedrocktools::events::GameModeAction::Attack;
+            const bool itemAsAttack = event.action == bedrocktools::events::GameModeAction::UseItemAsAttack;
+            if (!nativeAttack && !itemAsAttack) return;
+
+            const char* actionName = nativeAttack ? "Attack" : "UseItemAsAttack";
+            if (!enabled) return;
+            if (g_autoHitSyntheticAttack) {
+                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
+                    "AutoHit", "touch_activation", "synthetic_action_ignored", actionName);
+                return;
+            }
+            if (m_containerOpen.load(std::memory_order_acquire) ||
+                m_chatOpen.load(std::memory_order_acquire)) {
+                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+                    "AutoHit", "touch_activation", "blocked_by_screen", actionName);
+                return;
+            }
+
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            if (!m_touchRepeatEnabled) return;
+            if (!m_touchRepeatEnabled) {
+                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                    "AutoHit", "touch_activation",
+                    nativeAttack ? "attack_seen_repeat_disabled" : "item_as_attack_seen_repeat_disabled",
+                    "native action was observed, but touchscreen repeat is disabled");
+                return;
+            }
             const auto window = std::chrono::milliseconds(std::clamp(m_touchRepeatWindowMs, 100, 1000));
             m_touchRepeatUntil = std::chrono::steady_clock::now() + window;
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                "AutoHit", "touch_input", "repeat_window_armed",
-                std::string("window_ms=") + std::to_string(window.count()));
+                "AutoHit", "touch_input",
+                nativeAttack ? "attack_repeat_window_armed" : "item_as_attack_repeat_window_armed",
+                std::string("source=") + actionName + "; window_ms=" + std::to_string(window.count()));
         });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "initialized",
@@ -126,6 +147,8 @@ void AutoHitModule::onEnable() {
     m_nextAttack = {};
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "enabled");
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "AutoHit", "activation_mode", m_requireAttackInput ? "input_required" : "automatic_when_enabled");
 }
 
 void AutoHitModule::onDisable() {
@@ -177,17 +200,28 @@ bool AutoHitModule::onMouseEvent(int button, bool isDown) {
 void AutoHitModule::processPlayerTick(Player* player) {
     using namespace bedrocktools;
     bool attackHeld = false;
+    bool requireAttackInput = false;
     int attackButton = 0;
+    int heldButton = -1;
+    bool touchRepeatEnabled = false;
+    int touchWindowRemainingMs = 0;
     float configuredRange = 3.2f;
     bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
     float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         const auto tickNow = std::chrono::steady_clock::now();
-        attackHeld = m_attackHeld ||
+        requireAttackInput = m_requireAttackInput;
+        attackHeld = !requireAttackInput || m_attackHeld ||
             (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
              tickNow < m_touchRepeatUntil);
         attackButton = m_attackButton;
+        heldButton = m_heldButton;
+        touchRepeatEnabled = m_touchRepeatEnabled;
+        if (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil) {
+            touchWindowRemainingMs = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                m_touchRepeatUntil - tickNow).count());
+        }
         configuredRange = m_attackRange;
         swordEnabled = m_swordEnabled;
         swordCps = m_swordCps;
@@ -212,9 +246,30 @@ void AutoHitModule::processPlayerTick(Player* player) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
         return;
     }
+    // Check native dispatch availability before waiting for input. Otherwise an
+    // unsupported runtime looks like a broken input button forever, hiding the
+    // actual blocker from diagnostics. This check never performs an attack.
+    void* gameMode = core::gamehooks::gameModeForPlayer(player);
+    if (!gameMode) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
+        return;
+    }
+    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
+    if (!attackRouteAvailable) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable",
+            "public GameMode attack vtable/signature route failed runtime validation");
+        return;
+    }
+    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
+
     if (!attackHeld) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "waiting_for_attack_input",
-            std::string("configured_button=") + std::to_string(attackButton));
+        const std::string inputState = std::string("waiting_for_attack_input_button_") +
+            std::to_string(attackButton) + (touchRepeatEnabled ? "_touch_repeat_on" : "_touch_repeat_off");
+        const std::string inputDetail = std::string("configured_button=") + std::to_string(attackButton) +
+            "; held_button=" + std::to_string(heldButton) +
+            "; touch_repeat=" + (touchRepeatEnabled ? "enabled" : "disabled") +
+            "; repeat_window_remaining_ms=" + std::to_string(touchWindowRemainingMs);
+        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", inputState, inputDetail);
         return;
     }
 
@@ -287,18 +342,6 @@ void AutoHitModule::processPlayerTick(Player* player) {
         }
     }
 
-    void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
-        return;
-    }
-    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
-    if (!attackRouteAvailable) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
-
     // Final native-free gate is shared with host tests. The earlier checks are
     // intentionally retained for precise per-stage diagnostics; this last gate
     // ensures no dispatch occurs if any prerequisite becomes invalid.
@@ -344,6 +387,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), 0, 16);
+    m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
     m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
@@ -363,6 +407,7 @@ void AutoHitModule::saveConfig(nlohmann::json& json) {
     Module::saveConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     json["m_attackButton"] = m_attackButton;
+    json["m_requireAttackInput"] = m_requireAttackInput;
     json["m_attackRange"] = m_attackRange;
     json["m_touchRepeatEnabled"] = m_touchRepeatEnabled;
     json["m_touchRepeatWindowMs"] = m_touchRepeatWindowMs;
@@ -410,6 +455,13 @@ void AutoHitModule::onMenuRegistered() {
     };
 
     slider("m_attackButton", "Mouse button index", "combat", "0", "16", "1", "");
+    ConfigNodeV2 activationNode;
+    activationNode.id = "m_requireAttackInput";
+    activationNode.key = "m_requireAttackInput";
+    activationNode.title = "Require attack input (desktop)";
+    activationNode.category = "combat";
+    activationNode.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(activationNode));
     slider("m_attackRange", "Attack range", "combat", "2", "6", "0.1", " blocks");
     toggle("m_touchRepeatEnabled", "Enable touchscreen attack repeat");
     slider("m_touchRepeatWindowMs", "Touch repeat window", "combat", "100", "1000", "50", " ms");
@@ -434,6 +486,21 @@ void AutoHitModule::onMenuRegistered() {
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
+    if (key == "m_requireAttackInput") {
+        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
+        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
+        if (!on && !off) return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_requireAttackInput = on;
+        if (!on) {
+            m_attackHeld = false;
+            m_heldButton = -1;
+            m_touchRepeatUntil = {};
+        }
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "activation_mode", on ? "input_required" : "automatic_when_enabled");
+        return true;
+    }
     if (key == "m_touchRepeatEnabled") {
         const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
         const bool off = value == "false" || value == "0" || value == "off" || value == "no";

@@ -123,6 +123,9 @@ void clear() noexcept {
         {
             std::lock_guard<std::mutex> lock(gMutex);
             gEntries.clear();
+            // A cleared buffer starts a new sequence so exports are easier to
+            // distinguish and correlate within a single gameplay session.
+            gNextSequence = 1;
         }
         resetProbes();
     } catch (...) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <string_view>
 
@@ -32,12 +33,16 @@ public:
     int selectedHotbarSlot(const sdk::Player* player) const;
     std::string selectedHotbarIdentifier(const sdk::Player* player) const;
     std::string offhandIdentifier(const sdk::Player* player) const;
+    bool readOffhandIdentifier(const sdk::Player* player, std::string& identifier,
+                               std::string* error = nullptr) const;
     bool selectHotbarSlot(sdk::Player* player, int slot) const;
     OffhandTransferResult moveInventoryItemToOffhand(sdk::Player* player, int slot) const;
 
 private:
     using GetOffhandSlotFn = const void* (*)(const void*);
     GetOffhandSlotFn m_getOffhandSlot = nullptr;
+    std::string m_getOffhandSlotSource = "unresolved";
+    mutable std::atomic_bool m_offhandGetterQuarantined{false};
 };
 
 }

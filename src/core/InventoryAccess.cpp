@@ -16,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bedrocktools::core {
@@ -169,13 +170,40 @@ InventoryAccess& InventoryAccess::get() {
 }
 
 void InventoryAccess::initialize() {
-    m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(
-        memory::resolve(memory::SignatureId::ActorGetOffhandSlot));
+    m_offhandGetterQuarantined.store(false, std::memory_order_release);
+    // Prefer exact exported accessors over the generic signature pattern. The
+    // old pattern could resolve on newer builds but return an unreadable pointer,
+    // which made AutoTotem mistake an unknown offhand state for an empty slot.
+    struct GetterSymbol { const char* name; const char* label; };
+    constexpr GetterSymbol candidates[] = {
+        {"_ZNK5Actor14getOffhandSlotEv", "Actor::getOffhandSlot const symbol"},
+        {"_ZN5Actor14getOffhandSlotEv", "Actor::getOffhandSlot symbol"},
+        {"_ZNK6Player14getOffhandSlotEv", "Player::getOffhandSlot const symbol"},
+        {"_ZN6Player14getOffhandSlotEv", "Player::getOffhandSlot symbol"},
+        {"_ZNK11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot const symbol"},
+        {"_ZN11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot symbol"}
+    };
+    m_getOffhandSlot = nullptr;
+    m_getOffhandSlotSource = "unresolved";
+    for (const auto& candidate : candidates) {
+        if (void* address = resolveMinecraftSymbol(candidate.name)) {
+            m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(address);
+            m_getOffhandSlotSource = candidate.label;
+            break;
+        }
+    }
+    if (!m_getOffhandSlot) {
+        m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(
+            memory::resolve(memory::SignatureId::ActorGetOffhandSlot));
+        if (m_getOffhandSlot) m_getOffhandSlotSource = "signature-pattern fallback (runtime pointer validation required)";
+    }
     bedrocktools::diagnostics::probe(
         m_getOffhandSlot ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
         "InventoryAccess", "offhand_reader",
         m_getOffhandSlot ? "ready" : "signature_unavailable",
-        m_getOffhandSlot ? "offhand reads enabled" : "offhand transfers will fail closed");
+        std::string("source=") + m_getOffhandSlotSource +
+            (m_getOffhandSlot ? "; returned ItemStack pointers are validated before use"
+                              : "; offhand transfers fail closed"));
 }
 
 int InventoryAccess::countItems(const sdk::Player* player, std::string_view identifierPart) const {
@@ -189,11 +217,17 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
             total += countStack(reinterpret_cast<const void*>(begin + slot * ItemStackSize), identifierPart);
         }
     }
-    const void* offhand = m_getOffhandSlot ? m_getOffhandSlot(player) : nullptr;
-    const auto offhandAddress = reinterpret_cast<std::uintptr_t>(offhand);
-    const bool alreadyCounted = valid && begin && offhandAddress >= begin &&
-        offhandAddress - begin < size * ItemStackSize && (offhandAddress - begin) % ItemStackSize == 0;
-    if (!alreadyCounted) total += countStack(offhand, identifierPart);
+    // Never dereference the offhand getter directly here: the diagnostic logs
+    // showed that a signature-pattern fallback can return an unreadable pointer.
+    // Reuse the same validation/quarantine path as AutoTotem before counting it.
+    if (!identifierPart.empty() && m_getOffhandSlot &&
+        !m_offhandGetterQuarantined.load(std::memory_order_acquire)) {
+        std::string offhandId;
+        if (readOffhandIdentifier(player, offhandId, nullptr) &&
+            offhandId.find(identifierPart) != std::string::npos) {
+            ++total; // The offhand slot holds one stack; the item itself is validated.
+        }
+    }
     return total;
 }
 
@@ -263,11 +297,67 @@ int InventoryAccess::findInventorySlot(const sdk::Player* player, std::string_vi
     return -1;
 }
 
-std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const {
-    if (!isReadableMemory(player, PlayerInventory + sizeof(void*)) || !m_getOffhandSlot) return {};
+bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
+                                                  std::string& identifier,
+                                                  std::string* error) const {
+    identifier.clear();
+    auto fail = [&](std::string message) {
+        if (error) *error = std::move(message);
+        return false;
+    };
+    if (!player)
+        return fail("LocalPlayerTickEvent supplied a null Player pointer");
+    if (!isReadableMemory(player, sizeof(void*)))
+        return fail("LocalPlayerTickEvent Player pointer is not in a readable memory region");
+
+    // Validate the actual pointer-sized fields, not the entire byte span from
+    // the start of Player to the inventory offset. Player objects may cross
+    // mapping/page boundaries, so validating that whole span falsely rejects
+    // valid objects even when the target field itself is readable.
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    if (PlayerInventory > std::numeric_limits<std::uintptr_t>::max() - playerAddress)
+        return fail("Player inventory field address overflowed");
+    const auto* inventoryField = reinterpret_cast<const void*>(playerAddress + PlayerInventory);
+    if (!isReadableMemory(inventoryField, sizeof(void*)))
+        return fail("Player inventory pointer field is unreadable");
+    const void* inventoryProxy = read<const void*>(player, PlayerInventory);
+    if (!inventoryProxy || !isReadableMemory(inventoryProxy, sizeof(void*)))
+        return fail("Player inventory proxy pointer is null or unreadable");
+
+    const auto proxyAddress = reinterpret_cast<std::uintptr_t>(inventoryProxy);
+    if (PlayerInventoryContainer > std::numeric_limits<std::uintptr_t>::max() - proxyAddress)
+        return fail("inventory container field address overflowed");
+    const auto* containerField = reinterpret_cast<const void*>(proxyAddress + PlayerInventoryContainer);
+    if (!isReadableMemory(containerField, sizeof(void*)))
+        return fail("inventory container pointer field is unreadable");
+    const void* container = read<const void*>(inventoryProxy, PlayerInventoryContainer);
+    if (!container || !isReadableMemory(container, sizeof(void*)))
+        return fail("inventory container pointer is null or unreadable");
+
+    if (!m_getOffhandSlot)
+        return fail("no validated Actor/Player::getOffhandSlot entry point is available");
+    if (m_offhandGetterQuarantined.load(std::memory_order_acquire))
+        return fail("offhand getter quarantined after an unreadable pointer; restart Bedaim to retry safely");
+
     const void* offhand = m_getOffhandSlot(player);
-    if (!isReadableMemory(offhand, ItemStackSize)) return {};
-    return stackIdentifier(offhand);
+    if (!isReadableMemory(offhand, ItemStackSize)) {
+        char detail[256]{};
+        std::snprintf(detail, sizeof(detail),
+            "getter source=%s returned unreadable ItemStack pointer=%p; getter quarantined",
+            m_getOffhandSlotSource.c_str(), offhand);
+        m_offhandGetterQuarantined.store(true, std::memory_order_release);
+        return fail(detail);
+    }
+
+    identifier = stackIdentifier(offhand);
+    if (error) error->clear();
+    return true;
+}
+
+std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const {
+    std::string identifier;
+    readOffhandIdentifier(player, identifier, nullptr);
+    return identifier;
 }
 
 int InventoryAccess::selectedHotbarSlot(const sdk::Player* player) const {
@@ -353,7 +443,10 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     };
     if (!player) return report(OffhandTransferResult::InvalidPlayer, "player pointer is null");
     if (slot < 0 || slot >= 64) return report(OffhandTransferResult::InvalidSlot, "source slot or inventory slot range is invalid");
-    if (!m_getOffhandSlot) return report(OffhandTransferResult::RuntimeApiUnavailable, "ActorGetOffhandSlot signature unresolved");
+    if (!m_getOffhandSlot) return report(OffhandTransferResult::RuntimeApiUnavailable, "Actor/Player offhand getter unresolved");
+    if (m_offhandGetterQuarantined.load(std::memory_order_acquire))
+        return report(OffhandTransferResult::InvalidNativeState,
+                      "offhand getter quarantined after an unreadable pointer; restart Bedaim to retry safely");
 
     std::uintptr_t slotsBegin = 0;
     std::size_t slotCount = 0;
@@ -364,8 +457,12 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
 
     const auto offhandAddress = reinterpret_cast<std::uintptr_t>(m_getOffhandSlot(player));
     if (!isReadableMemory(reinterpret_cast<const void*>(offhandAddress), ItemStackSize)) {
-        return report(OffhandTransferResult::InvalidNativeState,
-                      "ActorGetOffhandSlot returned an unreadable ItemStack pointer");
+        char detail[256]{};
+        std::snprintf(detail, sizeof(detail),
+            "getter source=%s returned unreadable ItemStack pointer=%p; getter quarantined",
+            m_getOffhandSlotSource.c_str(), reinterpret_cast<const void*>(offhandAddress));
+        m_offhandGetterQuarantined.store(true, std::memory_order_release);
+        return report(OffhandTransferResult::InvalidNativeState, detail);
     }
     const void* offhand = reinterpret_cast<const void*>(offhandAddress);
     const std::string offhandId = stackIdentifier(offhand);
@@ -489,17 +586,26 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     // First equip using the engine's setter and verify that the offhand changed;
     // only then remove the source slot so a failed setter cannot destroy the item.
     setOffhand(player, totemSnapshot);
-    const bool equippedBeforeRemoval =
-        stackIdentifier(m_getOffhandSlot(player)).find("totem") != std::string::npos;
+    std::string afterSetId;
+    std::string afterSetError;
+    const bool afterSetReadable = readOffhandIdentifier(player, afterSetId, &afterSetError);
+    const bool equippedBeforeRemoval = afterSetReadable &&
+        afterSetId.find("totem") != std::string::npos;
     if (!equippedBeforeRemoval) {
         setOffhand(player, emptyOffhandSnapshot);
         actionDtor(inventoryAction.data());
         actionDtor(offhandAction.data());
-        return report(OffhandTransferResult::VerificationFailed, "offhand/source postcondition failed; rollback attempted");
+        const std::string detail = afterSetReadable
+            ? "offhand did not contain the totem after setter; rollback attempted"
+            : "offhand unreadable after setter: " + afterSetError + "; rollback attempted";
+        return report(OffhandTransferResult::VerificationFailed, detail);
     }
 
     removeItem(container, slot, 1);
-    const bool equipped = stackIdentifier(m_getOffhandSlot(player)).find("totem") != std::string::npos;
+    std::string afterRemoveId;
+    std::string afterRemoveError;
+    const bool afterRemoveReadable = readOffhandIdentifier(player, afterRemoveId, &afterRemoveError);
+    const bool equipped = afterRemoveReadable && afterRemoveId.find("totem") != std::string::npos;
     const void* updatedSource = reinterpret_cast<const void*>(
         slotsBegin + static_cast<std::size_t>(slot) * ItemStackSize);
     const bool removed = stackIdentifier(updatedSource).find("totem") == std::string::npos;
@@ -520,7 +626,10 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         }
         actionDtor(inventoryAction.data());
         actionDtor(offhandAction.data());
-        return report(OffhandTransferResult::VerificationFailed, "offhand/source postcondition failed; rollback attempted");
+        const std::string detail = !afterRemoveReadable
+            ? "offhand unreadable after source removal: " + afterRemoveError + "; rollback/restoration attempted"
+            : "offhand/source postcondition failed; rollback/restoration attempted";
+        return report(OffhandTransferResult::VerificationFailed, detail);
     }
 
     addAction(manager, inventoryAction.data(), false);
