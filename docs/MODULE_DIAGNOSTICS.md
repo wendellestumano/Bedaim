@@ -1,17 +1,27 @@
 # Module Diagnostics
 
-## Purpose
+## Where the files go
 
-Module Diagnostics provides a compact registry health report and a bounded runtime log. It helps distinguish static registration problems from failures that occur only during gameplay; it does not claim that a module works merely because it initializes or compiles.
+All exports are written to the phone's shared Downloads folder, inside:
+
+`/sdcard/Download/Bedaim/`
+
+- Manual export: `bedaim_diagnostics_YYYYMMDD_HHMMSS_mmm.txt` or `.json` (each click creates a separate file).
+- Periodic export: `bedaim_diagnostics_auto.txt` or `.json` (one rolling file is overwritten each interval to avoid filling storage).
+- The health report `module_diagnostics.json` is still written beside the configured `config.json`, usually `/sdcard/games/BedrockTools/module_diagnostics.json`.
+
+If Downloads export fails, the HUD status reports the failure and a reason is written to the in-memory diagnostics. On some Android configurations, shared-storage restrictions may prevent a native mod from writing to Downloads; check the device's storage permissions if the folder cannot be created.
 
 ## Enable and export
 
 1. Open the Bedaim module menu and enable **Module Diagnostics**.
-2. Review the compact HUD summary for registry inconsistencies.
-3. In its **Diagnostics** settings, use **Export all logs now** to write `bedaim_diagnostics.log` next to the configured `config.json`.
-4. Use **Clear in-memory logs** only after exporting any entries you want to retain.
+2. In its **Diagnostics** settings, choose **TXT** for readable text or **JSON** for structured data.
+3. Press **Export all logs to Downloads now** to create a timestamped export.
+4. To capture issues while playing, enable **Automatically export logs** and choose **Automatic export interval** from 1 to 60 minutes. The default is 5 minutes. Automatic export runs on a worker thread, not the game/render thread, and refreshes one rolling file.
+5. Keep Module Diagnostics enabled while playing; disabling the module stops periodic export. Log collection itself remains active while the mod is running.
+6. Use **Clear in-memory logs** only after exporting entries you want to retain.
 
-The `module_diagnostics.json` report contains the registry/metadata checks plus the most recent 128 runtime log entries. The log contains timestamped entries with sequence numbers, levels (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`), component names, and messages. The buffer is capped at 4,096 entries; export before clearing or before a long test if you need the full trace.
+The full log contains timestamped entries with sequence numbers, levels (`TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`, `CRITICAL`), component names, and messages. The buffer is capped at 4,096 entries; automatic exports help preserve snapshots during longer sessions. The health report `module_diagnostics.json` contains registry/metadata checks plus the most recent 128 runtime log entries.
 
 ## Reading the log
 

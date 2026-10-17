@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <ctime>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -44,19 +46,68 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
     schema.defaultCategory("diagnostics")
-        .category("diagnostics", "Diagnostics", "Module health report and exportable runtime logs.");
+        .category("diagnostics", "Diagnostics", "Module health report, Downloads export, and periodic runtime logs.");
 
     ConfigNodeV2 exportNode;
     exportNode.id = "m_exportLogsNow";
     exportNode.key = "m_exportLogsNow";
-    exportNode.title = "Export all logs now";
-    exportNode.description = "Writes bedaim_diagnostics.log next to config.json, including trace/debug/info/warn/error/critical entries.";
+    exportNode.title = "Export all logs to Downloads now";
+    exportNode.description = "Creates a timestamped file in Download/Bedaim using the selected format.";
     exportNode.category = "diagnostics";
     exportNode.type = ConfigControlTypeV2::Toggle;
     exportNode.defaultValue = "false";
     exportNode.currentValue = "false";
     exportNode.hasCurrentValue = true;
     schema.node(std::move(exportNode));
+
+    ConfigNodeV2 formatNode;
+    formatNode.id = "m_exportFormat";
+    formatNode.key = "m_exportFormat";
+    formatNode.title = "Export format";
+    formatNode.description = "Choose readable plain text or structured JSON.";
+    formatNode.category = "diagnostics";
+    formatNode.type = ConfigControlTypeV2::Choice;
+    formatNode.choiceStyle = ConfigChoiceStyleV2::Segmented;
+    formatNode.defaultValue = "txt";
+    formatNode.currentValue = m_exportFormat;
+    formatNode.hasCurrentValue = true;
+    ConfigOptionV2 txtOption;
+    txtOption.value = "txt";
+    txtOption.label = "TXT";
+    formatNode.options.push_back(std::move(txtOption));
+    ConfigOptionV2 jsonOption;
+    jsonOption.value = "json";
+    jsonOption.label = "JSON";
+    formatNode.options.push_back(std::move(jsonOption));
+    schema.node(std::move(formatNode));
+
+    ConfigNodeV2 autoNode;
+    autoNode.id = "m_autoExportEnabled";
+    autoNode.key = "m_autoExportEnabled";
+    autoNode.title = "Automatically export logs";
+    autoNode.description = "While Module Diagnostics is enabled, periodically refreshes one rolling file in Download/Bedaim without blocking the game thread.";
+    autoNode.category = "diagnostics";
+    autoNode.type = ConfigControlTypeV2::Toggle;
+    autoNode.defaultValue = "true";
+    autoNode.currentValue = m_autoExportEnabled ? "true" : "false";
+    autoNode.hasCurrentValue = true;
+    schema.node(std::move(autoNode));
+
+    ConfigNodeV2 intervalNode;
+    intervalNode.id = "m_autoExportIntervalMinutes";
+    intervalNode.key = "m_autoExportIntervalMinutes";
+    intervalNode.title = "Automatic export interval";
+    intervalNode.description = "Time between automatic exports; minimum 1 minute, maximum 60 minutes. Defaults to every minute for useful failure diagnostics.";
+    intervalNode.category = "diagnostics";
+    intervalNode.type = ConfigControlTypeV2::SliderFloat;
+    intervalNode.minValue = "1";
+    intervalNode.maxValue = "60";
+    intervalNode.step = "1";
+    intervalNode.unit = " min";
+    intervalNode.defaultValue = "1";
+    intervalNode.currentValue = std::to_string(m_autoExportIntervalMinutes);
+    intervalNode.hasCurrentValue = true;
+    schema.node(std::move(intervalNode));
 
     ConfigNodeV2 clearNode;
     clearNode.id = "m_clearLogsNow";
@@ -75,18 +126,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
 bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     const bool requested = value == "true" || value == "1" || value == "on";
     if (key == "m_exportLogsNow") {
-        if (!requested) return true;
-        const auto configPath = bedrocktools::config::ConfigManager::get().getConfigPath();
-        const auto outputPath = (std::filesystem::path(configPath).parent_path() /
-                                 "bedaim_diagnostics.log").string();
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Diagnostics",
-            "log export requested; destination=" + outputPath);
-        std::string error;
-        const bool ok = bedrocktools::diagnostics::exportTo(outputPath, &error);
-        bedrocktools::diagnostics::log(ok ? bedrocktools::diagnostics::Level::Info :
-            bedrocktools::diagnostics::Level::Error, "Diagnostics",
-            ok ? "diagnostic log exported to " + outputPath :
-                 "diagnostic log export failed: " + error);
+        if (requested) exportLogs(false);
         return true;
     }
     if (key == "m_clearLogsNow") {
@@ -97,30 +137,186 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
         }
         return true;
     }
+    if (key == "m_autoExportEnabled") {
+        {
+            std::lock_guard<std::mutex> lock(m_exportMutex);
+            m_autoExportEnabled = requested;
+        }
+        m_exportCondition.notify_all();
+        return true;
+    }
+    if (key == "m_exportFormat") {
+        if (value != "txt" && value != "json") return false;
+        {
+            std::lock_guard<std::mutex> lock(m_exportMutex);
+            m_exportFormat = std::string(value);
+        }
+        m_exportCondition.notify_all();
+        return true;
+    }
+    if (key == "m_autoExportIntervalMinutes") {
+        try {
+            std::size_t parsedLength = 0;
+            const std::string text(value);
+            const float parsed = std::stof(text, &parsedLength);
+            if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
+            {
+                std::lock_guard<std::mutex> lock(m_exportMutex);
+                m_autoExportIntervalMinutes = std::clamp(
+                    static_cast<int>(std::lround(parsed)), 1, 60);
+            }
+            m_exportCondition.notify_all();
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
     return false;
 }
 
 void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
-    m_exportLogsNow = false;
-    m_clearLogsNow = false;
+    {
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_exportLogsNow = false;
+        m_clearLogsNow = false;
+        m_autoExportEnabled = j.value("m_autoExportEnabled", m_autoExportEnabled);
+        m_autoExportIntervalMinutes = std::clamp(
+            j.value("m_autoExportIntervalMinutes", m_autoExportIntervalMinutes), 1, 60);
+        const auto format = j.value("m_exportFormat", m_exportFormat);
+        m_exportFormat = (format == "json") ? "json" : "txt";
+    }
+    m_exportCondition.notify_all();
 }
 
 void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
+    std::lock_guard<std::mutex> lock(m_exportMutex);
     j["m_exportLogsNow"] = false;
     j["m_clearLogsNow"] = false;
+    j["m_autoExportEnabled"] = m_autoExportEnabled;
+    j["m_autoExportIntervalMinutes"] = m_autoExportIntervalMinutes;
+    j["m_exportFormat"] = m_exportFormat;
+}
+
+ModuleDiagnosticsModule::~ModuleDiagnosticsModule() {
+    stopExportWorker();
 }
 
 void ModuleDiagnosticsModule::onEnable() {
     m_summary = runDiagnostics();
     m_reportReady = true;
     m_nextRefresh = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    startExportWorker();
 }
 
 void ModuleDiagnosticsModule::onDisable() {
+    stopExportWorker();
     m_reportReady = false;
     submitDrawCommands(moduleId, {});
+}
+
+void ModuleDiagnosticsModule::startExportWorker() {
+    std::lock_guard<std::mutex> lock(m_exportMutex);
+    if (m_exportWorker.joinable()) return;
+    m_stopExportWorker = false;
+    m_exportWorker = std::thread(&ModuleDiagnosticsModule::exportWorkerLoop, this);
+}
+
+void ModuleDiagnosticsModule::stopExportWorker() {
+    {
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_stopExportWorker = true;
+    }
+    m_exportCondition.notify_all();
+    if (m_exportWorker.joinable() && m_exportWorker.get_id() != std::this_thread::get_id())
+        m_exportWorker.join();
+}
+
+void ModuleDiagnosticsModule::exportWorkerLoop() {
+    std::unique_lock<std::mutex> lock(m_exportMutex);
+    while (!m_stopExportWorker) {
+        m_exportCondition.wait(lock, [this] {
+            return m_stopExportWorker || m_autoExportEnabled;
+        });
+        if (m_stopExportWorker) break;
+
+        // Save one snapshot immediately, then continue on the configured cadence.
+        // Filesystem I/O stays off the game/render thread.
+        lock.unlock();
+        exportLogs(true);
+        lock.lock();
+        if (m_stopExportWorker) break;
+        if (!m_autoExportEnabled) continue;
+
+        const int intervalMinutes = m_autoExportIntervalMinutes;
+        const bool changed = m_exportCondition.wait_for(
+            lock, std::chrono::minutes(intervalMinutes), [this, intervalMinutes] {
+                return m_stopExportWorker || !m_autoExportEnabled ||
+                       m_autoExportIntervalMinutes != intervalMinutes;
+            });
+        if (m_stopExportWorker) break;
+        if (changed) continue;
+    }
+}
+
+bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
+    std::string format;
+    {
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        format = m_exportFormat;
+    }
+
+    const std::filesystem::path outputDirectory("/sdcard/Download/Bedaim");
+    std::error_code ec;
+    std::filesystem::create_directories(outputDirectory, ec);
+    if (ec || !std::filesystem::is_directory(outputDirectory, ec) || ec) {
+        const std::string reason = "Cannot access /sdcard/Download/Bedaim; check Android storage access";
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Diagnostics", reason);
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_lastExportStatus = "Export failed: Downloads unavailable";
+        m_lastExportPath.clear();
+        return false;
+    }
+
+    std::string filename;
+    if (automatic) {
+        filename = "bedaim_diagnostics_auto." + format;
+    } else {
+        const auto now = std::chrono::system_clock::now();
+        const auto epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count();
+        const std::time_t epoch = std::chrono::system_clock::to_time_t(now);
+        std::tm utc{};
+        gmtime_r(&epoch, &utc);
+        char timestamp[24]{};
+        std::strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", &utc);
+        const auto millis = static_cast<int>((epochMs % 1000 + 1000) % 1000);
+        filename = "bedaim_diagnostics_" + std::string(timestamp) + "_" +
+            (millis < 100 ? (millis < 10 ? "00" : "0") : "") +
+            std::to_string(millis) + "." + format;
+    }
+
+    const auto outputPath = (outputDirectory / filename).string();
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Diagnostics",
+        std::string(automatic ? "periodic" : "manual") + " log export requested; format=" + format);
+    std::string error;
+    const bool ok = format == "json"
+        ? bedrocktools::diagnostics::exportJsonTo(outputPath, &error)
+        : bedrocktools::diagnostics::exportTo(outputPath, &error);
+    bedrocktools::diagnostics::log(ok ? bedrocktools::diagnostics::Level::Info :
+        bedrocktools::diagnostics::Level::Error, "Diagnostics",
+        ok ? "diagnostic logs exported to " + outputPath :
+             "diagnostic log export failed: " + error);
+
+    {
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_lastExportStatus = ok
+            ? (automatic ? "Auto-export succeeded" : "Export succeeded")
+            : ("Export failed: " + error);
+        m_lastExportPath = ok ? outputPath : std::string{};
+    }
+    return ok;
 }
 
 void ModuleDiagnosticsModule::onFrame() {
@@ -133,6 +329,18 @@ void ModuleDiagnosticsModule::onFrame() {
         m_nextRefresh = now + std::chrono::seconds(3);
     }
 
+    std::string exportStatus;
+    std::string exportPath;
+    bool autoExport;
+    int interval;
+    {
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        exportStatus = m_lastExportStatus;
+        exportPath = m_lastExportPath;
+        autoExport = m_autoExportEnabled;
+        interval = m_autoExportIntervalMinutes;
+    }
+
     std::vector<PLModMenu_DrawCommand> commands;
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
@@ -140,8 +348,13 @@ void ModuleDiagnosticsModule::onFrame() {
         " | Registry warn: " + std::to_string(m_summary.warnings) +
         " | err: " + std::to_string(m_summary.errors);
     const std::string line3 = m_summary.written
-        ? "Report saved: module_diagnostics.json"
-        : "Report write failed (check config folder)";
+        ? "Health report: module_diagnostics.json"
+        : "Health report write failed (check config folder)";
+    const std::string line4 = autoExport
+        ? "Auto-export: every " + std::to_string(interval) + " min | " + exportStatus
+        : "Auto-export off | " + exportStatus;
+    const std::string line5 = exportPath.empty() ? "Logs folder: Download/Bedaim"
+        : "Last export: " + exportPath;
 
     auto addText = [&](const std::string& text, float y, std::uint32_t color) {
         PLModMenu_DrawCommand command{};
@@ -159,6 +372,8 @@ void ModuleDiagnosticsModule::onFrame() {
     addText(line1, 8.0f, 0xFFFFFFFF);
     addText(line2, 24.0f, (m_summary.errors || m_summary.warnings) ? 0xFFFFC060 : 0xFF80FF80);
     addText(line3, 40.0f, m_summary.written ? 0xFF80FF80 : 0xFFFF7070);
+    addText(line4, 56.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
+    addText(line5, 72.0f, 0xFFFFFFFF);
     submitDrawCommands(moduleId, commands);
 }
 

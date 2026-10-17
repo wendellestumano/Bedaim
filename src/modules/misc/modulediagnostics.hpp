@@ -2,12 +2,16 @@
 
 #include "../Module.hpp"
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <string>
 #include <string_view>
 
 class ModuleDiagnosticsModule final : public Module {
 public:
     ModuleDiagnosticsModule();
+    ~ModuleDiagnosticsModule() override;
 
     void onEnable() override;
     void onDisable() override;
@@ -28,9 +32,22 @@ private:
     };
 
     ReportSummary runDiagnostics();
+    bool exportLogs(bool automatic);
+    void startExportWorker();
+    void stopExportWorker();
+    void exportWorkerLoop();
     std::chrono::steady_clock::time_point m_nextRefresh{};
     ReportSummary m_summary{};
     bool m_reportReady = false;
     bool m_exportLogsNow = false;
     bool m_clearLogsNow = false;
+    bool m_autoExportEnabled = true;
+    int m_autoExportIntervalMinutes = 1;
+    std::string m_exportFormat = "txt";
+    mutable std::mutex m_exportMutex;
+    std::condition_variable m_exportCondition;
+    std::thread m_exportWorker;
+    bool m_stopExportWorker = true;
+    std::string m_lastExportStatus = "No log export yet";
+    std::string m_lastExportPath;
 };
