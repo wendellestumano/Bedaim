@@ -1,5 +1,5 @@
 #include "modulediagnostics.hpp"
-#include "../core/Diagnostics.hpp"
+#include "../../core/Diagnostics.hpp"
 #include <pl/ModMenu.hpp>
 
 #include "modules/ModuleRegistry.hpp"
