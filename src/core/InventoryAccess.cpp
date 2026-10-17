@@ -438,8 +438,15 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     // setCarriedItem are adjacent on several Bedrock layouts, which can overwrite
     // the main hand instead of the offhand. Resolve the named native method and
     // fail closed if this runtime does not export a verified entry point.
+    // The offhand accessor is an Actor API in this runtime family; some builds
+    // export its setter on Actor instead of Player. Resolve the exact named native
+    // symbol and fail closed if none of these declarations are exported.
     SetOffhandFn setOffhand = reinterpret_cast<SetOffhandFn>(
-        resolveMinecraftSymbol("_ZN6Player14setOffhandSlotERK9ItemStack"));
+        resolveMinecraftSymbol("_ZN5Actor14setOffhandSlotERK9ItemStack"));
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN6Player14setOffhandSlotERK9ItemStack"));
+    }
     if (!setOffhand) {
         setOffhand = reinterpret_cast<SetOffhandFn>(
             resolveMinecraftSymbol("_ZN11LocalPlayer14setOffhandSlotERK9ItemStack"));
