@@ -17,7 +17,7 @@ If Downloads export fails, the HUD status reports the failure and a reason is wr
 1. Open the Bedaim module menu and enable **Module Diagnostics**.
 2. In its **Diagnostics** settings, choose **TXT** for readable text or **JSON** for structured data.
 3. Press **Export all logs to Downloads now** to create a timestamped export.
-4. To capture issues while playing, enable **Automatically export logs** and choose **Automatic export interval** from 1 to 60 minutes. The default is 5 minutes. Automatic export runs on a worker thread, not the game/render thread, and refreshes one rolling file.
+4. Automatic export is enabled by default while **Module Diagnostics** is enabled. It writes an initial snapshot immediately, then refreshes one rolling file every minute. You can disable **Automatically export logs** or change **Automatic export interval** from 1 to 60 minutes. Automatic export runs on a worker thread, not the game/render thread.
 5. Keep Module Diagnostics enabled while playing; disabling the module stops periodic export. Log collection itself remains active while the mod is running.
 6. Use **Clear in-memory logs** only after exporting entries you want to retain.
 

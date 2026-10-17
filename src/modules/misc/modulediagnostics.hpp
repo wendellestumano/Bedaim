@@ -41,8 +41,8 @@ private:
     bool m_reportReady = false;
     bool m_exportLogsNow = false;
     bool m_clearLogsNow = false;
-    bool m_autoExportEnabled = false;
-    int m_autoExportIntervalMinutes = 5;
+    bool m_autoExportEnabled = true;
+    int m_autoExportIntervalMinutes = 1;
     std::string m_exportFormat = "txt";
     mutable std::mutex m_exportMutex;
     std::condition_variable m_exportCondition;
