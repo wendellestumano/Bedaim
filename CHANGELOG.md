@@ -3,7 +3,7 @@
 ## Native client AABB expansion for Hitbox Expander — 2026-10-16
 
 - Added a temporary client-side expansion of nearby eligible actors’ `AABBShapeComponent` bounds, so the engine’s own local target queries can inspect the expanded box instead of only Bedaim’s AimAssist math using it.
-- Original bounds are snapshotted and restored before the next local-player tick and when the module is disabled; actor/component references are checked against a fresh nearby-actor snapshot before restoration.
+- Original bounds are snapshotted and restored before the next valid local-player tick, including after the module is disabled; actor/component references are checked against a fresh nearby-actor snapshot before restoration. The module avoids dereferencing cached actors from menu callbacks.
 - This is still client-side only: it does not modify the server’s hitboxes or bypass server-side reach/hit validation. In-game testing on Bedrock 26.52 is required before treating it as working.
 
 ## BedrockAim steering correction and module identity — 2026-10-16
