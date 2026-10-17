@@ -522,8 +522,19 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     target = nullptr;
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
-    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent ||
+        !validBounds(m_lastTargetBounds) ||
+        m_lastTargetSeen.time_since_epoch().count() == 0 ||
+        now < m_lastTargetSeen ||
+        now - m_lastTargetSeen > std::chrono::milliseconds(250)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "target_snapshot", "stale_or_missing");
+        return false;
+    }
     target = m_lastTarget;
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "BedrockAim", "target_snapshot", "fresh");
     bounds = m_lastTargetBounds;
     return true;
 }
@@ -564,8 +575,16 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
 bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    const auto now = std::chrono::steady_clock::now();
     if (!enabled || !player || player != m_lastPlayer || !target ||
-        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds)) return false;
+        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds) ||
+        m_lastTargetSeen.time_since_epoch().count() == 0 ||
+        now < m_lastTargetSeen ||
+        now - m_lastTargetSeen > std::chrono::milliseconds(250)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "crosshair_check", "stale_or_invalid_target");
+        return false;
+    }
 
     auto* rotationComponent = player->rotationComponent();
     if (!rotationComponent) return false;
