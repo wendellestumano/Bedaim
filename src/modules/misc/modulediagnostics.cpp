@@ -98,7 +98,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     intervalNode.title = "Automatic export interval";
     intervalNode.description = "Time between automatic exports; minimum 1 minute, maximum 60 minutes.";
     intervalNode.category = "diagnostics";
-    intervalNode.type = ConfigControlTypeV2::SliderInt;
+    intervalNode.type = ConfigControlTypeV2::SliderFloat;
     intervalNode.minValue = "1";
     intervalNode.maxValue = "60";
     intervalNode.step = "1";
