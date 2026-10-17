@@ -116,6 +116,13 @@ bool AutoHitModule::onMouseEvent(int button, bool isDown) {
         std::string("button_") + std::to_string(button) + (isDown ? "_down" : "_up"),
         "raw button index observed by the launcher input bridge");
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    const bool screenBlocked = m_containerOpen.load(std::memory_order_acquire) ||
+        m_chatOpen.load(std::memory_order_acquire);
+    if (screenBlocked) {
+        m_attackHeld = false;
+        m_heldButton = -1;
+        return false;
+    }
     if (!enabled) {
         if (!isDown && button == m_heldButton) {
             m_attackHeld = false;
