@@ -9,7 +9,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -71,7 +72,7 @@ AutoHitModule::AutoHitModule()
 
 void AutoHitModule::onInit() {
     bedrocktools::core::InventoryAccess::get().initialize();
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
         [this](auto& event) {
@@ -257,7 +258,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // actual blocker from diagnostics. This check never performs an attack.
     void* gameMode = core::gamehooks::gameModeForPlayer(player);
     if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable",
+            std::string("pre_tick_player_address=") + std::to_string(reinterpret_cast<std::uintptr_t>(player)));
         return;
     }
     const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
