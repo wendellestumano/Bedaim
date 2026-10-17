@@ -463,7 +463,7 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         addMissing(!actionDtor, "InventoryAction destructor");
         addMissing(!addAction, "InventoryTransactionManager::addAction");
         addMissing(!removeItem, "FillingContainer::removeItem");
-        addMissing(!setOffhand, "Player::setOffhandSlot");
+        addMissing(!setOffhand, "Actor/Player::setOffhandSlot");
         return report(OffhandTransferResult::RuntimeApiUnavailable,
                       std::string("missing validated native entry points: ") + missing);
     }
