@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cctype>
+#include <cmath>
 #include <string>
 #include <string_view>
 #include <utility>
