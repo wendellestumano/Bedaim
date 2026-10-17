@@ -230,11 +230,11 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         heldIdentifier.find("chorus_fruit") != std::string::npos;
 
     // Merely holding food no longer blocks ShiftBlade. We pause only when the
-    // native UseItem hook succeeded recently while a consumable is selected.
+    // UseItem action was observed recently while a consumable is selected.
     const auto now = std::chrono::steady_clock::now();
     const bool activelyConsuming = holdingConsumable &&
-        m_lastSuccessfulUseItem.time_since_epoch().count() != 0 &&
-        now - m_lastSuccessfulUseItem < std::chrono::milliseconds(1800);
+        m_lastUseItemAction.time_since_epoch().count() != 0 &&
+        now - m_lastUseItemAction < std::chrono::milliseconds(2800);
     if (activelyConsuming) {
         restoreIfOwned();
         reportStatus("paused: UseItem action detected while a consumable is selected");
