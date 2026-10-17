@@ -1,4 +1,5 @@
 #include "GameHooks.hpp"
+#include "Diagnostics.hpp"
 #include "modules/player/PlayerGameType.hpp"
 #include <bedrocktools/Version.hpp>
 
@@ -589,6 +590,7 @@ bool hookEgl() {
 bool install() {
     std::lock_guard lock(installMutex);
     if (installed) return true;
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", "starting hook installation");
     hookSignature(SignatureId::VersionString, reinterpret_cast<void*>(versionDetour), &versionOriginal);
     hookSignature(SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
     hookSignature(SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
@@ -622,6 +624,11 @@ bool install() {
     const bool eglHooked = hookEgl();
     gameHooksLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
     installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
+    bedrocktools::diagnostics::log(
+        installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
+        "GameHooks", installed ? "required tick/client hooks installed" : "required tick/client hooks missing");
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
+        std::string("attack hook available: ") + (gameModeAttackOriginal ? "true" : "false"));
     return installed;
 }
 
