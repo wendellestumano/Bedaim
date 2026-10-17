@@ -1586,7 +1586,10 @@ void HitboxExpanderModule::onDisable() {
 }
 
 void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
-    if (player) restoreNativeBounds(player);
+    // Keep expanded AABBs stable while the module is active. Restoring them in
+    // every pre-tick and re-expanding them in post-tick makes native collision /
+    // target queries alternate between two boxes every frame.
+    if (player && !enabled) restoreNativeBounds(player);
 }
 
 void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
@@ -1699,7 +1702,24 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
         expandPlayers = m_expandPlayers;
         expandMobs = m_expandMobs;
     }
+
+    bool expansionTypesChanged = false;
+    {
+        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+        expansionTypesChanged = m_hasAppliedExpansionTypes &&
+            (m_lastAppliedExpandPlayers != expandPlayers || m_lastAppliedExpandMobs != expandMobs);
+        m_lastAppliedExpandPlayers = expandPlayers;
+        m_lastAppliedExpandMobs = expandMobs;
+        m_hasAppliedExpansionTypes = true;
+    }
+
+    // If the selected actor types change, restore their original translated boxes
+    // once before reapplying the new policy. If expansion is fully disabled by
+    // configuration, restore all tracked boxes but retain snapshots for re-enable.
+    if (expansionTypesChanged || (!expandPlayers && !expandMobs))
+        restoreNativeBounds(player);
     if (!expandPlayers && !expandMobs) return;
+
     void* playerLevel = reinterpret_cast<Actor*>(player)->level();
     if (!playerLevel) return;
 
