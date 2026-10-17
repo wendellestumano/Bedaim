@@ -555,17 +555,26 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     // First equip using the engine's setter and verify that the offhand changed;
     // only then remove the source slot so a failed setter cannot destroy the item.
     setOffhand(player, totemSnapshot);
-    const bool equippedBeforeRemoval =
-        stackIdentifier(m_getOffhandSlot(player)).find("totem") != std::string::npos;
+    std::string afterSetId;
+    std::string afterSetError;
+    const bool afterSetReadable = readOffhandIdentifier(player, afterSetId, &afterSetError);
+    const bool equippedBeforeRemoval = afterSetReadable &&
+        afterSetId.find("totem") != std::string::npos;
     if (!equippedBeforeRemoval) {
         setOffhand(player, emptyOffhandSnapshot);
         actionDtor(inventoryAction.data());
         actionDtor(offhandAction.data());
-        return report(OffhandTransferResult::VerificationFailed, "offhand/source postcondition failed; rollback attempted");
+        const std::string detail = afterSetReadable
+            ? "offhand did not contain the totem after setter; rollback attempted"
+            : "offhand unreadable after setter: " + afterSetError + "; rollback attempted";
+        return report(OffhandTransferResult::VerificationFailed, detail);
     }
 
     removeItem(container, slot, 1);
-    const bool equipped = stackIdentifier(m_getOffhandSlot(player)).find("totem") != std::string::npos;
+    std::string afterRemoveId;
+    std::string afterRemoveError;
+    const bool afterRemoveReadable = readOffhandIdentifier(player, afterRemoveId, &afterRemoveError);
+    const bool equipped = afterRemoveReadable && afterRemoveId.find("totem") != std::string::npos;
     const void* updatedSource = reinterpret_cast<const void*>(
         slotsBegin + static_cast<std::size_t>(slot) * ItemStackSize);
     const bool removed = stackIdentifier(updatedSource).find("totem") == std::string::npos;
@@ -586,7 +595,10 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         }
         actionDtor(inventoryAction.data());
         actionDtor(offhandAction.data());
-        return report(OffhandTransferResult::VerificationFailed, "offhand/source postcondition failed; rollback attempted");
+        const std::string detail = !afterRemoveReadable
+            ? "offhand unreadable after source removal: " + afterRemoveError + "; rollback/restoration attempted"
+            : "offhand/source postcondition failed; rollback/restoration attempted";
+        return report(OffhandTransferResult::VerificationFailed, detail);
     }
 
     addAction(manager, inventoryAction.data(), false);
