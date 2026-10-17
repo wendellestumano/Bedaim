@@ -176,10 +176,10 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             const std::string text(value);
             const float parsed = std::stof(text, &parsedLength);
             if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
+            const float bounded = std::clamp(parsed, 1.0f, 300.0f);
             {
                 std::lock_guard<std::mutex> lock(m_exportMutex);
-                m_autoExportIntervalSeconds = std::clamp(
-                    static_cast<int>(std::lround(parsed)), 1, 300);
+                m_autoExportIntervalSeconds = static_cast<int>(std::lround(bounded));
             }
             m_exportCondition.notify_all();
             return true;
