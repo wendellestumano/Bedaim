@@ -50,6 +50,117 @@ std::string intervalLabel(int seconds) {
     if (seconds % 60 == 0) return std::to_string(seconds / 60) + " min";
     return std::to_string(seconds / 60) + "m " + std::to_string(seconds % 60) + "s";
 }
+
+bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
+                                     const std::filesystem::path& lifetimePath,
+                                     std::string* error = nullptr) noexcept {
+    try {
+        std::error_code ec;
+        if (!std::filesystem::exists(currentPath, ec)) {
+            if (ec && error) *error = "cannot inspect current-session log: " + ec.message();
+            return !ec;
+        }
+
+        std::ifstream currentStream(currentPath);
+        if (!currentStream) {
+            if (error) *error = "cannot open current-session log";
+            return false;
+        }
+        json current;
+        currentStream >> current;
+        if (!current.is_object() || !current.contains("entries") ||
+            !current["entries"].is_array()) {
+            if (error) *error = "current-session JSON has no entries array";
+            return false;
+        }
+
+        json lifetime = json::object();
+        if (std::filesystem::exists(lifetimePath, ec)) {
+            if (ec) {
+                if (error) *error = "cannot inspect lifetime log: " + ec.message();
+                return false;
+            }
+            std::ifstream lifetimeStream(lifetimePath);
+            if (!lifetimeStream) {
+                if (error) *error = "cannot open lifetime log";
+                return false;
+            }
+            lifetimeStream >> lifetime;
+            if (!lifetime.is_object() || !lifetime.contains("entries") ||
+                !lifetime["entries"].is_array()) {
+                if (error) *error = "lifetime JSON is invalid; refusing to overwrite it";
+                return false;
+            }
+        } else {
+            lifetime["schema_version"] = 1;
+            lifetime["created_at_unix_ms"] =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+            lifetime["entries"] = json::array();
+            lifetime["session_ids"] = json::array();
+        }
+
+        if (!lifetime.contains("session_ids") || !lifetime["session_ids"].is_array())
+            lifetime["session_ids"] = json::array();
+
+        auto entryKey = [](const json& entry) {
+            return std::to_string(entry.value("timestamp_ms", std::int64_t{0})) + "|" +
+                std::to_string(entry.value("sequence", std::uint64_t{0})) + "|" +
+                entry.value("level", std::string{}) + "|" +
+                entry.value("component", std::string{}) + "|" +
+                entry.value("message", std::string{});
+        };
+
+        std::unordered_set<std::string> existing;
+        existing.reserve(lifetime["entries"].size() + current["entries"].size());
+        for (const auto& entry : lifetime["entries"]) {
+            if (entry.is_object()) existing.insert(entryKey(entry));
+        }
+
+        std::string sessionId = "unknown";
+        if (!current["entries"].empty() && current["entries"].front().is_object())
+            sessionId = std::to_string(current["entries"].front().value(
+                "timestamp_ms", std::int64_t{0}));
+        if (std::find(lifetime["session_ids"].begin(), lifetime["session_ids"].end(),
+                      json(sessionId)) == lifetime["session_ids"].end()) {
+            lifetime["session_ids"].push_back(sessionId);
+        }
+
+        std::size_t appended = 0;
+        for (const auto& sourceEntry : current["entries"]) {
+            if (!sourceEntry.is_object()) continue;
+            const auto key = entryKey(sourceEntry);
+            if (!existing.insert(key).second) continue;
+            json archivedEntry = sourceEntry;
+            archivedEntry["session_id"] = sessionId;
+            lifetime["entries"].push_back(std::move(archivedEntry));
+            ++appended;
+        }
+
+        lifetime["schema_version"] = 1;
+        lifetime["generated_at_unix_ms"] =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        lifetime["entry_count"] = lifetime["entries"].size();
+        lifetime["session_count"] = lifetime["session_ids"].size();
+        lifetime["last_merge_appended"] = appended;
+
+        if (!bedrocktools::config::writePayloadAtomically(
+                lifetimePath.string(), lifetime.dump(2) + "\\n")) {
+            if (error) *error = "could not atomically replace lifetime log";
+            return false;
+        }
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+    } catch (...) {
+        if (error) *error = "unknown lifetime log merge failure";
+        return false;
+    }
+}
+
 }
 
 ModuleDiagnosticsModule::ModuleDiagnosticsModule()
@@ -80,7 +191,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     formatNode.id = "m_exportFormat";
     formatNode.key = "m_exportFormat";
     formatNode.title = "Export format";
-    formatNode.description = "Choose readable plain text or structured JSON.";
+    formatNode.description = "Choose the format for timestamped manual exports. Rolling current-session and lifetime logs are always JSON.";
     formatNode.category = "diagnostics";
     formatNode.type = ConfigControlTypeV2::Choice;
     formatNode.choiceStyle = ConfigChoiceStyleV2::Segmented;
@@ -101,7 +212,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     autoNode.id = "m_autoExportEnabled";
     autoNode.key = "m_autoExportEnabled";
     autoNode.title = "Automatically export logs";
-    autoNode.description = "While Module Diagnostics is enabled, periodically refreshes one rolling file in Download/Bedaim without blocking the game thread.";
+    autoNode.description = "While enabled, refreshes bedaim_diagnostics_auto.json for the current session and merges new entries into bedaim_diagnostics_total.json across all sessions.";
     autoNode.category = "diagnostics";
     autoNode.type = ConfigControlTypeV2::Toggle;
     autoNode.defaultValue = "true";
@@ -244,6 +355,10 @@ ModuleDiagnosticsModule::~ModuleDiagnosticsModule() {
 }
 
 void ModuleDiagnosticsModule::onEnable() {
+    // A fresh module activation starts a clean gameplay/test log. The previous
+    // rolling JSON is merged into the lifetime file before the current file is
+    // removed and recreated, so test sessions never overlap.
+    startFreshLogSession();
     m_summary = runDiagnostics();
     m_reportReady = true;
     m_nextRefresh = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -257,6 +372,42 @@ void ModuleDiagnosticsModule::onDisable() {
 }
 
 void ModuleDiagnosticsModule::startFreshLogSession() {
+    const std::filesystem::path outputDirectory("/sdcard/Download/Bedaim");
+    const auto currentPath = outputDirectory / "bedaim_diagnostics_auto.json";
+    const auto lifetimePath = outputDirectory / "bedaim_diagnostics_total.json";
+    std::string archiveError;
+    bool rotationOk = true;
+    {
+        // Serialize archive/delete against the rolling writer. Never delete the
+        // previous current-session file unless its entries were safely merged.
+        std::lock_guard<std::mutex> fileLock(m_fileWriteMutex);
+        std::error_code existsError;
+        const bool hasCurrent = std::filesystem::exists(currentPath, existsError);
+        if (existsError) {
+            rotationOk = false;
+            archiveError = "cannot inspect current-session JSON: " + existsError.message();
+        } else if (hasCurrent) {
+            rotationOk = mergeCurrentSessionIntoLifetime(currentPath, lifetimePath, &archiveError);
+            if (rotationOk) {
+                std::error_code removeError;
+                std::filesystem::remove(currentPath, removeError);
+                if (removeError) {
+                    rotationOk = false;
+                    archiveError = "could not replace current-session JSON: " + removeError.message();
+                }
+            }
+        }
+        // Remove the obsolete rolling text file; auto-save is always JSON.
+        std::error_code staleError;
+        std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
+    }
+    if (!rotationOk) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+            "Diagnostics", "session rotation aborted to protect previous logs: " + archiveError);
+        std::lock_guard<std::mutex> lock(m_exportMutex);
+        m_lastExportStatus = "Session rotation aborted; previous logs preserved";
+        return;
+    }
     // Keep only stable startup facts that are essential for diagnosing native
     // routes (especially AutoHit's attack hook and AutoTotem's offhand reader).
     // Old gameplay decisions/toggles are discarded so the new export is clean.
@@ -288,10 +439,14 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
             std::string(baselinePrefix) + message);
     }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
-        "Diagnostics", "fresh gameplay log session started; previous gameplay entries cleared");
+        "Diagnostics", "fresh gameplay log session started; current-session JSON reset");
+    if (!archiveError.empty()) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "Diagnostics", "lifetime/current log rotation warning: " + archiveError);
+    }
 
-    // The atomic exporter replaces the rolling file only after a successful
-    // write. Timestamped manual exports remain available as historical captures.
+    // The rolling current-session JSON is rewritten from this session only.
+    // Timestamped manual exports remain available as historical captures.
     const bool saved = exportLogs(true);
     if (saved) {
         std::lock_guard<std::mutex> lock(m_exportMutex);
@@ -351,7 +506,9 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
     std::string format;
     {
         std::lock_guard<std::mutex> lock(m_exportMutex);
-        format = m_exportFormat;
+        // The two rolling analysis files are always JSON. The format selector
+        // applies only to timestamped manual exports.
+        format = automatic ? "json" : m_exportFormat;
     }
 
     const std::filesystem::path outputDirectory("/sdcard/Download/Bedaim");
@@ -391,16 +548,23 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         ? bedrocktools::diagnostics::exportJsonTo(outputPath, &error)
         : bedrocktools::diagnostics::exportTo(outputPath, &error);
 
-    // Keep exactly one rolling auto-save format so switching TXT/JSON cannot
-    // leave a stale file that looks like the current gameplay's export.
+    // Maintain a separate lifetime JSON containing deduplicated entries from
+    // every gameplay. Merge from the just-written current snapshot, not from
+    // the mutable in-memory buffer, so repeated five-second saves are idempotent.
+    std::string lifetimeError;
+    const bool lifetimeOk = ok && automatic && mergeCurrentSessionIntoLifetime(
+        outputDirectory / "bedaim_diagnostics_auto.json",
+        outputDirectory / "bedaim_diagnostics_total.json", &lifetimeError);
     if (ok && automatic) {
-        const std::string staleExtension = format == "json" ? "txt" : "json";
         std::error_code staleError;
-        std::filesystem::remove(outputDirectory /
-            ("bedaim_diagnostics_auto." + staleExtension), staleError);
+        std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
         if (staleError) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
-                "Diagnostics", "could not remove stale rolling export: " + staleError.message());
+                "Diagnostics", "could not remove stale rolling text export: " + staleError.message());
+        }
+        if (!lifetimeOk) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+                "Diagnostics", "lifetime log update failed: " + lifetimeError);
         }
     }
 
@@ -414,7 +578,9 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         const std::string completedAt = localClockLabel();
         if (ok) {
             m_lastExportStatus = automatic
-                ? "Task completed successfully (" + completedAt + ")"
+                ? (lifetimeOk
+                    ? "Current + lifetime logs saved (" + completedAt + ")"
+                    : "Current log saved; lifetime update failed (" + completedAt + ")")
                 : "Manual export completed (" + completedAt + ")";
             m_lastExportPath = outputPath;
             m_lastSuccessfulExportTime = completedAt;
