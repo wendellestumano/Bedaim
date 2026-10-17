@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <exception>
+#include <system_error>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
