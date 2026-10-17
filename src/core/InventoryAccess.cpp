@@ -291,6 +291,17 @@ std::string InventoryAccess::hotbarSlotIdentifier(const sdk::Player* player, int
     return stackIdentifier(stack);
 }
 
+const void* InventoryAccess::hotbarSlotStack(const sdk::Player* player, int slot) const {
+    if (!player || slot < 0 || slot > 8) return nullptr;
+    std::uintptr_t begin = 0;
+    std::size_t size = 0;
+    if (!inventorySlots(player, begin, size) || !begin || size < 9 ||
+        static_cast<std::size_t>(slot) >= size) return nullptr;
+    const auto address = begin + static_cast<std::size_t>(slot) * ItemStackSize;
+    const auto* stack = reinterpret_cast<const void*>(address);
+    return isReadableMemory(stack, ItemStackSize) ? stack : nullptr;
+}
+
 int InventoryAccess::findInventorySlot(const sdk::Player* player, std::string_view identifierPart) const {
     if (!player || identifierPart.empty()) return -1;
     std::uintptr_t begin = 0;
