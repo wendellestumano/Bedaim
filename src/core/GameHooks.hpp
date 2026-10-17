@@ -6,6 +6,8 @@ namespace bedrocktools::core::gamehooks {
 bool install();
 void uninstall();
 void* clientInstance();
+// Returns the validated ClientInstance-owned local player, or nullptr if unresolved.
+void* localPlayer();
 void* gameMode();
 // Resolve the local player's owned GameMode instance without waiting for a manual action.
 void* gameModeForPlayer(void* player);
