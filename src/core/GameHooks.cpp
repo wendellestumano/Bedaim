@@ -627,40 +627,118 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 }
 
 void* clientUpdateDetour(void* clientInstance, bool value) {
-    if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
+    // Keep the native trampoline call unchanged. The prior fallback queried the
+    // runtime API, whose ClientInstance accessor reads currentClientInstance,
+    // i.e. the same value populated by this hook. It was circular and could not
+    // recover an invalid argument.
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
+    void* resolvedClientInstance = clientInstance;
+    bool usedRuntimeApiInstance = false;
 
-    // A failed signature match must stay visible: resolveAll() succeeds when any
-    // signature resolves, not when every optional function is present. Keep the
-    // local-player filter strict and diagnose the exact prerequisite instead of
-    // switching to an unvalidated vtable index or treating an arbitrary actor
-    // from NormalTick as the local player.
+    // Capture the actual hook target and call-site evidence once per process.
+    // This distinguishes a bad signature match from a bad object pointer without
+    // dereferencing the incoming argument.
+    static std::atomic_bool loggedClientUpdateEvidence{false};
+    if (!loggedClientUpdateEvidence.exchange(true, std::memory_order_acq_rel)) {
+        Dl_info targetInfo{};
+        Dl_info callerInfo{};
+        const auto target = bedrocktools::memory::resolve(SignatureId::ClientInstanceUpdate);
+        const auto caller = reinterpret_cast<void*>(__builtin_return_address(0));
+        const bool targetKnown = target && dladdr(reinterpret_cast<void*>(target), &targetInfo);
+        const bool callerKnown = caller && dladdr(caller, &callerInfo);
+        char evidence[768]{};
+        std::snprintf(evidence, sizeof(evidence),
+            "client_update_hook_evidence: arg=%p readable=%d value=%d target=%p target_module=%s trampoline=%p caller=%p caller_module=%s",
+            clientInstance, isReadableMemory(clientInstance, sizeof(void*)), value,
+            reinterpret_cast<void*>(target),
+            targetKnown && targetInfo.dli_fname ? targetInfo.dli_fname : "unknown",
+            reinterpret_cast<void*>(clientUpdateOriginal), caller,
+            callerKnown && callerInfo.dli_fname ? callerInfo.dli_fname : "unknown");
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", evidence);
+    }
+
+    // Do not ask ClientInstance::current() here: that API returns the value
+    // stored by this very hook, so it is not an independent fallback.
+    if (!resolvedClientInstance || !isReadableMemory(resolvedClientInstance, sizeof(void*))) {
+        resolvedClientInstance = nullptr;
+    }
+    if (resolvedClientInstance)
+        currentClientInstance.store(resolvedClientInstance, std::memory_order_release);
+
     const auto localPlayerGetter =
         bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
     void* localPlayer = nullptr;
-    if (!clientInstance) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Warning, "GameHooks",
-            "local_player_resolution", "client_instance_missing");
-    } else if (!localPlayerGetter) {
+    bool usedVirtualGetter = false;
+    const auto validPlayerCandidate = [](void* candidate) -> bool {
+        if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
+        auto** playerVtable = *reinterpret_cast<void***>(candidate);
+        return playerVtable && isReadableMemory(playerVtable, sizeof(void*)) &&
+               isMinecraftFunction(playerVtable[0]);
+    };
+
+    if (!resolvedClientInstance || !isReadableMemory(resolvedClientInstance, sizeof(void*))) {
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Error, "GameHooks",
-            "local_player_resolution", "getter_signature_unresolved",
-            "ClientInstanceGetLocalPlayer signature resolved to null; local-player events remain safely suppressed");
+            "local_player_resolution", "client_instance_unreadable",
+            "hook argument was invalid and runtime API did not provide a readable ClientInstance");
     } else {
-        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-        localPlayer = client->localPlayer();
-        bedrocktools::diagnostics::probe(
-            localPlayer ? bedrocktools::diagnostics::Level::Info :
-                          bedrocktools::diagnostics::Level::Warning,
-            "GameHooks", "local_player_resolution",
-            localPlayer ? "ready" : "getter_returned_null",
-            localPlayer ? "ClientInstanceGetLocalPlayer returned a candidate pointer"
-                        : "resolved getter returned null; local-player events remain safely suppressed");
-    }
-    currentLocalPlayer.store(localPlayer, std::memory_order_release);
+        // Prefer the signature-based path when it returns a validated player.
+        if (localPlayerGetter) {
+            auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(resolvedClientInstance);
+            void* candidate = client->localPlayer();
+            if (validPlayerCandidate(candidate)) localPlayer = candidate;
+        }
 
-    ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
+        // LeviLamina v26.51.7 declares getLocalPlayer() immediately after
+        // getRegion() in IClientInstance's virtual interface. Bedaim's SDK
+        // declares those slots as 31 and 32. Validate the complete slot range
+        // and the getter's code image before calling it. Never substitute a
+        // NormalTick actor for a verified local player.
+        if (!localPlayer) {
+            constexpr std::size_t getterSlot =
+                bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
+            auto** clientVtable = *reinterpret_cast<void***>(resolvedClientInstance);
+            const bool readableVtable = clientVtable &&
+                isReadableMemory(clientVtable, (getterSlot + 1) * sizeof(void*));
+            if (readableVtable) {
+                void* getterAddress = clientVtable[getterSlot];
+                if (isMinecraftFunction(getterAddress)) {
+                    using LocalPlayerGetterFn = void* (*)(const void*);
+                    void* candidate =
+                        reinterpret_cast<LocalPlayerGetterFn>(getterAddress)(resolvedClientInstance);
+                    if (validPlayerCandidate(candidate)) {
+                        localPlayer = candidate;
+                        usedVirtualGetter = true;
+                    }
+                }
+            }
+        }
+
+        const char* state = nullptr;
+        std::string detail;
+        bedrocktools::diagnostics::Level level = bedrocktools::diagnostics::Level::Error;
+        if (localPlayer) {
+            state = usedVirtualGetter ? "ready_virtual_getter" : "ready_signature_getter";
+            detail = usedVirtualGetter
+                ? "SDK virtual getter returned a readable player object with a Minecraft vtable"
+                : "signature getter returned a readable player object with a Minecraft vtable";
+            level = bedrocktools::diagnostics::Level::Info;
+        } else if (!localPlayerGetter) {
+            state = "getter_signature_unresolved_virtual_fallback_failed";
+            detail = "signature unresolved and SDK virtual getter did not return a validated Player";
+        } else {
+            state = "getter_returned_null_virtual_fallback_failed";
+            detail = "signature getter produced no validated Player; SDK virtual getter also failed validation";
+        }
+        if (usedRuntimeApiInstance && localPlayer) {
+            detail += "; ClientInstance recovered through BedrockTools runtime API";
+        }
+        bedrocktools::diagnostics::probe(
+            level, "GameHooks", "local_player_resolution", state, detail);
+    }
+
+    currentLocalPlayer.store(localPlayer, std::memory_order_release);
+    ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(resolvedClientInstance)};
     bus().publish(event);
     return result;
 }
