@@ -524,7 +524,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_attackIntervalMs") displayName = "MACEFALL > Attack interval (ms)";
                 else if (k == "m_restoreSlot") displayName = "MACEFALL > Restore previous slot";
             }
-            if (mod->moduleId == "bedrocktools.ShiftBlade") {
+            if (mod->moduleId == "bedrocktools.Sword Swapper") {
                 if (k == "m_attackRange") displayName = "BLADESHIFT > Attack range";
                 else if (k == "m_restoreSlot") displayName = "BLADESHIFT > Restore previous slot";
             }
@@ -621,7 +621,7 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackrange") {
                     minVal = 2.0f;
                     maxVal = 6.0f;
-                } else if (mod->moduleId == "bedrocktools.ShiftBlade" && kLower == "m_attackrange") {
+                } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_attackrange") {
                     minVal = 1.0f;
                     maxVal = 16.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_minimumfalldistance") {
@@ -754,7 +754,7 @@ void registerModulesWithLauncher() {
                 [&rank](const TmpConfigEntry& a, const TmpConfigEntry& b) {
                     return rank(a.key) < rank(b.key);
                 });
-        } else if (mod->moduleId == "bedrocktools.ShiftBlade") {
+        } else if (mod->moduleId == "bedrocktools.Sword Swapper") {
             const std::vector<std::string> priority = {"m_attackRange", "m_restoreSlot"};
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
