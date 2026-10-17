@@ -46,10 +46,15 @@ bedrocktools::sdk::Vec3 eyePositionFor(bedrocktools::sdk::Player* player) {
     }
 
     const std::string heldIdentifier = inventory.selectedHotbarIdentifier(player);
+    // Give food and drink a hard priority over auto-swapping. Bedrock's public
+    // Actor wrapper does not expose a stable "currently consuming" flag, so we
+    // conservatively preserve any selected consumable instead of interrupting it.
     const bool holdingConsumable =
         heldIdentifier.find("apple") != std::string::npos ||
-        heldIdentifier.find("golden_carrot") != std::string::npos ||
+        heldIdentifier.find("carrot") != std::string::npos ||
+        heldIdentifier.find("potato") != std::string::npos ||
         heldIdentifier.find("bread") != std::string::npos ||
+        heldIdentifier.find("cookie") != std::string::npos ||
         heldIdentifier.find("cooked_") != std::string::npos ||
         heldIdentifier.find("raw_") != std::string::npos ||
         heldIdentifier.find("beef") != std::string::npos ||
@@ -57,8 +62,19 @@ bedrocktools::sdk::Vec3 eyePositionFor(bedrocktools::sdk::Player* player) {
         heldIdentifier.find("chicken") != std::string::npos ||
         heldIdentifier.find("mutton") != std::string::npos ||
         heldIdentifier.find("rabbit") != std::string::npos ||
+        heldIdentifier.find("fish") != std::string::npos ||
         heldIdentifier.find("stew") != std::string::npos ||
+        heldIdentifier.find("soup") != std::string::npos ||
+        heldIdentifier.find("berries") != std::string::npos ||
+        heldIdentifier.find("beetroot") != std::string::npos ||
         heldIdentifier.find("melon_slice") != std::string::npos ||
+        heldIdentifier.find("pumpkin_pie") != std::string::npos ||
+        heldIdentifier.find("dried_kelp") != std::string::npos ||
+        heldIdentifier.find("honey_bottle") != std::string::npos ||
+        heldIdentifier.find("milk_bucket") != std::string::npos ||
+        heldIdentifier.find("potion") != std::string::npos ||
+        heldIdentifier.find("rotten_flesh") != std::string::npos ||
+        heldIdentifier.find("spider_eye") != std::string::npos ||
         heldIdentifier.find("chorus_fruit") != std::string::npos;
     if (holdingConsumable) {
         restoreIfOwned();
