@@ -50,6 +50,7 @@
 #include "player/autogg.hpp"
 #include "player/autoreq.hpp"
 #include "misc/hiveutils.hpp"
+#include "misc/modulediagnostics.hpp"
 #include "visual/swingmodifier.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
@@ -141,6 +142,7 @@ void registerAllModules() {
     registry.emplace<AutoGG>();
     registry.emplace<AutoReQ>();
     registry.emplace<HiveUtilsModule>();
+    registry.emplace<ModuleDiagnosticsModule>();
     registry.emplace<FPSUnlockerModule>();
     registry.emplace<LightOverlayModule>();
     registry.emplace<ShulkerPreviewModule>();
