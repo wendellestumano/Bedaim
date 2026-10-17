@@ -15,7 +15,8 @@ inline Class classify(std::string_view identifier) {
     std::transform(normalized.begin(), normalized.end(), normalized.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     if (normalized.find("sword") != std::string::npos) return Class::Sword;
-    if (normalized.find("axe") != std::string::npos) return Class::Axe;
+    if (normalized == "axe" || normalized.ends_with(":axe") ||
+        normalized.find("_axe") != std::string::npos) return Class::Axe;
     if (normalized.find("mace") != std::string::npos) return Class::Mace;
     if (normalized.find("trident") != std::string::npos) return Class::Trident;
     return Class::Unsupported;
