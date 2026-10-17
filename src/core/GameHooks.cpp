@@ -839,7 +839,7 @@ void* gameModeForPlayer(void* player) {
     // exact resolved public attack signature instead of merely a plausible game
     // vtable. This avoids accidentally retaining a neighboring polymorphic object.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (observed && publicAttackVirtualEntry(observed) != 0) return observed;
+    if (observed && (publicAttackVirtualEntry(observed) != 0 || publicUseItemVirtualEntry(observed) != 0)) return observed;
 
     // Some game sessions have not yet produced a GameMode callback when native attack dispatch
     // first becomes active. The Player SDK already documents the owned mGameMode
@@ -857,18 +857,52 @@ void* gameModeForPlayer(void* player) {
     if (!isReadableMemory(slot, sizeof(void*))) return nullptr;
 
     void* candidate = *reinterpret_cast<void* const*>(slot);
-    if (!candidate || publicAttackVirtualEntry(candidate) == 0) {
+    if (!candidate || (publicAttackVirtualEntry(candidate) == 0 && publicUseItemVirtualEntry(candidate) == 0)) {
         static std::atomic_bool loggedNoVerifiedGameMode{false};
         if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Could not validate a local Player-owned GameMode; no native attack was dispatched.");
+            gameHooksLogger().warn("Could not validate a local Player-owned GameMode against exact public attack/useItem methods.");
         return nullptr;
     }
 
     currentGameMode.store(candidate, std::memory_order_release);
     static std::atomic_bool loggedPlayerGameModeFallback{false};
     if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Recovered the Player-owned GameMode using a readable field and exact public attack signature match.");
+        gameHooksLogger().info("Recovered the Player-owned GameMode using exact public attack/useItem method validation.");
     return candidate;
+}
+
+bool useItem(void* player, const void* itemStack) {
+    if (!player || !itemStack) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "use_item", "missing_player_or_stack");
+        return false;
+    }
+    void* receiver = gameModeForPlayer(player);
+    if (!receiver) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "use_item", "gamemode_unavailable");
+        return false;
+    }
+    std::size_t slotIndex = 0;
+    if (!publicUseItemVirtualEntry(receiver, &slotIndex)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "use_item", "no_exact_public_vtable_match");
+        return false;
+    }
+    void** vtable = nullptr;
+    std::memcpy(&vtable, receiver, sizeof(vtable));
+    if (!vtable) return false;
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + slotIndex * sizeof(void*);
+    if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) return false;
+    auto nativeUse = reinterpret_cast<UseItemFn>(vtable[slotIndex]);
+    if (!nativeUse) return false;
+
+    const bool accepted = nativeUse(receiver, const_cast<void*>(itemStack));
+    bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info :
+            bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "use_item", accepted ? "native_route_accepted" : "native_route_rejected",
+        std::string("vtable_slot=") + std::to_string(slotIndex));
+    return accepted;
 }
 
 bool attackAvailable(void* gameMode) {
