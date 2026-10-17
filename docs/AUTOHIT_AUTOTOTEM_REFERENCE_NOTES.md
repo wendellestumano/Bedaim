@@ -38,3 +38,15 @@ The native code now adds a local-player identity filter around the generic `Norm
 ## Validation boundary
 
 Host regression tests and an Android ARM64 package build verify compilation and pure policy behavior only. AutoHit and AutoTotem remain experimental until a fresh in-game diagnostics export shows a valid local-player tick, a verified attack route, and a readable offhand stack, followed by controlled manual verification in Minecraft Bedrock/Levi.
+
+## Follow-up: 2026-10-17 local-player tick regression
+
+The field diagnostics export after Build #618 records that:
+- `ClientInstance::getLocalPlayer` resolution is unavailable.
+- The `NormalTick` detour consequently suppresses `LocalPlayerPreTickEvent` and `LocalPlayerTickEvent`.
+- Aim Assist and Hitbox Expander were enabled and their native dependency probes reported ready, but those probes only show that target-query/camera functions resolved; they do not indicate that their per-player tick callbacks are running.
+- GameMode public-attack signature resolution is present, but SurvivalMode/internal attack signatures and attack hooks are unavailable. `UseItemAsAttack` hooks are also unavailable in this runtime.
+
+The regression was introduced by the local-player identity filter in commit `12a9d6f13fa5a7089accbc03c4f6575de9dd77f8`: it correctly avoids treating arbitrary actors as the local player, but the only local-player identity source is a signature that fails on this runtime. Do not remove the filter or substitute a guessed vtable slot. The follow-up branch improves diagnostics to distinguish an unresolved getter signature from a resolved getter returning null. A validated alternate local-player source is still required before re-enabling gameplay tick events.
+
+AutoHit's existing target path already checks the Aim Assist target snapshot and whether the target bounds intersect the crosshair. The requested immediate-on-crosshair behavior must retain the per-weapon CPS cap, fresh-target checks, and validated native attack gate. No runtime attack route was established by this diagnostics export, so immediate dispatch remains blocked until the native route is validated.
