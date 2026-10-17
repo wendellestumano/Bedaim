@@ -10,6 +10,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <pl/ModMenu.hpp>
@@ -21,6 +22,8 @@
 #include <utility>
 
 namespace {
+thread_local bool g_autoHitSyntheticAttack = false;
+
 using bedrocktools::sdk::AABB;
 using bedrocktools::sdk::Player;
 using bedrocktools::sdk::Vec3;
@@ -79,6 +82,7 @@ void AutoHitModule::onInit() {
                     std::lock_guard<std::mutex> lock(m_stateMutex);
                     m_attackHeld = false;
                     m_heldButton = -1;
+                    m_touchRepeatUntil = {};
                 }
             } else if (event.screen == bedrocktools::events::ScreenKind::Chat) {
                 const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
@@ -87,18 +91,38 @@ void AutoHitModule::onInit() {
                     std::lock_guard<std::mutex> lock(m_stateMutex);
                     m_attackHeld = false;
                     m_heldButton = -1;
+                    m_touchRepeatUntil = {};
                 }
             }
         });
+    // The launcher mouse callback may not receive Bedrock's native touchscreen
+    // attack button. Observe ordinary engine attack actions as a mobile-compatible
+    // activation signal, then permit a bounded repeat window. Synthetic attacks
+    // are explicitly ignored so AutoHit cannot re-arm itself.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
+        [this](auto& event) {
+            if (!enabled || event.action != bedrocktools::events::GameModeAction::Attack ||
+                g_autoHitSyntheticAttack ||
+                m_containerOpen.load(std::memory_order_acquire) ||
+                m_chatOpen.load(std::memory_order_acquire)) return;
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            if (!m_touchRepeatEnabled) return;
+            const auto window = std::chrono::milliseconds(std::clamp(m_touchRepeatWindowMs, 100, 1000));
+            m_touchRepeatUntil = std::chrono::steady_clock::now() + window;
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "AutoHit", "touch_input", "repeat_window_armed",
+                std::string("window_ms=") + std::to_string(window.count()));
+        });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "initialized",
-        "held-input mode; module is disabled by default in the isolated test branch");
+        "mouse-held input plus optional bounded native-attack repeat for touchscreen input");
 }
 
 void AutoHitModule::onEnable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackHeld = false;
     m_heldButton = -1;
+    m_touchRepeatUntil = {};
     m_nextAttack = {};
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "enabled");
@@ -159,7 +183,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
     float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        attackHeld = m_attackHeld;
+        const auto tickNow = std::chrono::steady_clock::now();
+        attackHeld = m_attackHeld ||
+            (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
+             tickNow < m_touchRepeatUntil);
         attackButton = m_attackButton;
         configuredRange = m_attackRange;
         swordEnabled = m_swordEnabled;
@@ -295,6 +322,11 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
+    struct SyntheticAttackGuard {
+        bool previous;
+        SyntheticAttackGuard() : previous(g_autoHitSyntheticAttack) { g_autoHitSyntheticAttack = true; }
+        ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
+    } syntheticAttackGuard;
     const bool attacked = core::gamehooks::attack(gameMode, target, true, &hitPoint);
     if (attacked) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
@@ -314,6 +346,8 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), 0, 16);
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
+    m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
     const float legacyInterval = std::clamp(json.value("m_attackIntervalMs", 180.0f), 80.0f, 1000.0f);
     const float legacySwordCps = std::clamp(1000.0f / legacyInterval, 1.0f, 20.0f);
     m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
@@ -331,6 +365,8 @@ void AutoHitModule::saveConfig(nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     json["m_attackButton"] = m_attackButton;
     json["m_attackRange"] = m_attackRange;
+    json["m_touchRepeatEnabled"] = m_touchRepeatEnabled;
+    json["m_touchRepeatWindowMs"] = m_touchRepeatWindowMs;
     json["m_attackIntervalMs"] = 1000.0f / m_swordCps; // legacy config compatibility
     json["m_swordEnabled"] = m_swordEnabled;
     json["m_swordCps"] = m_swordCps;
@@ -376,6 +412,8 @@ void AutoHitModule::onMenuRegistered() {
 
     slider("m_attackButton", "Mouse button index", "combat", "0", "16", "1", "");
     slider("m_attackRange", "Attack range", "combat", "2", "6", "0.1", " blocks");
+    toggle("m_touchRepeatEnabled", "Enable touchscreen attack repeat");
+    slider("m_touchRepeatWindowMs", "Touch repeat window", "combat", "100", "1000", "50", " ms");
     toggle("m_swordEnabled", "Enable sword profile");
     slider("m_swordCps", "Sword CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
     toggle("m_axeEnabled", "Enable axe profile");
@@ -397,6 +435,17 @@ void AutoHitModule::onMenuRegistered() {
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
+    if (key == "m_touchRepeatEnabled") {
+        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
+        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
+        if (!on && !off) return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_touchRepeatEnabled = on;
+        if (!on) m_touchRepeatUntil = {};
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "touch_input", on ? "enabled" : "disabled");
+        return true;
+    }
     if (key == "m_swordEnabled" || key == "m_axeEnabled" ||
         key == "m_maceEnabled" || key == "m_tridentEnabled") {
         const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
@@ -420,6 +469,7 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (key == "m_attackButton") m_attackButton = std::clamp(static_cast<int>(std::lround(number)), 0, 16);
         else if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
+        else if (key == "m_touchRepeatWindowMs") m_touchRepeatWindowMs = std::clamp(static_cast<int>(std::lround(number)), 100, 1000);
         else if (key == "m_swordCps") m_swordCps = std::clamp(number, 1.0f, 20.0f);
         else if (key == "m_axeCps") m_axeCps = std::clamp(number, 1.0f, 20.0f);
         else if (key == "m_maceCps") m_maceCps = std::clamp(number, 1.0f, 20.0f);
