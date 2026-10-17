@@ -9,6 +9,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
@@ -26,6 +27,7 @@
 #include <limits>
 #include <atomic>
 #include <string_view>
+#include <unordered_set>
 #include <pl/Logger.hpp>
 #include <pl/Input.hpp>
 #include <pl/ModMenu.hpp>
@@ -60,6 +62,24 @@ ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
+HitboxExpanderModule* g_hitboxExpander = nullptr;
+std::once_flag g_hitboxExpanderEventOnce;
+
+bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& out) {
+    if (!origin || !g_fetchNearbyActors || !std::isfinite(radius) || radius <= 0.0f) return false;
+    bedrocktools::sdk::Vec3 extent{radius, radius, radius};
+    ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
+    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (!begin || !end || end < begin ||
+        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
+        (end - begin) / sizeof(DistanceSortedActor) > 16384) return false;
+    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        if (entry->actor && reinterpret_cast<std::uintptr_t>(entry->actor) > 0x1000)
+            out.insert(entry->actor);
+    }
+    return true;
+}
 std::atomic_bool g_loggedGameTypeUnavailable{false};
 
 pl::log::Logger& autoHitLogger() {
@@ -1906,9 +1926,156 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
  
 HitboxExpanderModule::HitboxExpanderModule()
     : Module("BedrockBounds",
-             "Expands client-side target selection, crosshair and AutoHit bounds; the server still validates reach and hits.",
+             "Temporarily expands client-side actor bounds for native target queries; the server still validates reach and hits.",
              "Hitbox Expander") {
     keybind = 0;
+    g_hitboxExpander = this;
+}
+
+void HitboxExpanderModule::onInit() {
+    if (!g_fetchNearbyActors) {
+        g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
+    }
+    if (!g_actorIsPlayer) {
+        g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    }
+
+    std::call_once(g_hitboxExpanderEventOnce, [] {
+        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
+            [](auto& event) {
+                if (g_hitboxExpander) g_hitboxExpander->processPreTick(event.player);
+            });
+        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+            [](auto& event) {
+                if (g_hitboxExpander) g_hitboxExpander->processPostTick(event.player);
+            });
+    });
+}
+
+void HitboxExpanderModule::onDisable() {
+    restoreNativeBounds(m_lastLocalPlayer.load(std::memory_order_acquire));
+}
+
+void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
+    if (player) m_lastLocalPlayer.store(player, std::memory_order_release);
+    restoreNativeBounds(player);
+}
+
+void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
+    if (!player) return;
+    m_lastLocalPlayer.store(player, std::memory_order_release);
+    if (enabled) applyNativeBounds(player);
+}
+
+void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    if (!player) player = m_lastLocalPlayer.load(std::memory_order_acquire);
+    if (!player || !g_fetchNearbyActors) return;
+
+    std::vector<void*> trackedActors;
+    {
+        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+        if (m_nativeBoundsOriginal.empty()) return;
+        trackedActors.reserve(m_nativeBoundsOriginal.size());
+        for (const auto& entry : m_nativeBoundsOriginal) trackedActors.push_back(entry.first);
+    }
+
+    std::unordered_set<void*> liveActors;
+    if (!collectNearbyActors(player, 64.0f, liveActors)) return;
+    const auto hasMissingTrackedActor = [&] {
+        for (void* actor : trackedActors) {
+            if (liveActors.find(actor) == liveActors.end()) return true;
+        }
+        return false;
+    };
+
+    bool missingActorsResolved = !hasMissingTrackedActor();
+    if (!missingActorsResolved) {
+        if (!collectNearbyActors(player, 256.0f, liveActors)) return;
+        missingActorsResolved = !hasMissingTrackedActor();
+        if (!missingActorsResolved) {
+            if (!collectNearbyActors(player, 512.0f, liveActors)) return;
+            missingActorsResolved = true;
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+    for (auto it = m_nativeBoundsOriginal.begin(); it != m_nativeBoundsOriginal.end();) {
+        void* actor = it->first;
+        const auto snapshot = it->second;
+        if (liveActors.find(actor) == liveActors.end()) {
+            // Only discard an unseen actor after a successful broad query. Never
+            // dereference an actor/component pointer that the engine no longer lists.
+            if (missingActorsResolved) it = m_nativeBoundsOriginal.erase(it);
+            else ++it;
+            continue;
+        }
+
+        const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+        if (actorAddress > 0x1000) {
+            auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
+                offsets::BuiltInActorComponents::mAABBShapeComponent);
+            void* currentComponent = *componentSlot;
+            if (currentComponent == snapshot.component && reinterpret_cast<std::uintptr_t>(currentComponent) > 0x1000) {
+                auto* currentBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(currentComponent) +
+                    offsets::AABBShapeComponent::mAABB);
+                std::memcpy(currentBounds, &snapshot.originalBounds, sizeof(AABB));
+            }
+        }
+        it = m_nativeBoundsOriginal.erase(it);
+    }
+}
+
+void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    if (!enabled || !player || !g_fetchNearbyActors || !g_actorIsPlayer) return;
+
+    Vec3 extent{32.0f, 32.0f, 32.0f};
+    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
+    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (!begin || !end || end < begin ||
+        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
+        (end - begin) / sizeof(DistanceSortedActor) > 8192) return;
+
+    bool expandPlayers = false;
+    bool expandMobs = false;
+    {
+        std::lock_guard<std::mutex> lock(m_expandMutex);
+        expandPlayers = m_expandPlayers;
+        expandMobs = m_expandMobs;
+    }
+    if (!expandPlayers && !expandMobs) return;
+
+    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        void* actor = entry->actor;
+        if (!actor || actor == player || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000) continue;
+
+        const bool isPlayer = g_actorIsPlayer(actor);
+        if (isPlayer ? !expandPlayers : (!expandMobs || !categoryHasMobBit(actor))) continue;
+
+        const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+        auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
+            offsets::BuiltInActorComponents::mAABBShapeComponent);
+        void* component = *componentSlot;
+        if (reinterpret_cast<std::uintptr_t>(component) <= 0x1000) continue;
+
+        auto* nativeBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(component) +
+            offsets::AABBShapeComponent::mAABB);
+        const AABB original = *nativeBounds;
+        if (!validBounds(original)) continue;
+        const AABB expanded = expandedTargetBounds(isPlayer, original);
+        if (!validBounds(expanded) ||
+            (expanded.min.x == original.min.x && expanded.min.y == original.min.y && expanded.min.z == original.min.z &&
+             expanded.max.x == original.max.x && expanded.max.y == original.max.y && expanded.max.z == original.max.z)) continue;
+
+        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+        if (m_nativeBoundsOriginal.find(actor) != m_nativeBoundsOriginal.end()) continue;
+        m_nativeBoundsOriginal.emplace(actor, NativeBoundsSnapshot{component, original});
+        std::memcpy(nativeBounds, &expanded, sizeof(AABB));
+    }
 }
 
 bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
