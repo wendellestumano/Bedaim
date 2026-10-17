@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main, master, fix/hitbox-expander-native-aabb-20261016]
+    branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017]
   pull_request:
   workflow_dispatch:
 
@@ -28,26 +28,6 @@ jobs:
           xmake run -P . aimassist_math_test
           xmake run -P . atomic_config_writer_test
 
-      - name: Install host test dependencies
-        working-directory: tests
-        run: xmake require -y -P . nlohmann_json
-
-      - name: Run host regression tests
-        working-directory: tests
-        run: |
-          pwd
-          xmake f -y -P . -p linux -a x86_64 -m debug
-          xmake -y -P .
-          xmake run -P . menu_config_value_test
-          xmake run -P . aimassist_math_test
-          xmake run -P . autohit_key_binding_test
-          xmake run -P . autohit_guards_test
-          xmake run -P . autototem_policy_test
-          xmake run -P . session_timer_format_test
-          xmake run -P . frame_stats_window_test
-          xmake run -P . distance_accumulator_test
-          xmake run -P . atomic_config_writer_test
-
       - uses: nttld/setup-ndk@v1
         id: ndk
         with:
@@ -60,6 +40,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BedrockTools-HitboxExpander-26.52-EXPERIMENTAL
+          name: BedrockTools-levipack
           path: build/android/arm64-v8a/release/BedrockTools.levipack
           if-no-files-found: error
