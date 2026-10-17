@@ -626,6 +626,46 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     return result;
 }
 
+bool isTrustedClientInstanceCandidate(void* candidate) {
+    if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
+    auto** table = *reinterpret_cast<void***>(candidate);
+    return table && isReadableMemory(table, sizeof(void*)) && isMinecraftFunction(table[0]);
+}
+
+bool isTrustedLocalPlayerCandidate(void* candidate) {
+    if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
+    auto** table = *reinterpret_cast<void***>(candidate);
+    return table && isReadableMemory(table, sizeof(void*)) && isMinecraftFunction(table[0]);
+}
+
+void* resolveLocalPlayerFromClient(void* clientInstance, bool& usedVirtualGetter) {
+    usedVirtualGetter = false;
+    if (!isTrustedClientInstanceCandidate(clientInstance)) return nullptr;
+
+    const auto signatureGetter =
+        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
+    if (signatureGetter) {
+        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
+        void* candidate = client->localPlayer();
+        if (isTrustedLocalPlayerCandidate(candidate)) return candidate;
+    }
+
+    // SDK slot 32 is the declared IClientInstance/ClientInstance local-player getter.
+    // Check the entire vtable range and the code image before making a native call.
+    constexpr std::size_t slot =
+        bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
+    auto** table = *reinterpret_cast<void***>(clientInstance);
+    if (!table || !isReadableMemory(table, (slot + 1) * sizeof(void*))) return nullptr;
+    void* entry = table[slot];
+    if (!isMinecraftFunction(entry)) return nullptr;
+
+    using Getter = void* (*)(const void*);
+    void* candidate = reinterpret_cast<Getter>(entry)(clientInstance);
+    if (!isTrustedLocalPlayerCandidate(candidate)) return nullptr;
+    usedVirtualGetter = true;
+    return candidate;
+}
+
 void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
@@ -973,46 +1013,6 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     return syntheticAttackNativeResult;
 }
 
-
-bool isTrustedClientInstanceCandidate(void* candidate) {
-    if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
-    auto** table = *reinterpret_cast<void***>(candidate);
-    return table && isReadableMemory(table, sizeof(void*)) && isMinecraftFunction(table[0]);
-}
-
-bool isTrustedLocalPlayerCandidate(void* candidate) {
-    if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
-    auto** table = *reinterpret_cast<void***>(candidate);
-    return table && isReadableMemory(table, sizeof(void*)) && isMinecraftFunction(table[0]);
-}
-
-void* resolveLocalPlayerFromClient(void* clientInstance, bool& usedVirtualGetter) {
-    usedVirtualGetter = false;
-    if (!isTrustedClientInstanceCandidate(clientInstance)) return nullptr;
-
-    const auto signatureGetter =
-        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
-    if (signatureGetter) {
-        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-        void* candidate = client->localPlayer();
-        if (isTrustedLocalPlayerCandidate(candidate)) return candidate;
-    }
-
-    // SDK slot 32 is the declared IClientInstance/ClientInstance local-player getter.
-    // Check the entire vtable range and the code image before making a native call.
-    constexpr std::size_t slot =
-        bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
-    auto** table = *reinterpret_cast<void***>(clientInstance);
-    if (!table || !isReadableMemory(table, (slot + 1) * sizeof(void*))) return nullptr;
-    void* entry = table[slot];
-    if (!isMinecraftFunction(entry)) return nullptr;
-
-    using Getter = void* (*)(const void*);
-    void* candidate = reinterpret_cast<Getter>(entry)(clientInstance);
-    if (!isTrustedLocalPlayerCandidate(candidate)) return nullptr;
-    usedVirtualGetter = true;
-    return candidate;
-}
 
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     if (!player) return false;
