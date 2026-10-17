@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <string_view>
 
 namespace bedrocktools::sdk {
 class Player;
@@ -18,6 +19,7 @@ public:
     void onEnable() override;
     void onDisable() override;
     void onMenuRegistered() override;
+    bool onMenuConfigChanged(std::string_view key, std::string_view value) override;
     void loadConfig(const nlohmann::json& json) override;
     void saveConfig(nlohmann::json& json) override;
 
