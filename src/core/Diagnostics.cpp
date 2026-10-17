@@ -165,7 +165,7 @@ bool exportJsonTo(const std::string& path, std::string* error) noexcept {
             });
         }
 
-        if (!bedrocktools::config::writePayloadAtomically(path, payload.dump(2) + "\\n")) {
+        if (!bedrocktools::config::writePayloadAtomically(path, payload.dump(2) + "\n")) {
             if (error) *error = "could not atomically replace exported JSON log";
             return false;
         }
