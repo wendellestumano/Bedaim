@@ -11,6 +11,7 @@ int main() {
 
     assert(classify("minecraft:diamond_sword") == Class::Sword);
     assert(classify("minecraft:netherite_axe") == Class::Axe);
+    assert(classify("minecraft:diamond_pickaxe") == Class::Unsupported);
     assert(classify("minecraft:mace") == Class::Mace);
     assert(classify("minecraft:trident") == Class::Trident);
     assert(classify("minecraft:bow") == Class::Unsupported);
