@@ -3,6 +3,7 @@
 #include "../Module.hpp"
 #include <chrono>
 #include <mutex>
+#include <string>
 #include <string_view>
 
 namespace bedrocktools::sdk { class Player; }
@@ -39,4 +40,5 @@ private:
     std::chrono::steady_clock::time_point m_nextSwordAttempt{};
     int m_swordSlot = -1;
     int m_previousSlot = -1;
+    std::string m_lastStatus;
 };
