@@ -2015,7 +2015,9 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
             auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
                 offsets::BuiltInActorComponents::mAABBShapeComponent);
             void* currentComponent = *componentSlot;
-            if (currentComponent == snapshot.component && reinterpret_cast<std::uintptr_t>(currentComponent) > 0x1000) {
+            void* currentLevel = reinterpret_cast<Actor*>(actor)->level();
+            if (currentComponent == snapshot.component && currentLevel && currentLevel == snapshot.level &&
+                reinterpret_cast<std::uintptr_t>(currentComponent) > 0x1000) {
                 auto* currentBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(currentComponent) +
                     offsets::AABBShapeComponent::mAABB);
                 std::memcpy(currentBounds, &snapshot.originalBounds, sizeof(AABB));
@@ -2045,6 +2047,8 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
         expandMobs = m_expandMobs;
     }
     if (!expandPlayers && !expandMobs) return;
+    void* playerLevel = reinterpret_cast<Actor*>(player)->level();
+    if (!playerLevel) return;
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* actor = entry->actor;
@@ -2054,6 +2058,8 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
         if (isPlayer ? !expandPlayers : (!expandMobs || !categoryHasMobBit(actor))) continue;
 
         const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+        void* actorLevel = reinterpret_cast<Actor*>(actor)->level();
+        if (!actorLevel || actorLevel != playerLevel) continue;
         auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
             offsets::BuiltInActorComponents::mAABBShapeComponent);
         void* component = *componentSlot;
@@ -2070,7 +2076,7 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
 
         std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
         if (m_nativeBoundsOriginal.find(actor) != m_nativeBoundsOriginal.end()) continue;
-        m_nativeBoundsOriginal.emplace(actor, NativeBoundsSnapshot{component, original});
+        m_nativeBoundsOriginal.emplace(actor, NativeBoundsSnapshot{component, actorLevel, original});
         std::memcpy(nativeBounds, &expanded, sizeof(AABB));
     }
 }
