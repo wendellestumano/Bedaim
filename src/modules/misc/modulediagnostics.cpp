@@ -141,7 +141,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     freshSessionNode.id = "m_startFreshLogSession";
     freshSessionNode.key = "m_startFreshLogSession";
     freshSessionNode.title = "Start fresh gameplay log session";
-    freshSessionNode.description = "Clears in-memory logs and atomically replaces the rolling auto-save with only the new session. Timestamped manual exports are preserved.";
+    freshSessionNode.description = "Clears previous gameplay entries, keeps essential startup/hook diagnostics, and atomically replaces the rolling auto-save. Timestamped manual exports are preserved.";
     freshSessionNode.category = "diagnostics";
     freshSessionNode.type = ConfigControlTypeV2::Toggle;
     freshSessionNode.defaultValue = "false";
