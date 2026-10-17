@@ -406,6 +406,53 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         if (kind) *kind = AttackKind::GameMode;
         return slotAddress;
     }
+
+    // Signature patterns can resolve the internal attack body on builds where
+    // the public virtual wrapper has a different prologue. Prefer exact exported
+    // C++ method symbols as a fallback, but still require the live vtable slot to
+    // equal the resolved symbol before dispatching through it.
+    struct PublicAttackSymbols {
+        std::uintptr_t gameMode{};
+        std::uintptr_t survivalMode{};
+    };
+    static const PublicAttackSymbols exportedSymbols = [] {
+        PublicAttackSymbols result{};
+        constexpr const char* gameModeNames[] = {
+            "_ZN8GameMode6attackEP5ActorRK4Vec3",
+            "_ZN8GameMode6attackER5ActorRK4Vec3"
+        };
+        constexpr const char* survivalModeNames[] = {
+            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3",
+            "_ZN12SurvivalMode6attackER5ActorRK4Vec3"
+        };
+        for (const char* name : gameModeNames) {
+            if (void* address = resolveMinecraftFunction(name)) {
+                result.gameMode = reinterpret_cast<std::uintptr_t>(address);
+                break;
+            }
+        }
+        for (const char* name : survivalModeNames) {
+            if (void* address = resolveMinecraftFunction(name)) {
+                result.survivalMode = reinterpret_cast<std::uintptr_t>(address);
+                break;
+            }
+        }
+        return result;
+    }();
+    if (exportedSymbols.survivalMode && slotAddress == exportedSymbols.survivalMode) {
+        if (kind) *kind = AttackKind::SurvivalMode;
+        static std::atomic_bool loggedSymbolFallback{false};
+        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
+            gameHooksLogger().info("Validated public attack wrapper via exact exported SurvivalMode::attack symbol.");
+        return slotAddress;
+    }
+    if (exportedSymbols.gameMode && slotAddress == exportedSymbols.gameMode) {
+        if (kind) *kind = AttackKind::GameMode;
+        static std::atomic_bool loggedSymbolFallback{false};
+        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
+            gameHooksLogger().info("Validated public attack wrapper via exact exported GameMode::attack symbol.");
+        return slotAddress;
+    }
     return 0;
 }
 
