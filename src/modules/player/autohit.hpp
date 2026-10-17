@@ -31,6 +31,17 @@ private:
     int m_heldButton = -1;
     int m_attackButton = 0;
     float m_attackRange = 3.2f;
-    float m_attackIntervalMs = 180.0f;
+
+    // Weapon profiles default to swords only. Each category has its own
+    // enable switch and CPS cap; unknown/non-weapon items never dispatch attacks.
+    bool m_swordEnabled = true;
+    float m_swordCps = 8.0f;
+    bool m_axeEnabled = false;
+    float m_axeCps = 4.0f;
+    bool m_maceEnabled = false;
+    float m_maceCps = 2.0f;
+    bool m_tridentEnabled = false;
+    float m_tridentCps = 3.0f;
+
     std::chrono::steady_clock::time_point m_nextAttack{};
 };
