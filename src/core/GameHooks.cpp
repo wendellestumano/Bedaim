@@ -630,34 +630,32 @@ void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
 
-    // A failed signature match must stay visible: resolveAll() succeeds when any
-    // signature resolves, not when every optional function is present. Keep the
-    // local-player filter strict and diagnose the exact prerequisite instead of
-    // switching to an unvalidated vtable index or treating an arbitrary actor
-    // from NormalTick as the local player.
-    const auto localPlayerGetter =
-        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
-    void* localPlayer = nullptr;
-    if (!clientInstance) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Warning, "GameHooks",
-            "local_player_resolution", "client_instance_missing");
-    } else if (!localPlayerGetter) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Error, "GameHooks",
-            "local_player_resolution", "getter_signature_unresolved",
-            "ClientInstanceGetLocalPlayer signature resolved to null; local-player events remain safely suppressed");
+    bool usedVirtualGetter = false;
+    void* localPlayer = resolveLocalPlayerFromClient(clientInstance, usedVirtualGetter);
+    const bool signatureResolved =
+        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer) != 0;
+
+    const char* state;
+    std::string detail;
+    bedrocktools::diagnostics::Level level = bedrocktools::diagnostics::Level::Error;
+    if (localPlayer) {
+        state = usedVirtualGetter ? "ready_vtable_fallback" : "ready";
+        detail = usedVirtualGetter
+            ? "signature getter unavailable or null; SDK virtual getter returned a validated local-player candidate"
+            : "signature getter returned a validated local-player candidate";
+        level = bedrocktools::diagnostics::Level::Info;
+    } else if (!isTrustedClientInstanceCandidate(clientInstance)) {
+        state = "client_instance_invalid";
+        detail = "client instance failed readable-memory or vtable-image validation";
+    } else if (!signatureResolved) {
+        state = "getter_signature_unresolved_fallback_failed";
+        detail = "signature getter unresolved and validated SDK virtual getter did not return a player";
     } else {
-        auto* client = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-        localPlayer = client->localPlayer();
-        bedrocktools::diagnostics::probe(
-            localPlayer ? bedrocktools::diagnostics::Level::Info :
-                          bedrocktools::diagnostics::Level::Warning,
-            "GameHooks", "local_player_resolution",
-            localPlayer ? "ready" : "getter_returned_null",
-            localPlayer ? "ClientInstanceGetLocalPlayer returned a candidate pointer"
-                        : "resolved getter returned null; local-player events remain safely suppressed");
+        state = "getter_returned_null_fallback_failed";
+        detail = "signature getter returned no validated player and SDK virtual fallback failed";
     }
+
+    bedrocktools::diagnostics::probe(level, "GameHooks", "local_player_resolution", state, detail);
     currentLocalPlayer.store(localPlayer, std::memory_order_release);
 
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
