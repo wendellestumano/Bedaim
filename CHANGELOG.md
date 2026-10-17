@@ -2,10 +2,11 @@
 
 ## 2026-10-17 — BedrockAim, BedrockBounds and ShiftBlade integration
 
-- Integrated the tested BedrockAim tracking improvements and BedrockBounds client-side AABB expansion into a mainline-based integration branch.
-- Fixed moving target bounds by retaining a stable unexpanded AABB baseline and translating it with actor movement each tick.
-- Added the **Ver Hitbox** preview setting and connected it to the existing hitbox renderer.
-- Added **ShiftBlade**, which selects a sword when the BedrockAim target is in range and the player is grounded by default; the new **Allowed distance above ground (blocks)** setting permits a configurable small height above the last stable ground level.
-- ShiftBlade yields to consumables, the Mace Swapper's slam priority, and explicit manual hotbar changes.
-- Retired AutoHit and AutoTotem controls/behavior from this integration and removed their related tests.
-- Existing modules remain registered; Android build and host tests are required before merging to main.
+- Integrated the BedrockAim target-tracking updates and BedrockBounds native AABB expansion on a branch based directly on `main`, without merging the divergent experimental history.
+- Added the **Ver Hitbox** preview and connected it to the existing hitbox renderer.
+- Reduced Hitbox Expander AABB oscillation by keeping active expanded bounds stable between ticks, translating saved native bounds with actor movement, pruning stale/out-of-range targets, and restoring bounds when disabled or when target-type settings change.
+- Added **ShiftBlade** with configurable target range and allowed height above stable ground. It now keeps a sword equipped while the target remains in range by default, yields to consumables and Mace Swapper priority, and offers **Respect manual hotbar changes** for users who prefer manual selection.
+- Fixed a ForceGlobalRP packet-hook guard that checked the ResourcePacksInfo trampoline before calling the ResourcePackStack trampoline.
+- Registered the existing **AutoReQ** module, which previously had source files but no registry entry.
+- Kept AutoHit and AutoTotem out of this integration.
+- Host regression tests and an Android ARM64 package build must pass on the final branch head before merging to `main`; in-game behavior still requires runtime testing.
