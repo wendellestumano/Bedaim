@@ -64,6 +64,19 @@ Official Script API samples read an inventory component/container and verify com
 
 Official Add-On source and Script API examples target managed scripts, behavior packs, and resource packs. They can improve experimental packs and can serve as a reference for algorithms, but they are not the same API surface as Bedaim's C++ client module. Review the specific source-file license before copying any third-party code; prefer documenting the behavioral pattern and implementing it independently. LeviLamina states that its non-closed source portions use LGPL-3.0; any direct code reuse must comply with the relevant license and compatibility requirements.
 
+## Additional local-player source lead from LeviLamina headers
+
+At LeviLamina commit `917f0defa15ffb34599eb4522da1617a4a55b42b`, the client headers declare:
+- `src-client/mc/client/game/IClientInstance.h`: abstract `virtual LocalPlayer* getLocalPlayer() const = 0;`
+- `src-client/mc/client/game/ClientInstance.h`: `virtual LocalPlayer* getLocalPlayer() const override;`
+
+References:
+- https://github.com/LiteLDev/LeviLamina/blob/917f0defa15ffb34599eb4522da1617a4a55b42b/src-client/mc/client/game/IClientInstance.h
+- https://github.com/LiteLDev/LeviLamina/blob/917f0defa15ffb34599eb4522da1617a4a55b42b/src-client/mc/client/game/ClientInstance.h
+
+This is evidence that a versioned native client interface exists in LeviLamina's source tree, not proof that its exact vtable index, layout, header package, or ABI matches Bedaim's target client. Follow-up should establish the precise Bedrock build and LeviLamina/client SDK version, then compare symbol/signature routes and interface slot only against version-matched declarations. Do not substitute an index into Bedaim from this header without ABI verification.
+
+
 ## Status
 
 - Research/documentation only.
