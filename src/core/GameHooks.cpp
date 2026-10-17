@@ -608,13 +608,19 @@ bool install() {
     hookSignature(SignatureId::SurvivalModeInteract, reinterpret_cast<void*>(survivalModeInteractDetour), &survivalModeInteractOriginal);
     const bool internalAttackHooked = hookSignature(
         SignatureId::GameModeAttackInternal, reinterpret_cast<void*>(gameModeAttackDetour), &gameModeAttackOriginal);
+    const bool publicAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0;
+    const bool survivalAttackSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0;
+    const bool internalAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0;
     gameHooksLogger().info(
         "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
-        bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0,
-        bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0,
-        bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0,
-        internalAttackHooked,
-        gameModeAttackOriginal != nullptr);
+        publicAttackSignature, survivalAttackSignature, internalAttackSignature,
+        internalAttackHooked, gameModeAttackOriginal != nullptr);
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
+        std::string("attack setup: public=") + (publicAttackSignature ? "1" : "0") +
+        " survival=" + (survivalAttackSignature ? "1" : "0") +
+        " internal=" + (internalAttackSignature ? "1" : "0") +
+        " hook=" + (internalAttackHooked ? "1" : "0") +
+        " trampoline=" + (gameModeAttackOriginal ? "1" : "0"));
     hookSignature(SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
@@ -623,6 +629,8 @@ bool install() {
     hookSignature(SignatureId::ContainerScreenControllerOnContainerSlotSelected, reinterpret_cast<void*>(containerSlotSelectedDetour), &containerSlotSelectedOriginal);
     const bool eglHooked = hookEgl();
     gameHooksLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks",
+        std::string("frame event hook installed=") + (eglHooked ? "true" : "false"));
     installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
     bedrocktools::diagnostics::log(
         installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
