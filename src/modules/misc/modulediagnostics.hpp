@@ -34,6 +34,7 @@ private:
 
     ReportSummary runDiagnostics();
     bool exportLogs(bool automatic);
+    void startFreshLogSession();
     void startExportWorker();
     void stopExportWorker();
     void exportWorkerLoop();
@@ -46,6 +47,7 @@ private:
     int m_autoExportIntervalSeconds = 5;
     std::string m_exportFormat = "txt";
     mutable std::mutex m_exportMutex;
+    std::mutex m_fileWriteMutex;
     std::condition_variable m_exportCondition;
     std::thread m_exportWorker;
     bool m_stopExportWorker = true;
