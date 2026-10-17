@@ -70,6 +70,20 @@ int main() {
     assert(content.find("WARN") != std::string::npos);
     assert(content.find("ERROR") != std::string::npos);
     assert(content.find("CRITICAL") != std::string::npos);
+
+    // A rolling export must replace the previous session, not append old entries.
+    bedrocktools::diagnostics::clear();
+    log(Level::Info, "Test", "fresh gameplay session only");
+    assert(bedrocktools::diagnostics::exportTo(path.string(), &error));
+    {
+        std::ifstream freshIn(path, std::ios::binary);
+        const std::string freshContent(
+            (std::istreambuf_iterator<char>(freshIn)), std::istreambuf_iterator<char>());
+        assert(freshContent.find("fresh gameplay session only") != std::string::npos);
+        assert(freshContent.find("trace message") == std::string::npos);
+        assert(freshContent.find("entries=1") != std::string::npos);
+    }
+
     std::filesystem::remove(path, ec);
     std::filesystem::remove(jsonPath, ec);
     bedrocktools::diagnostics::clear();
