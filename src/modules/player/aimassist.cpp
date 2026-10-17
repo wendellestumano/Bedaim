@@ -1586,17 +1586,16 @@ void HitboxExpanderModule::onDisable() {
 }
 
 void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
-    // Keep expanded AABBs stable while the module is active. Restoring them in
-    // every pre-tick and re-expanding them in post-tick makes native collision /
-    // target queries alternate between two boxes every frame.
-    if (player && !enabled) restoreNativeBounds(player);
+    // Keep in-range expanded AABBs stable. Restore only actors that left the
+    // active query radius while enabled; restore everything when the module is off.
+    if (player) restoreNativeBounds(player, enabled);
 }
 
 void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
     if (player && enabled) applyNativeBounds(player);
 }
 
-void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player) {
+void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player, bool onlyStale) {
     using namespace bedrocktools::sdk;
     if (!player || !g_fetchNearbyActors) return;
 
@@ -1607,6 +1606,12 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
         trackedActors.reserve(m_nativeBoundsOriginal.size());
         for (const auto& entry : m_nativeBoundsOriginal) trackedActors.push_back(entry.first);
     }
+
+    // "Active" is the normal 32-block extension query. When enabled, only boxes
+    // outside this set are restored so actors no longer handled by the expander do
+    // not retain stale expanded bounds. The wider live set below is for pointer safety.
+    std::unordered_set<void*> activeActors;
+    if (onlyStale && !collectNearbyActors(player, 32.0f, activeActors)) return;
 
     std::unordered_set<void*> liveActors;
     if (!collectNearbyActors(player, 64.0f, liveActors)) return;
@@ -1636,6 +1641,13 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
             // Never dereference a pointer that the current level no longer reports.
             if (missingActorsResolved) it = m_nativeBoundsOriginal.erase(it);
             else ++it;
+            continue;
+        }
+
+        if (onlyStale && activeActors.find(actor) != activeActors.end()) {
+            // This actor is still inside the expander's active radius; keep its
+            // enlarged AABB untouched to avoid per-tick native/expanded oscillation.
+            ++it;
             continue;
         }
 
@@ -1678,7 +1690,7 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
         // Keep the first unexpanded snapshot while enabled. Re-capturing the box
         // after each movement tick would bake any stale world position into the
         // next snapshot and make the hitbox lag behind the actor.
-        if (enabled) ++it;
+        if (enabled && !onlyStale) ++it;
         else it = m_nativeBoundsOriginal.erase(it);
     }
 }
