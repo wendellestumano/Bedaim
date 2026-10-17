@@ -257,12 +257,41 @@ void ModuleDiagnosticsModule::onDisable() {
 }
 
 void ModuleDiagnosticsModule::startFreshLogSession() {
-    // Clear only the in-memory session and immediately replace the rolling
-    // auto-save. The atomic exporter preserves the last good file if writing
-    // the new session fails; timestamped manual exports remain untouched.
+    // Keep only stable startup facts that are essential for diagnosing native
+    // routes (especially AutoHit's attack hook and AutoTotem's offhand reader).
+    // Old gameplay decisions/toggles are discarded so the new export is clean.
+    const auto previousEntries = bedrocktools::diagnostics::snapshot();
+    std::vector<bedrocktools::diagnostics::Entry> baselineEntries;
+    baselineEntries.reserve(previousEntries.size());
+    for (const auto& entry : previousEntries) {
+        const bool keep =
+            entry.component == "Runtime" ||
+            entry.component == "GameHooks" ||
+            entry.component == "InventoryAccess" ||
+            entry.component == "Config" ||
+            (entry.component == "ModuleRegistry" &&
+                entry.message.rfind("registered modules initialized:", 0) == 0) ||
+            ((entry.component == "AutoHit" || entry.component == "AutoTotem") &&
+                entry.message.rfind("lifecycle=initialized", 0) == 0) ||
+            ((entry.component == "BedrockAim" || entry.component == "HitboxExpander") &&
+                entry.message.rfind("native_dependencies=ready", 0) == 0);
+        if (keep) baselineEntries.push_back(entry);
+    }
+
     bedrocktools::diagnostics::clear();
+    for (const auto& entry : baselineEntries) {
+        std::string message = entry.message;
+        constexpr std::string_view baselinePrefix = "baseline: ";
+        if (message.rfind(baselinePrefix, 0) == 0)
+            message.erase(0, baselinePrefix.size());
+        bedrocktools::diagnostics::log(entry.level, entry.component,
+            std::string(baselinePrefix) + message);
+    }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
-        "Diagnostics", "fresh gameplay log session started; previous in-memory entries cleared");
+        "Diagnostics", "fresh gameplay log session started; previous gameplay entries cleared");
+
+    // The atomic exporter replaces the rolling file only after a successful
+    // write. Timestamped manual exports remain available as historical captures.
     const bool saved = exportLogs(true);
     if (saved) {
         std::lock_guard<std::mutex> lock(m_exportMutex);
