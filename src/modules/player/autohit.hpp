@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Module.hpp"
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string_view>
@@ -25,6 +26,8 @@ private:
 
     std::mutex m_stateMutex;
     bool m_attackHeld = false;
+    std::atomic_bool m_containerOpen{false};
+    std::atomic_bool m_chatOpen{false};
     int m_heldButton = -1;
     int m_attackButton = 0;
     float m_attackRange = 3.2f;
