@@ -2,6 +2,7 @@
 
 #include "aimassist.hpp"
 #include "AutoHitGuards.hpp"
+#include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/GameHooks.hpp"
 #include "core/InventoryAccess.hpp"
@@ -26,29 +27,6 @@ using bedrocktools::sdk::Vec3;
 
 bool finiteVec(const Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-}
-
-enum class WeaponClass { Sword, Axe, Mace, Trident, Unsupported };
-
-WeaponClass classifyWeapon(std::string identifier) {
-    std::transform(identifier.begin(), identifier.end(), identifier.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (identifier.find("sword") != std::string::npos) return WeaponClass::Sword;
-    if (identifier.find("axe") != std::string::npos) return WeaponClass::Axe;
-    if (identifier.find("mace") != std::string::npos) return WeaponClass::Mace;
-    if (identifier.find("trident") != std::string::npos) return WeaponClass::Trident;
-    return WeaponClass::Unsupported;
-}
-
-const char* weaponClassName(WeaponClass weapon) {
-    switch (weapon) {
-        case WeaponClass::Sword: return "sword";
-        case WeaponClass::Axe: return "axe";
-        case WeaponClass::Mace: return "mace";
-        case WeaponClass::Trident: return "trident";
-        case WeaponClass::Unsupported: return "unsupported";
-    }
-    return "unsupported";
 }
 
 bool validBounds(const AABB& bounds) {
@@ -215,24 +193,24 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
-    const WeaponClass weapon = classifyWeapon(heldItem);
+    const auto weapon = bedaim::autohit::weapon::classify(heldItem);
     bool weaponAllowed = false;
     float configuredCps = 0.0f;
     switch (weapon) {
-        case WeaponClass::Sword: weaponAllowed = swordEnabled; configuredCps = swordCps; break;
-        case WeaponClass::Axe: weaponAllowed = axeEnabled; configuredCps = axeCps; break;
-        case WeaponClass::Mace: weaponAllowed = maceEnabled; configuredCps = maceCps; break;
-        case WeaponClass::Trident: weaponAllowed = tridentEnabled; configuredCps = tridentCps; break;
-        case WeaponClass::Unsupported: break;
+        case bedaim::autohit::weapon::Class::Sword: weaponAllowed = swordEnabled; configuredCps = swordCps; break;
+        case bedaim::autohit::weapon::Class::Axe: weaponAllowed = axeEnabled; configuredCps = axeCps; break;
+        case bedaim::autohit::weapon::Class::Mace: weaponAllowed = maceEnabled; configuredCps = maceCps; break;
+        case bedaim::autohit::weapon::Class::Trident: weaponAllowed = tridentEnabled; configuredCps = tridentCps; break;
+        case bedaim::autohit::weapon::Class::Unsupported: break;
     }
     if (!weaponAllowed || !std::isfinite(configuredCps)) {
         diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile",
             weaponAllowed ? "invalid_cps" : "blocked",
-            std::string("weapon=") + weaponClassName(weapon) + "; item=" +
+            std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; item=" +
                 (heldItem.empty() ? "empty_or_unreadable" : heldItem));
         return;
     }
-    configuredCps = std::clamp(configuredCps, 1.0f, 20.0f);
+    configuredCps = bedaim::autohit::weapon::normalizeCps(configuredCps);
     const float intervalMs = 1000.0f / configuredCps;
     diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
         std::string("weapon=") + weaponClassName(weapon) + "; cps=" + std::to_string(configuredCps));
