@@ -170,6 +170,7 @@ InventoryAccess& InventoryAccess::get() {
 }
 
 void InventoryAccess::initialize() {
+    m_offhandGetterQuarantined.store(false, std::memory_order_release);
     // Prefer exact exported accessors over the generic signature pattern. The
     // old pattern could resolve on newer builds but return an unreadable pointer,
     // which made AutoTotem mistake an unknown offhand state for an empty slot.
@@ -216,7 +217,9 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
             total += countStack(reinterpret_cast<const void*>(begin + slot * ItemStackSize), identifierPart);
         }
     }
-    const void* offhand = m_getOffhandSlot ? m_getOffhandSlot(player) : nullptr;
+    const void* offhand = m_getOffhandSlot &&
+        !m_offhandGetterQuarantined.load(std::memory_order_acquire)
+        ? m_getOffhandSlot(player) : nullptr;
     const auto offhandAddress = reinterpret_cast<std::uintptr_t>(offhand);
     const bool alreadyCounted = valid && begin && offhandAddress >= begin &&
         offhandAddress - begin < size * ItemStackSize && (offhandAddress - begin) % ItemStackSize == 0;
@@ -302,13 +305,16 @@ bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
         return fail("local Player pointer/required inventory field is unreadable");
     if (!m_getOffhandSlot)
         return fail("no validated Actor/Player::getOffhandSlot entry point is available");
+    if (m_offhandGetterQuarantined.load(std::memory_order_acquire))
+        return fail("offhand getter quarantined after an unreadable pointer; restart Bedaim to retry safely");
 
     const void* offhand = m_getOffhandSlot(player);
     if (!isReadableMemory(offhand, ItemStackSize)) {
         char detail[256]{};
         std::snprintf(detail, sizeof(detail),
-            "getter source=%s returned unreadable ItemStack pointer=%p",
+            "getter source=%s returned unreadable ItemStack pointer=%p; getter quarantined",
             m_getOffhandSlotSource.c_str(), offhand);
+        m_offhandGetterQuarantined.store(true, std::memory_order_release);
         return fail(detail);
     }
 
@@ -406,7 +412,10 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     };
     if (!player) return report(OffhandTransferResult::InvalidPlayer, "player pointer is null");
     if (slot < 0 || slot >= 64) return report(OffhandTransferResult::InvalidSlot, "source slot or inventory slot range is invalid");
-    if (!m_getOffhandSlot) return report(OffhandTransferResult::RuntimeApiUnavailable, "ActorGetOffhandSlot signature unresolved");
+    if (!m_getOffhandSlot) return report(OffhandTransferResult::RuntimeApiUnavailable, "Actor/Player offhand getter unresolved");
+    if (m_offhandGetterQuarantined.load(std::memory_order_acquire))
+        return report(OffhandTransferResult::InvalidNativeState,
+                      "offhand getter quarantined after an unreadable pointer; restart Bedaim to retry safely");
 
     std::uintptr_t slotsBegin = 0;
     std::size_t slotCount = 0;
@@ -419,8 +428,9 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     if (!isReadableMemory(reinterpret_cast<const void*>(offhandAddress), ItemStackSize)) {
         char detail[256]{};
         std::snprintf(detail, sizeof(detail),
-            "getter source=%s returned unreadable ItemStack pointer=%p",
+            "getter source=%s returned unreadable ItemStack pointer=%p; getter quarantined",
             m_getOffhandSlotSource.c_str(), reinterpret_cast<const void*>(offhandAddress));
+        m_offhandGetterQuarantined.store(true, std::memory_order_release);
         return report(OffhandTransferResult::InvalidNativeState, detail);
     }
     const void* offhand = reinterpret_cast<const void*>(offhandAddress);
