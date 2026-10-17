@@ -1,6 +1,6 @@
 #include "ConfigManager.hpp"
 #include "AtomicConfigWriter.hpp"
-#include "Diagnostics.hpp"
+#include "../core/Diagnostics.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <pl/Logger.hpp>
 #include <filesystem>
