@@ -418,6 +418,59 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     return 0;
 }
 
+std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlot = nullptr) {
+    if (!plausibleGameMode(gameMode)) return 0;
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    const auto baseSignature = bedrocktools::memory::resolve(SignatureId::GameModeUseItem);
+    const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeUseItem);
+    struct Exported { std::uintptr_t base{}; std::uintptr_t survival{}; };
+    static const Exported symbols = [] {
+        Exported out{};
+        constexpr const char* baseNames[] = {
+            "_ZN8GameMode7useItemEP9ItemStack", "_ZN8GameMode7useItemER9ItemStack",
+            "_ZN8GameMode8$useItemEP9ItemStack", "_ZN8GameMode8$useItemER9ItemStack"
+        };
+        constexpr const char* survivalNames[] = {
+            "_ZN12SurvivalMode7useItemEP9ItemStack", "_ZN12SurvivalMode7useItemER9ItemStack",
+            "_ZN12SurvivalMode8$useItemEP9ItemStack", "_ZN12SurvivalMode8$useItemER9ItemStack"
+        };
+        for (const char* name : baseNames) {
+            if (void* address = resolveMinecraftFunction(name)) {
+                out.base = reinterpret_cast<std::uintptr_t>(address);
+                break;
+            }
+        }
+        for (const char* name : survivalNames) {
+            if (void* address = resolveMinecraftFunction(name)) {
+                out.survival = reinterpret_cast<std::uintptr_t>(address);
+                break;
+            }
+        }
+        return out;
+    }();
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto* slot = reinterpret_cast<const void*>(
+            reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
+        if (!isReadableMemory(slot, sizeof(void*))) break;
+        std::uintptr_t address = 0;
+        std::memcpy(&address, slot, sizeof(address));
+        if (!address) break;
+        if ((baseSignature && address == baseSignature) || (symbols.base && address == symbols.base) ||
+            (survivalSignature && address == survivalSignature) || (symbols.survival && address == symbols.survival)) {
+            if (matchedSlot) *matchedSlot = i;
+            static std::atomic_bool loggedMatch{false};
+            if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
+                gameHooksLogger().info("Validated public useItem through exact vtable match at slot {}.", i);
+            return address;
+        }
+    }
+    static std::atomic_bool loggedMiss{false};
+    if (!loggedMiss.exchange(true, std::memory_order_acq_rel))
+        gameHooksLogger().warn("No exact public GameMode::useItem method found in the live vtable.");
+    return 0;
+}
+
 AttackKind attackKindFor(void* gameMode) {
     AttackKind kind = AttackKind::GameMode;
     publicAttackVirtualEntry(gameMode, &kind);
