@@ -37,6 +37,13 @@ inline float normalizeCps(float cps) noexcept {
     return std::isfinite(cps) ? std::clamp(cps, 1.0f, 20.0f) : 1.0f;
 }
 
+inline int attemptIntervalMs(float cps) noexcept {
+    // Clamp to the supported 1–20 CPS range first. A 20 CPS profile therefore
+    // yields a 50 ms interval; failed dispatches use the same interval as success.
+    const float normalized = normalizeCps(cps);
+    return static_cast<int>(std::lround(1000.0f / normalized));
+}
+
 struct Profile {
     bool enabled = false;
     float cps = 0.0f;
