@@ -42,7 +42,7 @@ private:
     using GetOffhandSlotFn = const void* (*)(const void*);
     GetOffhandSlotFn m_getOffhandSlot = nullptr;
     std::string m_getOffhandSlotSource = "unresolved";
-    std::atomic_bool m_offhandGetterQuarantined{false};
+    mutable std::atomic_bool m_offhandGetterQuarantined{false};
 };
 
 }
