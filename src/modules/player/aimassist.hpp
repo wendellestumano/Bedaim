@@ -169,6 +169,7 @@ public:
 private:
     struct NativeBoundsSnapshot {
         void* component = nullptr;
+        void* level = nullptr;
         bedrocktools::sdk::AABB originalBounds{};
     };
 
