@@ -26,6 +26,6 @@ target_end()
 
 target("diagnostics_test")
     set_kind("binary")
-    add_files("launcher/diagnostics_test.cpp", "../src/core/Diagnostics.cpp")
+    add_files("launcher/diagnostics_test.cpp", "../src/core/Diagnostics.cpp", "../src/config/AtomicConfigWriter.cpp")
     add_includedirs("../src")
 target_end()
