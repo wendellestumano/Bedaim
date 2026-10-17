@@ -1,7 +1,7 @@
 #include "Diagnostics.hpp"
 #include "../config/AtomicConfigWriter.hpp"
 
-#include <algorithm>
+#include <deque>
 #include <unordered_map>
 #include <chrono>
 #include <cstdio>
@@ -19,7 +19,7 @@ namespace bedrocktools::diagnostics {
 namespace {
 constexpr std::size_t kCapacity = 4096;
 std::mutex gMutex;
-std::vector<Entry> gEntries;
+std::deque<Entry> gEntries;
 std::uint64_t gNextSequence = 1;
 std::mutex gProbeMutex;
 std::unordered_map<std::string, std::string> gProbeStates;
@@ -95,7 +95,7 @@ void log(Level level, std::string_view component, std::string_view message) noex
         {
             std::lock_guard<std::mutex> lock(gMutex);
             entry.sequence = gNextSequence++;
-            if (gEntries.size() == kCapacity) gEntries.erase(gEntries.begin());
+            if (gEntries.size() == kCapacity) gEntries.pop_front();
             gEntries.push_back(std::move(entry));
         }
     } catch (...) {
@@ -105,7 +105,7 @@ void log(Level level, std::string_view component, std::string_view message) noex
 
 std::vector<Entry> snapshot() {
     std::lock_guard<std::mutex> lock(gMutex);
-    return gEntries;
+    return std::vector<Entry>(gEntries.begin(), gEntries.end());
 }
 
 std::size_t count() noexcept {
