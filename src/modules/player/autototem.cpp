@@ -77,6 +77,7 @@ void AutoTotemModule::onEnable() {
     std::lock_guard lock(m_stateMutex);
     m_pendingRefill = false;
     m_lastOffhandHadTotem = false;
+    m_transferBlocked = false;
     m_refillAfter = {};
 }
 
@@ -112,6 +113,7 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (offhandHasTotem) {
         m_lastOffhandHadTotem = true;
         m_pendingRefill = false;
+        m_transferBlocked = false;
         m_refillAfter = {};
         return;
     }
@@ -120,7 +122,15 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!offhandEmpty) {
         m_lastOffhandHadTotem = false;
         m_pendingRefill = false;
+        m_transferBlocked = false;
         m_refillAfter = {};
+        return;
+    }
+
+    if (m_transferBlocked) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "AutoTotem", "transfer_gate", "blocked_until_reenable",
+            "last native transfer route failed validation; toggle AutoTotem off/on to retry after updating the runtime");
         return;
     }
 
@@ -192,13 +202,25 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     autoTotemLogger().info("Auto Totem first transfer result: {}.", transferResultName(result));
                 m_pendingRefill = false;
                 m_lastOffhandHadTotem = true;
+                m_transferBlocked = false;
                 m_refillAfter = {};
             } else {
-                // Fail closed and retry at a modest cadence if this build lacks a
-                // compatible native route or a local/server-visible transfer fails.
+                // An unavailable or invalid native route is not a transient delay.
+                // Stop after the first failed validation instead of trying the same
+                // unsafe operation every 100 ms. Re-enabling explicitly retries it.
                 if (!g_loggedAutoTotemTransferFailure.exchange(true, std::memory_order_acq_rel))
                     autoTotemLogger().warn("Auto Totem first transfer failed safely: {}. No unverified setter will be called.", transferResultName(result));
-                m_refillAfter = now + std::chrono::milliseconds(100);
+                if (result == bedrocktools::core::OffhandTransferResult::RuntimeApiUnavailable ||
+                    result == bedrocktools::core::OffhandTransferResult::InvalidNativeState) {
+                    m_transferBlocked = true;
+                    m_pendingRefill = false;
+                    m_refillAfter = {};
+                    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
+                        "AutoTotem", "transfer_gate", "blocked_until_reenable",
+                        transferResultName(result));
+                } else {
+                    m_refillAfter = now + std::chrono::milliseconds(250);
+                }
             }
             break;
         }
@@ -239,7 +261,10 @@ bool AutoTotemModule::onMenuConfigChanged(std::string_view key, std::string_view
         if (!enabledValue && !disabledValue) return false;
         std::lock_guard lock(m_stateMutex);
         if (key == "m_combatOnly") m_combatOnly = enabledValue;
-        else m_keepTotemEquipped = enabledValue;
+        else {
+            m_keepTotemEquipped = enabledValue;
+            if (enabledValue) m_transferBlocked = false;
+        }
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
             "AutoTotem", key, enabledValue ? "enabled" : "disabled");
         return true;
