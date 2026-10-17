@@ -37,3 +37,10 @@ The `test/autohit-autototem-mainline-20261017` branch contains experimental Auto
 - Use the log probes to identify the first failed gate. A successful local setter/attack result still needs to be verified in-game and on a server before considering any merge.
 
 The test branch exists for diagnosis and validation only. Keep these modules out of `main` until their runtime behavior is confirmed.
+
+## Latest experimental fixes
+
+- AutoHit supports both the launcher mouse-held path and a bounded touchscreen repeat window armed by a normal native attack event. The window defaults to 300 ms, is configurable from 100–1000 ms, and is cleared when chat or a container opens. Synthetic AutoHit dispatches are excluded from re-arming the window.
+- Weapon CPS profiles cap failed attempts as well as successful attacks. A rejected native call must not bypass the selected weapon's rate limit.
+- AutoTotem now resolves the exact `Actor::setOffhandSlot` symbol before trying Player/LocalPlayer variants. If no validated symbol exists, it still fails closed rather than guessing an adjacent vtable slot.
+- Runtime verification is still required: the AutoHit public attack route must match the active Bedrock build, and AutoTotem must report a successful offhand/source postcondition.
