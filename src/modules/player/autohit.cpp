@@ -9,7 +9,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
+#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -103,7 +103,7 @@ Vec3 eyePosition(Player* player) {
 
 AutoHitModule::AutoHitModule()
     : Module("Auto Hit",
-             "Experimental held-attack helper; requires BedrockAim to provide a fresh target.") {
+             "Experimental held-attack helper; uses the player tick path and requires a fresh BedrockAim target plus a validated native attack route.") {
     keybind = 0;
 }
 
