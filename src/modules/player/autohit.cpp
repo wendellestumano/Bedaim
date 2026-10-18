@@ -219,9 +219,20 @@ void AutoHitModule::processPlayerTick(Player* player) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         const auto tickNow = std::chrono::steady_clock::now();
         requireAttackInput = m_requireAttackInput;
+#if defined(__ANDROID__)
+        // The current Android launcher build does not expose touchscreen press
+        // state through onMouseEvent, and this runtime may not hook
+        // GameMode::useItemAsAttack. Requiring either signal can leave AutoHit
+        // permanently idle even with a fresh target. On Android, treat enabling
+        // AutoHit plus the touchscreen-repeat option as the activation signal;
+        // desktop builds retain the explicit held-input behavior.
+        attackHeld = !requireAttackInput || m_attackHeld || m_touchRepeatEnabled ||
+            (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil);
+#else
         attackHeld = !requireAttackInput || m_attackHeld ||
             (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
              tickNow < m_touchRepeatUntil);
+#endif
         attackButton = m_attackButton;
         heldButton = m_heldButton;
         touchRepeatEnabled = m_touchRepeatEnabled;
