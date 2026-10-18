@@ -81,7 +81,7 @@ MaceSwapperModule::MaceSwapperModule()
 }
 
 void MaceSwapperModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) {
             processPlayerTick(event.player);
         });
