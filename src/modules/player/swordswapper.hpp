@@ -40,7 +40,7 @@ private:
     std::chrono::steady_clock::time_point m_lastUseItemAction{};
     std::uint64_t m_playerTickCounter = 0;
     std::uint64_t m_nextSwordAttemptTick = 0;
-    int m_equipDelayTicks = 20;
+    int m_equipDelayTicks = 1;
     int m_swordSlot = -1;
     int m_previousSlot = -1;
     std::string m_lastStatus;
