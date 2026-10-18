@@ -546,17 +546,16 @@ bool isLocalPlayerTickObject(void* actor) {
     std::memcpy(&vtable, actor, sizeof(vtable));
     if (!vtable || !isReadableMemory(vtable, sizeof(void*))) return false;
 
-    const auto normalTick = bedrocktools::memory::resolve(SignatureId::NormalTick);
-    if (normalTick == 0 || !isMinecraftFunction(normalTick)) return false;
+    static const auto normalTick = bedrocktools::memory::resolve(SignatureId::NormalTick);
+    if (normalTick == 0 || !isMinecraftFunction(normalTick) ||
+        !isReadableMemory(vtable, sizeof(void*) * 64)) return false;
 
     // On the 1.26.51.01 binary, the unique NormalTick signature is the
     // LocalPlayer vtable entry. Verify the actor by identity instead of calling
     // ClientInstance's incompatible getter ABI as if it returned Player*.
     for (std::size_t i = 0; i < 64; ++i) {
-        const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*);
-        if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) break;
         std::uintptr_t entry = 0;
-        std::memcpy(&entry, reinterpret_cast<const void*>(slotAddress), sizeof(entry));
+        std::memcpy(&entry, vtable + i, sizeof(entry));
         if (entry == normalTick) return true;
     }
     return false;
@@ -566,7 +565,7 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
     (void)clientInstance;
     static std::atomic_bool loggedUnavailable{false};
     void* player = currentLocalPlayer.load(std::memory_order_acquire);
-    if (!player || !isReadableMemory(player, sizeof(void*)) || !isLocalPlayerTickObject(player)) {
+    if (!player || !isReadableMemory(player, sizeof(void*))) {
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
                 "GameHooks", "verified_local_player", "normal_tick_capture_unavailable");
