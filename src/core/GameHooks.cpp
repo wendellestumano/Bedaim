@@ -544,19 +544,54 @@ bool isLocalPlayerTickObject(void* actor) {
 
     void** vtable = nullptr;
     std::memcpy(&vtable, actor, sizeof(vtable));
-    if (!vtable || !isReadableMemory(vtable, sizeof(void*))) return false;
+    if (!vtable || !isReadableMemory(vtable, sizeof(void*) * 64)) return false;
 
     static const auto normalTick = bedrocktools::memory::resolve(SignatureId::NormalTick);
-    if (normalTick == 0 || !isMinecraftFunction(reinterpret_cast<const void*>(normalTick)) ||
-        !isReadableMemory(vtable, sizeof(void*) * 64)) return false;
+    if (normalTick == 0 || !isMinecraftFunction(reinterpret_cast<const void*>(normalTick)))
+        return false;
 
-    // On the 1.26.51.01 binary, the unique NormalTick signature is the
-    // LocalPlayer vtable entry. Verify the actor by identity instead of calling
-    // ClientInstance's incompatible getter ABI as if it returned Player*.
+    // Prefer exact identity: it is cheap and avoids canonicalizing every vtable
+    // entry on the hot path. Some ARM64 builds place a short B-branch veneer in
+    // the vtable, however, so exact equality alone can reject the actual
+    // LocalPlayer vtable even though the veneer resolves to the scanned method.
     for (std::size_t i = 0; i < 64; ++i) {
         std::uintptr_t entry = 0;
         std::memcpy(&entry, vtable + i, sizeof(entry));
         if (entry == normalTick) return true;
+    }
+
+    const auto canonicalNormalTick = canonicalArm64Entry(normalTick);
+    if (!canonicalNormalTick) return false;
+    for (std::size_t i = 0; i < 64; ++i) {
+        std::uintptr_t entry = 0;
+        std::memcpy(&entry, vtable + i, sizeof(entry));
+        if (!entry || entry == normalTick) continue;
+        if (canonicalArm64Entry(entry) == canonicalNormalTick) {
+            static std::atomic_bool loggedThunkMatch{false};
+            if (!loggedThunkMatch.exchange(true, std::memory_order_acq_rel)) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "verified_local_player", "captured_from_normal_tick_thunk",
+                    std::string("vtable_slot=") + std::to_string(i));
+            }
+            return true;
+        }
+    }
+
+    static std::atomic_bool loggedVtableMismatch{false};
+    if (!loggedVtableMismatch.exchange(true, std::memory_order_acq_rel)) {
+        std::uintptr_t slot25 = 0;
+        std::memcpy(&slot25, vtable + 25, sizeof(slot25));
+        char detail[256]{};
+        std::snprintf(detail, sizeof(detail),
+            "actor=%p vtable=%p normal_tick=%p canonical_tick=%p slot25=%p",
+            actor, reinterpret_cast<const void*>(vtable),
+            reinterpret_cast<void*>(normalTick),
+            reinterpret_cast<void*>(canonicalNormalTick),
+            reinterpret_cast<void*>(slot25));
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "verified_local_player", "normal_tick_vtable_mismatch", detail);
     }
     return false;
 }
