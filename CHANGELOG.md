@@ -1,3 +1,10 @@
+## 2026-10-18 — Combat tick performance safeguards
+- Rate-limit unresolved ClientInstance/local-player recovery and cache the result of LocalPlayer/NormalTick vtable classification, avoiding repeated native getter calls and ARM64 branch canonicalization for every actor tick.
+- Restrict the expensive ClientInstance ownership fallback to actual Player actors and a bounded retry cadence; resolve the verified local player once and reuse the cached pointer.
+- Spread the fallback Player-owned GameMode scan across small slices instead of validating up to 0x1800 bytes of player fields synchronously in one game tick.
+- Move AutoHit, MaceFall, and Sword Swapper to VerifiedLocalPlayerPreTickEvent so they no longer process mobs/remote actors or touch their inventory on every NormalTick.
+- This targets the severe frametime spikes reported with AutoHit/MaceFall. Host/Android build success is not a substitute for an in-game FPS check.
+
 ## 2026-10-18 — AimAssist local-player identity and camera diagnostics
 - Drive target tracking from `VerifiedLocalPlayerPreTickEvent` so arbitrary entity ticks cannot overwrite the player's target state or feed a non-local actor to the camera-control function.
 - Add a rate-limited `camera_apply=turn_delta_submitted` diagnostic with yaw/pitch deltas, distinguishing target tracking from an actual invocation of the camera-control entry point.
