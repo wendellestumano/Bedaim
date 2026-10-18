@@ -216,10 +216,22 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             return;
         }
 
-        void* gameMode = bedrocktools::core::gamehooks::gameMode();
+        // Resolve from the player for this tick instead of reusing the global
+        // last-observed GameMode receiver. Deferred mace attacks happen a tick
+        // after the slot swap, so the cached receiver may belong to an earlier
+        // interaction or be a different polymorphic object.
+        void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
         if (!gameMode) {
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-                "MaceSwapper", "gamemode", "unavailable");
+                "MaceSwapper", "gamemode", "player_owned_unavailable",
+                "fresh GameMode lookup failed for pending player tick");
+            restoreIfStillSwapped();
+            return;
+        }
+        if (!bedrocktools::core::gamehooks::attackAvailable(gameMode)) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "MaceSwapper", "attack_route", "unavailable",
+                "fresh player-owned GameMode did not pass exact public attack validation");
             restoreIfStillSwapped();
             return;
         }
