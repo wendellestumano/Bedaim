@@ -51,7 +51,7 @@ using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::ui
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
 using PublicAttackFn = bool(*)(void*, void*, bool, const void*);
-using ClientInstanceUpdateFn = void*(*)(void*, bool);
+using ClientInstanceUpdateFn = bool(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
 using EglSwapBuffersFn = EGLBoolean(*)(EGLDisplay, EGLSurface);
@@ -266,6 +266,31 @@ bool isMinecraftFunction(const void* address) {
     Dl_info info{};
     return dladdr(address, &info) != 0 && info.dli_fname &&
         std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
+}
+
+// Validate that a candidate really looks like a live ClientInstance before
+// caching it. Signature matches alone only identify code, not the receiver ABI.
+// ClientInstance's known interface extends through getLocalPlayer (vtable slot 32).
+bool isPlausibleClientInstance(void* object, std::size_t* trustedEntryCount = nullptr) {
+    if (trustedEntryCount) *trustedEntryCount = 0;
+    if (!object || !isReadableMemory(object, sizeof(void*))) return false;
+
+    void** vtable = nullptr;
+    std::memcpy(&vtable, object, sizeof(vtable));
+    constexpr std::size_t lastRequiredSlot =
+        bedrocktools::sdk::offsets::VTable::ClientInstance_getLocalPlayer;
+    if (!vtable || !isReadableMemory(vtable, sizeof(void*) * (lastRequiredSlot + 1)))
+        return false;
+
+    std::size_t trustedEntries = 0;
+    for (std::size_t i = 0; i <= lastRequiredSlot; ++i) {
+        std::uintptr_t entry = 0;
+        std::memcpy(&entry, vtable + i, sizeof(entry));
+        if (entry && isMinecraftFunction(reinterpret_cast<const void*>(entry)))
+            ++trustedEntries;
+    }
+    if (trustedEntryCount) *trustedEntryCount = trustedEntries;
+    return trustedEntries >= 2;
 }
 
 // Vtables can contain small ARM64 branch veneers instead of the final method
@@ -1019,17 +1044,46 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     return result;
 }
 
-void* clientUpdateDetour(void* clientInstance, bool value) {
-    void* previousClientInstance = currentClientInstance.exchange(clientInstance, std::memory_order_acq_rel);
-    if (previousClientInstance != clientInstance)
-        currentLocalPlayer.store(nullptr, std::memory_order_release);
-    void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
-    // Capture from ClientInstance's own getLocalPlayer virtual accessor after its
-    // update, before Actor ticks. The previous implementation waited for NormalTick
-    // vtable identity, which is not reliable for this runtime and prevented the
-    // VerifiedLocalPlayerPreTickEvent (and therefore AutoHit) from running.
-    if (clientInstance) (void)resolveLocalPlayerFromClientInstance(clientInstance);
-    ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
+bool clientUpdateDetour(void* clientInstance, bool value) {
+    std::size_t trustedVtableEntries = 0;
+    const bool receiverReadable = clientInstance &&
+        isReadableMemory(clientInstance, sizeof(void*));
+    const bool receiverValid =
+        isPlausibleClientInstance(clientInstance, &trustedVtableEntries);
+
+    if (receiverValid) {
+        void* previousClientInstance =
+            currentClientInstance.exchange(clientInstance, std::memory_order_acq_rel);
+        if (previousClientInstance != clientInstance)
+            currentLocalPlayer.store(nullptr, std::memory_order_release);
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "GameHooks",
+            "client_instance_update_detour", "receiver_valid",
+            std::string("receiver=") +
+                std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+                "; trusted_vtable_entries=" + std::to_string(trustedVtableEntries));
+    } else {
+        // Never poison the cached ClientInstance (or clear a valid LocalPlayer)
+        // when a stale signature happens to intercept a different receiver.
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "client_instance_update_detour", "receiver_rejected",
+            std::string("receiver=") +
+                std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+                "; object_readable=" + (receiverReadable ? "yes" : "no") +
+                "; trusted_vtable_entries=" + std::to_string(trustedVtableEntries));
+    }
+
+    // The current Bedrock/LeviLamina ABI is bool ClientInstance::update(bool).
+    // Preserve that exact return type; returning a pointer here corrupts the
+    // caller's bool result on ARM64 even though the hook itself appears installed.
+    const bool result = clientUpdateOriginal
+        ? clientUpdateOriginal(clientInstance, value) : false;
+
+    if (receiverValid) (void)resolveLocalPlayerFromClientInstance(clientInstance);
+    void* publishedClientInstance = currentClientInstance.load(std::memory_order_acquire);
+    ClientInstanceUpdateEvent event{
+        reinterpret_cast<bedrocktools::sdk::ClientInstance*>(publishedClientInstance)};
     bus().publish(event);
     return result;
 }
@@ -1157,11 +1211,54 @@ bool install() {
         "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
         publicAttackSignature, survivalAttackSignature, internalAttackSignature,
         internalAttackHooked, gameModeAttackOriginal != nullptr);
-    const bool clientUpdateHooked = hookSignature(
-        SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
+    // Prefer the exact exported ClientInstance::update(bool) symbol when this
+    // Bedrock build exports it; keep the signature scan as a version fallback.
+    constexpr const char* clientUpdateSymbols[] = {
+        "_ZN14ClientInstance6updateEb",
+        "_ZN14ClientInstance7$updateEb"
+    };
+    std::uintptr_t clientUpdateAddress = 0;
+    const char* clientUpdateSymbol = nullptr;
+    for (const char* symbol : clientUpdateSymbols) {
+        if (void* address = resolveMinecraftFunction(symbol)) {
+            clientUpdateAddress = reinterpret_cast<std::uintptr_t>(address);
+            clientUpdateSymbol = symbol;
+            break;
+        }
+    }
+    const char* clientUpdateSource = clientUpdateSymbol
+        ? "exported_symbol" : "signature_pattern";
+    if (!clientUpdateAddress)
+        clientUpdateAddress = bedrocktools::memory::resolve(SignatureId::ClientInstanceUpdate);
+
+    bool clientUpdateHooked = false;
+    if (clientUpdateAddress && handleCount < handles.size()) {
+        auto handle = bedrocktools::hooks::install(
+            reinterpret_cast<void*>(clientUpdateAddress),
+            reinterpret_cast<void*>(clientUpdateDetour),
+            reinterpret_cast<void**>(&clientUpdateOriginal));
+        if (handle) {
+            handles[handleCount++] = handle;
+            clientUpdateHooked = true;
+        }
+    }
+    const std::string clientUpdateDetail =
+        std::string("source=") + clientUpdateSource +
+        "; target=" + std::to_string(clientUpdateAddress) +
+        "; symbol=" + (clientUpdateSymbol ? clientUpdateSymbol : "unavailable");
+    bedrocktools::diagnostics::probe(
+        clientUpdateHooked ? bedrocktools::diagnostics::Level::Info
+                           : bedrocktools::diagnostics::Level::Error,
+        "GameHooks", "client_instance_update_hook",
+        clientUpdateHooked
+            ? (clientUpdateSymbol ? "installed_exported_symbol" : "installed_signature_pattern")
+            : "install_failed",
+        clientUpdateDetail);
     gameHooksLogger().info(
-        "ClientInstance capture hook installed={}, signature={:p}.", clientUpdateHooked,
-        reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::ClientInstanceUpdate)));
+        "ClientInstance::update hook installed={}, source={}, target={:p}, symbol={}",
+        clientUpdateHooked, clientUpdateSource,
+        reinterpret_cast<void*>(clientUpdateAddress),
+        clientUpdateSymbol ? clientUpdateSymbol : "unavailable");
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
     hookSignature(SignatureId::ChatScreenOpen, reinterpret_cast<void*>(chatOpenDetour), &chatOpenOriginal);

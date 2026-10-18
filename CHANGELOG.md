@@ -1,3 +1,8 @@
+## 2026-10-18 — AutoHit ClientInstance capture ABI fix
+- Match the verified `bool ClientInstance::update(bool)` ABI and prefer its exact exported C++ symbol before falling back to the version-sensitive signature pattern.
+- Validate the hooked receiver's readable object and vtable before caching it; rejected receivers no longer clear a previously verified local player.
+- Add diagnostics that reveal whether the update detour actually runs, which hook route was installed, and why a receiver is rejected. Device runtime verification is still required.
+
 # Changelog
 
 ## 2026-10-18 — AutoHit local-player resolution diagnostics
