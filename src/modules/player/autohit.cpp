@@ -112,6 +112,7 @@ void AutoHitModule::onInit() {
                 if (opened) {
                     std::lock_guard<std::mutex> lock(m_stateMutex);
                     m_attackHeld = false;
+                    m_keyboardAttackHeld = false;
                     m_heldButton = -1;
                     m_touchRepeatUntil = {};
                 }
@@ -121,6 +122,7 @@ void AutoHitModule::onInit() {
                 if (opened) {
                     std::lock_guard<std::mutex> lock(m_stateMutex);
                     m_attackHeld = false;
+                    m_keyboardAttackHeld = false;
                     m_heldButton = -1;
                     m_touchRepeatUntil = {};
                 }
@@ -182,6 +184,7 @@ void AutoHitModule::onEnable() {
         "reinitialized native inventory accessors on enable");
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackHeld = false;
+    m_keyboardAttackHeld = false;
     m_heldButton = -1;
     m_touchRepeatUntil = {};
     m_nextAttack = {};
@@ -194,16 +197,17 @@ void AutoHitModule::onEnable() {
 void AutoHitModule::onDisable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackHeld = false;
+    m_keyboardAttackHeld = false;
     m_heldButton = -1;
+    m_touchRepeatUntil = {};
     m_nextAttack = {};
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "disabled");
 }
 
 bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeChar) {
-    (void)unicodeChar;
-    std::lock_guard<std::mutex> lock(m_stateMutex);
-    if (m_captureNextInput && isDown &&
+    std::unique_lock<std::mutex> lock(m_stateMutex);
+    if (m_captureNextInput && isDown && keyCode >= 0 &&
         std::chrono::steady_clock::now() - m_captureArmedAt >= std::chrono::milliseconds(200)) {
         m_attackKeyCode = keyCode;
         m_attackKeyUnicode = unicodeChar;
@@ -214,6 +218,9 @@ bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeCha
             std::string("label=") + inputLabel(keyCode, -1, unicodeChar) +
                 "; key_code=" + std::to_string(keyCode) +
                 "; unicode=" + std::to_string(unicodeChar));
+        lock.unlock();
+        // Schema updates can touch launcher UI state; never do that while
+        // holding the module's input mutex.
         onMenuRegistered();
         return false;
     }
@@ -285,20 +292,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         const auto tickNow = std::chrono::steady_clock::now();
         requireAttackInput = m_requireAttackInput;
-#if defined(__ANDROID__)
-        // The current Android launcher build does not expose touchscreen press
-        // state through onMouseEvent, and this runtime may not hook
-        // GameMode::useItemAsAttack. Requiring either signal can leave AutoHit
-        // permanently idle even with a fresh target. On Android, treat enabling
-        // AutoHit plus the touchscreen-repeat option as the activation signal;
-        // desktop builds retain the explicit held-input behavior.
-        attackHeld = !requireAttackInput || m_attackHeld || m_keyboardAttackHeld || m_touchRepeatEnabled ||
-            (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil);
-#else
+        // On Android, the default is automatic activation when enabled, so a
+        // missing launcher touch callback does not block mobile users. If the
+        // user explicitly requires input, however, the repeat toggle alone is
+        // not a press: a real observed input or a currently armed repeat window
+        // is required. This keeps the desktop and mobile setting semantics aligned.
+        const bool activeRepeatWindow = m_touchRepeatUntil.time_since_epoch().count() != 0 &&
+            tickNow < m_touchRepeatUntil;
         attackHeld = !requireAttackInput || m_attackHeld || m_keyboardAttackHeld ||
-            (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
-             tickNow < m_touchRepeatUntil);
-#endif
+            (m_touchRepeatEnabled && activeRepeatWindow);
         attackButton = m_attackButton;
         heldButton = m_heldButton;
         touchRepeatEnabled = m_touchRepeatEnabled;
