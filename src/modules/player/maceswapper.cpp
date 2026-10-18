@@ -293,7 +293,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    void* gameMode = bedrocktools::core::gamehooks::gameMode();
+    void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
     if (!gameMode) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "MaceSwapper", "gamemode", "unavailable");
