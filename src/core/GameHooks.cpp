@@ -557,7 +557,6 @@ bool isLocalPlayerTickObject(void* actor) {
         if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) break;
         std::uintptr_t entry = 0;
         std::memcpy(&entry, reinterpret_cast<const void*>(slotAddress), sizeof(entry));
-        if (entry == 0) break;
         if (entry == normalTick) return true;
     }
     return false;
