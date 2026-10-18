@@ -372,6 +372,53 @@ std::uintptr_t canonicalArm64Entry(std::uintptr_t address) {
     return address;
 }
 
+// Some ARM64 Bedrock vtable entries are guarded thunks rather than a one-instruction
+// branch veneer. The thunk checks a couple of runtime flags, returns false when the
+// native action is unavailable, and only then branches to the real implementation.
+// Recognize that shape only when a short prefix contains a conditional guard, a return,
+// and an unconditional B directly to the already-resolved signature. This keeps dispatch
+// through the original vtable entry (and its guards) instead of calling the body by guess.
+std::uintptr_t guardedArm64ThunkTarget(std::uintptr_t entry) {
+#if defined(__aarch64__)
+    if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry))) return 0;
+
+    bool sawConditionalGuard = false;
+    bool sawReturn = false;
+    constexpr std::size_t maxInstructions = 16; // bounded prefix: 64 bytes
+    for (std::size_t i = 0; i < maxInstructions; ++i) {
+        const auto instructionAddress = entry + i * sizeof(std::uint32_t);
+        if (!isMinecraftFunction(reinterpret_cast<const void*>(instructionAddress)) ||
+            !isReadableMemory(reinterpret_cast<const void*>(instructionAddress), sizeof(std::uint32_t)))
+            return 0;
+
+        std::uint32_t instruction = 0;
+        std::memcpy(&instruction, reinterpret_cast<const void*>(instructionAddress), sizeof(instruction));
+
+        // B.cond, CBZ/CBNZ, and TBZ/TBNZ are the conditional checks seen in the guarded
+        // wrapper. BL is intentionally excluded from the unconditional B test below.
+        if ((instruction & 0xFF000010u) == 0x54000000u ||
+            (instruction & 0x7E000000u) == 0x34000000u ||
+            (instruction & 0x7E000000u) == 0x36000000u) {
+            sawConditionalGuard = true;
+        }
+        if ((instruction & 0xFFFFFC1Fu) == 0xD65F0000u) sawReturn = true;
+
+        // Only accept a tail B after a guarded return path. This avoids treating an
+        // ordinary function call (BL) or an arbitrary branch-containing method as the
+        // target. The caller still compares this destination to a unique resolved symbol.
+        if ((instruction & 0xFC000000u) == 0x14000000u) {
+            if (!sawConditionalGuard || !sawReturn) return 0;
+            std::int64_t imm26 = static_cast<std::int64_t>(instruction & 0x03FFFFFFu);
+            if ((imm26 & (1LL << 25)) != 0) imm26 |= ~((1LL << 26) - 1);
+            const auto target = static_cast<std::uintptr_t>(
+                static_cast<std::int64_t>(instructionAddress) + (imm26 * 4));
+            return target && isMinecraftFunction(reinterpret_cast<const void*>(target)) ? target : 0;
+        }
+    }
+#endif
+    return 0;
+}
+
 void* resolveMinecraftFunction(const char* name) {
     if (!name || !*name) return nullptr;
     void* address = dlsym(RTLD_DEFAULT, name);
@@ -532,28 +579,48 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         if (!address) break;
         AttackKind found = AttackKind::GameMode;
         bool match = false;
+        bool matchViaGuardedThunk = false;
         const auto canonicalAddress = canonicalArm64Entry(address);
-        const bool survivalMatch =
-            (survivalSignature && (address == survivalSignature ||
-                canonicalAddress == canonicalArm64Entry(survivalSignature))) ||
-            (symbols.survival && (address == symbols.survival ||
-                canonicalAddress == canonicalArm64Entry(symbols.survival)));
-        const bool baseMatch =
-            (baseSignature && (address == baseSignature ||
-                canonicalAddress == canonicalArm64Entry(baseSignature))) ||
-            (symbols.base && (address == symbols.base ||
-                canonicalAddress == canonicalArm64Entry(symbols.base)));
-        if (survivalMatch) {
-            found = AttackKind::SurvivalMode; match = true;
-        } else if (baseMatch) {
-            found = AttackKind::GameMode; match = true;
+        const auto guardedTarget = guardedArm64ThunkTarget(address);
+        const auto matchesDirectly = [&](std::uintptr_t candidate) {
+            return candidate && (address == candidate ||
+                canonicalAddress == canonicalArm64Entry(candidate));
+        };
+        const auto matchesGuardedThunk = [&](std::uintptr_t candidate) {
+            return candidate && guardedTarget &&
+                (guardedTarget == candidate ||
+                 canonicalArm64Entry(guardedTarget) == canonicalArm64Entry(candidate));
+        };
+        const bool survivalDirectMatch =
+            matchesDirectly(survivalSignature) || matchesDirectly(symbols.survival);
+        const bool survivalThunkMatch =
+            matchesGuardedThunk(survivalSignature) || matchesGuardedThunk(symbols.survival);
+        const bool baseDirectMatch =
+            matchesDirectly(baseSignature) || matchesDirectly(symbols.base);
+        const bool baseThunkMatch =
+            matchesGuardedThunk(baseSignature) || matchesGuardedThunk(symbols.base);
+        if (survivalDirectMatch || survivalThunkMatch) {
+            found = AttackKind::SurvivalMode;
+            match = true;
+            matchViaGuardedThunk = !survivalDirectMatch && survivalThunkMatch;
+        } else if (baseDirectMatch || baseThunkMatch) {
+            found = AttackKind::GameMode;
+            match = true;
+            matchViaGuardedThunk = !baseDirectMatch && baseThunkMatch;
         }
         if (!match) continue;
         if (kind) *kind = found;
         if (matchedSlot) *matchedSlot = i;
         static std::atomic_bool loggedMatch{false};
-        if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack through exact vtable match at slot {}.", i);
+        if (!loggedMatch.exchange(true, std::memory_order_acq_rel)) {
+            if (matchViaGuardedThunk) {
+                gameHooksLogger().info(
+                    "Validated public attack through guarded ARM64 vtable thunk at slot {} (entry={:p}, branch_target={:p}).",
+                    i, reinterpret_cast<void*>(address), reinterpret_cast<void*>(guardedTarget));
+            } else {
+                gameHooksLogger().info("Validated public attack through exact vtable match at slot {}.", i);
+            }
+        }
         return cacheResult(address, found, i);
     }
     static std::atomic_bool loggedMiss{false};

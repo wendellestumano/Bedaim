@@ -1,3 +1,9 @@
+## 2026-10-18 — Recognize guarded ARM64 GameMode attack thunk
+- Extend the public attack vtable matcher to recognize a bounded ARM64 guard thunk when its short instruction prefix contains a conditional guard, a return path, and an unconditional branch to the already-resolved GameMode::attack signature.
+- Keep synthetic dispatch through the vtable entry itself, so the entry's native guard remains active; no guessed slot or direct-call fallback is introduced.
+- Add one-shot logging that distinguishes the guarded-thunk route and reports the matched slot, entry, and branch target.
+- Static evidence from the 1.26.52.3 runtime identified the candidate entry at vtable slot 2 branching to the unique GameModeAttack signature. In-game confirmation is still required; this does not claim AutoHit is fixed until the new diagnostic and native attack result are observed.
+
 ## 2026-10-18 — Verified post-tick event and actor fan-out reduction
 - Add a Bedaim-owned `VerifiedLocalPlayerTickEvent` emitted after the native tick only when the actor is the verified local player.
 - Move post-tick combat/HUD/visual consumers (AutoHit, MaceFall, Sword Swapper, Nick, Weather Changer, Skin Stealer, and HUD/visual callbacks) off the raw `LocalPlayerTickEvent`, which fires for every actor.
