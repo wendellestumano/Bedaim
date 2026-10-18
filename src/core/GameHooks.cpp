@@ -955,8 +955,27 @@ void* gameModeForPlayer(void* player) {
     }
 
     static std::atomic_bool loggedNoVerifiedGameMode{false};
-    if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().warn("Could not validate a Player-owned GameMode; checked the SDK offset and a bounded pointer-field scan against exact public attack/useItem signatures.");
+    if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel)) {
+        const auto attackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+        const auto useItemSignature = bedrocktools::memory::resolve(SignatureId::GameModeUseItem);
+        const auto survivalAttackSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
+        const auto survivalUseItemSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeUseItem);
+        gameHooksLogger().warn(
+            "Could not validate Player-owned GameMode: player={:p}, observed={:p}, sdk_offset=0x{:X}, sdk_candidate={:p}, sdk_candidate_plausible={}, public_attack_sig={:p}, survival_attack_sig={:p}, public_useItem_sig={:p}, survival_useItem_sig={:p}. Bounded field scan found no exact trusted vtable match.",
+            player, observed, static_cast<std::size_t>(gameModeOffset), candidate,
+            plausibleGameMode(candidate), reinterpret_cast<void*>(attackSignature),
+            reinterpret_cast<void*>(survivalAttackSignature),
+            reinterpret_cast<void*>(useItemSignature),
+            reinterpret_cast<void*>(survivalUseItemSignature));
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks", "gamemode_resolution",
+            "no_validated_player_owned_candidate",
+            std::string("sdk_offset=0x") + [] (std::size_t value) {
+                char buffer[32]{};
+                std::snprintf(buffer, sizeof(buffer), "%zX", value);
+                return std::string(buffer);
+            }(static_cast<std::size_t>(gameModeOffset)));
+    }
     return nullptr;
 }
 
