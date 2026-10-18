@@ -458,18 +458,18 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     }
     static std::atomic_bool loggedMiss{false};
     if (!loggedMiss.exchange(true, std::memory_order_acq_rel)) {
-        std::uintptr_t slot0 = 0, slot16 = 0, slot32 = 0;
+        std::uintptr_t slot0 = 0, slot2 = 0, slot16 = 0, slot32 = 0;
         const auto readSlot = [&](std::size_t index, std::uintptr_t& out) {
             const auto address = reinterpret_cast<std::uintptr_t>(vtable) + index * sizeof(void*);
             if (isReadableMemory(reinterpret_cast<const void*>(address), sizeof(void*)))
                 std::memcpy(&out, reinterpret_cast<const void*>(address), sizeof(out));
         };
-        readSlot(0, slot0); readSlot(16, slot16); readSlot(32, slot32);
+        readSlot(0, slot0); readSlot(2, slot2); readSlot(16, slot16); readSlot(32, slot32);
         gameHooksLogger().warn(
-            "No exact public GameMode::attack vtable match: object={:p}, vtable={:p}, public_sig={:p}, survival_sig={:p}, slot0={:p}, slot16={:p}, slot32={:p}.",
-            gameMode, vtable, reinterpret_cast<void*>(baseSignature),
+            "No exact public GameMode::attack vtable match: object={:p}, vtable={:p}, public_sig={:p}, survival_sig={:p}, slot0={:p}, slot2={:p}, slot16={:p}, slot32={:p}.",
+            gameMode, reinterpret_cast<const void*>(vtable), reinterpret_cast<void*>(baseSignature),
             reinterpret_cast<void*>(survivalSignature), reinterpret_cast<void*>(slot0),
-            reinterpret_cast<void*>(slot16), reinterpret_cast<void*>(slot32));
+            reinterpret_cast<void*>(slot2), reinterpret_cast<void*>(slot16), reinterpret_cast<void*>(slot32));
     }
     return 0;
 }
@@ -547,7 +547,7 @@ bool isLocalPlayerTickObject(void* actor) {
     if (!vtable || !isReadableMemory(vtable, sizeof(void*))) return false;
 
     static const auto normalTick = bedrocktools::memory::resolve(SignatureId::NormalTick);
-    if (normalTick == 0 || !isMinecraftFunction(normalTick) ||
+    if (normalTick == 0 || !isMinecraftFunction(reinterpret_cast<const void*>(normalTick)) ||
         !isReadableMemory(vtable, sizeof(void*) * 64)) return false;
 
     // On the 1.26.51.01 binary, the unique NormalTick signature is the
@@ -938,7 +938,7 @@ void* gameModeForPlayer(void* player) {
     // Some game sessions have not yet produced a GameMode callback when native attack dispatch
     // first becomes active. The Player SDK already documents the owned mGameMode
     // field, but reading a version-sensitive offset is only acceptable after
-    // validating the storage mapping and then matching vtable slot 16 exactly to
+    // validating the storage mapping and then matching the live vtable entry exactly to
     // the resolved GameMode/SurvivalMode attack signature. Any ambiguous pointer
     // is rejected; there is no fallback to an unverified native function.
     currentGameMode.store(nullptr, std::memory_order_release);
