@@ -421,7 +421,7 @@ bool SwordSwapperModule::onMenuConfigChanged(std::string_view key, std::string_v
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
         else if (key == "m_groundDistance") m_groundDistance = std::clamp(number, 0.0f, 3.0f);
-        else if (key == "m_equipDelayTicks") m_equipDelayTicks = std::clamp(static_cast<int>(std::lround(number)), 0, 100);
+        else if (key == "m_equipDelayTicks") m_equipDelayTicks = std::clamp(static_cast<int>(std::lround(number)), 0, 5);
         else return false;
         return true;
     } catch (...) {
