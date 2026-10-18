@@ -886,7 +886,10 @@ void* gameModeForPlayer(void* player) {
     // provenance than a guessed Player field. Keep it as the candidate when its
     // object/vtable still belongs to libminecraftpe; attackAvailable() performs
     // the stricter exact-attack check before any synthetic dispatch.
-    if (observed && plausibleGameMode(observed)) return observed;
+    if (observed && (publicAttackVirtualEntry(observed) != 0 ||
+        publicUseItemVirtualEntry(observed) != 0)) {
+        return observed;
+    }
 
     // Some game sessions have not yet produced a GameMode callback when native attack dispatch
     // first becomes active. The Player SDK already documents the owned mGameMode
