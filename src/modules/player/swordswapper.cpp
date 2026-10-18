@@ -333,7 +333,7 @@ void SwordSwapperModule::loadConfig(const nlohmann::json& j) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_groundDistance = std::clamp(j.value("m_groundDistance", m_groundDistance), 0.0f, 3.0f);
-    m_equipDelayTicks = std::clamp(j.value("m_equipDelayTicks", m_equipDelayTicks), 0, 100);
+    m_equipDelayTicks = std::clamp(j.value("m_equipDelayTicks", m_equipDelayTicks), 0, 5);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
     m_respectManualSlotChanges = j.value("m_respectManualSlotChanges", m_respectManualSlotChanges);
 }
@@ -372,7 +372,7 @@ void SwordSwapperModule::onMenuRegistered() {
 
     slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks");
     slider("m_groundDistance", "Allowed distance above ground", "0", "3", "0.05", " blocks");
-    slider("m_equipDelayTicks", "Sword equip retry delay", "0", "100", "1", " ticks");
+    slider("m_equipDelayTicks", "Sword equip retry delay", "0", "5", "1", " ticks");
 
     ConfigNodeV2 restoreNode;
     restoreNode.id = "m_restoreSlot";
