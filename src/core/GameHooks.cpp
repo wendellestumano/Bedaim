@@ -264,6 +264,38 @@ bool isMinecraftFunction(const void* address) {
         std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
 }
 
+// Vtables can contain small ARM64 branch veneers instead of the final method
+// address. Compare both the entry and a bounded, validated B-branch target so
+// exact signature validation also works when the compiler/linker emits a thunk.
+// This never follows BL/calls or reads beyond a readable instruction.
+std::uintptr_t canonicalArm64Entry(std::uintptr_t address) {
+#if defined(__aarch64__)
+    for (int depth = 0; depth < 4 && address != 0; ++depth) {
+        if (!isMinecraftFunction(reinterpret_cast<const void*>(address)) ||
+            !isReadableMemory(reinterpret_cast<const void*>(address), sizeof(std::uint32_t)))
+            break;
+        const auto* instructionPtr = reinterpret_cast<const std::uint32_t*>(address);
+        std::uint32_t instruction = 0;
+        std::memcpy(&instruction, instructionPtr, sizeof(instruction));
+        // Skip common landing/pointer-authentication instructions emitted before a veneer.
+        if (instruction == 0xD503245Fu || instruction == 0xD503201Fu ||
+            instruction == 0xD503233Fu || instruction == 0xD50323Bfu) {
+            address += sizeof(std::uint32_t);
+            continue;
+        }
+        // AArch64 B imm26 (not BL). Sign-extend the 26-bit word offset.
+        if ((instruction & 0xFC000000u) != 0x14000000u) break;
+        std::int64_t imm26 = static_cast<std::int64_t>(instruction & 0x03FFFFFFu);
+        if ((imm26 & (1LL << 25)) != 0) imm26 |= ~((1LL << 26) - 1);
+        const auto next = static_cast<std::uintptr_t>(
+            static_cast<std::int64_t>(address) + (imm26 << 2));
+        if (!next || !isMinecraftFunction(reinterpret_cast<const void*>(next))) break;
+        address = next;
+    }
+#endif
+    return address;
+}
+
 void* resolveMinecraftFunction(const char* name) {
     if (!name || !*name) return nullptr;
     void* address = dlsym(RTLD_DEFAULT, name);
@@ -399,9 +431,14 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         if (!address) break;
         AttackKind found = AttackKind::GameMode;
         bool match = false;
-        if ((survivalSignature && address == survivalSignature) || (symbols.survival && address == symbols.survival)) {
+        const auto canonicalAddress = canonicalArm64Entry(address);
+        const auto canonicalSurvival = canonicalArm64Entry(survivalSignature ? survivalSignature : symbols.survival);
+        const auto canonicalBase = canonicalArm64Entry(baseSignature ? baseSignature : symbols.base);
+        if ((survivalSignature && (address == survivalSignature || canonicalAddress == canonicalSurvival)) ||
+            (symbols.survival && (address == symbols.survival || canonicalAddress == canonicalSurvival))) {
             found = AttackKind::SurvivalMode; match = true;
-        } else if ((baseSignature && address == baseSignature) || (symbols.base && address == symbols.base)) {
+        } else if ((baseSignature && (address == baseSignature || canonicalAddress == canonicalBase)) ||
+                   (symbols.base && (address == symbols.base || canonicalAddress == canonicalBase))) {
             found = AttackKind::GameMode; match = true;
         }
         if (!match) continue;
@@ -839,7 +876,11 @@ void* gameModeForPlayer(void* player) {
     // exact resolved public attack signature instead of merely a plausible game
     // vtable. This avoids accidentally retaining a neighboring polymorphic object.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (observed && (publicAttackVirtualEntry(observed) != 0 || publicUseItemVirtualEntry(observed) != 0)) return observed;
+    // A receiver captured by one of our live GameMode detours is stronger
+    // provenance than a guessed Player field. Keep it as the candidate when its
+    // object/vtable still belongs to libminecraftpe; attackAvailable() performs
+    // the stricter exact-attack check before any synthetic dispatch.
+    if (observed && plausibleGameMode(observed)) return observed;
 
     // Some game sessions have not yet produced a GameMode callback when native attack dispatch
     // first becomes active. The Player SDK already documents the owned mGameMode
