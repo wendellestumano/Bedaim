@@ -1,4 +1,5 @@
 #include "skinstealer.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
@@ -155,7 +156,7 @@ void SkinStealerModule::onInit() {
     
     // This cache is meant to identify the local player for skin access. The raw
     // LocalPlayerTickEvent includes every actor and was overwriting it with remotes.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [](auto& event) { onTickHook(event.player); });
     
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>([](auto& event) {
