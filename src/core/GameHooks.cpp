@@ -49,7 +49,7 @@ using UseItemAsAttackFn = bool(*)(void*, void*, const void*);
 using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::uint8_t, const void*, const void*, bool);
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
-using PublicAttackFn = void(*)(void*, void*, const void*);
+using PublicAttackFn = bool(*)(void*, void*, bool, const void*);
 using ClientInstanceUpdateFn = void*(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
@@ -79,6 +79,7 @@ ScreenFn chatOpenOriginal = nullptr;
 ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
+std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -412,12 +413,12 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     static const Exported symbols = [] {
         Exported out{};
         constexpr const char* baseNames[] = {
-            "_ZN8GameMode6attackEP5ActorRK4Vec3", "_ZN8GameMode6attackER5ActorRK4Vec3",
-            "_ZN8GameMode7$attackEP5ActorRK4Vec3", "_ZN8GameMode7$attackER5ActorRK4Vec3"
+            "_ZN8GameMode6attackEP5ActorbRK4Vec3", "_ZN8GameMode6attackER5ActorbRK4Vec3",
+            "_ZN8GameMode7$attackEP5ActorbRK4Vec3", "_ZN8GameMode7$attackER5ActorbRK4Vec3"
         };
         constexpr const char* survivalNames[] = {
-            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3", "_ZN12SurvivalMode6attackER5ActorRK4Vec3",
-            "_ZN12SurvivalMode7$attackEP5ActorRK4Vec3", "_ZN12SurvivalMode7$attackER5ActorRK4Vec3"
+            "_ZN12SurvivalMode6attackEP5ActorbRK4Vec3", "_ZN12SurvivalMode6attackER5ActorbRK4Vec3",
+            "_ZN12SurvivalMode7$attackEP5ActorbRK4Vec3", "_ZN12SurvivalMode7$attackER5ActorbRK4Vec3"
         };
         for (const char* name : baseNames) if (void* p = resolveMinecraftFunction(name)) { out.base = reinterpret_cast<std::uintptr_t>(p); break; }
         for (const char* name : survivalNames) if (void* p = resolveMinecraftFunction(name)) { out.survival = reinterpret_cast<std::uintptr_t>(p); break; }
@@ -538,58 +539,60 @@ std::string versionDetour(void* self) {
     return std::string("\xC2\xA7" "b") + std::string(bedrocktools::Name) + " v" + std::string(bedrocktools::Version) + " " + "\xC2\xA7" "fby " + "\xC2\xA7" "e" + std::string(bedrocktools::Author) + " " + "\xC2\xA7" "f- " + "\xC2\xA7" "r" + version;
 }
 
-void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
-    static std::atomic_bool loggedUnavailable{false};
-    if (!clientInstance || !isReadableMemory(clientInstance, sizeof(void*))) {
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-                "GameHooks", "verified_local_player", "client_instance_unavailable");
-        return nullptr;
-    }
+bool isLocalPlayerTickObject(void* actor) {
+    if (!actor || !isReadableMemory(actor, sizeof(void*))) return false;
+
     void** vtable = nullptr;
-    std::memcpy(&vtable, clientInstance, sizeof(vtable));
-    constexpr std::size_t getterIndex = bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
-    if (!vtable) return nullptr;
-    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + getterIndex * sizeof(void*);
-    if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) {
+    std::memcpy(&vtable, actor, sizeof(vtable));
+    if (!vtable || !isReadableMemory(vtable, sizeof(void*))) return false;
+
+    const auto normalTick = bedrocktools::memory::resolve(SignatureId::NormalTick);
+    if (normalTick == 0 || !isMinecraftFunction(normalTick)) return false;
+
+    // On the 1.26.51.01 binary, the unique NormalTick signature is the
+    // LocalPlayer vtable entry. Verify the actor by identity instead of calling
+    // ClientInstance's incompatible getter ABI as if it returned Player*.
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*);
+        if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) break;
+        std::uintptr_t entry = 0;
+        std::memcpy(&entry, reinterpret_cast<const void*>(slotAddress), sizeof(entry));
+        if (entry == 0) break;
+        if (entry == normalTick) return true;
+    }
+    return false;
+}
+
+void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
+    (void)clientInstance;
+    static std::atomic_bool loggedUnavailable{false};
+    void* player = currentLocalPlayer.load(std::memory_order_acquire);
+    if (!player || !isReadableMemory(player, sizeof(void*)) || !isLocalPlayerTickObject(player)) {
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-                "GameHooks", "verified_local_player", "getter_vtable_slot_unreadable");
+                "GameHooks", "verified_local_player", "normal_tick_capture_unavailable");
         return nullptr;
     }
-    void* getterAddress = nullptr;
-    std::memcpy(&getterAddress, reinterpret_cast<const void*>(slotAddress), sizeof(getterAddress));
-    if (!getterAddress || !isMinecraftFunction(getterAddress)) {
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-                "GameHooks", "verified_local_player", "getter_slot_not_minecraft_code");
-        return nullptr;
-    }
-    using GetLocalPlayerFn = void* (*)(void*);
-    auto getter = reinterpret_cast<GetLocalPlayerFn>(getterAddress);
-    void* player = getter(clientInstance);
-    if (!player || !isReadableMemory(player, sizeof(void*))) {
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-                "GameHooks", "verified_local_player", "getter_returned_unreadable_player");
-        return nullptr;
-    }
-    void** playerVtable = nullptr;
-    std::memcpy(&playerVtable, player, sizeof(playerVtable));
-    if (!playerVtable || !isReadableMemory(playerVtable, sizeof(void*))) return nullptr;
-    void* firstPlayerMethod = nullptr;
-    std::memcpy(&firstPlayerMethod, playerVtable, sizeof(firstPlayerMethod));
-    if (!firstPlayerMethod || !isMinecraftFunction(firstPlayerMethod)) return nullptr;
     return player;
 }
 
 void tickDetour(void* actor) {
-    // Keep established raw actor events for BedrockAim/HitboxExpander.
-    // Only the verified event is consumed by inventory/combat modules.
+    // Raw actor events remain available to modules that need them. Combat and
+    // inventory modules receive only the actor verified against LocalPlayer::NormalTick.
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-    void* localPlayer = resolveLocalPlayerFromClientInstance(
+    const bool actorIsLocalPlayer = isLocalPlayerTickObject(actor);
+    if (actorIsLocalPlayer) {
+        currentLocalPlayer.store(actor, std::memory_order_release);
+        static std::atomic_bool loggedCapture{false};
+        if (!loggedCapture.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "GameHooks", "verified_local_player", "captured_from_normal_tick_vtable");
+    }
+
+    void* localPlayer = actorIsLocalPlayer ? actor : resolveLocalPlayerFromClientInstance(
         currentClientInstance.load(std::memory_order_acquire));
     const bool isVerifiedLocal = actor && localPlayer && actor == localPlayer;
+
     LocalPlayerPreTickEvent preEvent{actorPlayer};
     bus().publish(preEvent);
     if (isVerifiedLocal) {
@@ -731,7 +734,9 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 }
 
 void* clientUpdateDetour(void* clientInstance, bool value) {
-    if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
+    void* previousClientInstance = currentClientInstance.exchange(clientInstance, std::memory_order_acq_rel);
+    if (previousClientInstance != clientInstance)
+        currentLocalPlayer.store(nullptr, std::memory_order_release);
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
@@ -809,8 +814,28 @@ bool install() {
     gameHooksLogger().info(
         "NormalTick hook installed={}, signature={:p}.", normalTickHooked,
         reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::NormalTick)));
-    hookSignature(SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
-    hookSignature(SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour), &survivalModeStartDestroyBlockOriginal);
+    const auto gameModeAttackEntry = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+    const auto gameModeStartDestroyBlockEntry = bedrocktools::memory::resolve(SignatureId::GameModeStartDestroyBlock);
+    const bool gameModeStartDestroyBlockCollision =
+        gameModeStartDestroyBlockEntry != 0 && gameModeStartDestroyBlockEntry == gameModeAttackEntry;
+    const bool gameModeStartDestroyBlockHooked = !gameModeStartDestroyBlockCollision && hookSignature(
+        SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
+    if (gameModeStartDestroyBlockCollision)
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
+            "GameHooks", "start_destroy_block_hook", "skipped_attack_signature_collision");
+
+    const auto survivalModeAttackEntry = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
+    const auto survivalModeStartDestroyBlockEntry = bedrocktools::memory::resolve(SignatureId::SurvivalModeStartDestroyBlock);
+    const bool survivalModeStartDestroyBlockCollision =
+        survivalModeStartDestroyBlockEntry != 0 && survivalModeStartDestroyBlockEntry == survivalModeAttackEntry;
+    const bool survivalModeStartDestroyBlockHooked = !survivalModeStartDestroyBlockCollision && hookSignature(
+        SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour), &survivalModeStartDestroyBlockOriginal);
+    if (survivalModeStartDestroyBlockCollision)
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
+            "GameHooks", "survival_start_destroy_block_hook", "skipped_attack_signature_collision");
+    gameHooksLogger().info(
+        "Block-start hooks: GameMode={}, SurvivalMode={}",
+        gameModeStartDestroyBlockHooked, survivalModeStartDestroyBlockHooked);
     hookSignature(SignatureId::GameModeStopDestroyBlock, reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal);
     hookSignature(SignatureId::GameModeStartBuildBlock, reinterpret_cast<void*>(gameModeStartBuildBlockDetour), &gameModeStartBuildBlockOriginal);
     hookSignature(SignatureId::SurvivalModeStartBuildBlock, reinterpret_cast<void*>(survivalModeStartBuildBlockDetour), &survivalModeStartBuildBlockOriginal);
@@ -1052,9 +1077,9 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     if (inSyntheticAttack) return false;
     if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
 
-    // GameMode::attack is the public three-argument wrapper; it prepares the
-    // native context before invoking the internal body. Only dispatch through it
-    // when the vtable entry matches a resolved public signature for this build.
+    // GameMode::attack has a four-argument virtual ABI on this runtime:
+    // (GameMode*, Actor*, predictive-sound flag, hit position). Only dispatch
+    // through a vtable entry that matches a resolved attack signature.
     std::size_t matchedAttackSlot = 0;
     const auto publicEntry = publicAttackVirtualEntry(gameMode, nullptr, &matchedAttackSlot);
     if (publicEntry == 0) {
@@ -1067,16 +1092,21 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
             } else {
                 void** vtable = nullptr;
                 std::memcpy(&vtable, gameMode, sizeof(vtable));
-                std::uintptr_t vtableEntry = 0;
-                const auto diagnosticSlot = reinterpret_cast<std::uintptr_t>(vtable) + 16 * sizeof(void*);
-                if (vtable && isReadableMemory(reinterpret_cast<const void*>(diagnosticSlot), sizeof(void*)))
-                    std::memcpy(&vtableEntry, reinterpret_cast<const void*>(diagnosticSlot), sizeof(vtableEntry));
+                std::uintptr_t attackVtableEntry = 0;
+                std::uintptr_t legacyVtableEntry = 0;
+                const auto attackSlot = reinterpret_cast<std::uintptr_t>(vtable) + 2 * sizeof(void*);
+                const auto legacySlot = reinterpret_cast<std::uintptr_t>(vtable) + 16 * sizeof(void*);
+                if (vtable && isReadableMemory(reinterpret_cast<const void*>(attackSlot), sizeof(void*)))
+                    std::memcpy(&attackVtableEntry, reinterpret_cast<const void*>(attackSlot), sizeof(attackVtableEntry));
+                if (vtable && isReadableMemory(reinterpret_cast<const void*>(legacySlot), sizeof(void*)))
+                    std::memcpy(&legacyVtableEntry, reinterpret_cast<const void*>(legacySlot), sizeof(legacyVtableEntry));
                 const auto publicSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
                 const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
                 char detail[320]{};
                 std::snprintf(detail, sizeof(detail),
-                    "attack_validation=vtable_mismatch: slot16=%p public_signature=%p survival_signature=%p",
-                    reinterpret_cast<void*>(vtableEntry),
+                    "attack_validation=vtable_mismatch: slot2=%p slot16=%p public_signature=%p survival_signature=%p",
+                    reinterpret_cast<void*>(attackVtableEntry),
+                    reinterpret_cast<void*>(legacyVtableEntry),
                     reinterpret_cast<void*>(publicSignature),
                     reinterpret_cast<void*>(survivalSignature));
                 bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
@@ -1115,27 +1145,27 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
     static std::atomic_bool loggedPublicRoute{false};
     if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Combat dispatch selected the validated public GameMode::attack wrapper.");
+        gameHooksLogger().info("Combat dispatch selected the validated public GameMode::attack vtable entry.");
 
-    // The public wrapper calls the hooked internal body, where the standard
-    // AttackEvent/GameModeAction/AttackResultEvent pipeline already runs.
-    // Do not publish a second set here; observe and return the real internal result.
-    publicAttack(gameMode, target, hitPosition);
+    // Dispatch with the native four-argument ABI. When the internal observer is
+    // installed, return its actual result; otherwise preserve the public method's
+    // return value instead of claiming an unverified successful attack.
+    const bool publicResult = publicAttack(gameMode, target, playPredictiveSound, hitPosition);
     if (!canObserveNativeResult) {
         // The call went through a validated public engine entry, but this build
         // lacks the internal observer required to read the native bool result.
-        // Return "dispatched" so callers can rate-limit/retry; this is not proof
-        // that the target took damage.
+        // Fall back to the public method's native return value. It indicates
+        // whether the engine accepted the attack, not guaranteed target damage.
         static std::atomic_bool loggedUnobservedDispatch{false};
         if (!loggedUnobservedDispatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Native attack used the validated public GameMode::attack entry, but the internal result hook is unavailable; damage confirmation is not observable.");
-        return true;
+            gameHooksLogger().warn("Native attack used the validated public GameMode::attack entry, but the internal result hook is unavailable; using the public return value.");
+        return publicResult;
     }
     if (!syntheticAttackResultObserved) {
         static std::atomic_bool loggedMissingInternalDispatch{false};
         if (!loggedMissingInternalDispatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().error("Validated public attack returned without reaching the installed internal observer; dispatch result is unknown.");
-        return true;
+            gameHooksLogger().error("Validated public attack returned without reaching the installed internal observer; using the public return value.");
+        return publicResult;
     }
     return syntheticAttackNativeResult;
 }
