@@ -506,17 +506,15 @@ void AutoHitModule::onMenuRegistered() {
         schema.node(std::move(node));
     };
 
-    slider("m_attackButton", "Mouse button index", "combat", "0", "16", "1", "");
     ConfigNodeV2 captureNode;
     captureNode.id = "m_captureNextInput";
     captureNode.key = "m_captureNextInput";
     captureNode.title = "Capture next keyboard/mouse input";
-    captureNode.description = "Enable this, then press a key (including Shift/0) or mouse button once.";
+    captureNode.description = std::string("Press this button, then press a key (Shift/0 included) or mouse button. Current key code: ") +
+        std::to_string(m_attackKeyCode) + "; mouse button: " + std::to_string(m_attackButton) + ".";
     captureNode.category = "combat";
-    captureNode.type = ConfigControlTypeV2::Toggle;
-    captureNode.defaultValue = "false";
-    captureNode.currentValue = "false";
-    captureNode.hasCurrentValue = true;
+    captureNode.type = ConfigControlTypeV2::Button;
+    captureNode.actionValue = "capture";
     schema.node(std::move(captureNode));
     ConfigNodeV2 activationNode;
     activationNode.id = "m_requireAttackInput";
@@ -550,13 +548,12 @@ void AutoHitModule::onMenuRegistered() {
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
     if (key == "m_captureNextInput") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
+        if (value != "capture" && value != "true" && value != "1") return false;
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_captureNextInput = on;
+        m_captureNextInput = true;
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "input_capture", on ? "armed" : "disarmed");
+            "AutoHit", "input_capture", "armed",
+            "waiting for one keyboard key or mouse button");
         return true;
     }
     if (key == "m_requireAttackInput") {
