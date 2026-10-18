@@ -146,7 +146,7 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
         lifetime["last_merge_appended"] = appended;
 
         if (!bedrocktools::config::writePayloadAtomically(
-                lifetimePath.string(), lifetime.dump(2) + "\\n")) {
+                lifetimePath.string(), lifetime.dump(2) + "\n")) {
             if (error) *error = "could not atomically replace lifetime log";
             return false;
         }
@@ -425,11 +425,13 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
     const std::filesystem::path outputDirectory("/sdcard/Download/Bedaim");
     const auto currentPath = outputDirectory / "bedaim_diagnostics_auto.json";
     const auto lifetimePath = outputDirectory / "bedaim_diagnostics_total.json";
+    const auto gameplayPath = outputDirectory / "bedaim_diagnostics_gameplay.json";
+    const auto gameplayLifetimePath = outputDirectory / "bedaim_diagnostics_gameplay_total.json";
     std::string archiveError;
     bool rotationOk = true;
     {
-        // Serialize archive/delete against the rolling writer. Never delete the
-        // previous current-session file unless its entries were safely merged.
+        // Serialize archive/delete against the rolling writer. Never delete either
+        // current-session file unless its entries were safely merged to lifetime.
         std::lock_guard<std::mutex> fileLock(m_fileWriteMutex);
         std::error_code existsError;
         const bool hasCurrent = std::filesystem::exists(currentPath, existsError);
@@ -447,7 +449,25 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
                 }
             }
         }
-        // Remove the obsolete rolling text file; auto-save is always JSON.
+        if (rotationOk) {
+            std::error_code gameplayExistsError;
+            const bool hasGameplay = std::filesystem::exists(gameplayPath, gameplayExistsError);
+            if (gameplayExistsError) {
+                rotationOk = false;
+                archiveError = "cannot inspect gameplay-only JSON: " + gameplayExistsError.message();
+            } else if (hasGameplay) {
+                rotationOk = mergeCurrentSessionIntoLifetime(
+                    gameplayPath, gameplayLifetimePath, &archiveError);
+                if (rotationOk) {
+                    std::error_code removeGameplayError;
+                    std::filesystem::remove(gameplayPath, removeGameplayError);
+                    if (removeGameplayError) {
+                        rotationOk = false;
+                        archiveError = "could not rotate gameplay-only JSON: " + removeGameplayError.message();
+                    }
+                }
+            }
+        }
         std::error_code staleError;
         std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
     }
@@ -612,10 +632,17 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
     const bool lifetimeOk = ok && automatic && mergeCurrentSessionIntoLifetime(
         outputDirectory / "bedaim_diagnostics_auto.json",
         outputDirectory / "bedaim_diagnostics_total.json", &lifetimeError);
+    std::string gameplayLifetimeError;
+    const bool gameplayLifetimeOk = gameplayOk && automatic && mergeCurrentSessionIntoLifetime(
+        gameplayPath, outputDirectory / "bedaim_diagnostics_gameplay_total.json",
+        &gameplayLifetimeError);
     if (ok && automatic) {
         if (!gameplayOk) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
                 "Diagnostics", "GAMEPLAY_ONLY_LOGS export failed: " + gameplayError);
+        } else if (!gameplayLifetimeOk) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+                "Diagnostics", "GAMEPLAY_ONLY_LOGS lifetime update failed: " + gameplayLifetimeError);
         }
         std::error_code staleError;
         std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
@@ -639,9 +666,9 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         const std::string completedAt = localClockLabel();
         if (ok) {
             m_lastExportStatus = automatic
-                ? (lifetimeOk && gameplayOk
-                    ? "ALL + GAMEPLAY_ONLY_LOGS + lifetime saved (" + completedAt + ")"
-                    : "ALL log saved; secondary log update failed (" + completedAt + ")")
+                ? (lifetimeOk && gameplayOk && gameplayLifetimeOk
+                    ? "ALL + GAMEPLAY_ONLY_LOGS + both histories saved (" + completedAt + ")"
+                    : "Some diagnostic outputs failed (" + completedAt + ")")
                 : "Manual export completed (" + completedAt + ")";
             m_lastExportPath = outputPath;
             m_lastSuccessfulExportTime = completedAt;
