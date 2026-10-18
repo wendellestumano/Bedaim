@@ -35,6 +35,7 @@ private:
     std::chrono::steady_clock::time_point m_captureArmedAt{};
     bool m_keyboardAttackHeld = false;
     int m_attackKeyCode = -1;
+    unsigned int m_attackKeyUnicode = 0;
     std::atomic_bool m_containerOpen{false};
     std::atomic_bool m_chatOpen{false};
     int m_heldButton = -1;
