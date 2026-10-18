@@ -1554,7 +1554,10 @@ void* gameModeForPlayer(void* player) {
         }
         if (nextPlayerFieldOffset + sizeof(void*) > scanEnd) {
             fullScanCompleted = true;
-            nextFullScan = scanNow + std::chrono::milliseconds(750);
+            // A full failed scan is expensive and the player's object layout
+            // normally remains stable. Back off several seconds before retrying
+            // instead of continuously rescanning the whole object on combat ticks.
+            nextFullScan = scanNow + std::chrono::seconds(5);
         }
     }
     if (!fullScanCompleted) return nullptr;
