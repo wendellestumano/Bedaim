@@ -1,7 +1,9 @@
 #include "nick.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <map>
@@ -156,7 +158,10 @@ void NickModule::onInit() {
     }
     
     if (!m_tickHooked) {
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { nickTick(event.player); });
+        // Nick edits Player name/name-tag fields. The raw actor tick is emitted for
+        // every entity and must not be used to overwrite remote players' names.
+        bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
+            [](auto& event) { nickTick(event.player); });
         m_tickHooked = true;
         uintptr_t setNameTagAddr = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorSetNameTag);
         if (setNameTagAddr != 0) {

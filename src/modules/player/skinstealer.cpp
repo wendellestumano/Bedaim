@@ -1,9 +1,11 @@
 #include "skinstealer.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include "../../config/ConfigManager.hpp"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -152,7 +154,10 @@ void SkinStealerModule::onInit() {
         isPlayerFn = reinterpret_cast<ActorIsPlayerFn>(isPlayerAddr);
     }
     
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { onTickHook(event.player); });
+    // This cache is meant to identify the local player for skin access. The raw
+    // LocalPlayerTickEvent includes every actor and was overwriting it with remotes.
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
+        [](auto& event) { onTickHook(event.player); });
     
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>([](auto& event) {
         if (!onAttackHook(event.gameMode, event.target, event.argument2, event.argument3)) event.cancel();

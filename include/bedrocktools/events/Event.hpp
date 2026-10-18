@@ -15,7 +15,8 @@ enum class EventType : std::uint32_t {
     GameModeAction,
     ContainerSlotSelected,
     AttackResult,
-    VerifiedLocalPlayerPreTick
+    VerifiedLocalPlayerPreTick,
+    VerifiedLocalPlayerTick
 };
 
 enum class EventPriority : std::int32_t {

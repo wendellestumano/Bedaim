@@ -1,4 +1,5 @@
 #include "breakindicator.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/GameModeActionEvent.hpp>
@@ -44,7 +45,7 @@ void BreakIndicatorModule::onInit() {
         }
     });
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto&) {
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([this](auto&) {
         if (!m_breaking || !m_gameMode) return;
         float progress = *reinterpret_cast<float*>(
             reinterpret_cast<std::uintptr_t>(m_gameMode) +

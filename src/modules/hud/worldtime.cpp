@@ -1,4 +1,5 @@
 #include "worldtime.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "modules/player/timechanger.hpp"
 #include <bedrocktools/events/EventBus.hpp>
@@ -43,7 +44,7 @@ WorldTimeModule::~WorldTimeModule() {
 void WorldTimeModule::onInit() {
     if (m_subscription != 0) return;
     m_timeChanger = static_cast<TimeChangerModule*>(ModuleRegistry::get().find("bedrocktools.Time Changer"));
-    m_subscription = bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    m_subscription = bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) {
             auto* player = event.player;
             auto* level = player ? player->level() : nullptr;

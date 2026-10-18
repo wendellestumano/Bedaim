@@ -1,4 +1,5 @@
 #include "debugmenu.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/Version.hpp>
 #include "modules/ModuleRegistry.hpp"
 #include "modules/player/timechanger.hpp"
@@ -209,7 +210,7 @@ void DebugMenuModule::updateData(float yaw, float pitch, const bedrocktools::sdk
 
 void DebugMenuModule::onInit() {
     m_timeChanger = static_cast<TimeChangerModule*>(ModuleRegistry::get().find("bedrocktools.Time Changer"));
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_debugTickCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { s_debugTickCallback(event.player); });
 
     if (!s_getRuntimeActorList) {
         uintptr_t addrActorList = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList);

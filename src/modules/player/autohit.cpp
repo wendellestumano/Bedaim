@@ -1,4 +1,5 @@
 #include "autohit.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 
 #include "aimassist.hpp"
 #include "AutoHitGuards.hpp"
@@ -9,7 +10,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -102,29 +103,16 @@ AutoHitModule::AutoHitModule()
 
 void AutoHitModule::onInit() {
     bedrocktools::core::InventoryAccess::get().initialize();
-    // The verified pre-tick event is not emitted on this runtime when the
-    // NormalTick/ClientInstance identity probe fails. AutoHit must use the same
-    // actor tick stream as AimAssist, but only process an exact local-player match;
-    // never dispatch against a mob or a remote player's tick.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    // Avoid resolving ClientInstance::getLocalPlayer once per actor tick.
+    // The verified event is emitted only after identity validation, so unresolved
+    // runtimes fail closed without running native inventory/attack checks for mobs.
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) {
             if (!enabled || !event.player) return;
-
-            auto* knownLocalPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(
-                bedrocktools::core::gamehooks::localPlayer());
-            if (!knownLocalPlayer) {
-                bedrocktools::diagnostics::probe(
-                    bedrocktools::diagnostics::Level::Warning, "AutoHit",
-                    "tick_source", "local_player_unresolved",
-                    "LocalPlayerTickEvent arrived, but GameHooks could not verify the local-player pointer; refusing arbitrary actors.");
-                return;
-            }
-            if (event.player != knownLocalPlayer) return;
-
             bedrocktools::diagnostics::probe(
                 bedrocktools::diagnostics::Level::Debug, "AutoHit",
                 "tick_source", "local_player_tick_confirmed");
-            processPlayerTick(knownLocalPlayer);
+            processPlayerTick(event.player);
         });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
         [this](auto& event) {

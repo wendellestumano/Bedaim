@@ -1,4 +1,5 @@
 #include "maceswapper.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "MaceFallPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "swapperstate.hpp"
@@ -14,7 +15,7 @@
 #include "../ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 
 #include <algorithm>
@@ -81,7 +82,10 @@ MaceSwapperModule::MaceSwapperModule()
 }
 
 void MaceSwapperModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    // This module must run only for the verified local player. LocalPlayerTickEvent
+    // is emitted for every actor's NormalTick and was making MaceFall process mobs and
+    // remote players on the game thread, even while disabled.
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) {
             processPlayerTick(event.player);
         });

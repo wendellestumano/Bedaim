@@ -1,4 +1,45 @@
+## 2026-10-18 — Recognize guarded ARM64 GameMode attack thunk
+- Extend the public attack vtable matcher to recognize a bounded ARM64 guard thunk when its short instruction prefix contains a conditional guard, a return path, and an unconditional branch to the already-resolved GameMode::attack signature.
+- Keep synthetic dispatch through the vtable entry itself, so the entry's native guard remains active; no guessed slot or direct-call fallback is introduced.
+- Add one-shot logging that distinguishes the guarded-thunk route and reports the matched slot, entry, and branch target.
+- Static evidence from the 1.26.52.3 runtime identified the candidate entry at vtable slot 2 branching to the unique GameModeAttack signature. In-game confirmation is still required; this does not claim AutoHit is fixed until the new diagnostic and native attack result are observed.
+
+## 2026-10-18 — Verified post-tick event and actor fan-out reduction
+- Add a Bedaim-owned `VerifiedLocalPlayerTickEvent` emitted after the native tick only when the actor is the verified local player.
+- Move post-tick combat/HUD/visual consumers (AutoHit, MaceFall, Sword Swapper, Nick, Weather Changer, Skin Stealer, and HUD/visual callbacks) off the raw `LocalPlayerTickEvent`, which fires for every actor.
+- Keep pre-tick-only input/aim logic on `VerifiedLocalPlayerPreTickEvent`; post-tick state updates use `VerifiedLocalPlayerTickEvent` so module timing is preserved while remote actor ticks are ignored.
+- This reduces repeated per-mob callbacks and prevents local-player-only modules from mutating or sampling remote actors.
+- The new event and migrations are part of the current candidate build; runtime FPS and module behavior still need confirmation on device.
+
+## 2026-10-18 — Combat tick performance safeguards
+- Rate-limit unresolved ClientInstance/local-player recovery and cache the result of LocalPlayer/NormalTick vtable classification, avoiding repeated native getter calls and ARM64 branch canonicalization for every actor tick.
+- Restrict the expensive ClientInstance ownership fallback to actual Player actors and a bounded retry cadence; resolve the verified local player once and reuse the cached pointer.
+- Spread the fallback Player-owned GameMode scan across small slices instead of validating up to 0x1800 bytes of player fields synchronously in one game tick.
+- Cache validated public GameMode attack/useItem vtable lookups, including negative results, to avoid rechecking the same 64-entry vtable every combat tick.
+- Move AutoHit, MaceFall, Sword Swapper, Hitbox Expander's pre-tick path, and AutoSprint to verified-local-player events or exact local-player identity checks; they no longer query actors, mutate input, or access hotbar state for every mob/remote actor tick.
+- This targets the severe frametime spikes reported with AutoHit/MaceFall. Host/Android build success is not a substitute for an in-game FPS check.
+
+## 2026-10-18 — AimAssist local-player identity and camera diagnostics
+- Drive target tracking from `VerifiedLocalPlayerPreTickEvent` so arbitrary entity ticks cannot overwrite the player's target state or feed a non-local actor to the camera-control function.
+- Add a rate-limited `camera_apply=turn_delta_submitted` diagnostic with yaw/pitch deltas, distinguishing target tracking from an actual invocation of the camera-control entry point.
+- The change depends on the ClientInstance/local-player identity fix and still requires in-game verification; it does not claim AutoHit success by itself.
+
+## 2026-10-18 — ARM64 tagged-pointer validation
+- Normalize the top-byte tag only for `/proc/self/maps` range checks in `isReadableMemory`, preserving the original tagged pointer for actual memory access. This addresses Android ARM64 pointers such as `0xB4...` being incorrectly rejected as unreadable.
+- Keep validation strict: the object and its vtable still need to reside in readable mappings, and ClientInstance vtable entries must still match the Minecraft image.
+- Runtime confirmation is required; this is a focused follow-up to Build #734's `receiver_rejected` diagnostic.
+
+## 2026-10-18 — AutoHit ClientInstance capture ABI fix
+- Match the verified `bool ClientInstance::update(bool)` ABI and prefer its exact exported C++ symbol before falling back to the version-sensitive signature pattern.
+- Validate the hooked receiver's readable object and vtable before caching it; rejected receivers no longer clear a previously verified local player.
+- Add diagnostics that reveal whether the update detour actually runs, which hook route was installed, and why a receiver is rejected. Device runtime verification is still required.
+
 # Changelog
+
+## 2026-10-18 — AutoHit local-player resolution diagnostics
+- Prefer an exact exported `ClientInstance::getLocalPlayer` symbol when available, then fall back to the validated vtable getter; the older ambiguous byte-pattern signature is not called.
+- Add state-change diagnostics for null getter results, unavailable getter routes, invalid player candidates, and successful pointer capture.
+- This is an isolated AutoHit recovery branch. It does not alter AimAssist's targeting algorithm; runtime testing is still required.
 
 ## 2026-10-17 — ElytraMacing module
 - Added an isolated ElytraMacing module with its own configuration for elytra glide gating, minimum fall distance, mace equip/restore, target range, hitpoint height, crosshair tolerance, camera assist speed and attack interval.

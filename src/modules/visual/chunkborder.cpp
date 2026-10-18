@@ -1,4 +1,5 @@
 #include "chunkborder.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
@@ -316,7 +317,7 @@ void ChunkBorderModule::onInit() {
         }
     }
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_chunkBorderTickCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { s_chunkBorderTickCallback(event.player); });
 }
 
 void ChunkBorderModule::applyPatch() {

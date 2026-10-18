@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "AimAssistMath.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
@@ -8,6 +9,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -419,11 +421,14 @@ void AimAssistModule::onInit() {
         ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
         ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    // Camera control must only ever receive a verified LocalPlayer. LocalPlayerTickEvent
+    // also carries ticks for arbitrary actors; processing those actors here can update
+    // the target snapshot from another entity and pass a non-local object to the camera API.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [](auto& event) {
-            if (g_aimAssist && g_aimAssist->enabled) {
-                g_aimAssist->processPlayerTick(event.player);
-            }
+            auto* module = g_aimAssist;
+            if (!module || !module->enabled || !event.player) return;
+            module->processPlayerTick(event.player);
         });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>(
         [](auto& event) {
@@ -1420,6 +1425,18 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     Vec2 turnDelta{-pitchDelta, yawDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
+    // Emit a low-rate proof that the camera-control entry point was actually invoked,
+    // including the signed delta. Target-selection logs alone do not prove camera motion.
+    static thread_local std::chrono::steady_clock::time_point nextCameraApplyProbe{};
+    const auto cameraApplyNow = std::chrono::steady_clock::now();
+    if (cameraApplyNow >= nextCameraApplyProbe) {
+        nextCameraApplyProbe = cameraApplyNow + std::chrono::seconds(1);
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "BedrockAim",
+            "camera_apply", "turn_delta_submitted",
+            std::string("yaw_delta=") + std::to_string(turnDelta.y) +
+                "; pitch_delta=" + std::to_string(turnDelta.x));
+    }
     m_lastAssistYawDelta = turnDelta.y;
     m_lastAssistPitchDelta = turnDelta.x;
 }
@@ -1627,13 +1644,20 @@ void HitboxExpanderModule::onInit() {
         ", actor_classification=" + (actorTypeReady ? "ok" : "missing"));
 
     std::call_once(g_hitboxExpanderEventOnce, [] {
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
+        // Restore/apply only around the verified local player's tick. These raw
+        // events are emitted for every actor; querying nearby actors and touching
+        // hitbox components for every mob tick causes severe CPU spikes.
+        bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
             [](auto& event) {
                 if (g_hitboxExpander) g_hitboxExpander->processPreTick(event.player);
             });
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+        bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
             [](auto& event) {
-                if (g_hitboxExpander) g_hitboxExpander->processPostTick(event.player);
+                if (!g_hitboxExpander || !event.player) return;
+                auto* local = reinterpret_cast<bedrocktools::sdk::Player*>(
+                    bedrocktools::core::gamehooks::localPlayer());
+                if (!local || event.player != local) return;
+                g_hitboxExpander->processPostTick(event.player);
             });
     });
 }
