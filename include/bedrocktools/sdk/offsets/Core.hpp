@@ -20,7 +20,8 @@ inline constexpr std::size_t MinecraftUIRenderContextGetTexture = 32;
 inline constexpr std::size_t HudCameraRendererRender = 17;
 inline constexpr std::size_t HudMobEffectsRendererRender = 17;
 inline constexpr std::size_t ClientInstanceGetMinecraftGame = 83;
-inline constexpr std::size_t ClientInstanceGetLocalPlayer = 32;
+// Disabled on 1.26.51.01: this slot is not a raw Player* getter ABI.
+inline constexpr std::size_t ClientInstanceGetLocalPlayer = 0;
 inline constexpr std::size_t PlayerGetCarriedItem = 78;
 // Player::openInventory follows getCarriedItem, setCarriedItem, damageCarriedItemOnAttack,
 // openPortfolio, openBook, openTrading, openChalkboard, and openNpcInteractScreen.
