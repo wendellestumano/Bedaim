@@ -14,6 +14,7 @@
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <pl/ModMenu.hpp>
+#include <pl/Input.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -96,6 +97,9 @@ void AutoHitModule::onInit() {
                 }
             }
         });
+    pl::input::registerKeyCallback([this](const pl::input::KeyEvent& input) {
+        return onKeyEvent(input.keyCode, input.isKeyDown, input.unicodeChar);
+    });
     // The launcher mouse callback may not receive Bedrock's native touchscreen
     // attack button. Observe ordinary engine attack actions as a mobile-compatible
     // activation signal, then permit a bounded repeat window. Synthetic attacks
@@ -167,8 +171,35 @@ void AutoHitModule::onDisable() {
         "AutoHit", "lifecycle", "disabled");
 }
 
+bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeChar) {
+    (void)unicodeChar;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (m_captureNextInput && isDown) {
+        m_attackKeyCode = keyCode;
+        m_captureNextInput = false;
+        m_keyboardAttackHeld = false;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "input_capture", "keyboard_key_captured",
+            std::string("key_code=") + std::to_string(keyCode));
+        return false;
+    }
+    if (keyCode == m_attackKeyCode && m_attackKeyCode >= 0)
+        m_keyboardAttackHeld = isDown;
+    return false;
+}
+
 bool AutoHitModule::onMouseEvent(int button, bool isDown) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (m_captureNextInput && isDown) {
+        m_attackButton = std::clamp(button, 0, 16);
+        m_captureNextInput = false;
+        m_attackHeld = false;
+        m_heldButton = -1;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "input_capture", "mouse_button_captured",
+            std::string("button=") + std::to_string(m_attackButton));
+        return false;
+    }
     const bool screenBlocked = m_containerOpen.load(std::memory_order_acquire) ||
         m_chatOpen.load(std::memory_order_acquire);
     if (screenBlocked) {
@@ -226,10 +257,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
         // permanently idle even with a fresh target. On Android, treat enabling
         // AutoHit plus the touchscreen-repeat option as the activation signal;
         // desktop builds retain the explicit held-input behavior.
-        attackHeld = !requireAttackInput || m_attackHeld || m_touchRepeatEnabled ||
+        attackHeld = !requireAttackInput || m_attackHeld || m_keyboardAttackHeld || m_touchRepeatEnabled ||
             (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil);
 #else
-        attackHeld = !requireAttackInput || m_attackHeld ||
+        attackHeld = !requireAttackInput || m_attackHeld || m_keyboardAttackHeld ||
             (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
              tickNow < m_touchRepeatUntil);
 #endif
@@ -406,6 +437,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), 0, 16);
+    m_attackKeyCode = json.value("m_attackKeyCode", m_attackKeyCode);
     m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
@@ -426,6 +458,7 @@ void AutoHitModule::saveConfig(nlohmann::json& json) {
     Module::saveConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     json["m_attackButton"] = m_attackButton;
+    json["m_attackKeyCode"] = m_attackKeyCode;
     json["m_requireAttackInput"] = m_requireAttackInput;
     json["m_attackRange"] = m_attackRange;
     json["m_touchRepeatEnabled"] = m_touchRepeatEnabled;
@@ -474,6 +507,17 @@ void AutoHitModule::onMenuRegistered() {
     };
 
     slider("m_attackButton", "Mouse button index", "combat", "0", "16", "1", "");
+    ConfigNodeV2 captureNode;
+    captureNode.id = "m_captureNextInput";
+    captureNode.key = "m_captureNextInput";
+    captureNode.title = "Capture next keyboard/mouse input";
+    captureNode.description = "Enable this, then press a key (including Shift/0) or mouse button once.";
+    captureNode.category = "combat";
+    captureNode.type = ConfigControlTypeV2::Toggle;
+    captureNode.defaultValue = "false";
+    captureNode.currentValue = "false";
+    captureNode.hasCurrentValue = true;
+    schema.node(std::move(captureNode));
     ConfigNodeV2 activationNode;
     activationNode.id = "m_requireAttackInput";
     activationNode.key = "m_requireAttackInput";
@@ -505,6 +549,16 @@ void AutoHitModule::onMenuRegistered() {
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
+    if (key == "m_captureNextInput") {
+        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
+        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
+        if (!on && !off) return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_captureNextInput = on;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "input_capture", on ? "armed" : "disarmed");
+        return true;
+    }
     if (key == "m_requireAttackInput") {
         const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
         const bool off = value == "false" || value == "0" || value == "off" || value == "no";
