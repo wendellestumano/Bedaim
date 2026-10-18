@@ -707,67 +707,137 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
 }
 
 void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
-    if (!clientInstance || !isReadableMemory(clientInstance, sizeof(void*))) return nullptr;
+    if (!clientInstance || !isReadableMemory(clientInstance, sizeof(void*))) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "verified_local_player", "client_instance_missing",
+            "cannot resolve LocalPlayer because the captured ClientInstance pointer is null or unreadable");
+        return nullptr;
+    }
 
+    using GetLocalPlayerFn = void* (*)(void*);
+    using ActorIsPlayerFn = bool (*)(void*);
+
+    // Prefer exact exported C++ symbols if this game build exposes them. Do not
+    // call the older byte-pattern signature here: it was observed to match an
+    // unrelated JNI function on a nearby Bedrock build.
+    static GetLocalPlayerFn exportedGetter = []() -> GetLocalPlayerFn {
+        constexpr const char* names[] = {
+            "_ZNK14ClientInstance14getLocalPlayerEv",
+            "_ZN14ClientInstance14getLocalPlayerEv",
+            "_ZNK14ClientInstance15getLocalPlayerEv",
+            "_ZN14ClientInstance15getLocalPlayerEv"
+        };
+        for (const char* name : names) {
+            if (void* address = resolveMinecraftFunction(name)) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "verified_local_player", "exact_getter_symbol_found", name);
+                return reinterpret_cast<GetLocalPlayerFn>(address);
+            }
+        }
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug, "GameHooks",
+            "verified_local_player", "exact_getter_symbol_missing",
+            "no exported ClientInstance::getLocalPlayer symbol; using validated vtable fallback");
+        return nullptr;
+    }();
+
+    static const auto actorIsPlayerAddress =
+        bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+    const bool actorClassifierReady = actorIsPlayerAddress &&
+        isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress));
+    auto acceptCandidate = [&](void* candidate, const char* route) -> bool {
+        if (!candidate || !isReadableMemory(candidate, sizeof(void*))) return false;
+        if (!actorClassifierReady) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                "verified_local_player", "actor_classifier_unavailable",
+                "getter returned a readable candidate, but Actor::isPlayer could not be validated");
+            return false;
+        }
+        const bool isPlayer = reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(candidate);
+        if (!isPlayer) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                "verified_local_player", "getter_candidate_rejected",
+                std::string("route=") + route + "; Actor::isPlayer returned false");
+            return false;
+        }
+
+        currentLocalPlayer.store(candidate, std::memory_order_release);
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "GameHooks",
+            "verified_local_player",
+            std::string("captured_from_") + route,
+            std::string("client_instance=") +
+                std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+                "; player=" + std::to_string(reinterpret_cast<std::uintptr_t>(candidate)));
+        return true;
+    };
+
+    // An exported symbol is a stronger target than a guessed virtual index.
+    if (exportedGetter) {
+        void* candidate = exportedGetter(clientInstance);
+        if (acceptCandidate(candidate, "clientinstance_exported_getter")) return candidate;
+        if (!candidate) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "GameHooks",
+                "verified_local_player", "exported_getter_returned_null",
+                "exact exported ClientInstance::getLocalPlayer returned null for the captured instance");
+        }
+    }
+
+    // The supported ClientInstance interface places getLocalPlayer immediately
+    // after getRegion. Validate the object/vtable storage before reading slot 32.
     void** vtable = nullptr;
     std::memcpy(&vtable, clientInstance, sizeof(vtable));
     constexpr std::size_t localPlayerSlot =
         bedrocktools::sdk::offsets::VTable::ClientInstance_getLocalPlayer;
-
-    // getRegion is an established runtime vtable offset (31) in this SDK, and
-    // getLocalPlayer is the immediately following virtual in the same interface.
-    // Call that accessor directly rather than the legacy signature which was
-    // observed to false-match inside an unrelated JNI method.
     void* nativeGetter = nullptr;
     if (vtable && isReadableMemory(vtable, sizeof(void*) * (localPlayerSlot + 1))) {
         std::memcpy(&nativeGetter, vtable + localPlayerSlot, sizeof(nativeGetter));
     }
-    if (nativeGetter && isMinecraftFunction(nativeGetter)) {
-        using GetLocalPlayerVirtualFn = void* (*)(void*);
-        void* candidate = reinterpret_cast<GetLocalPlayerVirtualFn>(nativeGetter)(clientInstance);
-        if (candidate && isReadableMemory(candidate, sizeof(void*))) {
-            static const auto actorIsPlayerAddress =
-                bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
-            bool isPlayer = false;
-            if (actorIsPlayerAddress && isMinecraftFunction(
-                    reinterpret_cast<const void*>(actorIsPlayerAddress))) {
-                using ActorIsPlayerFn = bool (*)(void*);
-                isPlayer = reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(candidate);
-            }
-            if (isPlayer) {
-                currentLocalPlayer.store(candidate, std::memory_order_release);
-                static std::atomic_bool loggedVtableCapture{false};
-                if (!loggedVtableCapture.exchange(true, std::memory_order_acq_rel)) {
-                    bedrocktools::diagnostics::probe(
-                        bedrocktools::diagnostics::Level::Info, "GameHooks",
-                        "verified_local_player", "captured_from_clientinstance_vtable",
-                        std::string("slot=") + std::to_string(localPlayerSlot));
-                }
-                return candidate;
-            }
-            static std::atomic_bool loggedInvalidGetterResult{false};
-            if (!loggedInvalidGetterResult.exchange(true, std::memory_order_acq_rel)) {
-                bedrocktools::diagnostics::probe(
-                    bedrocktools::diagnostics::Level::Warning, "GameHooks",
-                    "verified_local_player", "clientinstance_getter_result_not_player",
-                    std::string("slot=") + std::to_string(localPlayerSlot));
-            }
-        }
-    } else {
-        static std::atomic_bool loggedMissingGetter{false};
-        if (!loggedMissingGetter.exchange(true, std::memory_order_acq_rel)) {
-            bedrocktools::diagnostics::probe(
-                bedrocktools::diagnostics::Level::Warning, "GameHooks",
-                "verified_local_player", "clientinstance_vtable_getter_unavailable",
-                std::string("slot=") + std::to_string(localPlayerSlot) +
-                    "; getter_in_minecraft=" + (nativeGetter ? "no" : "null"));
-        }
+
+    bool vtableGetterCallable = nativeGetter && isMinecraftFunction(nativeGetter);
+    if (!vtableGetterCallable && nativeGetter) {
+        const auto canonical = canonicalArm64Entry(reinterpret_cast<std::uintptr_t>(nativeGetter));
+        vtableGetterCallable = canonical && canonical != reinterpret_cast<std::uintptr_t>(nativeGetter) &&
+            isMinecraftFunction(reinterpret_cast<const void*>(canonical));
+        if (vtableGetterCallable) nativeGetter = reinterpret_cast<void*>(canonical);
     }
 
-    // Conservative fallback to a previously verified player. Never use the
-    // legacy ClientInstanceGetLocalPlayer signature on the supported build.
+    if (vtableGetterCallable) {
+        void* candidate = reinterpret_cast<GetLocalPlayerFn>(nativeGetter)(clientInstance);
+        if (acceptCandidate(candidate, "clientinstance_vtable_getter")) return candidate;
+        if (!candidate) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "GameHooks",
+                "verified_local_player", "vtable_getter_returned_null",
+                std::string("slot=") + std::to_string(localPlayerSlot) +
+                    "; client_instance=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)));
+        }
+    } else {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "verified_local_player", "clientinstance_vtable_getter_unavailable",
+            std::string("slot=") + std::to_string(localPlayerSlot) +
+                "; getter=" + std::to_string(reinterpret_cast<std::uintptr_t>(nativeGetter)));
+    }
+
+    // Keep only a player captured by one of the independently validated routes.
     void* cachedPlayer = currentLocalPlayer.load(std::memory_order_acquire);
     if (cachedPlayer && isReadableMemory(cachedPlayer, sizeof(void*))) return cachedPlayer;
+
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Warning, "GameHooks",
+        "verified_local_player", "resolution_failed",
+        std::string("client_instance=") +
+            std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+            "; exact_export=" + (exportedGetter ? "found" : "missing") +
+            "; vtable_getter=" + (vtableGetterCallable ? "callable" : "unavailable") +
+            "; actor_classifier=" + (actorClassifierReady ? "ready" : "unavailable"));
     return nullptr;
 }
 
