@@ -1,4 +1,5 @@
 #include "weatherchanger.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/world/Weather.hpp>
@@ -131,7 +132,7 @@ void WeatherChangerModule::onInit() {
     installHooks();
     // Only use the verified local player to refresh dimension weather; raw actor
     // ticks would repeat the same dimension write for every mob and remote player.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [](auto& event) { s_normalTickCallback(event.player); });
 }
 
