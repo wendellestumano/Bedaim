@@ -1515,7 +1515,7 @@ void* gameModeForPlayer(void* player) {
     static thread_local bool fullScanCompleted = false;
     constexpr std::size_t scanBegin = sizeof(void*);
     constexpr std::size_t scanEnd = 0x1800;
-    constexpr std::size_t fieldsPerSlice = 16;
+    constexpr std::size_t fieldsPerSlice = 8;
     const auto scanNow = std::chrono::steady_clock::now();
 
     if (scanningPlayer != player) {
@@ -1531,7 +1531,7 @@ void* gameModeForPlayer(void* player) {
         fullScanCompleted = false;
     }
     if (!fullScanCompleted && scanNow >= nextScanSlice) {
-        nextScanSlice = scanNow + std::chrono::milliseconds(25);
+        nextScanSlice = scanNow + std::chrono::milliseconds(50);
         std::size_t scanned = 0;
         while (nextPlayerFieldOffset + sizeof(void*) <= scanEnd &&
                scanned < fieldsPerSlice) {
