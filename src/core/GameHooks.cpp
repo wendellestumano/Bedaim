@@ -894,6 +894,7 @@ void uninstall() {
     handleCount = 0;
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
+    currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
