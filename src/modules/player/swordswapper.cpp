@@ -13,7 +13,7 @@
 #include "../ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 
 #include <algorithm>
@@ -76,7 +76,10 @@ SwordSwapperModule::SwordSwapperModule()
 }
 
 void SwordSwapperModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    // Only process the local player. LocalPlayerTickEvent is also published for
+    // mobs and remote actors, so using it here caused unnecessary inventory access
+    // and could try to swap a non-local actor's hotbar.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
         [this](auto& event) {
