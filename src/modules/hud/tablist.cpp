@@ -1,4 +1,5 @@
 // Tablist module — thanks to Kashifro
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 // GitHub: https://github.com/Kashifro
 
 #include "tablist.hpp"
@@ -237,7 +238,7 @@ void TablistModule::onInit() {
     s_getRuntimeActorList = reinterpret_cast<GetRuntimeActorList_t>(bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
     s_actorIsPlayer = reinterpret_cast<ActorIsPlayer_t>(bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     s_actorGetNameTag = reinterpret_cast<ActorGetNameTag_t>(bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { tablistTickCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { tablistTickCallback(event.player); });
 }
 
 void TablistModule::onEnable() {
