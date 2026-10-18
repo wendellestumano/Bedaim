@@ -14,7 +14,7 @@
 #include "../ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
+#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 
 #include <algorithm>
