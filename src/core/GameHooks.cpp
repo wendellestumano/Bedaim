@@ -709,7 +709,6 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
 void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
     if (!clientInstance || !isReadableMemory(clientInstance, sizeof(void*))) return nullptr;
 
-    auto* sdkClient = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
     void** vtable = nullptr;
     std::memcpy(&vtable, clientInstance, sizeof(vtable));
     constexpr std::size_t localPlayerSlot =
