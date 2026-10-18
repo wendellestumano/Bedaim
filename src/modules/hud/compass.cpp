@@ -1,4 +1,5 @@
 #include "compass.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -25,7 +26,7 @@ CompassModule::~CompassModule() {
 }
 
 void CompassModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_compassCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { s_compassCallback(event.player); });
 }
 
 void CompassModule::onEnable() {}
