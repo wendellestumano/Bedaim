@@ -9,7 +9,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -102,7 +102,7 @@ AutoHitModule::AutoHitModule()
 
 void AutoHitModule::onInit() {
     bedrocktools::core::InventoryAccess::get().initialize();
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
         [this](auto& event) {
