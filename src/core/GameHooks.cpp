@@ -498,6 +498,31 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         for (const char* name : survivalNames) if (void* p = resolveMinecraftFunction(name)) { out.survival = reinterpret_cast<std::uintptr_t>(p); break; }
         return out;
     }();
+    const auto vtableAddress = reinterpret_cast<std::uintptr_t>(vtable);
+    struct AttackVTableCache {
+        std::uintptr_t vtable{};
+        std::uintptr_t baseSignature{};
+        std::uintptr_t survivalSignature{};
+        std::uintptr_t exportedBase{};
+        std::uintptr_t exportedSurvival{};
+        std::uintptr_t result{};
+        AttackKind kind{AttackKind::GameMode};
+        std::size_t slot{};
+        bool valid{};
+    };
+    static thread_local AttackVTableCache cache{};
+    if (cache.valid && cache.vtable == vtableAddress &&
+        cache.baseSignature == baseSignature && cache.survivalSignature == survivalSignature &&
+        cache.exportedBase == symbols.base && cache.exportedSurvival == symbols.survival) {
+        if (cache.result && kind) *kind = cache.kind;
+        if (cache.result && matchedSlot) *matchedSlot = cache.slot;
+        return cache.result;
+    }
+    auto cacheResult = [&](std::uintptr_t result, AttackKind found, std::size_t slot) {
+        cache = {vtableAddress, baseSignature, survivalSignature,
+                 symbols.base, symbols.survival, result, found, slot, true};
+        return result;
+    };
     for (std::size_t i = 0; i < 64; ++i) {
         const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
         if (!isReadableMemory(slot, sizeof(void*))) break;
@@ -528,7 +553,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         static std::atomic_bool loggedMatch{false};
         if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
             gameHooksLogger().info("Validated public attack through exact vtable match at slot {}.", i);
-        return address;
+        return cacheResult(address, found, i);
     }
     static std::atomic_bool loggedMiss{false};
     if (!loggedMiss.exchange(true, std::memory_order_acq_rel)) {
@@ -545,7 +570,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
             reinterpret_cast<void*>(survivalSignature), reinterpret_cast<void*>(slot0),
             reinterpret_cast<void*>(slot2), reinterpret_cast<void*>(slot16), reinterpret_cast<void*>(slot32));
     }
-    return 0;
+    return cacheResult(0, AttackKind::GameMode, 0);
 }
 
 std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlot = nullptr) {
@@ -579,6 +604,29 @@ std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlo
         }
         return out;
     }();
+    const auto vtableAddress = reinterpret_cast<std::uintptr_t>(vtable);
+    struct UseItemVTableCache {
+        std::uintptr_t vtable{};
+        std::uintptr_t baseSignature{};
+        std::uintptr_t survivalSignature{};
+        std::uintptr_t exportedBase{};
+        std::uintptr_t exportedSurvival{};
+        std::uintptr_t result{};
+        std::size_t slot{};
+        bool valid{};
+    };
+    static thread_local UseItemVTableCache cache{};
+    if (cache.valid && cache.vtable == vtableAddress &&
+        cache.baseSignature == baseSignature && cache.survivalSignature == survivalSignature &&
+        cache.exportedBase == symbols.base && cache.exportedSurvival == symbols.survival) {
+        if (cache.result && matchedSlot) *matchedSlot = cache.slot;
+        return cache.result;
+    }
+    auto cacheResult = [&](std::uintptr_t result, std::size_t slot) {
+        cache = {vtableAddress, baseSignature, survivalSignature,
+                 symbols.base, symbols.survival, result, slot, true};
+        return result;
+    };
     for (std::size_t i = 0; i < 64; ++i) {
         const auto* slot = reinterpret_cast<const void*>(
             reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
@@ -592,13 +640,13 @@ std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlo
             static std::atomic_bool loggedMatch{false};
             if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
                 gameHooksLogger().info("Validated public useItem through exact vtable match at slot {}.", i);
-            return address;
+            return cacheResult(address, i);
         }
     }
     static std::atomic_bool loggedMiss{false};
     if (!loggedMiss.exchange(true, std::memory_order_acq_rel))
         gameHooksLogger().warn("No exact public GameMode::useItem method found in the live vtable.");
-    return 0;
+    return cacheResult(0, 0);
 }
 
 AttackKind attackKindFor(void* gameMode) {
