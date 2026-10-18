@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026-10-18 — AutoHit local-player resolution diagnostics
+- Prefer an exact exported `ClientInstance::getLocalPlayer` symbol when available, then fall back to the validated vtable getter; the older ambiguous byte-pattern signature is not called.
+- Add state-change diagnostics for null getter results, unavailable getter routes, invalid player candidates, and successful pointer capture.
+- This is an isolated AutoHit recovery branch. It does not alter AimAssist's targeting algorithm; runtime testing is still required.
+
 ## 2026-10-17 — ElytraMacing module
 - Added an isolated ElytraMacing module with its own configuration for elytra glide gating, minimum fall distance, mace equip/restore, target range, hitpoint height, crosshair tolerance, camera assist speed and attack interval.
 - Glide-state reads use the current Bedrock entity-data encoding with SDK readable-memory checks. The module reads the existing BedrockAim target snapshot and does not write state to Aim Assist, Hitbox Expander, or MaceSwapper.
