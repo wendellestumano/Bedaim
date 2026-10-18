@@ -1,5 +1,7 @@
 #pragma once
 
+#include <bedrocktools/events/Event.hpp>
+
 namespace bedrocktools::sdk {
 class Player;
 }
@@ -10,6 +12,8 @@ namespace bedaim::events {
 // verified as the current local player. Use this for post-tick inventory/HUD
 // sampling instead of the raw LocalPlayerTickEvent, which is emitted for every actor.
 struct VerifiedLocalPlayerTickEvent {
+    static constexpr bedrocktools::events::EventType type =
+        bedrocktools::events::EventType::VerifiedLocalPlayerTick;
     bedrocktools::sdk::Player* player{};
 };
 
