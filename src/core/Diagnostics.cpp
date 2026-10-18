@@ -154,6 +154,7 @@ bool exportJsonTo(const std::string& path, std::string* error) noexcept {
         const auto entries = snapshot();
         nlohmann::json payload;
         payload["schema_version"] = 1;
+        payload["mode"] = "ALL";
         payload["generated_at_unix_ms"] = nowMs();
         payload["entry_count"] = entries.size();
         payload["buffer_capacity"] = kCapacity;
