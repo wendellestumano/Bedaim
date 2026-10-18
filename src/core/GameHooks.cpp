@@ -207,7 +207,15 @@ struct ReadableRegion {
 
 bool isReadableMemory(const void* pointer, std::size_t size) {
     if (!pointer || size == 0) return false;
-    const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
+    auto begin = reinterpret_cast<std::uintptr_t>(pointer);
+#if defined(__aarch64__)
+    // Android ARM64 may tag heap pointers in the top byte (for example,
+    // 0xB4xxxxxxxxxxxxxx). CPU dereferences can accept tagged pointers with TBI,
+    // but /proc/self/maps reports the untagged virtual address. Normalize only
+    // the address used for map-range validation; keep the original pointer for
+    // actual memory access so pointer-tagging semantics are preserved.
+    begin &= 0x00FFFFFFFFFFFFFFULL;
+#endif
     if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
     const auto end = begin + size;
 

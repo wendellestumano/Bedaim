@@ -1,3 +1,8 @@
+## 2026-10-18 — ARM64 tagged-pointer validation
+- Normalize the top-byte tag only for `/proc/self/maps` range checks in `isReadableMemory`, preserving the original tagged pointer for actual memory access. This addresses Android ARM64 pointers such as `0xB4...` being incorrectly rejected as unreadable.
+- Keep validation strict: the object and its vtable still need to reside in readable mappings, and ClientInstance vtable entries must still match the Minecraft image.
+- Runtime confirmation is required; this is a focused follow-up to Build #734's `receiver_rejected` diagnostic.
+
 ## 2026-10-18 — AutoHit ClientInstance capture ABI fix
 - Match the verified `bool ClientInstance::update(bool)` ABI and prefer its exact exported C++ symbol before falling back to the version-sensitive signature pattern.
 - Validate the hooked receiver's readable object and vtable before caching it; rejected receivers no longer clear a previously verified local player.
