@@ -625,16 +625,42 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
 }
 
 void tickDetour(void* actor) {
-    // Raw actor events remain available to modules that need them. Combat and
-    // inventory modules receive only the actor verified against LocalPlayer::NormalTick.
+    // Experimental 1.26.52.3 fallback:
+    // this detour is installed on the resolved NormalTick entry itself. The
+    // previous extra vtable-identity check rejected every actor on the tested
+    // runtime, so VerifiedLocalPlayerPreTickEvent never reached AutoHit even
+    // while the hook was installed. Treat the receiver of this exact hooked
+    // method as the tick owner for this experimental branch, but require a
+    // readable object header and plausible Player bounds before publishing the
+    // combat event. Keep the strict identity check as the preferred route.
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-    const bool actorIsLocalPlayer = isLocalPlayerTickObject(actor);
+    const bool strictMatch = isLocalPlayerTickObject(actor);
+    const bool readableActor = actor && isReadableMemory(actor, sizeof(void*) * 2);
+    bool plausiblePlayer = false;
+    if (readableActor) {
+        const auto bounds = actorPlayer->bounds();
+        const auto finite = [](float v) { return std::isfinite(v); };
+        const float w = bounds.max.x - bounds.min.x;
+        const float h = bounds.max.y - bounds.min.y;
+        const float d = bounds.max.z - bounds.min.z;
+        plausiblePlayer = finite(bounds.min.x) && finite(bounds.min.y) && finite(bounds.min.z) &&
+            finite(bounds.max.x) && finite(bounds.max.y) && finite(bounds.max.z) &&
+            w > 0.20f && w <= 2.0f && h >= 0.8f && h <= 3.5f && d > 0.20f && d <= 2.0f;
+    }
+    // The fallback is opt-in at compile time and deliberately isolated to this
+    // branch. It does not guess a GameMode or bypass attack-route validation.
+    constexpr bool ExperimentalNormalTickReceiverFallback = true;
+    const bool actorIsLocalPlayer = strictMatch ||
+        (ExperimentalNormalTickReceiverFallback && readableActor && plausiblePlayer);
     if (actorIsLocalPlayer) {
         currentLocalPlayer.store(actor, std::memory_order_release);
         static std::atomic_bool loggedCapture{false};
         if (!loggedCapture.exchange(true, std::memory_order_acq_rel))
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                "GameHooks", "verified_local_player", "captured_from_normal_tick_vtable");
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", strictMatch
+                    ? "captured_from_normal_tick_vtable"
+                    : "captured_from_normal_tick_receiver_fallback",
+                "experimental fallback accepted receiver after readable-object and Player-bounds checks");
     }
 
     void* localPlayer = actorIsLocalPlayer ? actor : resolveLocalPlayerFromClientInstance(
