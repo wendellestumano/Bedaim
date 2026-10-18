@@ -856,19 +856,58 @@ void* gameModeForPlayer(void* player) {
     const auto* slot = reinterpret_cast<const void*>(slotAddress);
     if (!isReadableMemory(slot, sizeof(void*))) return nullptr;
 
-    void* candidate = *reinterpret_cast<void* const*>(slot);
-    if (!candidate || (publicAttackVirtualEntry(candidate) == 0 && publicUseItemVirtualEntry(candidate) == 0)) {
-        static std::atomic_bool loggedNoVerifiedGameMode{false};
-        if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Could not validate a local Player-owned GameMode against exact public attack/useItem methods.");
-        return nullptr;
+    void* candidate = nullptr;
+    std::memcpy(&candidate, slot, sizeof(candidate));
+    auto isValidatedGameMode = [](void* value) {
+        return value && (publicAttackVirtualEntry(value) != 0 ||
+                         publicUseItemVirtualEntry(value) != 0);
+    };
+
+    if (isValidatedGameMode(candidate)) {
+        currentGameMode.store(candidate, std::memory_order_release);
+        static std::atomic_bool loggedPlayerGameModeFallback{false};
+        if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
+            gameHooksLogger().info("Recovered the Player-owned GameMode using exact public attack/useItem method validation.");
+        return candidate;
     }
 
-    currentGameMode.store(candidate, std::memory_order_release);
-    static std::atomic_bool loggedPlayerGameModeFallback{false};
-    if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Recovered the Player-owned GameMode using exact public attack/useItem method validation.");
-    return candidate;
+    // The SDK's mGameMode offset can drift between Bedrock client builds. As a
+    // fallback, inspect pointer-aligned fields inside the local Player object,
+    // but accept a candidate only if its live vtable contains an exact match for
+    // a resolved GameMode/SurvivalMode attack or useItem entry in libminecraftpe.
+    // This does not call any guessed address and never accepts a vtable merely
+    // because it looks plausible. Limit the scan and rate-limit it per player so
+    // an unsupported build does not add a per-tick scan cost.
+    static thread_local const void* lastScannedPlayer = nullptr;
+    static thread_local std::chrono::steady_clock::time_point nextScan{};
+    const auto scanNow = std::chrono::steady_clock::now();
+    if (lastScannedPlayer != player || scanNow >= nextScan) {
+        lastScannedPlayer = player;
+        nextScan = scanNow + std::chrono::milliseconds(750);
+        constexpr std::size_t scanBegin = sizeof(void*);
+        constexpr std::size_t scanEnd = 0x1800;
+        for (std::size_t offset = scanBegin; offset + sizeof(void*) <= scanEnd;
+             offset += alignof(void*)) {
+            if (offset == gameModeOffset) continue;
+            if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - offset) break;
+            const auto* field = reinterpret_cast<const void*>(playerAddress + offset);
+            if (!isReadableMemory(field, sizeof(void*))) continue;
+            void* possible = nullptr;
+            std::memcpy(&possible, field, sizeof(possible));
+            if (!isValidatedGameMode(possible)) continue;
+
+            currentGameMode.store(possible, std::memory_order_release);
+            gameHooksLogger().info(
+                "Recovered Player-owned GameMode through exact vtable signature match at Player offset 0x{:X}.",
+                offset);
+            return possible;
+        }
+    }
+
+    static std::atomic_bool loggedNoVerifiedGameMode{false};
+    if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
+        gameHooksLogger().warn("Could not validate a Player-owned GameMode; checked the SDK offset and a bounded pointer-field scan against exact public attack/useItem signatures.");
+    return nullptr;
 }
 
 bool useItem(void* player, const void* itemStack) {
