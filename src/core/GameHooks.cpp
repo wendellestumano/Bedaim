@@ -103,6 +103,44 @@ std::mutex playerGameTypeCacheMutex;
 std::unordered_map<const void*, std::int32_t> playerGameTypeCache;
 void* resolveLocalPlayerFromClientInstance(void* clientInstance);
 
+// Local-player recovery happens on hot engine callbacks. Retry failed resolution at a
+// bounded cadence rather than invoking a null-returning native getter for every actor tick.
+std::atomic<void*> g_localPlayerResolveClient{nullptr};
+std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
+std::atomic<void*> g_ownershipScanClient{nullptr};
+std::atomic<std::int64_t> g_nextOwnershipScanNs{0};
+
+bool shouldAttemptTimedRecovery(std::atomic<void*>& cachedClient,
+                               std::atomic<std::int64_t>& nextAttemptNs,
+                               void* client, std::chrono::milliseconds interval) {
+    if (!client) return false;
+    const void* previousClient = cachedClient.exchange(client, std::memory_order_acq_rel);
+    if (previousClient != client) nextAttemptNs.store(0, std::memory_order_release);
+
+    const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto intervalNs = std::chrono::duration_cast<std::chrono::nanoseconds>(interval).count();
+    auto dueNs = nextAttemptNs.load(std::memory_order_acquire);
+    for (;;) {
+        if (nowNs < dueNs) return false;
+        if (nextAttemptNs.compare_exchange_weak(
+                dueNs, nowNs + intervalNs,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            return true;
+        }
+    }
+}
+
+bool shouldResolveLocalPlayer(void* client) {
+    return shouldAttemptTimedRecovery(g_localPlayerResolveClient, g_nextLocalPlayerResolveNs,
+                                      client, std::chrono::milliseconds(250));
+}
+
+bool shouldScanClientOwnership(void* client) {
+    return shouldAttemptTimedRecovery(g_ownershipScanClient, g_nextOwnershipScanNs,
+                                      client, std::chrono::milliseconds(250));
+}
+
 
 template <class Function>
 bool hookSignature(SignatureId id, void* detour, Function** original) {
@@ -586,18 +624,36 @@ bool isLocalPlayerTickObject(void* actor) {
     if (normalTick == 0 || !isMinecraftFunction(reinterpret_cast<const void*>(normalTick)))
         return false;
 
-    // Prefer exact identity: it is cheap and avoids canonicalizing every vtable
-    // entry on the hot path. Some ARM64 builds place a short B-branch veneer in
-    // the vtable, however, so exact equality alone can reject the actual
-    // LocalPlayer vtable even though the veneer resolves to the scanned method.
+    const auto normalTickAddress = static_cast<std::uintptr_t>(normalTick);
+    const auto vtableAddress = reinterpret_cast<std::uintptr_t>(vtable);
+    static thread_local std::uintptr_t cachedNormalTickAddress = 0;
+    static thread_local std::unordered_map<std::uintptr_t, bool> localPlayerVtableResults;
+    if (cachedNormalTickAddress != normalTickAddress) {
+        cachedNormalTickAddress = normalTickAddress;
+        localPlayerVtableResults.clear();
+    }
+    if (const auto cached = localPlayerVtableResults.find(vtableAddress);
+        cached != localPlayerVtableResults.end()) {
+        return cached->second;
+    }
+    auto rememberResult = [&](bool matched) {
+        if (localPlayerVtableResults.size() >= 128) localPlayerVtableResults.clear();
+        localPlayerVtableResults[vtableAddress] = matched;
+        return matched;
+    };
+
+    // Prefer exact identity. Cache results per vtable because every mob/remote player
+    // repeatedly ticks through the same class vtable on the game thread.
     for (std::size_t i = 0; i < 64; ++i) {
         std::uintptr_t entry = 0;
         std::memcpy(&entry, vtable + i, sizeof(entry));
-        if (entry == normalTick) return true;
+        if (entry == normalTick) return rememberResult(true);
     }
 
+    // ARM64 sometimes installs a B-branch veneer in the vtable. The expensive
+    // canonical comparison is now done once per distinct vtable, not per actor tick.
     const auto canonicalNormalTick = canonicalArm64Entry(normalTick);
-    if (!canonicalNormalTick) return false;
+    if (!canonicalNormalTick) return rememberResult(false);
     for (std::size_t i = 0; i < 64; ++i) {
         std::uintptr_t entry = 0;
         std::memcpy(&entry, vtable + i, sizeof(entry));
@@ -610,7 +666,7 @@ bool isLocalPlayerTickObject(void* actor) {
                     "verified_local_player", "captured_from_normal_tick_thunk",
                     std::string("vtable_slot=") + std::to_string(i));
             }
-            return true;
+            return rememberResult(true);
         }
     }
 
@@ -644,7 +700,17 @@ bool isLocalPlayerTickObject(void* actor) {
             bedrocktools::diagnostics::Level::Warning, "GameHooks",
             "verified_local_player", "normal_tick_vtable_mismatch", detail);
     }
-    return false;
+    return rememberResult(false);
+}
+
+bool isPlayerActorForOwnershipFallback(void* actor) {
+    if (!actor) return false;
+    static const auto actorIsPlayerAddress = bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+    static const bool actorClassifierReady = actorIsPlayerAddress &&
+        isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress));
+    if (!actorClassifierReady) return false;
+    using ActorIsPlayerFn = bool (*)(void*);
+    return reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(actor);
 }
 
 bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::size_t* matchedOffset) {
@@ -881,16 +947,25 @@ void tickDetour(void* actor) {
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* client = currentClientInstance.load(std::memory_order_acquire);
     void* localPlayer = currentLocalPlayer.load(std::memory_order_acquire);
-    if (!localPlayer && client) localPlayer = resolveLocalPlayerFromClientInstance(client);
+    if (!localPlayer && client && shouldResolveLocalPlayer(client))
+        localPlayer = resolveLocalPlayerFromClientInstance(client);
 
     bool actorIsLocalPlayer = actor && localPlayer && actor == localPlayer;
     std::size_t clientFieldOffset = 0;
     bool actorOwnedByClient = false;
-    if (!localPlayer) {
+    if (!localPlayer && actor) {
         const bool actorMatchesNormalTick = isLocalPlayerTickObject(actor);
-        actorOwnedByClient = !actorMatchesNormalTick &&
-            clientInstanceDirectlyOwnsPlayer(client, actor, &clientFieldOffset);
-        actorIsLocalPlayer = actorMatchesNormalTick || actorOwnedByClient;
+        actorIsLocalPlayer = actorMatchesNormalTick;
+
+        // Do not scan ClientInstance/MinecraftGame memory for every actor tick.
+        // Only real Player actors are ownership candidates, and the deep fallback
+        // runs at a bounded cadence while the primary getter is unavailable.
+        if (!actorMatchesNormalTick && client && isPlayerActorForOwnershipFallback(actor) &&
+            shouldScanClientOwnership(client)) {
+            actorOwnedByClient = clientInstanceDirectlyOwnsPlayer(
+                client, actor, &clientFieldOffset);
+            actorIsLocalPlayer = actorOwnedByClient;
+        }
         if (actorIsLocalPlayer) {
             currentLocalPlayer.store(actor, std::memory_order_release);
             localPlayer = actor;
@@ -1088,7 +1163,11 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
     const bool result = clientUpdateOriginal
         ? clientUpdateOriginal(clientInstance, value) : false;
 
-    if (receiverValid) (void)resolveLocalPlayerFromClientInstance(clientInstance);
+    if (receiverValid &&
+        !currentLocalPlayer.load(std::memory_order_acquire) &&
+        shouldResolveLocalPlayer(clientInstance)) {
+        (void)resolveLocalPlayerFromClientInstance(clientInstance);
+    }
     void* publishedClientInstance = currentClientInstance.load(std::memory_order_acquire);
     ClientInstanceUpdateEvent event{
         reinterpret_cast<bedrocktools::sdk::ClientInstance*>(publishedClientInstance)};
@@ -1294,6 +1373,10 @@ void uninstall() {
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
+    g_localPlayerResolveClient.store(nullptr, std::memory_order_release);
+    g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
+    g_ownershipScanClient.store(nullptr, std::memory_order_release);
+    g_nextOwnershipScanNs.store(0, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
@@ -1309,8 +1392,11 @@ void* clientInstance() {
 }
 
 void* localPlayer() {
-    return resolveLocalPlayerFromClientInstance(
-        currentClientInstance.load(std::memory_order_acquire));
+    void* cachedPlayer = currentLocalPlayer.load(std::memory_order_acquire);
+    if (cachedPlayer && isReadableMemory(cachedPlayer, sizeof(void*))) return cachedPlayer;
+    void* client = currentClientInstance.load(std::memory_order_acquire);
+    if (!client || !shouldResolveLocalPlayer(client)) return nullptr;
+    return resolveLocalPlayerFromClientInstance(client);
 }
 
 void* gameMode() {
@@ -1363,23 +1449,39 @@ void* gameModeForPlayer(void* player) {
         return candidate;
     }
 
-    // The SDK's mGameMode offset can drift between Bedrock client builds. As a
-    // fallback, inspect pointer-aligned fields inside the local Player object,
-    // but accept a candidate only if its live vtable contains an exact match for
-    // a resolved GameMode/SurvivalMode attack or useItem entry in libminecraftpe.
-    // This does not call any guessed address and never accepts a vtable merely
-    // because it looks plausible. Limit the scan and rate-limit it per player so
-    // an unsupported build does not add a per-tick scan cost.
-    static thread_local const void* lastScannedPlayer = nullptr;
-    static thread_local std::chrono::steady_clock::time_point nextScan{};
+    // The SDK's mGameMode offset can drift between Bedrock client builds. Keep a
+    // conservative fallback scan, but spread it across callbacks: walking 0x1800 bytes
+    // and validating every candidate vtable in one game tick can freeze low-end Android.
+    static thread_local const void* scanningPlayer = nullptr;
+    static thread_local std::size_t nextPlayerFieldOffset = sizeof(void*);
+    static thread_local std::chrono::steady_clock::time_point nextScanSlice{};
+    static thread_local std::chrono::steady_clock::time_point nextFullScan{};
+    static thread_local bool fullScanCompleted = false;
+    constexpr std::size_t scanBegin = sizeof(void*);
+    constexpr std::size_t scanEnd = 0x1800;
+    constexpr std::size_t fieldsPerSlice = 16;
     const auto scanNow = std::chrono::steady_clock::now();
-    if (lastScannedPlayer != player || scanNow >= nextScan) {
-        lastScannedPlayer = player;
-        nextScan = scanNow + std::chrono::milliseconds(750);
-        constexpr std::size_t scanBegin = sizeof(void*);
-        constexpr std::size_t scanEnd = 0x1800;
-        for (std::size_t offset = scanBegin; offset + sizeof(void*) <= scanEnd;
-             offset += alignof(void*)) {
+
+    if (scanningPlayer != player) {
+        scanningPlayer = player;
+        nextPlayerFieldOffset = scanBegin;
+        nextScanSlice = {};
+        nextFullScan = {};
+        fullScanCompleted = false;
+    }
+    if (fullScanCompleted && scanNow >= nextFullScan) {
+        nextPlayerFieldOffset = scanBegin;
+        nextScanSlice = {};
+        fullScanCompleted = false;
+    }
+    if (!fullScanCompleted && scanNow >= nextScanSlice) {
+        nextScanSlice = scanNow + std::chrono::milliseconds(25);
+        std::size_t scanned = 0;
+        while (nextPlayerFieldOffset + sizeof(void*) <= scanEnd &&
+               scanned < fieldsPerSlice) {
+            const std::size_t offset = nextPlayerFieldOffset;
+            nextPlayerFieldOffset += alignof(void*);
+            ++scanned;
             if (offset == gameModeOffset) continue;
             if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - offset) break;
             const auto* field = reinterpret_cast<const void*>(playerAddress + offset);
@@ -1394,7 +1496,12 @@ void* gameModeForPlayer(void* player) {
                 offset);
             return possible;
         }
+        if (nextPlayerFieldOffset + sizeof(void*) > scanEnd) {
+            fullScanCompleted = true;
+            nextFullScan = scanNow + std::chrono::milliseconds(750);
+        }
     }
+    if (!fullScanCompleted) return nullptr;
 
     static std::atomic_bool loggedNoVerifiedGameMode{false};
     if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel)) {
