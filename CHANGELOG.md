@@ -1,6 +1,7 @@
 ## 2026-10-18 — Verified post-tick event and actor fan-out reduction
 - Add a Bedaim-owned `VerifiedLocalPlayerTickEvent` emitted after the native tick only when the actor is the verified local player.
-- Move post-tick HUD and visual consumers off the raw `LocalPlayerTickEvent`, which fires for every actor; move name/weather/skin cache updates to the verified pre-tick event.
+- Move post-tick combat/HUD/visual consumers (AutoHit, MaceFall, Sword Swapper, Nick, Weather Changer, Skin Stealer, and HUD/visual callbacks) off the raw `LocalPlayerTickEvent`, which fires for every actor.
+- Keep pre-tick-only input/aim logic on `VerifiedLocalPlayerPreTickEvent`; post-tick state updates use `VerifiedLocalPlayerTickEvent` so module timing is preserved while remote actor ticks are ignored.
 - This reduces repeated per-mob callbacks and prevents local-player-only modules from mutating or sampling remote actors.
 - The new event and migrations are part of the current candidate build; runtime FPS and module behavior still need confirmation on device.
 
