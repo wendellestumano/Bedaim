@@ -119,14 +119,32 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
         mapsCacheValid = true;
     }
 
-    const auto it = std::upper_bound(
-        readableRegions.begin(), readableRegions.end(), begin,
-        [](std::uintptr_t address, const ReadableRegion& region) {
-            return address < region.begin;
-        });
-    if (it == readableRegions.begin()) return false;
-    const auto& region = *std::prev(it);
-    return begin >= region.begin && end <= region.end;
+    const auto containsRange = [&]() {
+        const auto it = std::upper_bound(
+            readableRegions.begin(), readableRegions.end(), begin,
+            [](std::uintptr_t address, const ReadableRegion& region) {
+                return address < region.begin;
+            });
+        if (it == readableRegions.begin()) return false;
+        const auto& region = *std::prev(it);
+        return begin >= region.begin && end <= region.end;
+    };
+
+    if (containsRange()) return true;
+
+    // A LocalPlayer can be published by the engine immediately after a mapping
+    // change. If the short-lived maps snapshot misses a pointer once, refresh it
+    // once before rejecting the pointer. This is only the slow path and does not
+    // relax validation: the refreshed map must still contain the entire range.
+    thread_local bool retryingStaleMapSnapshot = false;
+    if (mapsCacheValid && !retryingStaleMapSnapshot) {
+        mapsCacheValid = false;
+        retryingStaleMapSnapshot = true;
+        const bool refreshedResult = isReadableMemory(pointer, size);
+        retryingStaleMapSnapshot = false;
+        return refreshedResult;
+    }
+    return false;
 }
 
 bool isMinecraftFunction(const void* address) {
