@@ -26,32 +26,25 @@
 namespace {
 thread_local bool g_autoHitSyntheticAttack = false;
 
-std::string inputLabel(int keyCode, int mouseButton) {
+std::string inputLabel(int keyCode, int mouseButton, unsigned int unicodeChar = 0) {
     if (keyCode >= 0) {
+        // Prefer the actual character reported by Levi's input event. Numeric
+        // key codes are backend-specific: code 7 is not universally the '0' key.
+        if (unicodeChar >= 32 && unicodeChar <= 126) {
+            return std::string(1, static_cast<char>(unicodeChar)) + " (code " + std::to_string(keyCode) + ")";
+        }
         switch (keyCode) {
-            case 7: return "0";
-            case 8: return "1";
-            case 9: return "2";
-            case 10: return "3";
-            case 11: return "4";
-            case 12: return "5";
-            case 13: return "6";
-            case 14: return "7";
-            case 15: return "8";
-            case 16: return "9";
-            case 19: return "Arrow Up";
-            case 20: return "Arrow Down";
-            case 21: return "Arrow Left";
-            case 22: return "Arrow Right";
-            case 24: return "Volume Up";
-            case 25: return "Volume Down";
-            case 59: return "Left Shift";
-            case 60: return "Right Shift";
-            case 66: return "Enter";
-            case 67: return "Backspace";
-            case 111: return "Escape";
-            case 112: return "Delete";
-            default: return "Key " + std::to_string(keyCode);
+            case 19: return "Arrow Up (code 19)";
+            case 20: return "Arrow Down (code 20)";
+            case 21: return "Arrow Left (code 21)";
+            case 22: return "Arrow Right (code 22)";
+            case 59: return "Left Shift (code 59)";
+            case 60: return "Right Shift (code 60)";
+            case 66: return "Enter (code 66)";
+            case 67: return "Backspace (code 67)";
+            case 111: return "Escape (code 111)";
+            case 112: return "Delete (code 112)";
+            default: return "Key code " + std::to_string(keyCode);
         }
     }
     switch (mouseButton) {
@@ -213,11 +206,15 @@ bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeCha
     if (m_captureNextInput && isDown &&
         std::chrono::steady_clock::now() - m_captureArmedAt >= std::chrono::milliseconds(200)) {
         m_attackKeyCode = keyCode;
+        m_attackKeyUnicode = unicodeChar;
         m_captureNextInput = false;
         m_keyboardAttackHeld = false;
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
             "AutoHit", "input_capture", "keyboard_key_captured",
-            std::string("key_code=") + std::to_string(keyCode));
+            std::string("label=") + inputLabel(keyCode, -1, unicodeChar) +
+                "; key_code=" + std::to_string(keyCode) +
+                "; unicode=" + std::to_string(unicodeChar));
+        onMenuRegistered();
         return false;
     }
     if (keyCode == m_attackKeyCode && m_attackKeyCode >= 0)
@@ -476,6 +473,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), -1, 16);
     m_attackKeyCode = json.value("m_attackKeyCode", m_attackKeyCode);
+    m_attackKeyUnicode = json.value("m_attackKeyUnicode", m_attackKeyUnicode);
     m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
@@ -497,6 +495,7 @@ void AutoHitModule::saveConfig(nlohmann::json& json) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     json["m_attackButton"] = m_attackButton;
     json["m_attackKeyCode"] = m_attackKeyCode;
+    json["m_attackKeyUnicode"] = m_attackKeyUnicode;
     json["m_requireAttackInput"] = m_requireAttackInput;
     json["m_attackRange"] = m_attackRange;
     json["m_touchRepeatEnabled"] = m_touchRepeatEnabled;
@@ -548,12 +547,31 @@ void AutoHitModule::onMenuRegistered() {
     captureNode.id = "m_captureNextInput";
     captureNode.key = "m_captureNextInput";
     captureNode.title = "Capture next keyboard/mouse input";
-    captureNode.description = std::string("Press this button, then press a key (Shift/0 included) or mouse button. Current key code: ") +
-        std::to_string(m_attackKeyCode) + "; mouse button: " + std::to_string(m_attackButton) + ".";
+    captureNode.description = std::string("Press this button, then press a key or mouse button. Current keyboard binding: ") +
+        inputLabel(m_attackKeyCode, -1, m_attackKeyUnicode) + "; mouse binding: " +
+        inputLabel(-1, m_attackButton) + ". Numeric codes vary by input backend; the label uses the character reported by the input event when available.";
     captureNode.category = "combat";
     captureNode.type = ConfigControlTypeV2::Button;
     captureNode.actionValue = "capture";
     schema.node(std::move(captureNode));
+    ConfigNodeV2 clearKeyNode;
+    clearKeyNode.id = "m_clearAttackKey";
+    clearKeyNode.key = "m_clearAttackKey";
+    clearKeyNode.title = "Clear keyboard binding";
+    clearKeyNode.description = "Removes the recorded keyboard key without changing the mouse binding.";
+    clearKeyNode.category = "combat";
+    clearKeyNode.type = ConfigControlTypeV2::Button;
+    clearKeyNode.actionValue = "clear";
+    schema.node(std::move(clearKeyNode));
+    ConfigNodeV2 clearMouseNode;
+    clearMouseNode.id = "m_clearAttackMouse";
+    clearMouseNode.key = "m_clearAttackMouse";
+    clearMouseNode.title = "Clear mouse binding";
+    clearMouseNode.description = "Resets the recorded mouse button to left mouse.";
+    clearMouseNode.category = "combat";
+    clearMouseNode.type = ConfigControlTypeV2::Button;
+    clearMouseNode.actionValue = "clear";
+    schema.node(std::move(clearMouseNode));
     ConfigNodeV2 activationNode;
     activationNode.id = "m_requireAttackInput";
     activationNode.key = "m_requireAttackInput";
@@ -585,6 +603,26 @@ void AutoHitModule::onMenuRegistered() {
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
+    if (key == "m_clearAttackKey") {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_attackKeyCode = -1;
+        m_attackKeyUnicode = 0;
+        m_keyboardAttackHeld = false;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "input_capture", "keyboard_binding_cleared");
+        onMenuRegistered();
+        return true;
+    }
+    if (key == "m_clearAttackMouse") {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_attackButton = 0;
+        m_attackHeld = false;
+        m_heldButton = -1;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "AutoHit", "input_capture", "mouse_binding_reset", "button=0");
+        onMenuRegistered();
+        return true;
+    }
     if (key == "m_captureNextInput") {
         if (value != "capture" && value != "true" && value != "1") return false;
         std::lock_guard<std::mutex> lock(m_stateMutex);
