@@ -611,6 +611,60 @@ bool isLocalPlayerTickObject(void* actor) {
     return false;
 }
 
+bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::size_t* matchedOffset) {
+    if (!clientInstance || !actor ||
+        !isReadableMemory(clientInstance, sizeof(void*)) ||
+        !isReadableMemory(actor, sizeof(void*))) return false;
+
+    // Do not infer LocalPlayer from a generic Actor::normalTick vtable match alone.
+    // The current ClientInstance is captured from its real update detour; validate
+    // its vtable and require the candidate Actor pointer to be stored directly in
+    // the live ClientInstance object.
+    void** clientVtable = nullptr;
+    std::memcpy(&clientVtable, clientInstance, sizeof(clientVtable));
+    if (!clientVtable || !isReadableMemory(clientVtable, sizeof(void*) * 32)) return false;
+
+    bool trustedClientVtable = false;
+    for (std::size_t i = 0; i < 32; ++i) {
+        std::uintptr_t entry = 0;
+        std::memcpy(&entry, clientVtable + i, sizeof(entry));
+        if (entry && isMinecraftFunction(reinterpret_cast<const void*>(entry))) {
+            trustedClientVtable = true;
+            break;
+        }
+    }
+    if (!trustedClientVtable) return false;
+
+    // Only actual Player actors are candidates. This resolved classifier is used
+    // elsewhere by BedrockAim and prevents arbitrary entity pointers from being
+    // promoted to the local-player slot by a coincidental member match.
+    static const auto actorIsPlayerAddress = bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+    if (!actorIsPlayerAddress ||
+        !isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress))) return false;
+    using ActorIsPlayerFn = bool (*)(void*);
+    const auto actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress);
+    if (!actorIsPlayer(actor)) return false;
+
+    // ClientInstance layouts move between Bedrock builds and platform ABIs.
+    // Search a bounded prefix for the exact actor pointer instead of calling the
+    // known-stale legacy ClientInstanceGetLocalPlayer signature or guessing a
+    // version-sensitive field offset. The field is compared as data; no guessed
+    // candidate pointer is dereferenced or called.
+    constexpr std::size_t scanLimit = 0x800;
+    const auto base = reinterpret_cast<std::uintptr_t>(clientInstance);
+    for (std::size_t offset = sizeof(void*); offset < scanLimit; offset += alignof(void*)) {
+        if (base > std::numeric_limits<std::uintptr_t>::max() - offset) break;
+        const auto* field = reinterpret_cast<const void*>(base + offset);
+        if (!isReadableMemory(field, sizeof(void*))) continue;
+        void* value = nullptr;
+        std::memcpy(&value, field, sizeof(value));
+        if (value != actor) continue;
+        if (matchedOffset) *matchedOffset = offset;
+        return true;
+    }
+    return false;
+}
+
 void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
     (void)clientInstance;
     static std::atomic_bool loggedUnavailable{false};
@@ -626,19 +680,33 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
 
 void tickDetour(void* actor) {
     // Raw actor events remain available to modules that need them. Combat and
-    // inventory modules receive only the actor verified against LocalPlayer::NormalTick.
+    // inventory modules receive only an actor whose local ownership was verified.
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-    const bool actorIsLocalPlayer = isLocalPlayerTickObject(actor);
+    void* client = currentClientInstance.load(std::memory_order_acquire);
+    const bool actorMatchesNormalTick = isLocalPlayerTickObject(actor);
+    std::size_t clientFieldOffset = 0;
+    const bool actorOwnedByClient = !actorMatchesNormalTick &&
+        clientInstanceDirectlyOwnsPlayer(client, actor, &clientFieldOffset);
+    const bool actorIsLocalPlayer = actorMatchesNormalTick || actorOwnedByClient;
     if (actorIsLocalPlayer) {
         currentLocalPlayer.store(actor, std::memory_order_release);
         static std::atomic_bool loggedCapture{false};
-        if (!loggedCapture.exchange(true, std::memory_order_acq_rel))
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                "GameHooks", "verified_local_player", "captured_from_normal_tick_vtable");
+        if (!loggedCapture.exchange(true, std::memory_order_acq_rel)) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Info, "GameHooks", "verified_local_player",
+                actorOwnedByClient ? "captured_from_clientinstance_player_field" :
+                                     "captured_from_normal_tick_vtable",
+                actorOwnedByClient
+                    ? std::string("matched_direct_player_pointer_at_offset=0x") + [&] {
+                        char buffer[32]{};
+                        std::snprintf(buffer, sizeof(buffer), "%zX", clientFieldOffset);
+                        return std::string(buffer);
+                    }()
+                    : "exact/canonical NormalTick vtable identity");
+        }
     }
 
-    void* localPlayer = actorIsLocalPlayer ? actor : resolveLocalPlayerFromClientInstance(
-        currentClientInstance.load(std::memory_order_acquire));
+    void* localPlayer = actorIsLocalPlayer ? actor : resolveLocalPlayerFromClientInstance(client);
     const bool isVerifiedLocal = actor && localPlayer && actor == localPlayer;
 
     LocalPlayerPreTickEvent preEvent{actorPlayer};
