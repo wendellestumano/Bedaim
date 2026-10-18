@@ -580,15 +580,30 @@ bool isLocalPlayerTickObject(void* actor) {
 
     static std::atomic_bool loggedVtableMismatch{false};
     if (!loggedVtableMismatch.exchange(true, std::memory_order_acq_rel)) {
-        std::uintptr_t slot25 = 0;
-        std::memcpy(&slot25, vtable + 25, sizeof(slot25));
-        char detail[256]{};
-        std::snprintf(detail, sizeof(detail),
-            "actor=%p vtable=%p normal_tick=%p canonical_tick=%p slot25=%p",
-            actor, reinterpret_cast<const void*>(vtable),
-            reinterpret_cast<void*>(normalTick),
-            reinterpret_cast<void*>(canonicalNormalTick),
-            reinterpret_cast<void*>(slot25));
+        // Diagnostic-only: sample the first 64 entries so version drift can be
+        // investigated without accepting an unverified LocalPlayer vtable.
+        std::string detail = std::string("actor=") +
+            std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+            ";vtable=" + std::to_string(reinterpret_cast<std::uintptr_t>(vtable)) +
+            ";normal_tick=" + std::to_string(normalTick) +
+            ";canonical_tick=" + std::to_string(canonicalNormalTick) + ";entries=";
+        std::size_t reported = 0;
+        for (std::size_t i = 0; i < 64; ++i) {
+            std::uintptr_t entry = 0;
+            std::memcpy(&entry, vtable + i, sizeof(entry));
+            if (!entry) continue;
+            const auto canonical = canonicalArm64Entry(entry);
+            if (!isMinecraftFunction(reinterpret_cast<const void*>(entry)) &&
+                canonical == entry) continue;
+            if (reported++) detail += ",";
+            detail += std::to_string(i) + ":" + std::to_string(entry) +
+                "->" + std::to_string(canonical);
+            if (detail.size() > 1800) {
+                detail += ",truncated";
+                break;
+            }
+        }
+        if (reported == 0) detail += "none-classified-as-minecraft";
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Warning, "GameHooks",
             "verified_local_player", "normal_tick_vtable_mismatch", detail);
