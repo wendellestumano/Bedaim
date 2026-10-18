@@ -11,6 +11,7 @@
 #include <bedrocktools/sdk/offsets/Core.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
 #include <bedrocktools/sdk/offsets/World.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 #include <dlfcn.h>
 #include <EGL/egl.h>
 #include <algorithm>
@@ -650,17 +651,55 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
     // known-stale legacy ClientInstanceGetLocalPlayer signature or guessing a
     // version-sensitive field offset. The field is compared as data; no guessed
     // candidate pointer is dereferenced or called.
-    constexpr std::size_t scanLimit = 0x800;
-    const auto base = reinterpret_cast<std::uintptr_t>(clientInstance);
-    for (std::size_t offset = sizeof(void*); offset < scanLimit; offset += alignof(void*)) {
-        if (base > std::numeric_limits<std::uintptr_t>::max() - offset) break;
-        const auto* field = reinterpret_cast<const void*>(base + offset);
-        if (!isReadableMemory(field, sizeof(void*))) continue;
-        void* value = nullptr;
-        std::memcpy(&value, field, sizeof(value));
-        if (value != actor) continue;
-        if (matchedOffset) *matchedOffset = offset;
-        return true;
+    const auto scanObjectForExactPlayerPointer = [&](void* object, std::size_t scanLimit,
+                                                        std::size_t* foundOffset) {
+        if (!object || !isReadableMemory(object, sizeof(void*))) return false;
+        const auto base = reinterpret_cast<std::uintptr_t>(object);
+        for (std::size_t offset = sizeof(void*); offset < scanLimit; offset += alignof(void*)) {
+            if (base > std::numeric_limits<std::uintptr_t>::max() - offset) break;
+            const auto* field = reinterpret_cast<const void*>(base + offset);
+            if (!isReadableMemory(field, sizeof(void*))) continue;
+            void* value = nullptr;
+            std::memcpy(&value, field, sizeof(value));
+            if (value != actor) continue;
+            if (foundOffset) *foundOffset = offset;
+            return true;
+        }
+        return false;
+    };
+
+    // Direct fields are the cheapest path and cover layouts with an inline
+    // LocalPlayer pointer.
+    if (scanObjectForExactPlayerPointer(clientInstance, 0x400, matchedOffset)) return true;
+
+    // Some Bedrock layouts expose the local player through MinecraftGame rather
+    // than storing the pointer directly on ClientInstance. This is an existing,
+    // version-profiled virtual accessor (slot 83 in Core.hpp), not a guessed
+    // LocalPlayer getter. Validate the returned object before comparing its fields.
+    auto* sdkClient = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
+    void* minecraftGame = sdkClient->minecraftGame();
+    if (minecraftGame && minecraftGame != clientInstance &&
+        isReadableMemory(minecraftGame, sizeof(void*))) {
+        void** gameVtable = nullptr;
+        std::memcpy(&gameVtable, minecraftGame, sizeof(gameVtable));
+        bool trustedGameVtable = false;
+        if (gameVtable && isReadableMemory(gameVtable, sizeof(void*) * 16)) {
+            for (std::size_t i = 0; i < 16; ++i) {
+                std::uintptr_t entry = 0;
+                std::memcpy(&entry, gameVtable + i, sizeof(entry));
+                if (entry && isMinecraftFunction(reinterpret_cast<const void*>(entry))) {
+                    trustedGameVtable = true;
+                    break;
+                }
+            }
+        }
+        if (trustedGameVtable) {
+            std::size_t nestedOffset = 0;
+            if (scanObjectForExactPlayerPointer(minecraftGame, 0x800, &nestedOffset)) {
+                if (matchedOffset) *matchedOffset = 0x10000 + nestedOffset;
+                return true;
+            }
+        }
     }
     return false;
 }
