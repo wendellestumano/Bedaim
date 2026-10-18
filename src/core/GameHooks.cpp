@@ -456,8 +456,20 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         return address;
     }
     static std::atomic_bool loggedMiss{false};
-    if (!loggedMiss.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().warn("No exact public GameMode::attack method found in the live vtable.");
+    if (!loggedMiss.exchange(true, std::memory_order_acq_rel)) {
+        std::uintptr_t slot0 = 0, slot16 = 0, slot32 = 0;
+        const auto readSlot = [&](std::size_t index, std::uintptr_t& out) {
+            const auto address = reinterpret_cast<std::uintptr_t>(vtable) + index * sizeof(void*);
+            if (isReadableMemory(reinterpret_cast<const void*>(address), sizeof(void*)))
+                std::memcpy(&out, reinterpret_cast<const void*>(address), sizeof(out));
+        };
+        readSlot(0, slot0); readSlot(16, slot16); readSlot(32, slot32);
+        gameHooksLogger().warn(
+            "No exact public GameMode::attack vtable match: object={:p}, vtable={:p}, public_sig={:p}, survival_sig={:p}, slot0={:p}, slot16={:p}, slot32={:p}.",
+            gameMode, vtable, reinterpret_cast<void*>(baseSignature),
+            reinterpret_cast<void*>(survivalSignature), reinterpret_cast<void*>(slot0),
+            reinterpret_cast<void*>(slot16), reinterpret_cast<void*>(slot32));
+    }
     return 0;
 }
 
@@ -792,7 +804,11 @@ bool install() {
     if (installed) return true;
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", "starting hook installation");
     hookSignature(SignatureId::VersionString, reinterpret_cast<void*>(versionDetour), &versionOriginal);
-    hookSignature(SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
+    const bool normalTickHooked = hookSignature(
+        SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
+    gameHooksLogger().info(
+        "NormalTick hook installed={}, signature={:p}.", normalTickHooked,
+        reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::NormalTick)));
     hookSignature(SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
     hookSignature(SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour), &survivalModeStartDestroyBlockOriginal);
     hookSignature(SignatureId::GameModeStopDestroyBlock, reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal);
@@ -825,7 +841,11 @@ bool install() {
         "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
         publicAttackSignature, survivalAttackSignature, internalAttackSignature,
         internalAttackHooked, gameModeAttackOriginal != nullptr);
-    hookSignature(SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
+    const bool clientUpdateHooked = hookSignature(
+        SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
+    gameHooksLogger().info(
+        "ClientInstance capture hook installed={}, signature={:p}.", clientUpdateHooked,
+        reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::ClientInstanceUpdate)));
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
     hookSignature(SignatureId::ChatScreenOpen, reinterpret_cast<void*>(chatOpenDetour), &chatOpenOriginal);
