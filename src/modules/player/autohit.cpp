@@ -26,6 +26,42 @@
 namespace {
 thread_local bool g_autoHitSyntheticAttack = false;
 
+std::string inputLabel(int keyCode, int mouseButton) {
+    if (keyCode >= 0) {
+        switch (keyCode) {
+            case 7: return "0";
+            case 8: return "1";
+            case 9: return "2";
+            case 10: return "3";
+            case 11: return "4";
+            case 12: return "5";
+            case 13: return "6";
+            case 14: return "7";
+            case 15: return "8";
+            case 16: return "9";
+            case 19: return "Arrow Up";
+            case 20: return "Arrow Down";
+            case 21: return "Arrow Left";
+            case 22: return "Arrow Right";
+            case 24: return "Volume Up";
+            case 25: return "Volume Down";
+            case 59: return "Left Shift";
+            case 60: return "Right Shift";
+            case 66: return "Enter";
+            case 67: return "Backspace";
+            case 111: return "Escape";
+            case 112: return "Delete";
+            default: return "Key " + std::to_string(keyCode);
+        }
+    }
+    switch (mouseButton) {
+        case 0: return "Mouse Left";
+        case 1: return "Mouse Right";
+        case 2: return "Mouse Middle";
+        default: return mouseButton >= 0 ? "Mouse Button " + std::to_string(mouseButton) : "None (null)";
+    }
+}
+
 using bedrocktools::sdk::AABB;
 using bedrocktools::sdk::Player;
 using bedrocktools::sdk::Vec3;
@@ -436,7 +472,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), 0, 16);
+    m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), -1, 16);
     m_attackKeyCode = json.value("m_attackKeyCode", m_attackKeyCode);
     m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
