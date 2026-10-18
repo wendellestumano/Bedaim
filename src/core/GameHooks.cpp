@@ -50,7 +50,7 @@ using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::ui
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
 using PublicAttackFn = bool(*)(void*, void*, bool, const void*);
-using ClientInstanceUpdateFn = void*(*)(void*, bool);
+using ClientInstanceUpdateFn = bool(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
 using EglSwapBuffersFn = EGLBoolean(*)(EGLDisplay, EGLSurface);
@@ -789,11 +789,11 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     return result;
 }
 
-void* clientUpdateDetour(void* clientInstance, bool value) {
+bool clientUpdateDetour(void* clientInstance, bool value) {
     void* previousClientInstance = currentClientInstance.exchange(clientInstance, std::memory_order_acq_rel);
     if (previousClientInstance != clientInstance)
         currentLocalPlayer.store(nullptr, std::memory_order_release);
-    void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
+    const bool result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : false;
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
     return result;
