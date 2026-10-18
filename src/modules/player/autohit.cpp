@@ -210,7 +210,7 @@ void AutoHitModule::onDisable() {
 bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeChar) {
     (void)unicodeChar;
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    if (m_captureNextInput && isDown) {
+    if (m_captureNextInput && isDown &&\n        std::chrono::steady_clock::now() - m_captureArmedAt >= std::chrono::milliseconds(200)) {
         m_attackKeyCode = keyCode;
         m_captureNextInput = false;
         m_keyboardAttackHeld = false;
@@ -226,7 +226,7 @@ bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeCha
 
 bool AutoHitModule::onMouseEvent(int button, bool isDown) {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    if (m_captureNextInput && isDown) {
+    if (m_captureNextInput && isDown &&\n        std::chrono::steady_clock::now() - m_captureArmedAt >= std::chrono::milliseconds(200)) {
         m_attackButton = std::clamp(button, 0, 16);
         m_captureNextInput = false;
         m_attackHeld = false;
