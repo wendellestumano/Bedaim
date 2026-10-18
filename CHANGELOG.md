@@ -1,3 +1,8 @@
+## 2026-10-18 — AimAssist local-player identity and camera diagnostics
+- Drive target tracking from `VerifiedLocalPlayerPreTickEvent` so arbitrary entity ticks cannot overwrite the player's target state or feed a non-local actor to the camera-control function.
+- Add a rate-limited `camera_apply=turn_delta_submitted` diagnostic with yaw/pitch deltas, distinguishing target tracking from an actual invocation of the camera-control entry point.
+- The change depends on the ClientInstance/local-player identity fix and still requires in-game verification; it does not claim AutoHit success by itself.
+
 ## 2026-10-18 — ARM64 tagged-pointer validation
 - Normalize the top-byte tag only for `/proc/self/maps` range checks in `isReadableMemory`, preserving the original tagged pointer for actual memory access. This addresses Android ARM64 pointers such as `0xB4...` being incorrectly rejected as unreadable.
 - Keep validation strict: the object and its vtable still need to reside in readable mappings, and ClientInstance vtable entries must still match the Minecraft image.
