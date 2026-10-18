@@ -431,6 +431,19 @@ void AutoHitModule::processPlayerTick(Player* player) {
         }
     }
 
+    // Resolve the receiver again immediately before dispatch. Target selection,
+    // inventory reads and cooldown checks above can span several engine callbacks;
+    // a cached global GameMode may have changed or become stale during that work.
+    // Revalidate the player-owned receiver and exact public attack route at the
+    // point of use rather than relying on the earlier preflight result.
+    void* dispatchGameMode = core::gamehooks::gameModeForPlayer(player);
+    if (!dispatchGameMode || !core::gamehooks::attackAvailable(dispatchGameMode)) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dispatch_gate",
+            "gamemode_or_attack_route_changed",
+            "fresh GameMode lookup failed final exact attack-route validation");
+        return;
+    }
+
     // Final native-free gate is shared with host tests. The earlier checks are
     // intentionally retained for precise per-stage diagnostics; this last gate
     // ensures no dispatch occurs if any prerequisite becomes invalid.
@@ -440,8 +453,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         target != nullptr,
         validBounds(targetBounds),
         true, // currentTargetSnapshot rejects stale target data
-        gameMode != nullptr,
-        attackRouteAvailable,
+        dispatchGameMode != nullptr,
+        true,
         finiteVec(hitPoint),
         true, // cooldown was checked immediately before resolving GameMode
         std::sqrt(distanceSq),
@@ -459,7 +472,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         SyntheticAttackGuard() : previous(g_autoHitSyntheticAttack) { g_autoHitSyntheticAttack = true; }
         ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
     } syntheticAttackGuard;
-    const bool attacked = core::gamehooks::attack(gameMode, target, true, &hitPoint);
+    const bool attacked = core::gamehooks::attack(dispatchGameMode, target, true, &hitPoint);
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         // CPS is an attempt-rate cap, not only a success-rate cap. Failed native
