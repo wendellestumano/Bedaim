@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -66,8 +67,21 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
             if (error) *error = "cannot open current-session log";
             return false;
         }
-        json current;
-        currentStream >> current;
+        std::string currentPayload((std::istreambuf_iterator<char>(currentStream)),
+                                   std::istreambuf_iterator<char>());
+        // Older builds accidentally appended the two literal characters \\n
+        // after JSON. Normalize only that trailing artifact; never discard entries.
+        while (!currentPayload.empty() &&
+               std::isspace(static_cast<unsigned char>(currentPayload.back())))
+            currentPayload.pop_back();
+        while (currentPayload.size() >= 2 &&
+               currentPayload.compare(currentPayload.size() - 2, 2, "\\\\n") == 0) {
+            currentPayload.resize(currentPayload.size() - 2);
+            while (!currentPayload.empty() &&
+                   std::isspace(static_cast<unsigned char>(currentPayload.back())))
+                currentPayload.pop_back();
+        }
+        json current = json::parse(currentPayload);
         if (!current.is_object() || !current.contains("entries") ||
             !current["entries"].is_array()) {
             if (error) *error = "current-session JSON has no entries array";
@@ -85,7 +99,19 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
                 if (error) *error = "cannot open lifetime log";
                 return false;
             }
-            lifetimeStream >> lifetime;
+            std::string lifetimePayload((std::istreambuf_iterator<char>(lifetimeStream)),
+                                        std::istreambuf_iterator<char>());
+            while (!lifetimePayload.empty() &&
+                   std::isspace(static_cast<unsigned char>(lifetimePayload.back())))
+                lifetimePayload.pop_back();
+            while (lifetimePayload.size() >= 2 &&
+                   lifetimePayload.compare(lifetimePayload.size() - 2, 2, "\\\\n") == 0) {
+                lifetimePayload.resize(lifetimePayload.size() - 2);
+                while (!lifetimePayload.empty() &&
+                       std::isspace(static_cast<unsigned char>(lifetimePayload.back())))
+                    lifetimePayload.pop_back();
+            }
+            lifetime = json::parse(lifetimePayload);
             if (!lifetime.is_object() || !lifetime.contains("entries") ||
                 !lifetime["entries"].is_array()) {
                 if (error) *error = "lifetime JSON is invalid; refusing to overwrite it";
