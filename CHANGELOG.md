@@ -2,7 +2,8 @@
 - Rate-limit unresolved ClientInstance/local-player recovery and cache the result of LocalPlayer/NormalTick vtable classification, avoiding repeated native getter calls and ARM64 branch canonicalization for every actor tick.
 - Restrict the expensive ClientInstance ownership fallback to actual Player actors and a bounded retry cadence; resolve the verified local player once and reuse the cached pointer.
 - Spread the fallback Player-owned GameMode scan across small slices instead of validating up to 0x1800 bytes of player fields synchronously in one game tick.
-- Move AutoHit, MaceFall, and Sword Swapper to VerifiedLocalPlayerPreTickEvent so they no longer process mobs/remote actors or touch their inventory on every NormalTick.
+- Cache validated public GameMode attack/useItem vtable lookups, including negative results, to avoid rechecking the same 64-entry vtable every combat tick.
+- Move AutoHit, MaceFall, Sword Swapper, Hitbox Expander's pre-tick path, and AutoSprint to verified-local-player events or exact local-player identity checks; they no longer query actors, mutate input, or access hotbar state for every mob/remote actor tick.
 - This targets the severe frametime spikes reported with AutoHit/MaceFall. Host/Android build success is not a substitute for an in-game FPS check.
 
 ## 2026-10-18 — AimAssist local-player identity and camera diagnostics
