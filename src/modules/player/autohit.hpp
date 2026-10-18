@@ -31,7 +31,8 @@ private:
     // Mobile-friendly default: valid targets and weapon profiles can drive AutoHit
     // without relying on the launcher mouse bridge. Desktop users may require input.
     bool m_requireAttackInput = false;
-    bool m_captureNextInput = false;\n    std::chrono::steady_clock::time_point m_captureArmedAt{};
+    bool m_captureNextInput = false;
+    std::chrono::steady_clock::time_point m_captureArmedAt{};
     bool m_keyboardAttackHeld = false;
     int m_attackKeyCode = -1;
     std::atomic_bool m_containerOpen{false};
