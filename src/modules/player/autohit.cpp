@@ -627,9 +627,10 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
         if (value != "capture" && value != "true" && value != "1") return false;
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_captureNextInput = true;
+        m_captureArmedAt = std::chrono::steady_clock::now();
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
             "AutoHit", "input_capture", "armed",
-            "waiting for one keyboard key or mouse button");
+            "waiting for one keyboard key or mouse button after a 200 ms arming delay");
         return true;
     }
     if (key == "m_requireAttackInput") {
