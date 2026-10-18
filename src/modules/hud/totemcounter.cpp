@@ -1,4 +1,5 @@
 #include "totemcounter.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 
 #include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
@@ -51,7 +52,7 @@ TotemCounterModule::TotemCounterModule()
 
 void TotemCounterModule::onInit() {
     bedrocktools::core::InventoryAccess::get().initialize();
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) { updateCount(event.player); }
     );
 }
