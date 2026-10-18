@@ -612,16 +612,57 @@ bool isLocalPlayerTickObject(void* actor) {
 }
 
 void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
-    (void)clientInstance;
-    static std::atomic_bool loggedUnavailable{false};
-    void* player = currentLocalPlayer.load(std::memory_order_acquire);
-    if (!player || !isReadableMemory(player, sizeof(void*))) {
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-                "GameHooks", "verified_local_player", "normal_tick_capture_unavailable");
+    // First try the exact exported ClientInstance getter when this runtime exposes
+    // it. Do not use the broad byte-pattern signature here: on some 1.26.52.x
+    // builds that pattern also matches bytes inside an unrelated JNI routine.
+    // resolveMinecraftFunction() accepts only symbols owned by libminecraftpe.so.
+    using GetLocalPlayerFn = void* (*)(void*);
+    static GetLocalPlayerFn getLocalPlayer = []() -> GetLocalPlayerFn {
+        constexpr const char* names[] = {
+            "_ZNK14ClientInstance14getLocalPlayerEv",
+            "_ZN14ClientInstance14getLocalPlayerEv",
+            "_ZNK14ClientInstance15getLocalPlayerEv",
+            "_ZN14ClientInstance15getLocalPlayerEv"
+        };
+        for (const char* name : names) {
+            if (void* address = resolveMinecraftFunction(name))
+                return reinterpret_cast<GetLocalPlayerFn>(address);
+        }
         return nullptr;
+    }();
+
+    if (clientInstance && isReadableMemory(clientInstance, sizeof(void*)) && getLocalPlayer) {
+        void* candidate = getLocalPlayer(clientInstance);
+        if (candidate && isReadableMemory(candidate, sizeof(void*))) {
+            void** candidateVtable = nullptr;
+            std::memcpy(&candidateVtable, candidate, sizeof(candidateVtable));
+            if (candidateVtable && isReadableMemory(candidateVtable, sizeof(void*)) &&
+                isMinecraftFunction(candidateVtable[0])) {
+                currentLocalPlayer.store(candidate, std::memory_order_release);
+                static std::atomic_bool loggedGetterCapture{false};
+                if (!loggedGetterCapture.exchange(true, std::memory_order_acq_rel))
+                    bedrocktools::diagnostics::probe(
+                        bedrocktools::diagnostics::Level::Info, "GameHooks",
+                        "verified_local_player", "captured_from_client_instance_getter");
+                return candidate;
+            }
+        }
     }
-    return player;
+
+    // Keep the last tick-verified player as a fallback. A cached pointer alone
+    // is not enough to establish identity; tickDetour still compares it with the
+    // actor currently being ticked before publishing VerifiedLocalPlayerPreTick.
+    void* player = currentLocalPlayer.load(std::memory_order_acquire);
+    if (player && isReadableMemory(player, sizeof(void*))) return player;
+
+    static std::atomic_bool loggedUnavailable{false};
+    if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "verified_local_player", "normal_tick_capture_unavailable",
+            std::string("client_instance=") + (clientInstance ? "present" : "null") +
+                "; exported_getter=" + (getLocalPlayer ? "found" : "missing"));
+    }
+    return nullptr;
 }
 
 void tickDetour(void* actor) {
