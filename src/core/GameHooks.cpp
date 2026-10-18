@@ -1,4 +1,5 @@
 #include "GameHooks.hpp"
+#include "VerifiedLocalPlayerTickEvent.hpp"
 #include "Diagnostics.hpp"
 #include "modules/player/PlayerGameType.hpp"
 #include <bedrocktools/Version.hpp>
@@ -1043,6 +1044,13 @@ void tickDetour(void* actor) {
         bus().publish(verifiedEvent);
     }
     if (tickOriginal) tickOriginal(actor);
+    if (isVerifiedLocal) {
+        // Post-tick work (inventory/HUD sampling, hitbox application) must run
+        // once for the verified local player, never for every remote actor.
+        bedaim::events::VerifiedLocalPlayerTickEvent verifiedTick{
+            reinterpret_cast<bedrocktools::sdk::Player*>(localPlayer)};
+        bus().publish(verifiedTick);
+    }
     LocalPlayerTickEvent event{actorPlayer};
     bus().publish(event);
 }
