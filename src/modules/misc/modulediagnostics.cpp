@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <ctime>
 #include <cstddef>
 #include <cstdint>
@@ -75,7 +76,7 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
                std::isspace(static_cast<unsigned char>(currentPayload.back())))
             currentPayload.pop_back();
         while (currentPayload.size() >= 2 &&
-               currentPayload.compare(currentPayload.size() - 2, 2, "\\\\n") == 0) {
+               currentPayload.compare(currentPayload.size() - 2, 2, "\\n") == 0) {
             currentPayload.resize(currentPayload.size() - 2);
             while (!currentPayload.empty() &&
                    std::isspace(static_cast<unsigned char>(currentPayload.back())))
@@ -105,7 +106,7 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
                    std::isspace(static_cast<unsigned char>(lifetimePayload.back())))
                 lifetimePayload.pop_back();
             while (lifetimePayload.size() >= 2 &&
-                   lifetimePayload.compare(lifetimePayload.size() - 2, 2, "\\\\n") == 0) {
+                   lifetimePayload.compare(lifetimePayload.size() - 2, 2, "\\n") == 0) {
                 lifetimePayload.resize(lifetimePayload.size() - 2);
                 while (!lifetimePayload.empty() &&
                        std::isspace(static_cast<unsigned char>(lifetimePayload.back())))
