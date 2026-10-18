@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 #include "AimAssistMath.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
@@ -1650,7 +1651,7 @@ void HitboxExpanderModule::onInit() {
             [](auto& event) {
                 if (g_hitboxExpander) g_hitboxExpander->processPreTick(event.player);
             });
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+        bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
             [](auto& event) {
                 if (!g_hitboxExpander || !event.player) return;
                 auto* local = reinterpret_cast<bedrocktools::sdk::Player*>(
