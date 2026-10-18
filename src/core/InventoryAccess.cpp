@@ -119,14 +119,32 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
         mapsCacheValid = true;
     }
 
-    const auto it = std::upper_bound(
-        readableRegions.begin(), readableRegions.end(), begin,
-        [](std::uintptr_t address, const ReadableRegion& region) {
-            return address < region.begin;
-        });
-    if (it == readableRegions.begin()) return false;
-    const auto& region = *std::prev(it);
-    return begin >= region.begin && end <= region.end;
+    const auto containsRange = [&]() {
+        const auto it = std::upper_bound(
+            readableRegions.begin(), readableRegions.end(), begin,
+            [](std::uintptr_t address, const ReadableRegion& region) {
+                return address < region.begin;
+            });
+        if (it == readableRegions.begin()) return false;
+        const auto& region = *std::prev(it);
+        return begin >= region.begin && end <= region.end;
+    };
+
+    if (containsRange()) return true;
+
+    // A LocalPlayer can be published by the engine immediately after a mapping
+    // change. If the short-lived maps snapshot misses a pointer once, refresh it
+    // once before rejecting the pointer. This is only the slow path and does not
+    // relax validation: the refreshed map must still contain the entire range.
+    thread_local bool retryingStaleMapSnapshot = false;
+    if (mapsCacheValid && !retryingStaleMapSnapshot) {
+        mapsCacheValid = false;
+        retryingStaleMapSnapshot = true;
+        const bool refreshedResult = isReadableMemory(pointer, size);
+        retryingStaleMapSnapshot = false;
+        return refreshedResult;
+    }
+    return false;
 }
 
 bool isMinecraftFunction(const void* address) {
@@ -178,10 +196,16 @@ void InventoryAccess::initialize() {
     constexpr GetterSymbol candidates[] = {
         {"_ZNK5Actor14getOffhandSlotEv", "Actor::getOffhandSlot const symbol"},
         {"_ZN5Actor14getOffhandSlotEv", "Actor::getOffhandSlot symbol"},
+        {"_ZNK5Actor15$getOffhandSlotEv", "Actor::$getOffhandSlot const symbol"},
+        {"_ZN5Actor15$getOffhandSlotEv", "Actor::$getOffhandSlot symbol"},
         {"_ZNK6Player14getOffhandSlotEv", "Player::getOffhandSlot const symbol"},
         {"_ZN6Player14getOffhandSlotEv", "Player::getOffhandSlot symbol"},
+        {"_ZNK6Player15$getOffhandSlotEv", "Player::$getOffhandSlot const symbol"},
+        {"_ZN6Player15$getOffhandSlotEv", "Player::$getOffhandSlot symbol"},
         {"_ZNK11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot const symbol"},
-        {"_ZN11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot symbol"}
+        {"_ZN11LocalPlayer14getOffhandSlotEv", "LocalPlayer::getOffhandSlot symbol"},
+        {"_ZNK11LocalPlayer15$getOffhandSlotEv", "LocalPlayer::$getOffhandSlot const symbol"},
+        {"_ZN11LocalPlayer15$getOffhandSlotEv", "LocalPlayer::$getOffhandSlot symbol"}
     };
     m_getOffhandSlot = nullptr;
     m_getOffhandSlotSource = "unresolved";
@@ -283,6 +307,17 @@ std::string InventoryAccess::hotbarSlotIdentifier(const sdk::Player* player, int
     const void* stack = reinterpret_cast<const void*>(begin +
         static_cast<std::size_t>(slot) * ItemStackSize);
     return stackIdentifier(stack);
+}
+
+const void* InventoryAccess::hotbarSlotStack(const sdk::Player* player, int slot) const {
+    if (!player || slot < 0 || slot > 8) return nullptr;
+    std::uintptr_t begin = 0;
+    std::size_t size = 0;
+    if (!inventorySlots(player, begin, size) || !begin || size < 9 ||
+        static_cast<std::size_t>(slot) >= size) return nullptr;
+    const auto address = begin + static_cast<std::size_t>(slot) * ItemStackSize;
+    const auto* stack = reinterpret_cast<const void*>(address);
+    return isReadableMemory(stack, ItemStackSize) ? stack : nullptr;
 }
 
 int InventoryAccess::findInventorySlot(const sdk::Player* player, std::string_view identifierPart) const {
@@ -540,11 +575,23 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
         resolveMinecraftSymbol("_ZN5Actor14setOffhandSlotERK9ItemStack"));
     if (!setOffhand) {
         setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN5Actor15$setOffhandSlotERK9ItemStack"));
+    }
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
             resolveMinecraftSymbol("_ZN6Player14setOffhandSlotERK9ItemStack"));
     }
     if (!setOffhand) {
         setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN6Player15$setOffhandSlotERK9ItemStack"));
+    }
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
             resolveMinecraftSymbol("_ZN11LocalPlayer14setOffhandSlotERK9ItemStack"));
+    }
+    if (!setOffhand) {
+        setOffhand = reinterpret_cast<SetOffhandFn>(
+            resolveMinecraftSymbol("_ZN11LocalPlayer15$setOffhandSlotERK9ItemStack"));
     }
 
     if (!actionCtor || !actionDtor || !addAction || !removeItem || !setOffhand) {

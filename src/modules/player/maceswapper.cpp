@@ -14,7 +14,7 @@
 #include "../ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 
 #include <algorithm>
@@ -81,7 +81,7 @@ MaceSwapperModule::MaceSwapperModule()
 }
 
 void MaceSwapperModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [this](auto& event) {
             processPlayerTick(event.player);
         });
@@ -216,7 +216,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             return;
         }
 
-        void* gameMode = bedrocktools::core::gamehooks::gameMode();
+        void* gameMode = bedrocktools::core::gamehooks::gameModeForPlayer(player);
         if (!gameMode) {
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
                 "MaceSwapper", "gamemode", "unavailable");

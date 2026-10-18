@@ -9,7 +9,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -71,7 +72,7 @@ AutoHitModule::AutoHitModule()
 
 void AutoHitModule::onInit() {
     bedrocktools::core::InventoryAccess::get().initialize();
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
         [this](auto& event) {
@@ -218,9 +219,20 @@ void AutoHitModule::processPlayerTick(Player* player) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         const auto tickNow = std::chrono::steady_clock::now();
         requireAttackInput = m_requireAttackInput;
+#if defined(__ANDROID__)
+        // The current Android launcher build does not expose touchscreen press
+        // state through onMouseEvent, and this runtime may not hook
+        // GameMode::useItemAsAttack. Requiring either signal can leave AutoHit
+        // permanently idle even with a fresh target. On Android, treat enabling
+        // AutoHit plus the touchscreen-repeat option as the activation signal;
+        // desktop builds retain the explicit held-input behavior.
+        attackHeld = !requireAttackInput || m_attackHeld || m_touchRepeatEnabled ||
+            (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil);
+#else
         attackHeld = !requireAttackInput || m_attackHeld ||
             (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
              tickNow < m_touchRepeatUntil);
+#endif
         attackButton = m_attackButton;
         heldButton = m_heldButton;
         touchRepeatEnabled = m_touchRepeatEnabled;
@@ -257,7 +269,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // actual blocker from diagnostics. This check never performs an attack.
     void* gameMode = core::gamehooks::gameModeForPlayer(player);
     if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable",
+            std::string("pre_tick_player_address=") + std::to_string(reinterpret_cast<std::uintptr_t>(player)));
         return;
     }
     const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);

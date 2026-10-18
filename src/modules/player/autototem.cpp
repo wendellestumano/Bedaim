@@ -7,7 +7,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
-#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <pl/ModMenu.hpp>
 #include <pl/Logger.hpp>
@@ -16,6 +16,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cstdint>
 #include <cmath>
 #include <string>
 #include <string_view>
@@ -62,7 +63,7 @@ void AutoTotemModule::onInit() {
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoTotem", "lifecycle", "initialized", "inventory and screen-state hooks subscribed");
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
@@ -111,7 +112,8 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     std::string offhandReadError;
     if (!inventory.readOffhandIdentifier(player, offhandId, &offhandReadError)) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
-            "AutoTotem", "offhand_state", "unreadable", offhandReadError);
+            "AutoTotem", "offhand_state", "unreadable",
+            offhandReadError + "; pre_tick_player_address=" + std::to_string(reinterpret_cast<std::uintptr_t>(player)));
         // An unreadable slot is not the same as an empty slot. Never begin a
         // transfer unless the offhand accessor returns a readable ItemStack.
         return;

@@ -6,6 +6,7 @@
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/AttackResultEvent.hpp>
+#include <bedrocktools/events/VerifiedLocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Core.hpp>
 #include <bedrocktools/sdk/offsets/UI.hpp>
@@ -357,102 +358,116 @@ void resolvePlayerGameTypeApi() {
 }
 
 bool plausibleGameMode(void* gameMode) {
-    if (!gameMode) return false;
-    static std::atomic<void*> lastValidatedGameMode{nullptr};
-
-    // A pointer validated once is not guaranteed to remain alive after respawn,
-    // world unload, or GameMode replacement. Re-check mappings and its vtable
-    // before every native call; neither success nor failure is cached as truth.
-    constexpr std::size_t kKnownAttackSlot = 16;
-    if (!isReadableMemory(gameMode, sizeof(void*))) {
-        lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        return false;
-    }
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    if (!vtable || !isReadableMemory(vtable, (kKnownAttackSlot + 1) * sizeof(void*)) ||
-        !vtable[kKnownAttackSlot]) {
-        lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        return false;
-    }
-
-    Dl_info info{};
-    if (!dladdr(vtable[kKnownAttackSlot], &info) || !info.dli_fname ||
-        std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
-        lastValidatedGameMode.store(nullptr, std::memory_order_release);
-        return false;
-    }
-
-    lastValidatedGameMode.store(gameMode, std::memory_order_release);
-    return true;
+    if (!gameMode || !isReadableMemory(gameMode, sizeof(void*))) return false;
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    if (!vtable || !isReadableMemory(vtable, 8 * sizeof(void*))) return false;
+    void* first = nullptr;
+    std::memcpy(&first, vtable, sizeof(first));
+    return first && isMinecraftFunction(first);
 }
 
-// GameMode::attack is the public wrapper at vtable slot 16. Its validated
-// signature is a 3-argument wrapper (this, target, hit-position) which prepares
-// the internal 4-argument call itself. Never call the internal body directly:
-// doing so bypasses that setup and previously caused the game to stall.
-std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr) {
+// Find the exact public wrapper in the object's live vtable rather than
+// assuming every patched Bedrock build keeps GameMode::attack at index 16.
+std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr,
+                                        std::size_t* matchedSlot = nullptr) {
     if (!plausibleGameMode(gameMode)) return 0;
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    constexpr std::size_t kKnownAttackSlot = 16;
-    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable[kKnownAttackSlot]);
-    const auto publicGameModeAttack = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-    const auto publicSurvivalAttack = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-
-    if (publicSurvivalAttack && slotAddress == publicSurvivalAttack) {
-        if (kind) *kind = AttackKind::SurvivalMode;
-        return slotAddress;
-    }
-    if (publicGameModeAttack && slotAddress == publicGameModeAttack) {
-        if (kind) *kind = AttackKind::GameMode;
-        return slotAddress;
-    }
-
-    // Signature patterns can resolve the internal attack body on builds where
-    // the public virtual wrapper has a different prologue. Prefer exact exported
-    // C++ method symbols as a fallback, but still require the live vtable slot to
-    // equal the resolved symbol before dispatching through it.
-    struct PublicAttackSymbols {
-        std::uintptr_t gameMode{};
-        std::uintptr_t survivalMode{};
-    };
-    static const PublicAttackSymbols exportedSymbols = [] {
-        PublicAttackSymbols result{};
-        constexpr const char* gameModeNames[] = {
-            "_ZN8GameMode6attackEP5ActorRK4Vec3",
-            "_ZN8GameMode6attackER5ActorRK4Vec3"
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    const auto baseSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+    const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
+    struct Exported { std::uintptr_t base{}; std::uintptr_t survival{}; };
+    static const Exported symbols = [] {
+        Exported out{};
+        constexpr const char* baseNames[] = {
+            "_ZN8GameMode6attackEP5ActorRK4Vec3", "_ZN8GameMode6attackER5ActorRK4Vec3",
+            "_ZN8GameMode7$attackEP5ActorRK4Vec3", "_ZN8GameMode7$attackER5ActorRK4Vec3"
         };
-        constexpr const char* survivalModeNames[] = {
-            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3",
-            "_ZN12SurvivalMode6attackER5ActorRK4Vec3"
+        constexpr const char* survivalNames[] = {
+            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3", "_ZN12SurvivalMode6attackER5ActorRK4Vec3",
+            "_ZN12SurvivalMode7$attackEP5ActorRK4Vec3", "_ZN12SurvivalMode7$attackER5ActorRK4Vec3"
         };
-        for (const char* name : gameModeNames) {
-            if (void* address = resolveMinecraftFunction(name)) {
-                result.gameMode = reinterpret_cast<std::uintptr_t>(address);
-                break;
-            }
-        }
-        for (const char* name : survivalModeNames) {
-            if (void* address = resolveMinecraftFunction(name)) {
-                result.survivalMode = reinterpret_cast<std::uintptr_t>(address);
-                break;
-            }
-        }
-        return result;
+        for (const char* name : baseNames) if (void* p = resolveMinecraftFunction(name)) { out.base = reinterpret_cast<std::uintptr_t>(p); break; }
+        for (const char* name : survivalNames) if (void* p = resolveMinecraftFunction(name)) { out.survival = reinterpret_cast<std::uintptr_t>(p); break; }
+        return out;
     }();
-    if (exportedSymbols.survivalMode && slotAddress == exportedSymbols.survivalMode) {
-        if (kind) *kind = AttackKind::SurvivalMode;
-        static std::atomic_bool loggedSymbolFallback{false};
-        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack wrapper via exact exported SurvivalMode::attack symbol.");
-        return slotAddress;
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
+        if (!isReadableMemory(slot, sizeof(void*))) break;
+        std::uintptr_t address = 0;
+        std::memcpy(&address, slot, sizeof(address));
+        if (!address) break;
+        AttackKind found = AttackKind::GameMode;
+        bool match = false;
+        if ((survivalSignature && address == survivalSignature) || (symbols.survival && address == symbols.survival)) {
+            found = AttackKind::SurvivalMode; match = true;
+        } else if ((baseSignature && address == baseSignature) || (symbols.base && address == symbols.base)) {
+            found = AttackKind::GameMode; match = true;
+        }
+        if (!match) continue;
+        if (kind) *kind = found;
+        if (matchedSlot) *matchedSlot = i;
+        static std::atomic_bool loggedMatch{false};
+        if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
+            gameHooksLogger().info("Validated public attack through exact vtable match at slot {}.", i);
+        return address;
     }
-    if (exportedSymbols.gameMode && slotAddress == exportedSymbols.gameMode) {
-        if (kind) *kind = AttackKind::GameMode;
-        static std::atomic_bool loggedSymbolFallback{false};
-        if (!loggedSymbolFallback.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack wrapper via exact exported GameMode::attack symbol.");
-        return slotAddress;
+    static std::atomic_bool loggedMiss{false};
+    if (!loggedMiss.exchange(true, std::memory_order_acq_rel))
+        gameHooksLogger().warn("No exact public GameMode::attack method found in the live vtable.");
+    return 0;
+}
+
+std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlot = nullptr) {
+    if (!plausibleGameMode(gameMode)) return 0;
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    const auto baseSignature = bedrocktools::memory::resolve(SignatureId::GameModeUseItem);
+    const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeUseItem);
+    struct Exported { std::uintptr_t base{}; std::uintptr_t survival{}; };
+    static const Exported symbols = [] {
+        Exported out{};
+        constexpr const char* baseNames[] = {
+            "_ZN8GameMode7useItemEP9ItemStack", "_ZN8GameMode7useItemER9ItemStack",
+            "_ZN8GameMode8$useItemEP9ItemStack", "_ZN8GameMode8$useItemER9ItemStack"
+        };
+        constexpr const char* survivalNames[] = {
+            "_ZN12SurvivalMode7useItemEP9ItemStack", "_ZN12SurvivalMode7useItemER9ItemStack",
+            "_ZN12SurvivalMode8$useItemEP9ItemStack", "_ZN12SurvivalMode8$useItemER9ItemStack"
+        };
+        for (const char* name : baseNames) {
+            if (void* address = resolveMinecraftFunction(name)) {
+                out.base = reinterpret_cast<std::uintptr_t>(address);
+                break;
+            }
+        }
+        for (const char* name : survivalNames) {
+            if (void* address = resolveMinecraftFunction(name)) {
+                out.survival = reinterpret_cast<std::uintptr_t>(address);
+                break;
+            }
+        }
+        return out;
+    }();
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto* slot = reinterpret_cast<const void*>(
+            reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
+        if (!isReadableMemory(slot, sizeof(void*))) break;
+        std::uintptr_t address = 0;
+        std::memcpy(&address, slot, sizeof(address));
+        if (!address) break;
+        if ((baseSignature && address == baseSignature) || (symbols.base && address == symbols.base) ||
+            (survivalSignature && address == survivalSignature) || (symbols.survival && address == symbols.survival)) {
+            if (matchedSlot) *matchedSlot = i;
+            static std::atomic_bool loggedMatch{false};
+            if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
+                gameHooksLogger().info("Validated public useItem through exact vtable match at slot {}.", i);
+            return address;
+        }
     }
+    static std::atomic_bool loggedMiss{false};
+    if (!loggedMiss.exchange(true, std::memory_order_acq_rel))
+        gameHooksLogger().warn("No exact public GameMode::useItem method found in the live vtable.");
     return 0;
 }
 
@@ -468,12 +483,67 @@ std::string versionDetour(void* self) {
     return std::string("\xC2\xA7" "b") + std::string(bedrocktools::Name) + " v" + std::string(bedrocktools::Version) + " " + "\xC2\xA7" "fby " + "\xC2\xA7" "e" + std::string(bedrocktools::Author) + " " + "\xC2\xA7" "f- " + "\xC2\xA7" "r" + version;
 }
 
+void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
+    static std::atomic_bool loggedUnavailable{false};
+    if (!clientInstance || !isReadableMemory(clientInstance, sizeof(void*))) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "client_instance_unavailable");
+        return nullptr;
+    }
+    void** vtable = nullptr;
+    std::memcpy(&vtable, clientInstance, sizeof(vtable));
+    constexpr std::size_t getterIndex = bedrocktools::sdk::offsets::VTable::ClientInstanceGetLocalPlayer;
+    if (!vtable) return nullptr;
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + getterIndex * sizeof(void*);
+    if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "getter_vtable_slot_unreadable");
+        return nullptr;
+    }
+    void* getterAddress = nullptr;
+    std::memcpy(&getterAddress, reinterpret_cast<const void*>(slotAddress), sizeof(getterAddress));
+    if (!getterAddress || !isMinecraftFunction(getterAddress)) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "getter_slot_not_minecraft_code");
+        return nullptr;
+    }
+    using GetLocalPlayerFn = void* (*)(void*);
+    auto getter = reinterpret_cast<GetLocalPlayerFn>(getterAddress);
+    void* player = getter(clientInstance);
+    if (!player || !isReadableMemory(player, sizeof(void*))) {
+        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel))
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "GameHooks", "verified_local_player", "getter_returned_unreadable_player");
+        return nullptr;
+    }
+    void** playerVtable = nullptr;
+    std::memcpy(&playerVtable, player, sizeof(playerVtable));
+    if (!playerVtable || !isReadableMemory(playerVtable, sizeof(void*))) return nullptr;
+    void* firstPlayerMethod = nullptr;
+    std::memcpy(&firstPlayerMethod, playerVtable, sizeof(firstPlayerMethod));
+    if (!firstPlayerMethod || !isMinecraftFunction(firstPlayerMethod)) return nullptr;
+    return player;
+}
+
 void tickDetour(void* actor) {
-    auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-    LocalPlayerPreTickEvent preEvent{player};
+    // Keep established raw actor events for BedrockAim/HitboxExpander.
+    // Only the verified event is consumed by inventory/combat modules.
+    auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    void* localPlayer = resolveLocalPlayerFromClientInstance(
+        currentClientInstance.load(std::memory_order_acquire));
+    const bool isVerifiedLocal = actor && localPlayer && actor == localPlayer;
+    LocalPlayerPreTickEvent preEvent{actorPlayer};
     bus().publish(preEvent);
+    if (isVerifiedLocal) {
+        VerifiedLocalPlayerPreTickEvent verifiedEvent{
+            reinterpret_cast<bedrocktools::sdk::Player*>(localPlayer)};
+        bus().publish(verifiedEvent);
+    }
     if (tickOriginal) tickOriginal(actor);
-    LocalPlayerTickEvent event{player};
+    LocalPlayerTickEvent event{actorPlayer};
     bus().publish(event);
 }
 
@@ -753,6 +823,11 @@ void* clientInstance() {
     return currentClientInstance.load(std::memory_order_acquire);
 }
 
+void* localPlayer() {
+    return resolveLocalPlayerFromClientInstance(
+        currentClientInstance.load(std::memory_order_acquire));
+}
+
 void* gameMode() {
     return currentGameMode.load(std::memory_order_acquire);
 }
@@ -764,7 +839,7 @@ void* gameModeForPlayer(void* player) {
     // exact resolved public attack signature instead of merely a plausible game
     // vtable. This avoids accidentally retaining a neighboring polymorphic object.
     void* observed = currentGameMode.load(std::memory_order_acquire);
-    if (observed && publicAttackVirtualEntry(observed) != 0) return observed;
+    if (observed && (publicAttackVirtualEntry(observed) != 0 || publicUseItemVirtualEntry(observed) != 0)) return observed;
 
     // Some game sessions have not yet produced a GameMode callback when native attack dispatch
     // first becomes active. The Player SDK already documents the owned mGameMode
@@ -781,19 +856,92 @@ void* gameModeForPlayer(void* player) {
     const auto* slot = reinterpret_cast<const void*>(slotAddress);
     if (!isReadableMemory(slot, sizeof(void*))) return nullptr;
 
-    void* candidate = *reinterpret_cast<void* const*>(slot);
-    if (!candidate || publicAttackVirtualEntry(candidate) == 0) {
-        static std::atomic_bool loggedNoVerifiedGameMode{false};
-        if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Could not validate a local Player-owned GameMode; no native attack was dispatched.");
-        return nullptr;
+    void* candidate = nullptr;
+    std::memcpy(&candidate, slot, sizeof(candidate));
+    auto isValidatedGameMode = [](void* value) {
+        return value && (publicAttackVirtualEntry(value) != 0 ||
+                         publicUseItemVirtualEntry(value) != 0);
+    };
+
+    if (isValidatedGameMode(candidate)) {
+        currentGameMode.store(candidate, std::memory_order_release);
+        static std::atomic_bool loggedPlayerGameModeFallback{false};
+        if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
+            gameHooksLogger().info("Recovered the Player-owned GameMode using exact public attack/useItem method validation.");
+        return candidate;
     }
 
-    currentGameMode.store(candidate, std::memory_order_release);
-    static std::atomic_bool loggedPlayerGameModeFallback{false};
-    if (!loggedPlayerGameModeFallback.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Recovered the Player-owned GameMode using a readable field and exact public attack signature match.");
-    return candidate;
+    // The SDK's mGameMode offset can drift between Bedrock client builds. As a
+    // fallback, inspect pointer-aligned fields inside the local Player object,
+    // but accept a candidate only if its live vtable contains an exact match for
+    // a resolved GameMode/SurvivalMode attack or useItem entry in libminecraftpe.
+    // This does not call any guessed address and never accepts a vtable merely
+    // because it looks plausible. Limit the scan and rate-limit it per player so
+    // an unsupported build does not add a per-tick scan cost.
+    static thread_local const void* lastScannedPlayer = nullptr;
+    static thread_local std::chrono::steady_clock::time_point nextScan{};
+    const auto scanNow = std::chrono::steady_clock::now();
+    if (lastScannedPlayer != player || scanNow >= nextScan) {
+        lastScannedPlayer = player;
+        nextScan = scanNow + std::chrono::milliseconds(750);
+        constexpr std::size_t scanBegin = sizeof(void*);
+        constexpr std::size_t scanEnd = 0x1800;
+        for (std::size_t offset = scanBegin; offset + sizeof(void*) <= scanEnd;
+             offset += alignof(void*)) {
+            if (offset == gameModeOffset) continue;
+            if (playerAddress > std::numeric_limits<std::uintptr_t>::max() - offset) break;
+            const auto* field = reinterpret_cast<const void*>(playerAddress + offset);
+            if (!isReadableMemory(field, sizeof(void*))) continue;
+            void* possible = nullptr;
+            std::memcpy(&possible, field, sizeof(possible));
+            if (!isValidatedGameMode(possible)) continue;
+
+            currentGameMode.store(possible, std::memory_order_release);
+            gameHooksLogger().info(
+                "Recovered Player-owned GameMode through exact vtable signature match at Player offset 0x{:X}.",
+                offset);
+            return possible;
+        }
+    }
+
+    static std::atomic_bool loggedNoVerifiedGameMode{false};
+    if (!loggedNoVerifiedGameMode.exchange(true, std::memory_order_acq_rel))
+        gameHooksLogger().warn("Could not validate a Player-owned GameMode; checked the SDK offset and a bounded pointer-field scan against exact public attack/useItem signatures.");
+    return nullptr;
+}
+
+bool useItem(void* player, const void* itemStack) {
+    if (!player || !itemStack) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "use_item", "missing_player_or_stack");
+        return false;
+    }
+    void* receiver = gameModeForPlayer(player);
+    if (!receiver) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "use_item", "gamemode_unavailable");
+        return false;
+    }
+    std::size_t slotIndex = 0;
+    if (!publicUseItemVirtualEntry(receiver, &slotIndex)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "use_item", "no_exact_public_vtable_match");
+        return false;
+    }
+    void** vtable = nullptr;
+    std::memcpy(&vtable, receiver, sizeof(vtable));
+    if (!vtable) return false;
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + slotIndex * sizeof(void*);
+    if (!isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) return false;
+    auto nativeUse = reinterpret_cast<UseItemFn>(vtable[slotIndex]);
+    if (!nativeUse) return false;
+
+    const bool accepted = nativeUse(receiver, const_cast<void*>(itemStack));
+    bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info :
+            bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "use_item", accepted ? "native_route_accepted" : "native_route_rejected",
+        std::string("vtable_slot=") + std::to_string(slotIndex));
+    return accepted;
 }
 
 bool attackAvailable(void* gameMode) {
@@ -818,7 +966,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // GameMode::attack is the public three-argument wrapper; it prepares the
     // native context before invoking the internal body. Only dispatch through it
     // when the vtable entry matches a resolved public signature for this build.
-    const auto publicEntry = publicAttackVirtualEntry(gameMode);
+    std::size_t matchedAttackSlot = 0;
+    const auto publicEntry = publicAttackVirtualEntry(gameMode, nullptr, &matchedAttackSlot);
     if (publicEntry == 0) {
         static std::atomic_bool loggedUnavailable{false};
         if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel)) {
@@ -827,9 +976,12 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
                     "GameHooks",
                     "attack_validation=implausible_gamemode: object/vtable did not pass the libminecraftpe validation");
             } else {
-                auto** vtable = *reinterpret_cast<void***>(gameMode);
-                constexpr std::size_t kKnownAttackSlot = 16;
-                const auto vtableEntry = reinterpret_cast<std::uintptr_t>(vtable[kKnownAttackSlot]);
+                void** vtable = nullptr;
+                std::memcpy(&vtable, gameMode, sizeof(vtable));
+                std::uintptr_t vtableEntry = 0;
+                const auto diagnosticSlot = reinterpret_cast<std::uintptr_t>(vtable) + 16 * sizeof(void*);
+                if (vtable && isReadableMemory(reinterpret_cast<const void*>(diagnosticSlot), sizeof(void*)))
+                    std::memcpy(&vtableEntry, reinterpret_cast<const void*>(diagnosticSlot), sizeof(vtableEntry));
                 const auto publicSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
                 const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
                 char detail[320]{};
@@ -845,9 +997,11 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         }
         return false;
     }
-    auto** vtable = *reinterpret_cast<void***>(gameMode);
-    constexpr std::size_t kKnownAttackSlot = 16;
-    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[kKnownAttackSlot]);
+    void** vtable = nullptr;
+    std::memcpy(&vtable, gameMode, sizeof(vtable));
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + matchedAttackSlot * sizeof(void*);
+    if (!vtable || !isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) return false;
+    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[matchedAttackSlot]);
     if (!publicAttack) return false;
 
     struct AttackGuard {

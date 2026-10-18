@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-10-17 — ElytraMacing module
+- Added an isolated ElytraMacing module with its own configuration for elytra glide gating, minimum fall distance, mace equip/restore, target range, hitpoint height, crosshair tolerance, camera assist speed and attack interval.
+- Glide-state reads use the current Bedrock entity-data encoding with SDK readable-memory checks. The module reads the existing BedrockAim target snapshot and does not write state to Aim Assist, Hitbox Expander, or MaceSwapper.
+- The module is isolated on the feature branch and requires Android ARM64 build/runtime verification before being considered complete.
+- All target/range state reads in the new module validate pointer-derived data locally; it does not change Aim Assist state or global hook policy.
+
+
+## 2026-10-17 — Native symbol aliases and configurable ShiftBlade delay
+- AutoHit/GameHooks now also checks the exact exported `$attack` wrapper symbol variants. Dispatch still requires an exact match against the active GameMode vtable entry; the native safety validation is unchanged.
+- AutoTotem's offhand accessor and setter resolution now tries the matching exact exported `$getOffhandSlot`/`$setOffhandSlot` variants before the existing signature fallback. Returned pointers and post-transfer inventory state remain validated.
+- ShiftBlade's sword retry interval is now configurable in local-player ticks (0–100; default 20). All existing target selection, ownership, restore, manual override, and consumption behavior is retained.
+
 ## 2026-10-17 — Diagnostics auto-save and combat failure visibility
 
 - Changed rolling diagnostics auto-save interval to a configurable **1–300 seconds** (default 5 seconds); migrated older minute-based settings safely.
