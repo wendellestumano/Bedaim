@@ -44,8 +44,6 @@ private:
     bool m_exportLogsNow = false;
     bool m_clearLogsNow = false;
     bool m_autoExportEnabled = true;
-    bool m_logAllEnabled = true;
-    bool m_gameplayOnlyLogsEnabled = true;
     int m_autoExportIntervalSeconds = 5;
     std::string m_exportFormat = "txt";
     mutable std::mutex m_exportMutex;
