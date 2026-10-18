@@ -288,7 +288,7 @@ std::uintptr_t canonicalArm64Entry(std::uintptr_t address) {
         std::int64_t imm26 = static_cast<std::int64_t>(instruction & 0x03FFFFFFu);
         if ((imm26 & (1LL << 25)) != 0) imm26 |= ~((1LL << 26) - 1);
         const auto next = static_cast<std::uintptr_t>(
-            static_cast<std::int64_t>(address) + (imm26 << 2));
+            static_cast<std::int64_t>(address) + (imm26 * 4));
         if (!next || !isMinecraftFunction(reinterpret_cast<const void*>(next))) break;
         address = next;
     }
