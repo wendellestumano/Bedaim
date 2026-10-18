@@ -1,4 +1,5 @@
 #include "autohit.hpp"
+#include "../../core/VerifiedLocalPlayerTickEvent.hpp"
 
 #include "aimassist.hpp"
 #include "AutoHitGuards.hpp"
@@ -105,7 +106,7 @@ void AutoHitModule::onInit() {
     // Avoid resolving ClientInstance::getLocalPlayer once per actor tick.
     // The verified event is emitted only after identity validation, so unresolved
     // runtimes fail closed without running native inventory/attack checks for mobs.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) {
             if (!enabled || !event.player) return;
             bedrocktools::diagnostics::probe(
