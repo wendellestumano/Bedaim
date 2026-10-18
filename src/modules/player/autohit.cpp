@@ -17,6 +17,7 @@
 #include <pl/Input.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -96,7 +97,7 @@ Vec3 eyePosition(Player* player) {
 
 AutoHitModule::AutoHitModule()
     : Module("Auto Hit",
-             "Experimental held-attack helper; uses the player tick path and requires a fresh BedrockAim target plus a validated native attack route.") {
+             "Experimental held-attack helper; uses a verified local-player tick, a fresh BedrockAim target and a validated native attack route without requiring crosshair lock.") {
     keybind = 0;
 }
 
@@ -281,6 +282,12 @@ bool AutoHitModule::onMouseEvent(int button, bool isDown) {
 
 void AutoHitModule::processPlayerTick(Player* player) {
     using namespace bedrocktools;
+    static std::atomic_bool loggedFirstEnabledTick{false};
+    if (enabled && !loggedFirstEnabledTick.exchange(true, std::memory_order_acq_rel)) {
+        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "tick_callback",
+            "first_enabled_local_player_tick",
+            std::string("player=") + std::to_string(reinterpret_cast<std::uintptr_t>(player)));
+    }
     bool attackHeld = false;
     bool requireAttackInput = false;
     int attackButton = 0;
@@ -365,9 +372,20 @@ void AutoHitModule::processPlayerTick(Player* player) {
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
     const auto weapon = bedaim::autohit::weapon::classify(heldItem);
-    const auto profile = bedaim::autohit::weapon::resolve(
+    auto profile = bedaim::autohit::weapon::resolve(
         weapon, swordEnabled, swordCps, axeEnabled, axeCps,
         maceEnabled, maceCps, tridentEnabled, tridentCps);
+    if (!profile.enabled && heldItem.empty() && swordEnabled) {
+        // Some 1.26.52.3 inventory layouts return an empty identifier even when
+        // the selected slot visibly contains an item. Don't turn this read failure
+        // into a permanent AutoHit stop: use the bounded sword profile as a
+        // conservative attempt-rate fallback. Explicitly identified unsupported
+        // items remain blocked, and all target/range/GameMode checks still apply.
+        profile = {true, swordCps};
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "weapon_profile",
+            "unknown_identifier_fallback",
+            "selected item identifier unavailable; using configured sword CPS cap");
+    }
     if (!profile.enabled) {
         diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile", "blocked",
             std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; item=" +
@@ -398,11 +416,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "target", "invalid_bounds");
         return;
     }
-    if (!aim->currentTargetInCrosshair(player, target)) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair", "target_not_centered");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair", "confirmed");
+    // This is AutoHit, not a click simulator: the validated BedrockAim
+    // snapshot is the target authority, so camera/crosshair alignment is not a
+    // prerequisite. Requiring it here duplicated Aim Assist's angle gate and
+    // caused otherwise valid nearby bots to be rejected even with a fresh box.
+    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair",
+        "alignment_not_required_for_valid_snapshot");
 
     const Vec3 eye = eyePosition(player);
     if (!finiteVec(eye)) {

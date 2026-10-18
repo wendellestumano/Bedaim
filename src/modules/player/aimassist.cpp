@@ -421,9 +421,18 @@ void AimAssistModule::onInit() {
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
-            if (g_aimAssist && g_aimAssist->enabled) {
-                g_aimAssist->processPlayerTick(event.player);
-            }
+            auto* module = g_aimAssist;
+            if (!module || !module->enabled) return;
+
+            // GameHooks publishes this event for every Actor that reaches the
+            // shared tick detour. Tracking all of them lets a bot/mob overwrite
+            // the local player's target snapshot between local ticks. Resolve
+            // the verified pointer captured by GameHooks and accept only that
+            // exact object.
+            auto* localPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(
+                bedrocktools::core::gamehooks::localPlayer());
+            if (!localPlayer || event.player != localPlayer) return;
+            module->processPlayerTick(event.player);
         });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>(
         [](auto& event) {

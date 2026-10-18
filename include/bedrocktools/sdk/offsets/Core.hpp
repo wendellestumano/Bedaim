@@ -6,6 +6,8 @@ namespace bedrocktools::sdk::offsets {
 
 namespace VTable {
 inline constexpr std::size_t ClientInstance_getRegion = 31;
+// Adjacent to getRegion in ClientInstance's virtual interface.
+inline constexpr std::size_t ClientInstance_getLocalPlayer = ClientInstance_getRegion + 1;
 inline constexpr std::size_t BlockSource_getDimensionId = 18;
 inline constexpr std::size_t RenderMaterialGroup_getMaterial = 2;
 inline constexpr std::size_t HoverTextRendererRenderHoverBox = 17;
