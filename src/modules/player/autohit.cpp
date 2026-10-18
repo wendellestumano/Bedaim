@@ -230,7 +230,7 @@ bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeCha
 }
 
 bool AutoHitModule::onMouseEvent(int button, bool isDown) {
-    std::lock_guard<std::mutex> lock(m_stateMutex);
+    std::unique_lock<std::mutex> lock(m_stateMutex);
     if (m_captureNextInput && isDown &&
         std::chrono::steady_clock::now() - m_captureArmedAt >= std::chrono::milliseconds(200)) {
         m_attackButton = std::clamp(button, 0, 16);
@@ -240,6 +240,8 @@ bool AutoHitModule::onMouseEvent(int button, bool isDown) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
             "AutoHit", "input_capture", "mouse_button_captured",
             std::string("button=") + std::to_string(m_attackButton));
+        lock.unlock();
+        onMenuRegistered();
         return false;
     }
     const bool screenBlocked = m_containerOpen.load(std::memory_order_acquire) ||
