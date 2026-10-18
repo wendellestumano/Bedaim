@@ -1643,13 +1643,20 @@ void HitboxExpanderModule::onInit() {
         ", actor_classification=" + (actorTypeReady ? "ok" : "missing"));
 
     std::call_once(g_hitboxExpanderEventOnce, [] {
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>(
+        // Restore/apply only around the verified local player's tick. These raw
+        // events are emitted for every actor; querying nearby actors and touching
+        // hitbox components for every mob tick causes severe CPU spikes.
+        bedrocktools::events::bus().subscribe<bedrocktools::events::VerifiedLocalPlayerPreTickEvent>(
             [](auto& event) {
                 if (g_hitboxExpander) g_hitboxExpander->processPreTick(event.player);
             });
         bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
             [](auto& event) {
-                if (g_hitboxExpander) g_hitboxExpander->processPostTick(event.player);
+                if (!g_hitboxExpander || !event.player) return;
+                auto* local = reinterpret_cast<bedrocktools::sdk::Player*>(
+                    bedrocktools::core::gamehooks::localPlayer());
+                if (!local || event.player != local) return;
+                g_hitboxExpander->processPostTick(event.player);
             });
     });
 }
