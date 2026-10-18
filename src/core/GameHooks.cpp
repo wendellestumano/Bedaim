@@ -432,13 +432,19 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         AttackKind found = AttackKind::GameMode;
         bool match = false;
         const auto canonicalAddress = canonicalArm64Entry(address);
-        const auto canonicalSurvival = canonicalArm64Entry(survivalSignature ? survivalSignature : symbols.survival);
-        const auto canonicalBase = canonicalArm64Entry(baseSignature ? baseSignature : symbols.base);
-        if ((survivalSignature && (address == survivalSignature || canonicalAddress == canonicalSurvival)) ||
-            (symbols.survival && (address == symbols.survival || canonicalAddress == canonicalSurvival))) {
+        const bool survivalMatch =
+            (survivalSignature && (address == survivalSignature ||
+                canonicalAddress == canonicalArm64Entry(survivalSignature))) ||
+            (symbols.survival && (address == symbols.survival ||
+                canonicalAddress == canonicalArm64Entry(symbols.survival)));
+        const bool baseMatch =
+            (baseSignature && (address == baseSignature ||
+                canonicalAddress == canonicalArm64Entry(baseSignature))) ||
+            (symbols.base && (address == symbols.base ||
+                canonicalAddress == canonicalArm64Entry(symbols.base)));
+        if (survivalMatch) {
             found = AttackKind::SurvivalMode; match = true;
-        } else if ((baseSignature && (address == baseSignature || canonicalAddress == canonicalBase)) ||
-                   (symbols.base && (address == symbols.base || canonicalAddress == canonicalBase))) {
+        } else if (baseMatch) {
             found = AttackKind::GameMode; match = true;
         }
         if (!match) continue;
