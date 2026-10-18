@@ -161,6 +161,56 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
     }
 }
 
+
+bool exportGameplayOnlyJsonTo(const std::string& path, std::string* error = nullptr) noexcept {
+    try {
+        if (path.empty()) {
+            if (error) *error = "empty export path";
+            return false;
+        }
+        const auto entries = bedrocktools::diagnostics::snapshot();
+        const auto isGameplay = [](const bedrocktools::diagnostics::Entry& entry) {
+            // Keep module decisions and the native routes they depend on, while
+            // excluding generic startup, registry and exporter chatter.
+            return entry.component != "Runtime" &&
+                   entry.component != "Config" &&
+                   entry.component != "ModuleRegistry" &&
+                   entry.component != "Diagnostics";
+        };
+        json payload;
+        payload["schema_version"] = 1;
+        payload["mode"] = "GAMEPLAY_ONLY_LOGS";
+        payload["generated_at_unix_ms"] =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        payload["buffer_capacity"] = 4096;
+        payload["entries"] = json::array();
+        for (const auto& entry : entries) {
+            if (!isGameplay(entry)) continue;
+            payload["entries"].push_back({
+                {"timestamp_ms", entry.timestampMs},
+                {"sequence", entry.sequence},
+                {"level", bedrocktools::diagnostics::levelName(entry.level)},
+                {"component", entry.component},
+                {"message", entry.message}
+            });
+        }
+        payload["entry_count"] = payload["entries"].size();
+        if (!bedrocktools::config::writePayloadAtomically(path, payload.dump(2) + "\n")) {
+            if (error) *error = "could not atomically replace gameplay-only JSON log";
+            return false;
+        }
+        if (error) error->clear();
+        return true;
+    } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+    } catch (...) {
+        if (error) *error = "unknown gameplay-only export failure";
+        return false;
+    }
+}
+
 }
 
 ModuleDiagnosticsModule::ModuleDiagnosticsModule()
@@ -541,12 +591,19 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
     }
 
     const auto outputPath = (outputDirectory / filename).string();
+    const auto gameplayPath = (outputDirectory / "bedaim_diagnostics_gameplay.json").string();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Diagnostics",
         std::string(automatic ? "periodic" : "manual") + " log export requested; format=" + format);
     std::string error;
     const bool ok = format == "json"
         ? bedrocktools::diagnostics::exportJsonTo(outputPath, &error)
         : bedrocktools::diagnostics::exportTo(outputPath, &error);
+    // Both analysis modes are emitted by default: the full stream for startup
+    // and native-hook diagnosis, plus a gameplay-focused stream for module gates.
+    std::string gameplayError;
+    const bool gameplayOk = automatic
+        ? exportGameplayOnlyJsonTo(gameplayPath, &gameplayError)
+        : true;
 
     // Maintain a separate lifetime JSON containing deduplicated entries from
     // every gameplay. Merge from the just-written current snapshot, not from
@@ -556,6 +613,10 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         outputDirectory / "bedaim_diagnostics_auto.json",
         outputDirectory / "bedaim_diagnostics_total.json", &lifetimeError);
     if (ok && automatic) {
+        if (!gameplayOk) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+                "Diagnostics", "GAMEPLAY_ONLY_LOGS export failed: " + gameplayError);
+        }
         std::error_code staleError;
         std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
         if (staleError) {
@@ -578,9 +639,9 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         const std::string completedAt = localClockLabel();
         if (ok) {
             m_lastExportStatus = automatic
-                ? (lifetimeOk
-                    ? "Current + lifetime logs saved (" + completedAt + ")"
-                    : "Current log saved; lifetime update failed (" + completedAt + ")")
+                ? (lifetimeOk && gameplayOk
+                    ? "ALL + GAMEPLAY_ONLY_LOGS + lifetime saved (" + completedAt + ")"
+                    : "ALL log saved; secondary log update failed (" + completedAt + ")")
                 : "Manual export completed (" + completedAt + ")";
             m_lastExportPath = outputPath;
             m_lastSuccessfulExportTime = completedAt;
