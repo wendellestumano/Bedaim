@@ -901,8 +901,12 @@ void tickDetour(void* actor) {
         bedaim::events::VerifiedLocalPlayerTickEvent event{reinterpret_cast<bedrocktools::sdk::Player*>(local)};
         bus().publish(event);
     }
-    LocalPlayerTickEvent raw{actorPlayer};
-    bus().publish(raw);
+    // LocalPlayerTickEvent is reserved for the verified local player. Remote actors
+    // can still be observed through LocalPlayerPreTickEvent when genuinely needed.
+    if (verified) {
+        LocalPlayerTickEvent localTick{actorPlayer};
+        bus().publish(localTick);
+    }
 }
 
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
