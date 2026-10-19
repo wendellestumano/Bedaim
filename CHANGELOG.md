@@ -119,3 +119,6 @@
 - Limited AutoHit's live target revalidation to a small query radius derived from configured attack reach instead of rescanning the Aim Assist's full configured range.
 - Treated the attack-input requirement as desktop-only on Android builds; enabling AutoHit on Android now activates automatically while retaining weapon, target, reach, cooldown, and native attack-route validation.
 - This is a performance/activation hypothesis pending Android runtime testing. A successful compile or wrapper return does not prove server-confirmed damage or eliminate all FPS drops.
+
+- Added bounded ARM64 branch-target validation for guarded public attack wrappers: a vtable entry is accepted only when its first 16 instructions contain a direct branch to the unique resolved attack signature. The validated entry is cached per GameMode/vtable identity.
+- AutoHit now preflights the native attack route before requesting a target snapshot; AutoHit-only tracking is skipped while the build's native attack route is unavailable, preventing repeated expensive scans that cannot lead to an attack.
