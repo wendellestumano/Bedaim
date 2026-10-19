@@ -45,10 +45,18 @@ int main() {
         std::ifstream jsonIn(jsonPath, std::ios::binary);
         const nlohmann::json exported = nlohmann::json::parse(
             std::string((std::istreambuf_iterator<char>(jsonIn)), std::istreambuf_iterator<char>()));
-        assert(exported.at("schema_version").get<int>() == 1);
+        assert(exported.at("schema_version").get<int>() == 2);
         assert(exported.at("entry_count").get<std::size_t>() == 8);
         assert(exported.at("entries").size() == 8);
+        assert(exported.at("buffer_capacity").get<std::size_t>() ==
+               bedrocktools::diagnostics::bufferCapacity());
+        assert(exported.at("dropped_entry_count").get<std::uint64_t>() == 0);
+        assert(exported.at("first_sequence").get<std::uint64_t>() == 1);
+        assert(exported.at("last_sequence").get<std::uint64_t>() == 8);
         assert(exported.at("entries").front().at("level") == "TRACE");
+        assert(exported.at("entries").front().contains("monotonic_ns"));
+        assert(exported.at("entries").front().at("monotonic_ns").get<std::uint64_t>() > 0);
+        assert(exported.at("entries").front().contains("thread_id"));
         assert(exported.at("entries").back().at("message") ==
                "target=missing: native query returned no actor");
     }
@@ -93,5 +101,38 @@ int main() {
     assert(bedrocktools::diagnostics::count() == 0);
     bedrocktools::diagnostics::probe(Level::Debug, "ProbeTest", "target", "none");
     assert(bedrocktools::diagnostics::count() == 1);
+
+    // The larger bounded ring retains the newest events and reports losses.
+    bedrocktools::diagnostics::clear();
+    const auto capacity = bedrocktools::diagnostics::bufferCapacity();
+    assert(capacity == 32768);
+    constexpr std::size_t overflowBy = 7;
+    for (std::size_t i = 0; i < capacity + overflowBy; ++i) {
+        log(Level::Trace, "OverflowTest", std::to_string(i));
+    }
+    assert(bedrocktools::diagnostics::count() == capacity);
+    assert(bedrocktools::diagnostics::droppedCount() == overflowBy);
+    const auto overflowEntries = bedrocktools::diagnostics::snapshot();
+    assert(overflowEntries.front().sequence == overflowBy + 1);
+    assert(overflowEntries.front().message == std::to_string(overflowBy));
+    assert(overflowEntries.back().sequence == capacity + overflowBy);
+    assert(overflowEntries.back().message == std::to_string(capacity + overflowBy - 1));
+
+    const auto overflowJsonPath = std::filesystem::temp_directory_path() / "bedaim_diagnostics_overflow.json";
+    assert(bedrocktools::diagnostics::exportJsonTo(overflowJsonPath.string(), &error));
+    {
+        std::ifstream overflowIn(overflowJsonPath, std::ios::binary);
+        const nlohmann::json overflow = nlohmann::json::parse(
+            std::string((std::istreambuf_iterator<char>(overflowIn)), std::istreambuf_iterator<char>()));
+        assert(overflow.at("entry_count").get<std::size_t>() == capacity);
+        assert(overflow.at("buffer_capacity").get<std::size_t>() == capacity);
+        assert(overflow.at("dropped_entry_count").get<std::uint64_t>() == overflowBy);
+        assert(overflow.at("first_sequence").get<std::uint64_t>() == overflowBy + 1);
+        assert(overflow.at("last_sequence").get<std::uint64_t>() == capacity + overflowBy);
+    }
+    std::filesystem::remove(overflowJsonPath, ec);
+    bedrocktools::diagnostics::clear();
+    assert(bedrocktools::diagnostics::count() == 0);
+    assert(bedrocktools::diagnostics::droppedCount() == 0);
     return 0;
 }

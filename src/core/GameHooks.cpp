@@ -1,6 +1,7 @@
 #include "GameHooks.hpp"
 #include "VerifiedLocalPlayerTickEvent.hpp"
 #include "Diagnostics.hpp"
+#include "NativeAttackResultPolicy.hpp"
 #include "modules/player/PlayerGameType.hpp"
 #include <bedrocktools/Version.hpp>
 
@@ -2026,15 +2027,17 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
     const bool publicResult = usesFourArgumentAbi
         ? nativeAttack(gameMode, target, playPredictiveSound, nativeResultOut)
         : publicAttack(gameMode, target, hitPosition);
-    // If the internal observer installed successfully but did not see this call,
-    // do not trust a wrapper's "true" return: that mismatch produced particles/
-    // swing with no target damage in the latest runtime logs.
-    // A public wrapper's bool return is not proof that the internal attack
-    // action ran. The current runtime logs showed "true" with the observer
-    // never reached and no hurt-time change; treating that as accepted caused
-    // AutoHit's no-hit guard to learn a false success state. Only trust a
-    // result observed from the resolved internal attack implementation.
-    const bool accepted = syntheticAttackResultObserved && syntheticAttackNativeResult;
+    // The APK-matched ARM64 body clears x3's output bool at entry and writes
+    // true only along its success branch. A true wrapper/internal return with
+    // output=false must not be counted as a successful native-route result.
+    // This is native-route confirmation, not server-authoritative damage.
+    const bool outputFlagUsed = nativeResultOutUsed && *nativeResultOutUsed;
+    const bool outputFlagTrue = nativeResultOut && *nativeResultOut;
+    const bool nativeOutputConfirmsAttempt = !usesFourArgumentAbi ||
+        (outputFlagUsed && outputFlagTrue);
+    const bool accepted = bedrocktools::core::attackresult::confirmedByNativeRoute(
+        syntheticAttackResultObserved, syntheticAttackNativeResult,
+        usesFourArgumentAbi, outputFlagUsed, outputFlagTrue);
     if (!syntheticAttackResultObserved) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "GameHooks", "attack", "internal_observer_not_reached",
@@ -2066,9 +2069,10 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         "; public_return=" + (publicResult ? "true" : "false") +
         "; internal_native_return=" + (syntheticAttackResultObserved
             ? (syntheticAttackNativeResult ? "true" : "false") : "not_observed") +
-        "; native_out_used=" + (nativeResultOutUsed && *nativeResultOutUsed ? "true" : "false") +
-        "; native_out_result=" + ((nativeResultOutUsed && *nativeResultOutUsed && nativeResultOut)
-            ? (*nativeResultOut ? "true" : "false") : "not_applicable") +
+        "; native_out_used=" + (outputFlagUsed ? "true" : "false") +
+        "; native_out_result=" + (outputFlagUsed ? (outputFlagTrue ? "true" : "false") : "not_applicable") +
+        "; native_output_confirms_attempt=" + (nativeOutputConfirmsAttempt ? "true" : "false") +
+        "; acceptance_policy=" + (usesFourArgumentAbi ? "observed_return_and_native_out_flag" : "observed_internal_return") +
         "; accepted_by_observer=" + (accepted ? "true" : "false") +
         "; explicit_input_callback=not_called_in_this_path" +
         "; return_values_do_not_prove_server_damage";
@@ -2076,13 +2080,16 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         "GameHooks", "native_attack_dispatch_result", dispatchResult);
 
     bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
-        "GameHooks", "attack", accepted ? "public_virtual_returned_true" : "public_virtual_returned_false",
+        "GameHooks", "attack",
+        accepted ? "attack_result_confirmed_by_native_route" : "attack_result_not_confirmed_by_native_route",
         std::string("vtable_slot=") + std::to_string(matchedSlot) +
         "; abi=" + (usesFourArgumentAbi ? "four_argument" : "three_argument") +
         "; observer_ready=" + (observerReady ? "true" : "false") +
         "; internal_observer=" + (syntheticAttackResultObserved ? "observed" : "not_reached") +
         "; public_return=" + (publicResult ? "true" : "false") +
-        "; return_true_does_not_prove_server_damage");
+        "; native_out_result=" + (outputFlagUsed ? (outputFlagTrue ? "true" : "false") : "not_applicable") +
+        "; native_output_confirms_attempt=" + (nativeOutputConfirmsAttempt ? "true" : "false") +
+        "; native route confirmation is not server damage confirmation");
     return accepted;
 }
 

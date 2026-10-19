@@ -1,4 +1,5 @@
 #include "modules/player/AutoHitGuards.hpp"
+#include "core/NativeAttackResultPolicy.hpp"
 
 #include <cstdlib>
 #include <cmath>
@@ -29,6 +30,20 @@ int main() {
     using bedaim::autohit::Decision;
     using bedaim::autohit::evaluate;
     using bedaim::autohit::effectiveScanRange;
+    using bedrocktools::core::attackresult::confirmedByNativeRoute;
+
+    check(confirmedByNativeRoute(true, true, false, false, false),
+          "three-argument route uses the observed internal result");
+    check(confirmedByNativeRoute(true, true, true, true, true),
+          "four-argument route confirms when its native output flag is true");
+    check(!confirmedByNativeRoute(true, true, true, true, false),
+          "four-argument route rejects internal true with output flag false");
+    check(!confirmedByNativeRoute(true, true, true, false, true),
+          "four-argument route rejects an output flag that was not observed as used");
+    check(!confirmedByNativeRoute(false, true, true, true, true),
+          "missing internal observer never confirms an attack result");
+    check(!confirmedByNativeRoute(true, false, true, true, true),
+          "false internal return never confirms an attack result");
 
     check(effectiveScanRange(5.0f, false, 6.0f) == 5.0f,
           "AutoHit disabled preserves Aim Assist scan range");
