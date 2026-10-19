@@ -1,4 +1,5 @@
 #include "hitbox.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
@@ -473,7 +474,7 @@ void HitboxModule::onInit() {
     uintptr_t afn = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted);
     if (afn) s_actorFetchNearby = (Actor_fetchNearbyActorsSorted_t)afn;
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_hitboxTickCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { s_hitboxTickCallback(event.player); });
     // Keep the renderer hook installed so BedrockBounds can preview its expanded
     // target AABBs even when the standalone Hitbox module is disabled.
     applyPatch();
