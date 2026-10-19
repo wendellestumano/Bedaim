@@ -2,6 +2,26 @@ plugins {
     id 'com.android.application'
 }
 
+import java.util.Properties
+
+// Persistent signing material is supplied by CI from a protected GitHub Actions secret.
+// Never check the keystore or the signing bundle into this public repository.
+def signingDir = System.getenv("SCREENBRIDGE_SIGNING_DIR")
+def signingProperties = new Properties()
+def signingKeyFile = signingDir ? file("${signingDir}/screenbridge-signing.p12") : null
+def signingPropertiesFile = signingDir ? file("${signingDir}/signing.properties") : null
+if (signingPropertiesFile != null && signingPropertiesFile.isFile()) {
+    signingPropertiesFile.withInputStream { stream -> signingProperties.load(stream) }
+}
+def hasPersistentSigning = signingKeyFile != null &&
+        signingKeyFile.isFile() &&
+        signingProperties.getProperty("storePassword") &&
+        signingProperties.getProperty("keyAlias") &&
+        signingProperties.getProperty("keyPassword")
+
+def runNumber = System.getenv("GITHUB_RUN_NUMBER")
+def buildVersionCode = runNumber != null && runNumber.isInteger() ? runNumber.toInteger() : 1
+
 android {
     namespace 'dev.screenbridge'
     compileSdk 35
@@ -10,8 +30,29 @@ android {
         applicationId 'dev.screenbridge'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '0.1.0'
+        versionCode buildVersionCode
+        versionName "0.1.${buildVersionCode}"
+    }
+
+    signingConfigs {
+        persistent {
+            if (hasPersistentSigning) {
+                storeFile signingKeyFile
+                storePassword signingProperties.getProperty("storePassword")
+                keyAlias signingProperties.getProperty("keyAlias")
+                keyPassword signingProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // CI publishes an APK only when persistent signing material is present.
+            // The fallback exists for local IDE sync/testing, but must not be distributed.
+            if (hasPersistentSigning) {
+                signingConfig signingConfigs.persistent
+            }
+        }
     }
 
     compileOptions {
