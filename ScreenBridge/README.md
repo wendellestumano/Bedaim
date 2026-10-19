@@ -3,12 +3,19 @@
 ScreenBridge is an Android foreground service for authenticated screen capture and accessibility gestures. It lives on the separate `feature/screenbridge-android-app-20261019` branch; Bedaim's `main` branch is not changed.
 
 ## Setup and permission model
-1. Install the debug APK built by GitHub Actions.
+1. Install the stable-signed APK produced by the GitHub Actions workflow.
 2. Enable **ScreenBridge Remote Control** in Android Accessibility settings.
 3. Open ScreenBridge and tap **Authorize screen and start service**. Confirm Android's screen-capture dialog.
 4. Keep the foreground-service notification visible while you want control enabled.
 
-Screen capture requires explicit Android consent. If Android revokes the session or kills the service, open ScreenBridge and authorize again. The app must not silently bypass that OS permission. The local HTTP listener binds only to `127.0.0.1:18766`; it is not exposed to Wi-Fi or the public internet. A random per-install token protects control and image endpoints. Never share that token publicly.
+Screen capture requires explicit Android consent. If Android revokes the session or kills the service, open ScreenBridge and authorize again. Android's system consent cannot be silently persisted across new MediaProjection sessions.
+
+## Keeping permissions across updates
+- CI expects the repository Actions secret `SCREENBRIDGE_SIGNING_BUNDLE_B64`. The value is a Base64-encoded ZIP containing `screenbridge-signing.p12` and `signing.properties`.
+- Keep that signing bundle private and make a secure backup. **Never commit the keystore, signing bundle, passwords, or the Base64 value to this public repository or paste them into chat.**
+- The bundle must remain unchanged for every future build. A different signing key can prevent an in-place update and require uninstalling/reinstalling the app, which loses app data and usually requires enabling Accessibility again.
+- The first stable-key migration from an earlier CI debug APK may still require one clean reinstall because previous GitHub-hosted runners generated temporary debug keys. After migration, all workflow-built APKs reuse the same certificate and have monotonically increasing CI version codes.
+- A missing signing secret deliberately produces no APK. Do not install locally built/default-debug-signed APKs as replacements for the stable-signed app.
 
 ## Local endpoints
 - `GET /health` — service, projection, accessibility, cached-frame freshness, frame count, and capture error diagnostics.
