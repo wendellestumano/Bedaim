@@ -40,6 +40,10 @@ Decision evaluate(const Inputs& input) noexcept;
 float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHitRange,
                          float queryExpansionMargin = 0.0f) noexcept;
 
+// Requires the engine's current HitResult to identify the exact selected target.
+// A missing target or mismatched raycast result must never dispatch an attack.
+bool hitResultMatchesTarget(const void* target, const void* hitResultTarget) noexcept;
+
 // Diagnostic-only tracker for a native call that reports acceptance without
 // an immediate local hurt-time transition. Hurt-time can update after the current
 // tick, so this must never gate attack dispatch. observe() returns true once when
