@@ -40,15 +40,15 @@ Decision evaluate(const Inputs& input) noexcept;
 float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHitRange,
                          float queryExpansionMargin = 0.0f) noexcept;
 
-// Fail-closed guard for a native wrapper that reports acceptance without any
-// immediate positive target hurt-time transition. This is local feedback only,
-// not proof of server-side damage. After six consecutive such attempts on the
-// same actor, that actor is quarantined until target identity or module state changes.
+// Diagnostic-only tracker for a native call that reports acceptance without
+// an immediate local hurt-time transition. Hurt-time can update after the current
+// tick, so this must never gate attack dispatch. observe() returns true once when
+// the streak reaches the threshold, allowing one warning while the configured CPS
+// limiter continues to bound attempts.
 class NoHitFeedbackGuard {
 public:
-    static constexpr std::uint32_t kAttemptsBeforeQuarantine = 6;
+    static constexpr std::uint32_t kAttemptsBeforeWarning = 6;
 
-    bool isBlocked(const void* target) noexcept;
     bool observe(const void* target, bool accepted, int hurtTimeBefore,
                  int hurtTimeAfter) noexcept;
     void reset() noexcept;
@@ -57,7 +57,7 @@ public:
 private:
     const void* m_target = nullptr;
     std::uint32_t m_consecutiveNoFeedback = 0;
-    bool m_blocked = false;
+    bool m_warningEmitted = false;
 };
 
 } // namespace bedaim::autohit
