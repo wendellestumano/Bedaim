@@ -20,6 +20,7 @@ Screen capture requires explicit Android consent. If Android revokes the session
 ## Local endpoints
 - `GET /health` — service, projection, accessibility, cached-frame freshness, frame count, and capture error diagnostics.
 - `GET /<token>/screen.jpg` — most recently captured JPEG frame.
+- `GET /<token>/ui.json` — cached active-window accessibility tree with text, descriptions, IDs, clickability and display bounds. Add `?refresh=1` to queue a fresh snapshot on the accessibility-service thread; normal reads use the event-updated cache and avoid spawning `uiautomator dump`.
 - `GET /<token>/action?op=tap&x=120&y=240` — dispatch a tap and return the next available frame.
 - `GET /<token>/action?op=swipe&x1=100&y1=300&x2=400&y2=300&ms=180` — dispatch a swipe and return the next frame.
 - `GET /<token>/action?op=back` or `op=home` — global navigation and the next frame.

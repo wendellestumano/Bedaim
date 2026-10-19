@@ -299,6 +299,11 @@ public class ScreenBridgeService extends Service {
                     return;
                 }
                 respond(s, 200, "image/jpeg", jpg);
+            } else if ("ui.json".equals(route)) {
+                Map<String,String> q = query(uri.getRawQuery());
+                boolean refresh = "1".equals(q.get("refresh"));
+                String snapshot = ScreenControlAccessibilityService.uiSnapshotJson(refresh);
+                respond(s, 200, "application/json; charset=utf-8", snapshot.getBytes(StandardCharsets.UTF_8));
             } else if ("action".equals(route)) {
                 Map<String,String> q = query(uri.getRawQuery());
                 String op = q.getOrDefault("op", "");
