@@ -1223,7 +1223,17 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
     const bool result = clientUpdateOriginal
         ? clientUpdateOriginal(clientInstance, value) : false;
 
-    if (receiverValid && shouldResolveLocalPlayer(clientInstance)) (void)resolveLocalPlayerFromClientInstance(clientInstance);
+    if (receiverValid && shouldResolveLocalPlayer(clientInstance)) {
+        // Resolve GameMode from a verified LocalPlayer and install the attack
+        // observer at the public adapter's validated implementation target.
+        // This happens independently of AutoHit being enabled, preserving real
+        // attack events for Keystrokes/ReachCounter/SkinStealer and other modules.
+        void* resolvedPlayer = resolveLocalPlayerFromClientInstance(clientInstance);
+        if (resolvedPlayer) {
+            void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
+            if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
+        }
+    }
     void* publishedClientInstance = currentClientInstance.load(std::memory_order_acquire);
     ClientInstanceUpdateEvent event{
         reinterpret_cast<bedrocktools::sdk::ClientInstance*>(publishedClientInstance)};
