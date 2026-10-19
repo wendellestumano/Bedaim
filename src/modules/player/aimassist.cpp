@@ -8,6 +8,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -419,7 +420,7 @@ void AimAssistModule::onInit() {
         ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
         ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [](auto& event) {
             if (g_aimAssist && g_aimAssist->enabled) {
                 g_aimAssist->processPlayerTick(event.player);
