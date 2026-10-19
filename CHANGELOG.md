@@ -147,3 +147,12 @@
 - Reduced unnecessary input-event subscriptions and state bookkeeping. The latest runtime logs still require a fresh test with AutoHit enabled: the most recent current-session log showed no AutoHit enable/dispatch events, and an earlier native trampoline result was false.
 
 - Added disabled-module fast paths to MaceSwapper and Sword Swapper: when inactive and no slot restoration is pending, they skip player-position/inventory work and repeated per-tick diagnostics.
+
+
+## 2026-10-19 — AutoHit no-feedback circuit breaker (experimental)
+
+- Added a native-free, unit-tested guard that quarantines the currently selected actor after six consecutive native attack calls return accepted without an immediate positive local hurt-time transition.
+- AutoHit stops dispatching against that same actor instead of continuing an unbounded stream of visually accepted but unconfirmed attacks. Switching target or toggling AutoHit resets the guard.
+- The probe explicitly labels hurt-time as local evidence only: it is not proof of server-authoritative damage. This is a containment measure for the reported repeated-attack/disconnect symptom, not a claim that the missing-damage root cause is solved.
+- The video also shows recurring Hitbox Expander bounds warnings and low FPS; those messages are distinct from the new AutoHit guard and still require the exported runtime logs/source path to diagnose precisely.
+- Change remains on `perf/autohit-tick-throttle-20261019`; `main` and Aim Assist targeting logic remain unchanged. Host regression tests and Android ARM64 packaging must pass before distributing the new build.
