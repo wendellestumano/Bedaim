@@ -91,17 +91,24 @@ void AutoTotemModule::onEnable() {
 }
 
 void AutoTotemModule::onDisable() {
-    std::lock_guard lock(m_stateMutex);
-    m_pendingRefill = false;
-    m_lastOffhandHadTotem = false;
-    m_transferBlocked = false;
-    m_refillAfter = {};
+    {
+        std::lock_guard lock(m_stateMutex);
+        m_pendingRefill = false;
+        m_lastOffhandHadTotem = false;
+        m_transferBlocked = false;
+        m_refillAfter = {};
+    }
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "AutoTotem", "lifecycle", "disabled");
 }
 
 void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
-    if (!enabled || !player) {
+    // The pre-tick subscription remains installed while the module is disabled;
+    // that is expected and must not appear as a warning while idle.
+    if (!enabled) return;
+    if (!player) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "AutoTotem", "tick_gate", !enabled ? "disabled" : "missing_player");
+            "AutoTotem", "tick_gate", "missing_player");
         return;
     }
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,

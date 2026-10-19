@@ -130,12 +130,17 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
         if (!lifetime.contains("session_ids") || !lifetime["session_ids"].is_array())
             lifetime["session_ids"] = json::array();
 
+        // This export adds monotonic time and thread identity; mark upgraded
+        // lifetime files even when they were originally created by schema v1.
+        lifetime["schema_version"] = 2;
         auto entryKey = [](const json& entry) {
             return std::to_string(entry.value("timestamp_ms", std::int64_t{0})) + "|" +
                 std::to_string(entry.value("sequence", std::uint64_t{0})) + "|" +
                 entry.value("level", std::string{}) + "|" +
                 entry.value("component", std::string{}) + "|" +
-                entry.value("message", std::string{});
+                entry.value("message", std::string{}) + "|" +
+                std::to_string(entry.value("monotonic_ns", std::uint64_t{0})) + "|" +
+                std::to_string(entry.value("thread_id", std::uint64_t{0}));
         };
 
         std::unordered_set<std::string> existing;
@@ -164,7 +169,7 @@ bool mergeCurrentSessionIntoLifetime(const std::filesystem::path& currentPath,
             ++appended;
         }
 
-        lifetime["schema_version"] = 1;
+        lifetime["schema_version"] = 2;
         lifetime["generated_at_unix_ms"] =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
@@ -205,17 +210,20 @@ bool exportGameplayOnlyJsonTo(const std::string& path, std::string* error = null
                    entry.component != "Diagnostics";
         };
         json payload;
-        payload["schema_version"] = 1;
+        payload["schema_version"] = 2;
         payload["mode"] = "GAMEPLAY_ONLY_LOGS";
         payload["generated_at_unix_ms"] =
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count();
-        payload["buffer_capacity"] = 4096;
+        payload["buffer_capacity"] = bedrocktools::diagnostics::bufferCapacity();
+        payload["dropped_entry_count"] = bedrocktools::diagnostics::droppedCount();
         payload["entries"] = json::array();
         for (const auto& entry : entries) {
             if (!isGameplay(entry)) continue;
             payload["entries"].push_back({
                 {"timestamp_ms", entry.timestampMs},
+                {"monotonic_ns", entry.monotonicNs},
+                {"thread_id", entry.threadId},
                 {"sequence", entry.sequence},
                 {"level", bedrocktools::diagnostics::levelName(entry.level)},
                 {"component", entry.component},
@@ -223,6 +231,10 @@ bool exportGameplayOnlyJsonTo(const std::string& path, std::string* error = null
             });
         }
         payload["entry_count"] = payload["entries"].size();
+        payload["first_sequence"] = payload["entries"].empty()
+            ? 0 : payload["entries"].front().value("sequence", std::uint64_t{0});
+        payload["last_sequence"] = payload["entries"].empty()
+            ? 0 : payload["entries"].back().value("sequence", std::uint64_t{0});
         if (!bedrocktools::config::writePayloadAtomically(path, payload.dump(2) + "\n")) {
             if (error) *error = "could not atomically replace gameplay-only JSON log";
             return false;
@@ -317,7 +329,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     clearNode.id = "m_clearLogsNow";
     clearNode.key = "m_clearLogsNow";
     clearNode.title = "Clear in-memory logs";
-    clearNode.description = "Clears the 4096-entry log buffer. Export first if you need to keep it.";
+    clearNode.description = "Clears the 32768-entry log buffer and dropped counter. Export first if you need to keep it.";
     clearNode.category = "diagnostics";
     clearNode.type = ConfigControlTypeV2::Toggle;
     clearNode.defaultValue = "false";
@@ -734,9 +746,11 @@ void ModuleDiagnosticsModule::onFrame() {
     std::vector<PLModMenu_DrawCommand> commands;
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
-    const std::string line2 = "Logs: " + std::to_string(bedrocktools::diagnostics::count()) +
-        " | Registry warn: " + std::to_string(m_summary.warnings) +
-        " | err: " + std::to_string(m_summary.errors);
+    const std::string line2 = "Logs " + std::to_string(bedrocktools::diagnostics::count()) +
+        "/" + std::to_string(bedrocktools::diagnostics::bufferCapacity()) +
+        " | lost " + std::to_string(bedrocktools::diagnostics::droppedCount()) +
+        " | Reg W " + std::to_string(m_summary.warnings) +
+        " E " + std::to_string(m_summary.errors);
     const std::string line3 = m_summary.written
         ? "Health report: module_diagnostics.json"
         : "Health report write failed (check config folder)";
@@ -899,13 +913,16 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
         ? runtimeEvents.size() - 128 : 0;
     report["runtime_log"] = {
         {"buffered_entries", runtimeEvents.size()},
-        {"capacity", 4096},
+        {"capacity", bedrocktools::diagnostics::bufferCapacity()},
+        {"dropped_entries", bedrocktools::diagnostics::droppedCount()},
         {"recent_entries", json::array()}
     };
     for (std::size_t i = firstRuntimeEvent; i < runtimeEvents.size(); ++i) {
         const auto& entry = runtimeEvents[i];
         report["runtime_log"]["recent_entries"].push_back({
             {"timestamp_ms", entry.timestampMs},
+            {"monotonic_ns", entry.monotonicNs},
+            {"thread_id", entry.threadId},
             {"sequence", entry.sequence},
             {"level", bedrocktools::diagnostics::levelName(entry.level)},
             {"component", entry.component},

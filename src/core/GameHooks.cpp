@@ -1955,7 +1955,12 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         return false;
     }
     if (nativeResultOutUsed) *nativeResultOutUsed = usesFourArgumentAbi;
-    if (implementation) (void)ensureAttackObserver(implementation);
+    const bool observerInstallSucceeded = implementation != 0 &&
+        ensureAttackObserver(implementation);
+    const bool observerReady = observerInstallSucceeded &&
+        attackObserverTarget.load(std::memory_order_acquire) ==
+            reinterpret_cast<void*>(implementation) &&
+        gameModeAttackOriginal != nullptr;
     void** vtable = nullptr;
     std::memcpy(&vtable, gameMode, sizeof(vtable));
     const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + matchedSlot * sizeof(void*);
@@ -1984,13 +1989,20 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         return false;
     }
 
-    const bool observe = gameModeAttackOriginal != nullptr;
+    const bool observe = observerReady;
     struct ObservationGuard {
-        bool active;
-        explicit ObservationGuard(bool value) : active(value) {
-            if (active) { syntheticAttackResultObserved = false; syntheticAttackNativeResult = false; syntheticAttackDispatchActive = true; }
+        bool previousDispatchActive;
+        explicit ObservationGuard(bool active)
+            : previousDispatchActive(syntheticAttackDispatchActive) {
+            // Always reset the result flags: an unobserved call must not inherit
+            // the previous attempt's observed=true/native-return=true state.
+            syntheticAttackResultObserved = false;
+            syntheticAttackNativeResult = false;
+            syntheticAttackDispatchActive = active;
         }
-        ~ObservationGuard() { if (active) syntheticAttackDispatchActive = false; }
+        ~ObservationGuard() {
+            syntheticAttackDispatchActive = previousDispatchActive;
+        }
     } observation{observe};
     struct PrepublishedGuard {
         bool previous;
@@ -2005,6 +2017,9 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
             usesFourArgumentAbi ? "four-argument native" : "three-argument public", matchedSlot);
         gameHooksLogger().info("{}", msg);
     }
+    static std::atomic<std::uint64_t> syntheticDispatchSequence{0};
+    const auto dispatchId =
+        syntheticDispatchSequence.fetch_add(1, std::memory_order_relaxed) + 1;
     // The fallback route is callable with four arguments only because its live
     // entry was validated to tail-branch to the matching four-argument attack
     // implementation. Never call that entry through the three-argument ABI.
@@ -2030,11 +2045,43 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
     }
     AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), accepted};
     bus().publish(resultEvent);
+
+    const auto addressText = [](const void* pointer) {
+        char buffer[32]{};
+        std::snprintf(buffer, sizeof(buffer), "0x%llx",
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(pointer)));
+        return std::string(buffer);
+    };
+    const std::string dispatchResult =
+        "dispatch_id=" + std::to_string(dispatchId) +
+        "; game_mode=" + addressText(gameMode) +
+        "; target=" + addressText(target) +
+        "; public_entry=" + addressText(reinterpret_cast<const void*>(publicEntry)) +
+        "; implementation=" + addressText(reinterpret_cast<const void*>(implementation)) +
+        "; vtable_slot=" + std::to_string(matchedSlot) +
+        "; abi=" + (usesFourArgumentAbi ? "four_argument" : "three_argument") +
+        "; observer_install_succeeded=" + (observerInstallSucceeded ? "true" : "false") +
+        "; observer_ready_for_implementation=" + (observerReady ? "true" : "false") +
+        "; observer_reached=" + (syntheticAttackResultObserved ? "true" : "false") +
+        "; public_return=" + (publicResult ? "true" : "false") +
+        "; internal_native_return=" + (syntheticAttackResultObserved
+            ? (syntheticAttackNativeResult ? "true" : "false") : "not_observed") +
+        "; native_out_used=" + (nativeResultOutUsed && *nativeResultOutUsed ? "true" : "false") +
+        "; native_out_result=" + ((nativeResultOutUsed && *nativeResultOutUsed && nativeResultOut)
+            ? (*nativeResultOut ? "true" : "false") : "not_applicable") +
+        "; accepted_by_observer=" + (accepted ? "true" : "false") +
+        "; explicit_input_callback=not_called_in_this_path" +
+        "; return_values_do_not_prove_server_damage";
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "GameHooks", "native_attack_dispatch_result", dispatchResult);
+
     bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
         "GameHooks", "attack", accepted ? "public_virtual_returned_true" : "public_virtual_returned_false",
         std::string("vtable_slot=") + std::to_string(matchedSlot) +
         "; abi=" + (usesFourArgumentAbi ? "four_argument" : "three_argument") +
+        "; observer_ready=" + (observerReady ? "true" : "false") +
         "; internal_observer=" + (syntheticAttackResultObserved ? "observed" : "not_reached") +
+        "; public_return=" + (publicResult ? "true" : "false") +
         "; return_true_does_not_prove_server_damage");
     return accepted;
 }

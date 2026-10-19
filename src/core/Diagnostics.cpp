@@ -14,14 +14,18 @@
 #include <sstream>
 #include <utility>
 #include <vector>
+#include <thread>
+#include <functional>
 #include <nlohmann/json.hpp>
 
 namespace bedrocktools::diagnostics {
 namespace {
-constexpr std::size_t kCapacity = 4096;
+// Larger bounded ring for long, high-CPS investigations without unbounded memory use.
+constexpr std::size_t kCapacity = 32768;
 std::mutex gMutex;
 std::deque<Entry> gEntries;
 std::uint64_t gNextSequence = 1;
+std::uint64_t gDroppedEntries = 0;
 std::mutex gProbeMutex;
 std::unordered_map<std::string, std::string> gProbeStates;
 
@@ -90,13 +94,21 @@ void log(Level level, std::string_view component, std::string_view message) noex
     try {
         Entry entry;
         entry.timestampMs = nowMs();
+        entry.monotonicNs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        entry.threadId = static_cast<std::uint64_t>(
+            std::hash<std::thread::id>{}(std::this_thread::get_id()));
         entry.level = level;
         entry.component = safeField(component);
         entry.message = safeField(message);
         {
             std::lock_guard<std::mutex> lock(gMutex);
             entry.sequence = gNextSequence++;
-            if (gEntries.size() == kCapacity) gEntries.pop_front();
+            if (gEntries.size() >= kCapacity) {
+                gEntries.pop_front();
+                ++gDroppedEntries;
+            }
             gEntries.push_back(std::move(entry));
         }
     } catch (...) {
@@ -118,6 +130,19 @@ std::size_t count() noexcept {
     }
 }
 
+std::size_t bufferCapacity() noexcept {
+    return kCapacity;
+}
+
+std::uint64_t droppedCount() noexcept {
+    try {
+        std::lock_guard<std::mutex> lock(gMutex);
+        return gDroppedEntries;
+    } catch (...) {
+        return 0;
+    }
+}
+
 void clear() noexcept {
     try {
         {
@@ -126,6 +151,7 @@ void clear() noexcept {
             // A cleared buffer starts a new sequence so exports are easier to
             // distinguish and correlate within a single gameplay session.
             gNextSequence = 1;
+            gDroppedEntries = 0;
         }
         resetProbes();
     } catch (...) {
@@ -153,15 +179,20 @@ bool exportJsonTo(const std::string& path, std::string* error) noexcept {
 
         const auto entries = snapshot();
         nlohmann::json payload;
-        payload["schema_version"] = 1;
+        payload["schema_version"] = 2;
         payload["mode"] = "ALL";
         payload["generated_at_unix_ms"] = nowMs();
         payload["entry_count"] = entries.size();
         payload["buffer_capacity"] = kCapacity;
+        payload["dropped_entry_count"] = droppedCount();
+        payload["first_sequence"] = entries.empty() ? 0 : entries.front().sequence;
+        payload["last_sequence"] = entries.empty() ? 0 : entries.back().sequence;
         payload["entries"] = nlohmann::json::array();
         for (const auto& entry : entries) {
             payload["entries"].push_back({
                 {"timestamp_ms", entry.timestampMs},
+                {"monotonic_ns", entry.monotonicNs},
+                {"thread_id", entry.threadId},
                 {"sequence", entry.sequence},
                 {"level", levelName(entry.level)},
                 {"component", entry.component},
@@ -193,10 +224,12 @@ bool exportTo(const std::string& path, std::string* error) noexcept {
         const auto entries = snapshot();
         std::ostringstream payload;
         payload << "# Bedaim diagnostics export\n";
-        payload << "# entries=" << entries.size() << " capacity=" << kCapacity << "\n";
-        payload << "# Fields: timestamp_ms | sequence | level | component | message\n";
+        payload << "# entries=" << entries.size() << " capacity=" << kCapacity
+                << " dropped=" << droppedCount() << "\n";
+        payload << "# Fields: timestamp_ms | monotonic_ns | thread_id | sequence | level | component | message\n";
         for (const auto& entry : entries) {
-            payload << entry.timestampMs << " | " << entry.sequence << " | "
+            payload << entry.timestampMs << " | " << entry.monotonicNs << " | "
+                    << entry.threadId << " | " << entry.sequence << " | "
                     << levelName(entry.level) << " | " << entry.component << " | "
                     << entry.message << '\n';
         }

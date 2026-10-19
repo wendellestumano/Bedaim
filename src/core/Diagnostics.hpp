@@ -20,6 +20,8 @@ enum class Level : std::uint8_t {
 struct Entry {
     std::uint64_t sequence{};
     std::int64_t timestampMs{};
+    std::uint64_t monotonicNs{};
+    std::uint64_t threadId{};
     Level level{Level::Info};
     std::string component;
     std::string message;
@@ -33,6 +35,8 @@ void probe(Level level, std::string_view component, std::string_view key,
 void resetProbes() noexcept;
 std::vector<Entry> snapshot();
 std::size_t count() noexcept;
+std::size_t bufferCapacity() noexcept;
+std::uint64_t droppedCount() noexcept;
 void clear() noexcept;
 bool exportTo(const std::string& path, std::string* error = nullptr) noexcept;
 bool exportJsonTo(const std::string& path, std::string* error = nullptr) noexcept;

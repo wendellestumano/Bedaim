@@ -17,6 +17,8 @@
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -25,6 +27,7 @@
 
 namespace {
 thread_local bool g_autoHitSyntheticAttack = false;
+std::atomic<std::uint64_t> g_autoHitAttemptSequence{0};
 
 using bedrocktools::sdk::AABB;
 using bedrocktools::sdk::Player;
@@ -397,12 +400,47 @@ void AutoHitModule::processPlayerTick(Player* player) {
         ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
     } syntheticGuard;
 
+    const auto pointerHex = [](const void* ptr) {
+        char buffer[32]{};
+        std::snprintf(buffer, sizeof(buffer), "%llX",
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(ptr)));
+        return std::string(buffer);
+    };
+    const auto vecText = [](const Vec3& value) {
+        return std::string("(") + std::to_string(value.x) + "," +
+            std::to_string(value.y) + "," + std::to_string(value.z) + ")";
+    };
+    const auto boundsText = [&vecText](const AABB& value) {
+        return std::string("min=") + vecText(value.min) + ";max=" + vecText(value.max);
+    };
+    const auto attemptId =
+        g_autoHitAttemptSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    const std::string attemptContext =
+        "attempt_id=" + std::to_string(attemptId) +
+        "; dispatch_path=GameMode_vtable" +
+        "; explicit_input_callback=not_called_in_this_path" +
+        "; player=0x" + pointerHex(player) +
+        "; game_mode=0x" + pointerHex(gameMode) +
+        "; target=0x" + pointerHex(target) +
+        "; weapon=" + bedaim::autohit::weapon::name(weapon) +
+        "; cps=" + std::to_string(profile.cps) +
+        "; distance=" + std::to_string(gateInputs.distance) +
+        "; range=" + std::to_string(maxRange) +
+        "; eye=" + vecText(eye) +
+        "; contact_point=" + vecText(hitPoint) +
+        "; target_bounds=" + boundsText(targetBounds);
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug,
+        "AutoHit", "attack_attempt_begin", attemptContext);
+
     const int targetHurtTimeBefore =
         reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
     bool nativeAttackResult = false;
     bool nativeAttackResultUsed = false;
+    const auto nativeCallStart = std::chrono::steady_clock::now();
     const bool accepted = core::gamehooks::attack(
         gameMode, target, true, &hitPoint, &nativeAttackResult, &nativeAttackResultUsed);
+    const auto nativeCallDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - nativeCallStart).count();
     // Hurt time is only an immediate local observation: server-authoritative
     // target state can arrive later, so this is evidence, not a damage verdict.
     const int targetHurtTimeAfter =
@@ -418,12 +456,17 @@ void AutoHitModule::processPlayerTick(Player* player) {
             "feedback", "no_immediate_hurt_time_transition",
             "six accepted native calls had no immediate local hurt-time increase; continuing at the configured CPS limit because this observation alone is not proof of a miss or server damage.");
     }
-    const auto pointerHex = [](const void* ptr) {
-        char buffer[32]{};
-        std::snprintf(buffer, sizeof(buffer), "%llX",
-            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(ptr)));
-        return std::string(buffer);
-    };
+    const std::string attemptResult =
+        attemptContext +
+        "; wrapper_result=" + (accepted ? "accepted_by_internal_observer" : "not_accepted_by_internal_observer") +
+        "; native_out_result=" + (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
+        "; hurt_time_before=" + std::to_string(targetHurtTimeBefore) +
+        "; hurt_time_after=" + std::to_string(targetHurtTimeAfter) +
+        "; hurt_time_increased=" + (targetHurtTimeAfter > targetHurtTimeBefore ? "true" : "false") +
+        "; native_call_duration_us=" + std::to_string(nativeCallDurationUs) +
+        "; wrapper_result_is_not_server_damage_confirmation";
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "AutoHit", "attack_attempt_result", attemptResult);
     reportGate(accepted ? 201 : 202,
         accepted ? "native_attack_accepted" : "native_attack_rejected",
         std::string("target=0x") + pointerHex(target) +
