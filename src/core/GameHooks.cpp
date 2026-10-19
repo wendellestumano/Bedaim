@@ -1420,8 +1420,10 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
         const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
         GameModeActionScope scope{modeKind, gameMode};
         scope.publish(GameModeAction::Attack);
+        // The native fourth argument is an output flag, not a hit position.
+        // Keep the higher-level event's position slot null for native/manual calls.
         AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
-            reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), static_cast<void*>(resultOut)};
+            reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), nullptr};
         bus().publish(event);
         if (event.cancelled()) {
             static std::atomic_bool cancelled{false};
@@ -1969,9 +1971,10 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
     const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
     GameModeActionEvent actionEvent{modeKind, GameModeAction::Attack, gameMode};
     bus().publish(actionEvent);
+    // Keep AttackEvent.argument3 semantic: hit position supplied by the caller.
+    // The native output flag is passed only to the guarded four-argument ABI below.
     AttackEvent attackEvent{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
-        reinterpret_cast<void*>(static_cast<std::uintptr_t>(true)),
-        usesFourArgumentAbi ? static_cast<void*>(nativeResultOut) : const_cast<void*>(hitPosition)};
+        reinterpret_cast<void*>(static_cast<std::uintptr_t>(true)), const_cast<void*>(hitPosition)};
     bus().publish(attackEvent);
     if (attackEvent.cancelled()) {
         AttackResultEvent cancelled{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), false};
