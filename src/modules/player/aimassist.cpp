@@ -551,11 +551,14 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
 
 bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
                                                    bedrocktools::sdk::AABB& bounds,
-                                                   float& range) {
+                                                   float& range,
+                                                   float maxQueryRange) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     bounds = {};
-    range = std::clamp(m_range, 2.0f, 80.0f);
+    const float safeQueryRange = std::isfinite(maxQueryRange)
+        ? std::clamp(maxQueryRange, 2.0f, 80.0f) : 80.0f;
+    range = std::clamp(std::min(m_range, safeQueryRange), 2.0f, 80.0f);
     auto* player = m_lastPlayer;
     if ((!enabled && !autoHitNeedsTargeting()) || !player || !desiredTarget || !g_fetchNearbyActors) return false;
 
@@ -759,7 +762,10 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         eyePosition.y += 1.5f;
     }
 
-    const float range = std::clamp(m_range, 2.0f, 80.0f);
+    // AutoHit only needs a nearby candidate: its own reach is capped at 6 blocks.
+    // Avoid querying an 80-block cube when AimAssist is disabled but AutoHit is on.
+    const bool autoHitOnly = !enabled && autoHitNeedsTargeting();
+    const float range = std::clamp(autoHitOnly ? std::min(m_range, 8.0f) : m_range, 2.0f, 80.0f);
     const float expansionMargin = expander ? expander->queryExpansionMargin() : 0.0f;
     const float scanRange = std::clamp(range + expansionMargin, 2.0f, 80.0f);
     Vec3 extent{scanRange, scanRange, scanRange};
@@ -808,7 +814,14 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         std::cos(yawRadians) * cosPitch
     };
 
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+    // The native list is distance-sorted. Bound per-tick work on crowded servers;
+    // close crosshair targets are considered first, while malformed/huge worlds
+    // cannot force thousands of entity checks on the render-critical path.
+    constexpr std::size_t kMaxActorsScannedPerTick = 256;
+    std::size_t scannedActors = 0;
+    for (auto* entry = actors.begin;
+         entry < actors.end && scannedActors < kMaxActorsScannedPerTick;
+         ++entry, ++scannedActors) {
         void* candidate = entry->actor;
         if (!candidate || candidate == player) continue;
 
