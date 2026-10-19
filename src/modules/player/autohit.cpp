@@ -266,17 +266,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    bool targetQuarantined = false;
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        targetQuarantined = m_noHitFeedbackGuard.isBlocked(target);
-    }
-    if (targetQuarantined) {
-        reportGate(203, "target_quarantined_no_hit_feedback",
-            "six accepted native attempts showed no positive hurt-time transition; target dispatch is paused until target identity changes or AutoHit is toggled");
-        return;
-    }
-
+    // A zero immediate hurtTime transition is not a reliable attack-route
+    // verdict: server-authoritative state may arrive after this tick. Keep
+    // target validity/reach checks as hard gates, but do not stop dispatch just
+    // because local feedback has not updated synchronously.
     // The shared snapshot avoids a second target-selection pass. Before a native
     // call, verify that this actor still belongs to the live engine actor set and
     // refresh its bounds; this happens only when the CPS gate is open, not every tick.
@@ -414,8 +407,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
     }
     if (targetQuarantinedNow && accepted) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit",
-            "safety_guard", "target_quarantined_no_hit_feedback",
-            "six consecutive accepted native calls did not increase local target hurt-time; dispatch to this actor is paused to avoid unbounded repetition. This is not a server-damage verdict.");
+            "feedback", "no_immediate_hurt_time_transition",
+            "six accepted native calls had no immediate local hurt-time increase; continuing at the configured CPS limit because this observation alone is not proof of a miss or server damage.");
     }
     const auto pointerHex = [](const void* ptr) {
         char buffer[32]{};
