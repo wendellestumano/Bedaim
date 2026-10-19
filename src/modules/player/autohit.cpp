@@ -341,13 +341,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     // Do not rescan targets, inspect inventory, or resolve native GameMode on
     // every local tick while the weapon's CPS timer is still active.
+    bool waitingForCooldown = false;
     {
         const auto tickNow = std::chrono::steady_clock::now();
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (m_nextAttack.time_since_epoch().count() != 0 && tickNow < m_nextAttack) {
-            reportGate(110, "cooldown_waiting", "");
-            return;
-        }
+        waitingForCooldown = m_nextAttack.time_since_epoch().count() != 0 && tickNow < m_nextAttack;
+    }
+    if (waitingForCooldown) {
+        reportGate(110, "cooldown_waiting", "");
+        return;
     }
 
     // ProtoHax's useful separation is preserved here: target acquisition,
@@ -465,16 +467,20 @@ void AutoHitModule::processPlayerTick(Player* player) {
     }
 
     const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(profile.cps);
+    bool reservedAttackSlot = false;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         // Recheck under the same lock that reserves the slot. This makes the
         // pacing gate safe if another callback ever enters the pipeline.
         const auto reserveTime = std::chrono::steady_clock::now();
-        if (m_nextAttack.time_since_epoch().count() != 0 && reserveTime < m_nextAttack) {
-            reportGate(200, "cooldown_waiting", "CPS slot was reserved by another callback");
-            return;
+        if (m_nextAttack.time_since_epoch().count() == 0 || reserveTime >= m_nextAttack) {
+            m_nextAttack = reserveTime + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
+            reservedAttackSlot = true;
         }
-        m_nextAttack = reserveTime + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
+    }
+    if (!reservedAttackSlot) {
+        reportGate(200, "cooldown_waiting", "CPS slot was reserved by another callback");
+        return;
     }
 
     struct SyntheticAttackGuard {
