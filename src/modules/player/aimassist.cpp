@@ -931,11 +931,33 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const bool rayHitsExpandedTarget = expander &&
             rayIntersectsAABB(eyePosition, viewDirection, selectionBounds);
 
+        // A current target may step just outside the angular filter during camera
+        // smoothing. Preserve it as a lower-priority candidate ONLY while it is
+        // present in this fresh native actor vector and has already passed category,
+        // whitelist, invisibility, bounds, visibility, and distance checks above.
+        // This lets the camera reacquire it without trusting a stale entity pointer.
+        const bool outsideFov = angleScore > maxFov && !insideRetentionBubble &&
+            !candidateBelowPlayer && !rayHitsExpandedTarget;
+        if (candidate == m_lastTarget && outsideFov) {
+            retainedTarget = candidate;
+            retainedTargetBounds = targetBounds;
+            retainedTargetIsPlayer = isPlayer;
+            retainedTargetScore = (m_targetSelectionMode == "Player")
+                ? targetDistance : angleScore + targetDistance * 0.0001f;
+            retainedTargetInsideBubble = false;
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "BedrockAim",
+                "target_tracking", "current_target_outside_fov_retained",
+                std::string("target=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(candidate)) +
+                    "; angle_error=" + std::to_string(angleScore) +
+                    "; fov_limit=" + std::to_string(maxFov) +
+                    "; in_live_actor_vector=yes; actionable_after_selection=yes");
+        }
         // The last target also gets a small 3D retention bubble, including when it
         // passes below the player or behind the camera. This prevents target loss
         // during the fast vertical movement of a slam.
-        if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer &&
-            !rayHitsExpandedTarget) continue;
+        if (outsideFov) continue;
 
         // A ray through the expanded box is a high-confidence crosshair match,
         // not an angle-only candidate that happens to fall inside the FOV.
