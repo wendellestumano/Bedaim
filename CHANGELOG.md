@@ -1,3 +1,11 @@
+## 2026-10-19 — AutoHit public attack ABI correction (experimental)
+
+- Corrected the native attack dispatch to call the public `GameMode::attack(Actor&, Vec3 const&)` virtual with its three-argument ABI. The old resolver could select a different vtable entry because it matched a four-argument internal-helper-shaped signature; a `true` return from that route did not establish that the intended target was attacked.
+- Added guarded ARM64 recognition for the public adapter that forwards the contact position and supplies the predictive-sound flag to its four-argument implementation. The resolver does not select a vtable entry solely because it resembles the internal helper.
+- Preserved AutoHit's `GameModeActionEvent`, cancellable `AttackEvent`, and `AttackResultEvent` semantics without double-publishing when the optional internal observer is reached.
+- Video/log review: the Keystrokes HUD derives LMB CPS from internal `GameModeAction::Attack` events. It shows the attack path is being triggered, not a literal OS click or confirmed server damage. Latest logs showed native wrapper acceptance with target hurt time remaining at 0 before/after.
+- Experimental branch only. Host regressions, ARM64 package build, and in-game server damage verification are separate checks; `main` and ElytraMacing remain untouched.
+
 ## 2026-10-19 — AutoHit contact-point and attack-feedback diagnostics
 
 - Pass the nearest point on the freshly validated target AABB as the native attack contact position instead of the AABB center, aligning the supplied position with the reach geometry.
