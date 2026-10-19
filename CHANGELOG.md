@@ -198,3 +198,13 @@
 - Route misses are retried at a one-second cadence instead of being cached permanently for a stable object/vtable pair. This avoids a transient validation miss disabling resolution for the entire world session.
 - The call path remains fail-closed: no direct call to the ambiguous four-argument internal method, no guessed vtable slot, and no weakening of server-side damage claims.
 - This targets route discovery and the disconnect symptom's likely precursor (invalid dispatch), but actual hit registration and long-session stability still require in-game verification. `main` is unchanged.
+
+
+## 2026-10-19 — Fix diagnostics log arity (experimental)
+
+- Hypothesis: Android build failure in `src/core/GameHooks.cpp` is caused by passing four arguments to `diagnostics::log`, whose declared signature accepts three.
+- Change: kept the event name and dispatch details in one message string; no attack routing, ABI selection, offsets, or module behavior changed.
+- Intended validation: run host regression tests and Android ARM64 build; inspect the actual workflow result before claiming success.
+- Branch: `fix/diagnostics-log-arity-20261019` (based on `perf/autohit-tick-throttle-20261019`).
+- Code commit: `a9e4b0f8ffe87b787a3916173ddc6bdf616dc523`.
+- Status at note creation: patch committed; CI result pending. No in-game damage validation performed.
