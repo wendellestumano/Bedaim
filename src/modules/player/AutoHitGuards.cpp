@@ -39,10 +39,6 @@ float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHi
     return std::clamp(baseRange + margin, 2.0f, 80.0f);
 }
 
-bool hitResultMatchesTarget(const void* target, const void* hitResultTarget) noexcept {
-    return target != nullptr && hitResultTarget == target;
-}
-
 void NoHitFeedbackGuard::reset() noexcept {
     m_target = nullptr;
     m_consecutiveNoFeedback = 0;
