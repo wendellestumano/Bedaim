@@ -194,6 +194,7 @@ void AutoHitModule::onEnable() {
     m_heldButton = -1;
     m_touchRepeatUntil = {};
     m_nextAttack = {};
+    m_lastGateDecision.store(-1, std::memory_order_release);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "enabled");
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
@@ -207,6 +208,7 @@ void AutoHitModule::onDisable() {
     m_heldButton = -1;
     m_touchRepeatUntil = {};
     m_nextAttack = {};
+    m_lastGateDecision.store(-1, std::memory_order_release);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "disabled");
 }
