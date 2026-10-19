@@ -51,7 +51,7 @@ using UseItemAsAttackFn = bool(*)(void*, void*, const void*);
 using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::uint8_t, const void*, const void*, bool);
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, const void*);
-using PublicAttackFn = bool(*)(void*, void*, bool, const void*);
+using PublicAttackFn = bool(*)(void*, void*, const void*);
 using ClientInstanceUpdateFn = bool(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
@@ -102,6 +102,7 @@ thread_local std::uint32_t gameModeActionDepth = 0;
 thread_local bool syntheticAttackDispatchActive = false;
 thread_local bool syntheticAttackResultObserved = false;
 thread_local bool syntheticAttackNativeResult = false;
+thread_local bool syntheticAttackEventsPrepublished = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
 PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
@@ -502,6 +503,41 @@ bool plausibleGameMode(void* gameMode) {
     return first && isMinecraftFunction(first);
 }
 
+// Recognize the public three-argument GameMode::attack adapter. It forwards
+// x2 (Vec3 const*) to x3 and sets the internal helper's predictive-sound bool.
+bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation = nullptr,
+                           bool* trialModeGuarded = nullptr) {
+#if defined(__aarch64__)
+    if (implementation) *implementation = 0;
+    if (trialModeGuarded) *trialModeGuarded = false;
+    entry = canonicalArm64Entry(entry);
+    if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry))) return false;
+    bool forwardsPosition = false, enablesSound = false, trialGuard = false;
+    for (std::size_t i = 0; i < 24; ++i) {
+        const auto pc = entry + i * sizeof(std::uint32_t);
+        if (!isReadableMemory(reinterpret_cast<const void*>(pc), sizeof(std::uint32_t))) return false;
+        std::uint32_t ins = 0;
+        std::memcpy(&ins, reinterpret_cast<const void*>(pc), sizeof(ins));
+        if (i == 0 && ins == 0x39432008u) trialGuard = true; // ldrb w8,[x0,#0xc8]
+        if (ins == 0xAA0203E3u) forwardsPosition = true; // mov x3,x2
+        if (ins == 0x52800022u) enablesSound = true; // mov w2,#1
+        if ((ins & 0xFC000000u) != 0x14000000u) continue; // direct B, not BL
+        if (!forwardsPosition || !enablesSound) continue;
+        std::int64_t imm = static_cast<std::int64_t>(ins & 0x03FFFFFFu);
+        if (imm & (1LL << 25)) imm -= (1LL << 26);
+        const auto target = static_cast<std::uintptr_t>(static_cast<std::int64_t>(pc) + imm * 4);
+        if (!target || !isMinecraftFunction(reinterpret_cast<const void*>(target)) ||
+            !isReadableMemory(reinterpret_cast<const void*>(target), sizeof(std::uint32_t))) return false;
+        if (implementation) *implementation = target;
+        if (trialModeGuarded) *trialModeGuarded = trialGuard;
+        return true;
+    }
+#else
+    (void)entry; (void)implementation; (void)trialModeGuarded;
+#endif
+    return false;
+}
+
 // Find the exact public wrapper in the object's live vtable rather than
 // assuming every patched Bedrock build keeps GameMode::attack at index 16.
 std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr,
@@ -509,69 +545,52 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     if (!plausibleGameMode(gameMode)) return 0;
     void** vtable = nullptr;
     std::memcpy(&vtable, gameMode, sizeof(vtable));
-    const auto baseSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-    const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-    struct Exported { std::uintptr_t base{}; std::uintptr_t survival{}; };
-    static const Exported symbols = [] {
-        Exported out{};
+    struct Symbols { std::uintptr_t base{}, survival{}; };
+    static const Symbols symbols = [] {
+        Symbols out{};
         constexpr const char* baseNames[] = {
-            "_ZN8GameMode6attackEP5ActorbRK4Vec3", "_ZN8GameMode6attackER5ActorbRK4Vec3",
-            "_ZN8GameMode7$attackEP5ActorbRK4Vec3", "_ZN8GameMode7$attackER5ActorbRK4Vec3"
+            "_ZN8GameMode6attackEP5ActorRK4Vec3", "_ZN8GameMode6attackER5ActorRK4Vec3",
+            "_ZN8GameMode7$attackEP5ActorRK4Vec3", "_ZN8GameMode7$attackER5ActorRK4Vec3"
         };
         constexpr const char* survivalNames[] = {
-            "_ZN12SurvivalMode6attackEP5ActorbRK4Vec3", "_ZN12SurvivalMode6attackER5ActorbRK4Vec3",
-            "_ZN12SurvivalMode7$attackEP5ActorbRK4Vec3", "_ZN12SurvivalMode7$attackER5ActorbRK4Vec3"
+            "_ZN12SurvivalMode6attackEP5ActorRK4Vec3", "_ZN12SurvivalMode6attackER5ActorRK4Vec3",
+            "_ZN12SurvivalMode7$attackEP5ActorRK4Vec3", "_ZN12SurvivalMode7$attackER5ActorRK4Vec3"
         };
-        for (const char* name : baseNames) if (void* p = resolveMinecraftFunction(name)) { out.base = reinterpret_cast<std::uintptr_t>(p); break; }
-        for (const char* name : survivalNames) if (void* p = resolveMinecraftFunction(name)) { out.survival = reinterpret_cast<std::uintptr_t>(p); break; }
+        for (auto name : baseNames) if (auto p = resolveMinecraftFunction(name)) { out.base = reinterpret_cast<std::uintptr_t>(p); break; }
+        for (auto name : survivalNames) if (auto p = resolveMinecraftFunction(name)) { out.survival = reinterpret_cast<std::uintptr_t>(p); break; }
         return out;
     }();
-    static std::atomic<void*> cachedObject{nullptr};
-    static std::atomic<void*> cachedVtable{nullptr};
+    static std::atomic<void*> cachedObject{nullptr}, cachedVtable{nullptr};
     static std::atomic<std::uintptr_t> cachedEntry{0};
     static std::atomic<std::size_t> cachedSlot{0};
-    static std::atomic<int> cachedKind{-1}; // -1=unknown, 0=not found, 1=GameMode, 2=SurvivalMode
+    static std::atomic<int> cachedKind{-1};
     if (cachedObject.load(std::memory_order_acquire) == gameMode &&
         cachedVtable.load(std::memory_order_acquire) == vtable) {
-        const int resultKind = cachedKind.load(std::memory_order_acquire);
-        if (resultKind >= 0) {
-            const auto resultEntry = cachedEntry.load(std::memory_order_relaxed);
-            if (resultKind == 0 || resultEntry == 0) return 0;
-            if (kind) *kind = resultKind == 2 ? AttackKind::SurvivalMode : AttackKind::GameMode;
+        const int k = cachedKind.load(std::memory_order_acquire);
+        if (k >= 0) {
+            const auto e = cachedEntry.load(std::memory_order_relaxed);
+            if (k == 0 || !e) return 0;
+            if (kind) *kind = k == 2 ? AttackKind::SurvivalMode : AttackKind::GameMode;
             if (matchedSlot) *matchedSlot = cachedSlot.load(std::memory_order_relaxed);
-            return resultEntry;
+            return e;
         }
     }
-
     for (std::size_t i = 0; i < 64; ++i) {
         const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
         if (!isReadableMemory(slot, sizeof(void*))) break;
         std::uintptr_t address = 0;
         std::memcpy(&address, slot, sizeof(address));
         if (!address) break;
-        AttackKind found = AttackKind::GameMode;
-        bool match = false;
-        const auto canonicalAddress = canonicalArm64Entry(address);
-        const bool survivalMatch =
-            (survivalSignature && (address == survivalSignature ||
-                canonicalAddress == canonicalArm64Entry(survivalSignature) ||
-                boundedArm64BranchReaches(address, survivalSignature))) ||
-            (symbols.survival && (address == symbols.survival ||
-                canonicalAddress == canonicalArm64Entry(symbols.survival) ||
-                boundedArm64BranchReaches(address, symbols.survival)));
-        const bool baseMatch =
-            (baseSignature && (address == baseSignature ||
-                canonicalAddress == canonicalArm64Entry(baseSignature) ||
-                boundedArm64BranchReaches(address, baseSignature))) ||
-            (symbols.base && (address == symbols.base ||
-                canonicalAddress == canonicalArm64Entry(symbols.base) ||
-                boundedArm64BranchReaches(address, symbols.base)));
-        if (survivalMatch) {
-            found = AttackKind::SurvivalMode; match = true;
-        } else if (baseMatch) {
-            found = AttackKind::GameMode; match = true;
-        }
-        if (!match) continue;
+        const auto canon = canonicalArm64Entry(address);
+        const bool survivalSymbol = symbols.survival && (address == symbols.survival ||
+            canon == canonicalArm64Entry(symbols.survival) || boundedArm64BranchReaches(address, symbols.survival));
+        const bool baseSymbol = symbols.base && (address == symbols.base ||
+            canon == canonicalArm64Entry(symbols.base) || boundedArm64BranchReaches(address, symbols.base));
+        std::uintptr_t internal = 0; bool trialGuard = false;
+        const bool adapter = isPublicAttackAdapter(address, &internal, &trialGuard);
+        if (!survivalSymbol && !baseSymbol && !adapter) continue;
+        const AttackKind found = (survivalSymbol || (adapter && trialGuard))
+            ? AttackKind::SurvivalMode : AttackKind::GameMode;
         cachedEntry.store(address, std::memory_order_relaxed);
         cachedSlot.store(i, std::memory_order_relaxed);
         cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
@@ -579,9 +598,13 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         cachedObject.store(gameMode, std::memory_order_release);
         if (kind) *kind = found;
         if (matchedSlot) *matchedSlot = i;
-        static std::atomic_bool loggedMatch{false};
-        if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack through vtable entry or bounded branch wrapper at slot {}.", i);
+        static std::atomic_bool logged{false};
+        if (!logged.exchange(true, std::memory_order_acq_rel)) {
+            char msg[200]{};
+            std::snprintf(msg, sizeof(msg), "validated public 3-argument attack route: slot=%zu; adapter=%s; internal_target=%p",
+                i, adapter ? (trialGuard ? "survival" : "base") : "symbol", reinterpret_cast<void*>(internal));
+            gameHooksLogger().info("{}", msg);
+        }
         return address;
     }
     cachedEntry.store(0, std::memory_order_relaxed);
@@ -589,20 +612,14 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     cachedKind.store(0, std::memory_order_relaxed);
     cachedVtable.store(vtable, std::memory_order_relaxed);
     cachedObject.store(gameMode, std::memory_order_release);
-    static std::atomic_bool loggedMiss{false};
-    if (!loggedMiss.exchange(true, std::memory_order_acq_rel)) {
-        std::uintptr_t slot0 = 0, slot2 = 0, slot16 = 0, slot32 = 0;
-        const auto readSlot = [&](std::size_t index, std::uintptr_t& out) {
-            const auto address = reinterpret_cast<std::uintptr_t>(vtable) + index * sizeof(void*);
-            if (isReadableMemory(reinterpret_cast<const void*>(address), sizeof(void*)))
-                std::memcpy(&out, reinterpret_cast<const void*>(address), sizeof(out));
-        };
-        readSlot(0, slot0); readSlot(2, slot2); readSlot(16, slot16); readSlot(32, slot32);
-        gameHooksLogger().warn(
-            "No exact public GameMode::attack vtable match: object={:p}, vtable={:p}, public_sig={:p}, survival_sig={:p}, slot0={:p}, slot2={:p}, slot16={:p}, slot32={:p}.",
-            gameMode, reinterpret_cast<const void*>(vtable), reinterpret_cast<void*>(baseSignature),
-            reinterpret_cast<void*>(survivalSignature), reinterpret_cast<void*>(slot0),
-            reinterpret_cast<void*>(slot2), reinterpret_cast<void*>(slot16), reinterpret_cast<void*>(slot32));
+    static std::atomic_bool miss{false};
+    if (!miss.exchange(true, std::memory_order_acq_rel)) {
+        std::uintptr_t s0=0,s2=0,s16=0,s32=0;
+        auto readSlot=[&](std::size_t n,std::uintptr_t& out){auto a=reinterpret_cast<std::uintptr_t>(vtable)+n*sizeof(void*); if(isReadableMemory(reinterpret_cast<const void*>(a),sizeof(void*)))std::memcpy(&out,reinterpret_cast<const void*>(a),sizeof(out));};
+        readSlot(0,s0); readSlot(2,s2); readSlot(16,s16); readSlot(32,s32);
+        gameHooksLogger().warn("No validated public 3-argument attack route: object={:p}, vtable={:p}, public_sig={:p}, survival_sig={:p}, slot0={:p}, slot2={:p}, slot16={:p}, slot32={:p}.",
+            gameMode, reinterpret_cast<const void*>(vtable), reinterpret_cast<void*>(symbols.base), reinterpret_cast<void*>(symbols.survival),
+            reinterpret_cast<void*>(s0), reinterpret_cast<void*>(s2), reinterpret_cast<void*>(s16), reinterpret_cast<void*>(s32));
     }
     return 0;
 }
@@ -1089,36 +1106,34 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     if (!loggedNativeAttack.exchange(true, std::memory_order_acq_rel))
         gameHooksLogger().info("Native attack detour received its first call (target={}, hitPosition={}, trampoline={}).",
             target != nullptr, hitPosition != nullptr, gameModeAttackOriginal != nullptr);
-
+    const bool eventsAlreadyPublished = syntheticAttackEventsPrepublished;
     const AttackKind kind = attackKindFor(gameMode);
-    const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
-    GameModeActionScope scope{modeKind, gameMode};
-    scope.publish(GameModeAction::Attack);
-    AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target), reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), const_cast<void*>(hitPosition)};
-    bus().publish(event);
-    if (event.cancelled()) {
-        if (syntheticAttackDispatchActive) {
-            syntheticAttackResultObserved = true;
-            syntheticAttackNativeResult = false;
+    if (!eventsAlreadyPublished) {
+        const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
+        GameModeActionScope scope{modeKind, gameMode};
+        scope.publish(GameModeAction::Attack);
+        AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
+            reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), const_cast<void*>(hitPosition)};
+        bus().publish(event);
+        if (event.cancelled()) {
+            static std::atomic_bool cancelled{false};
+            if (!cancelled.exchange(true, std::memory_order_acq_rel))
+                gameHooksLogger().warn("The first native attack was cancelled by an AttackEvent listener.");
+            return false;
         }
-        static std::atomic_bool loggedCancelled{false};
-        if (!loggedCancelled.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("The first native attack was cancelled by an AttackEvent listener.");
-        return false;
     }
-    const bool result = gameModeAttackOriginal
-        ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition)
-        : false;
+    const bool result = gameModeAttackOriginal ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition) : false;
     if (syntheticAttackDispatchActive) {
         syntheticAttackResultObserved = true;
         syntheticAttackNativeResult = result;
     }
-    static std::atomic_bool loggedNativeResult{false};
-    if (!loggedNativeResult.exchange(true, std::memory_order_acq_rel))
+    static std::atomic_bool loggedResult{false};
+    if (!loggedResult.exchange(true, std::memory_order_acq_rel))
         gameHooksLogger().info("First native attack trampoline result: {}.", result);
-    // Publish after native processing so the HUD can react to the actual attack result.
-    AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
-    bus().publish(resultEvent);
+    if (!eventsAlreadyPublished) {
+        AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), result};
+        bus().publish(resultEvent);
+    }
     return result;
 }
 
@@ -1541,103 +1556,74 @@ bool attackAvailable(void* gameMode) {
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
-    (void)playPredictiveSound; // The validated public wrapper owns this default.
+    (void)playPredictiveSound;
 
     static thread_local bool inSyntheticAttack = false;
-    if (inSyntheticAttack) return false;
-    if (currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
-
-    // GameMode::attack has a four-argument virtual ABI on this runtime:
-    // (GameMode*, Actor*, predictive-sound flag, hit position). Only dispatch
-    // through a vtable entry that matches a resolved attack signature.
-    std::size_t matchedAttackSlot = 0;
-    const auto publicEntry = publicAttackVirtualEntry(gameMode, nullptr, &matchedAttackSlot);
-    if (publicEntry == 0) {
-        static std::atomic_bool loggedUnavailable{false};
-        if (!loggedUnavailable.exchange(true, std::memory_order_acq_rel)) {
-            if (!plausibleGameMode(gameMode)) {
-                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
-                    "GameHooks",
-                    "attack_validation=implausible_gamemode: object/vtable did not pass the libminecraftpe validation");
-            } else {
-                void** vtable = nullptr;
-                std::memcpy(&vtable, gameMode, sizeof(vtable));
-                std::uintptr_t attackVtableEntry = 0;
-                std::uintptr_t legacyVtableEntry = 0;
-                const auto attackSlot = reinterpret_cast<std::uintptr_t>(vtable) + 2 * sizeof(void*);
-                const auto legacySlot = reinterpret_cast<std::uintptr_t>(vtable) + 16 * sizeof(void*);
-                if (vtable && isReadableMemory(reinterpret_cast<const void*>(attackSlot), sizeof(void*)))
-                    std::memcpy(&attackVtableEntry, reinterpret_cast<const void*>(attackSlot), sizeof(attackVtableEntry));
-                if (vtable && isReadableMemory(reinterpret_cast<const void*>(legacySlot), sizeof(void*)))
-                    std::memcpy(&legacyVtableEntry, reinterpret_cast<const void*>(legacySlot), sizeof(legacyVtableEntry));
-                const auto publicSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-                const auto survivalSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-                char detail[320]{};
-                std::snprintf(detail, sizeof(detail),
-                    "attack_validation=vtable_mismatch: slot2=%p slot16=%p public_signature=%p survival_signature=%p",
-                    reinterpret_cast<void*>(attackVtableEntry),
-                    reinterpret_cast<void*>(legacyVtableEntry),
-                    reinterpret_cast<void*>(publicSignature),
-                    reinterpret_cast<void*>(survivalSignature));
-                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
-                    "GameHooks", detail);
-            }
-            gameHooksLogger().error("Synthetic attack refused: public GameMode::attack is not validated for this runtime.");
-        }
+    if (inSyntheticAttack || currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
+    std::size_t matchedSlot = 0;
+    AttackKind kind = AttackKind::GameMode;
+    const auto publicEntry = publicAttackVirtualEntry(gameMode, &kind, &matchedSlot);
+    if (!publicEntry) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "attack", "public_three_argument_route_unavailable");
         return false;
     }
     void** vtable = nullptr;
     std::memcpy(&vtable, gameMode, sizeof(vtable));
-    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + matchedAttackSlot * sizeof(void*);
+    const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + matchedSlot * sizeof(void*);
     if (!vtable || !isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) return false;
-    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[matchedAttackSlot]);
+    auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[matchedSlot]);
     if (!publicAttack) return false;
 
-    struct AttackGuard {
-        bool& active;
-        explicit AttackGuard(bool& value) : active(value) { active = true; }
-        ~AttackGuard() { active = false; }
-    } guard{inSyntheticAttack};
-    const bool canObserveNativeResult = gameModeAttackOriginal != nullptr;
-    struct DispatchObservationGuard {
+    struct AttackGuard { bool& active; explicit AttackGuard(bool& v) : active(v) { active = true; } ~AttackGuard() { active = false; } } attackGuard{inSyntheticAttack};
+
+    // Publish events once at the synthetic caller. Some runtimes do not pass
+    // through the old internal observer after invoking the public virtual.
+    const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
+    GameModeActionEvent actionEvent{modeKind, GameModeAction::Attack, gameMode};
+    bus().publish(actionEvent);
+    AttackEvent attackEvent{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
+        reinterpret_cast<void*>(static_cast<std::uintptr_t>(true)), const_cast<void*>(hitPosition)};
+    bus().publish(attackEvent);
+    if (attackEvent.cancelled()) {
+        AttackResultEvent cancelled{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), false};
+        bus().publish(cancelled);
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "GameHooks", "attack", "cancelled_by_attack_event");
+        return false;
+    }
+
+    const bool observe = gameModeAttackOriginal != nullptr;
+    struct ObservationGuard {
         bool active;
-        explicit DispatchObservationGuard(bool shouldObserve) : active(shouldObserve) {
-            if (active) {
-                syntheticAttackResultObserved = false;
-                syntheticAttackNativeResult = false;
-                syntheticAttackDispatchActive = true;
-            }
+        explicit ObservationGuard(bool value) : active(value) {
+            if (active) { syntheticAttackResultObserved = false; syntheticAttackNativeResult = false; syntheticAttackDispatchActive = true; }
         }
-        ~DispatchObservationGuard() {
-            if (active) syntheticAttackDispatchActive = false;
-        }
-    } observationGuard{canObserveNativeResult};
+        ~ObservationGuard() { if (active) syntheticAttackDispatchActive = false; }
+    } observation{observe};
+    struct PrepublishedGuard {
+        bool previous;
+        explicit PrepublishedGuard(bool& value) : previous(value) { value = true; }
+        ~PrepublishedGuard() { syntheticAttackEventsPrepublished = previous; }
+    } prepublished{syntheticAttackEventsPrepublished};
 
-    static std::atomic_bool loggedPublicRoute{false};
-    if (!loggedPublicRoute.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Combat dispatch selected the validated public GameMode::attack vtable entry.");
-
-    // Dispatch with the native four-argument ABI. When the internal observer is
-    // installed, return its actual result; otherwise preserve the public method's
-    // return value instead of claiming an unverified successful attack.
-    const bool publicResult = publicAttack(gameMode, target, playPredictiveSound, hitPosition);
-    if (!canObserveNativeResult) {
-        // The call went through a validated public engine entry, but this build
-        // lacks the internal observer required to read the native bool result.
-        // Fall back to the public method's native return value. It indicates
-        // whether the engine accepted the attack, not guaranteed target damage.
-        static std::atomic_bool loggedUnobservedDispatch{false};
-        if (!loggedUnobservedDispatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().warn("Native attack used the validated public GameMode::attack entry, but the internal result hook is unavailable; using the public return value.");
-        return publicResult;
+    static std::atomic_bool loggedPublic{false};
+    if (!loggedPublic.exchange(true, std::memory_order_acq_rel)) {
+        char msg[144]{};
+        std::snprintf(msg, sizeof(msg), "dispatching public three-argument attack virtual at slot %zu", matchedSlot);
+        gameHooksLogger().info("{}", msg);
     }
-    if (!syntheticAttackResultObserved) {
-        static std::atomic_bool loggedMissingInternalDispatch{false};
-        if (!loggedMissingInternalDispatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().error("Validated public attack returned without reaching the installed internal observer; using the public return value.");
-        return publicResult;
-    }
-    return syntheticAttackNativeResult;
+    // Correct public ABI is (this, Actor*, Vec3 const*), without bool.
+    const bool publicResult = publicAttack(gameMode, target, hitPosition);
+    const bool accepted = syntheticAttackResultObserved ? syntheticAttackNativeResult : publicResult;
+    AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), accepted};
+    bus().publish(resultEvent);
+    bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "attack", accepted ? "public_virtual_returned_true" : "public_virtual_returned_false",
+        std::string("vtable_slot=") + std::to_string(matchedSlot) +
+        "; internal_observer=" + (syntheticAttackResultObserved ? "observed" : "not_reached") +
+        "; return_true_does_not_prove_server_damage");
+    return accepted;
 }
 
 
