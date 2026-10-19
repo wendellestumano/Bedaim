@@ -836,6 +836,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     // cannot force thousands of entity checks on the render-critical path.
     constexpr std::size_t kMaxActorsScannedPerTick = 256;
     std::size_t scannedActors = 0;
+    std::size_t rejectedCategory = 0, rejectedWhitelist = 0, rejectedInvisible = 0;
+    std::size_t rejectedBounds = 0, rejectedLineOfSight = 0, rejectedRange = 0;
+    std::size_t rejectedAngle = 0, rejectedFov = 0;
     for (auto* entry = actors.begin;
          entry < actors.end && scannedActors < kMaxActorsScannedPerTick;
          ++entry, ++scannedActors) {
@@ -844,7 +847,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
         const bool isPlayer = g_actorIsPlayer && g_actorIsPlayer(candidate);
         if (isPlayer) {
-            if (!m_targetPlayers) continue;
+            if (!m_targetPlayers) { ++rejectedCategory; continue; }
             if (m_ignoreCreativeSpectator) {
                 std::int32_t gameType = -1;
                 if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
@@ -854,16 +857,16 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                 }
             }
         } else {
-            if (!m_targetMobs || !categoryHasMobBit(candidate)) continue;
+            if (!m_targetMobs || !categoryHasMobBit(candidate)) { ++rejectedCategory; continue; }
         }
 
-        if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) continue;
-        if (g_actorIsInvisible && g_actorIsInvisible(candidate)) continue;
+        if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) { ++rejectedWhitelist; continue; }
+        if (g_actorIsInvisible && g_actorIsInvisible(candidate)) { ++rejectedInvisible; continue; }
 
         auto* target = reinterpret_cast<Actor*>(candidate);
         const Vec3 targetPosition = target->position();
         const AABB targetBounds = target->bounds();
-        if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
+        if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) { ++rejectedBounds; continue; }
 
         // Aim at a stable point on the native bounds but allow the bounded
         // expanded client box to participate in target acquisition and automatic attack range.
@@ -886,14 +889,14 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // If the LOS signature is unavailable for this Minecraft build, don't
         // silently discard every candidate. Enforce LOS only when the checker is live.
         if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
-            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
+            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) { ++rejectedLineOfSight; continue; }
 
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
         // Range checks use the nearest point on the selected hitbox geometry, not
         // its center; the box itself still cannot exceed the configured size limits.
         const bool inAimAssistRange = std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxDistanceSq;
-        if (!std::isfinite(d2) || !inAimAssistRange) continue;
+        if (!std::isfinite(d2) || !inAimAssistRange) { ++rejectedRange; continue; }
 
         // If the current target is right beside/around the player, keep it locked
         // while it crosses behind the camera. Measure distance to the target AABB,
@@ -917,12 +920,12 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const float desiredPitch = -std::atan2(dy, std::max(horizontal, 0.001f)) * kRadToDeg;
 
         const float targetDistance = std::sqrt(std::max(d2, 0.0f));
-        if (!std::isfinite(targetDistance)) continue;
+        if (!std::isfinite(targetDistance)) { ++rejectedRange; continue; }
 
         const float yawError = wrapDegrees(desiredYaw - currentRotation.y);
         const float pitchError = desiredPitch - currentRotation.x;
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
-        if (!std::isfinite(angleScore)) continue;
+        if (!std::isfinite(angleScore)) { ++rejectedAngle; continue; }
 
         // Keep targets directly below the player's feet eligible during a mace
         // slam, and permit a precise ray hit through the configured expanded box.
@@ -963,7 +966,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // The last target also gets a small 3D retention bubble, including when it
         // passes below the player or behind the camera. This prevents target loss
         // during the fast vertical movement of a slam.
-        if (outsideFov) continue;
+        if (outsideFov) { ++rejectedFov; continue; }
 
         // A ray through the expanded box is a high-confidence crosshair match,
         // not an angle-only candidate that happens to fall inside the FOV.
@@ -1004,9 +1007,20 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     if (!bestTarget) {
+        const std::string scanSummary =
+            std::string("scanned=") + std::to_string(scannedActors) +
+            "; rejected_category=" + std::to_string(rejectedCategory) +
+            "; whitelist=" + std::to_string(rejectedWhitelist) +
+            "; invisible=" + std::to_string(rejectedInvisible) +
+            "; invalid_bounds=" + std::to_string(rejectedBounds) +
+            "; line_of_sight=" + std::to_string(rejectedLineOfSight) +
+            "; out_of_range=" + std::to_string(rejectedRange) +
+            "; invalid_angle=" + std::to_string(rejectedAngle) +
+            "; outside_fov=" + std::to_string(rejectedFov) +
+            "; current_target_in_live_list=" +
+                ((retainedTarget == m_lastTarget && retainedTarget != nullptr) ? "yes" : "no");
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "target_selection", "none",
-            "no eligible actor in the scan radius passed the current filters");
+            "BedrockAim", "target_selection", "none", scanSummary);
         // Preserve camera steering for a very short scan dropout, using only the
         // previously validated bounds. Do not refresh lastTargetSeen and do not
         // expose this pointer to AutoHit, crosshair checks, or other actions.
