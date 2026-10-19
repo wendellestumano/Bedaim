@@ -325,10 +325,23 @@ public class ScreenBridgeService extends Service {
                     respond(s, 409, "application/json", "{\"ok\":false,\"error\":\"accessibility unavailable or coordinates invalid\"}".getBytes(StandardCharsets.UTF_8));
                     return;
                 }
-                long oldFrame = latestFrameAt;
-                byte[] jpg = awaitNewFrame(oldFrame, 450);
-                if (jpg != null) {
-                    respond(s, 200, "image/jpeg", jpg);
+                // Fast-control mode: acknowledge the gesture immediately instead of
+                // blocking the HTTP client while waiting for a new screen frame.
+                // Add async=0 (or waitFrame=1) to preserve the legacy image-after-action response.
+                if ("0".equals(q.get("async")) || "1".equals(q.get("waitFrame"))) {
+                    long oldFrame = latestFrameAt;
+                    byte[] jpg = awaitNewFrame(oldFrame, 450);
+                    if (jpg != null) {
+                        respond(s, 200, "image/jpeg", jpg);
+                    } else {
+                        JSONObject j = new JSONObject();
+                        j.put("ok", true);
+                        j.put("accepted", true);
+                        j.put("frameUpdated", false);
+                        j.put("frameAgeMs", latestFrameAt == 0 ? -1 : Math.max(0, System.currentTimeMillis() - latestFrameAt));
+                        j.put("detail", captureError);
+                        respond(s, 200, "application/json", j.toString().getBytes(StandardCharsets.UTF_8));
+                    }
                 } else {
                     JSONObject j = new JSONObject();
                     j.put("ok", true);
