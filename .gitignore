@@ -7,3 +7,8 @@ compile_commands.json
 *.so
 *.levipack
 *.zip
+*.jks
+*.p12
+*.keystore
+ScreenBridge/signing.properties
+screenbridge-signing-bundle.*
