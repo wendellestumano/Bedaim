@@ -29,23 +29,9 @@ private:
     std::mutex m_stateMutex;
     // Emits gate diagnostics only when the pipeline changes state, avoiding per-tick log spam.
     std::atomic<int> m_lastGateDecision{-1};
-    bool m_attackHeld = false;
-    // Mobile-friendly default: valid targets and weapon profiles can drive AutoHit
-    // without relying on the launcher mouse bridge. Desktop users may require input.
-    bool m_requireAttackInput = false;
-    bool m_captureNextInput = false;
-    std::chrono::steady_clock::time_point m_captureArmedAt{};
-    bool m_keyboardAttackHeld = false;
-    int m_attackKeyCode = -1;
-    unsigned int m_attackKeyUnicode = 0;
     std::atomic_bool m_containerOpen{false};
     std::atomic_bool m_chatOpen{false};
-    int m_heldButton = -1;
-    int m_attackButton = 0;
     float m_attackRange = 3.2f;
-    bool m_touchRepeatEnabled = true;
-    int m_touchRepeatWindowMs = 300;
-    std::chrono::steady_clock::time_point m_touchRepeatUntil{};
 
     // Weapon profiles default to swords only. Each category has its own
     // enable switch and CPS cap; unknown/non-weapon items never dispatch attacks.
