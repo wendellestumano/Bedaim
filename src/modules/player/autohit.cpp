@@ -287,9 +287,30 @@ bool AutoHitModule::onMouseEvent(int button, bool isDown) {
 
 void AutoHitModule::processPlayerTick(Player* player) {
     using namespace bedrocktools;
-    if (!enabled || !player ||
-        m_containerOpen.load(std::memory_order_acquire) ||
-        m_chatOpen.load(std::memory_order_acquire)) return;
+    using bedaim::autohit::Decision;
+
+    // Keep the tick path deterministic: copy user-controlled state once, then
+    // perform all target/inventory/native reads without holding the input mutex.
+    auto reportGate = [this](int code, const char* reason, const std::string& detail) {
+        const int previous = m_lastGateDecision.exchange(code, std::memory_order_acq_rel);
+        if (previous != code) {
+            diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "pipeline", reason, detail);
+        }
+    };
+
+    if (!enabled) {
+        reportGate(1, "module_disabled", "");
+        return;
+    }
+    if (!player) {
+        reportGate(2, "local_player_missing", "");
+        return;
+    }
+    if (m_containerOpen.load(std::memory_order_acquire) ||
+        m_chatOpen.load(std::memory_order_acquire)) {
+        reportGate(3, "blocked_by_screen", "");
+        return;
+    }
 
     bool attackHeld = false;
     float configuredRange = 3.2f;
@@ -308,19 +329,33 @@ void AutoHitModule::processPlayerTick(Player* player) {
         maceEnabled = m_maceEnabled; maceCps = m_maceCps;
         tridentEnabled = m_tridentEnabled; tridentCps = m_tridentCps;
     }
-    if (!attackHeld) return;
+    if (!attackHeld) {
+        reportGate(4, "waiting_for_attack_input", "activation mode requires a held input or an active touch-repeat window");
+        return;
+    }
 
-    // ProtoHax's KillAura model separates eligible-target selection from CPS pacing.
-    // Reuse AimAssist's cached target so this module never performs a second actor scan.
+    // ProtoHax's useful separation is preserved here: target acquisition,
+    // weapon eligibility, reach/cooldown, and native dispatch are independent
+    // gates. Bedaim uses the engine's validated native route rather than
+    // ProtoHax's relay/network transaction API.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase) return;
+    if (!aimBase) {
+        reportGate(5, "aim_assist_unavailable", "AutoHit needs the shared BedrockAim target provider");
+        return;
+    }
     auto* aim = static_cast<AimAssistModule*>(aimBase);
-
     void* target = nullptr;
     AABB targetBounds{};
     float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) ||
-        !target || !validBounds(targetBounds)) return;
+    const bool targetFresh = aim->currentTargetSnapshot(target, targetBounds, aimRange);
+    if (!targetFresh || !target) {
+        reportGate(6, "target_snapshot_missing_or_stale", "no fresh target snapshot is available");
+        return;
+    }
+    if (!validBounds(targetBounds)) {
+        reportGate(7, "target_bounds_invalid", "native target AABB failed finite/dimension checks");
+        return;
+    }
 
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
@@ -328,10 +363,18 @@ void AutoHitModule::processPlayerTick(Player* player) {
     const auto profile = bedaim::autohit::weapon::resolve(
         weapon, swordEnabled, swordCps, axeEnabled, axeCps, maceEnabled, maceCps,
         tridentEnabled, tridentCps);
-    if (!profile.enabled) return;
+    if (!profile.enabled) {
+        reportGate(8, "weapon_profile_rejected",
+            std::string("identifier=") + (heldItem.empty() ? "<empty>" : heldItem) +
+            "; class=" + bedaim::autohit::weapon::name(weapon));
+        return;
+    }
 
     const Vec3 eye = eyePosition(player);
-    if (!finiteVec(eye)) return;
+    if (!finiteVec(eye)) {
+        reportGate(9, "player_eye_invalid", "player eye position contains non-finite coordinates");
+        return;
+    }
     const Vec3 nearestPoint{
         std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
         std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
@@ -339,31 +382,72 @@ void AutoHitModule::processPlayerTick(Player* player) {
     };
     const float distanceSq = distanceSquared(eye, nearestPoint);
     const float maxRange = std::clamp(std::min(configuredRange, aimRange), 2.0f, 6.0f);
-    if (!finiteVec(nearestPoint) || !std::isfinite(distanceSq) ||
-        distanceSq > maxRange * maxRange) return;
-
-    const auto now = std::chrono::steady_clock::now();
-    const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(profile.cps);
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) return;
-        // Reserve the CPS slot before entering native code to prevent reentrant attempts.
-        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
-    }
-
-    // Use a stable point inside the selected target's real bounds. No guessed slot,
-    // stale actor, or duplicate attack-route preflight is used by this core.
     const Vec3 hitPoint{
         (targetBounds.min.x + targetBounds.max.x) * 0.5f,
         (targetBounds.min.y + targetBounds.max.y) * 0.5f,
         (targetBounds.min.z + targetBounds.max.z) * 0.5f
     };
-    if (!finiteVec(hitPoint)) return;
-
-    void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dispatch", "game_mode_unavailable");
+    const bool hitPointFinite = finiteVec(hitPoint) && finiteVec(nearestPoint) &&
+        std::isfinite(distanceSq) && distanceSq >= 0.0f;
+    if (!hitPointFinite) {
+        reportGate(10, "hit_geometry_invalid", "computed hit point or distance is not finite");
         return;
+    }
+
+    // Resolve the owned GameMode and verify the public attack route before
+    // reserving the CPS slot. A missing native route must not consume cooldown.
+    void* gameMode = core::gamehooks::gameModeForPlayer(player);
+    const bool routeAvailable = gameMode && core::gamehooks::attackAvailable(gameMode);
+    const auto now = std::chrono::steady_clock::now();
+    bool cooldownReady = false;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        cooldownReady = m_nextAttack.time_since_epoch().count() == 0 || now >= m_nextAttack;
+    }
+
+    const bedaim::autohit::Inputs gateInputs{
+        true, player != nullptr, target != nullptr, validBounds(targetBounds), targetFresh,
+        gameMode != nullptr, routeAvailable, hitPointFinite, cooldownReady,
+        std::sqrt(std::max(distanceSq, 0.0f)), maxRange
+    };
+    const Decision decision = bedaim::autohit::evaluate(gateInputs);
+    const auto decisionName = [](Decision value) -> const char* {
+        switch (value) {
+            case Decision::Ready: return "ready";
+            case Decision::Disabled: return "module_disabled";
+            case Decision::MissingPlayer: return "local_player_missing";
+            case Decision::MissingTarget: return "target_missing";
+            case Decision::InvalidBounds: return "target_bounds_invalid";
+            case Decision::StaleTarget: return "target_snapshot_stale";
+            case Decision::MissingGameMode: return "game_mode_unavailable";
+            case Decision::MissingAttackRoute: return "native_attack_route_unavailable";
+            case Decision::InvalidHitPoint: return "hit_geometry_invalid";
+            case Decision::OutOfRange: return "target_out_of_range";
+            case Decision::Cooldown: return "cooldown_waiting";
+        }
+        return "unknown_gate";
+    };
+    if (decision != Decision::Ready) {
+        const int code = 100 + static_cast<int>(decision);
+        reportGate(code, decisionName(decision),
+            std::string("distance=") + std::to_string(gateInputs.distance) +
+            "; range=" + std::to_string(maxRange) +
+            "; game_mode=" + (gameMode ? "present" : "missing") +
+            "; attack_route=" + (routeAvailable ? "ready" : "unavailable"));
+        return;
+    }
+
+    const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(profile.cps);
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        // Recheck under the same lock that reserves the slot. This makes the
+        // pacing gate safe if another callback ever enters the pipeline.
+        const auto reserveTime = std::chrono::steady_clock::now();
+        if (m_nextAttack.time_since_epoch().count() != 0 && reserveTime < m_nextAttack) {
+            reportGate(200, "cooldown_waiting", "CPS slot was reserved by another callback");
+            return;
+        }
+        m_nextAttack = reserveTime + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
     }
 
     struct SyntheticAttackGuard {
@@ -379,14 +463,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
             static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(ptr)));
         return std::string(buffer);
     };
-    diagnostics::probe(accepted ? diagnostics::Level::Info : diagnostics::Level::Warning,
-        "AutoHit", "dispatch", accepted ? "native_attack_accepted" : "native_attack_rejected",
+    reportGate(accepted ? 201 : 202,
+        accepted ? "native_attack_accepted" : "native_attack_rejected",
         std::string("target=0x") + pointerHex(target) +
         "; player=0x" + pointerHex(player) +
-        "; distance=" + std::to_string(std::sqrt(std::max(distanceSq, 0.0f))) +
+        "; distance=" + std::to_string(gateInputs.distance) +
         "; range=" + std::to_string(maxRange) +
         "; weapon=" + bedaim::autohit::weapon::name(weapon) +
-        "; cps=" + std::to_string(profile.cps));
+        "; cps=" + std::to_string(profile.cps) +
+        "; accepted means the validated native wrapper returned success, not that the server confirmed damage");
 }
 
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
