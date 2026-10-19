@@ -2077,7 +2077,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         "; explicit_input_callback=not_called_in_this_path" +
         "; return_values_do_not_prove_server_damage";
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
-        "GameHooks", "native_attack_dispatch_result", dispatchResult);
+        "GameHooks", std::string("native_attack_dispatch_result; ") + dispatchResult);
 
     bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
         "GameHooks", "attack",
