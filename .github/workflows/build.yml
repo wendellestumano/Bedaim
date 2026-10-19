@@ -6,7 +6,7 @@ concurrency:
 
 on:
   push:
-    branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017, test/autohit-autototem-mainline-20261017, feature/diagnostics-download-autosave-20261017, fix/autohit-input-diagnostics-20261017, fix/autohit-gamemode-runtime-diagnostics-20261018, recovery/bedrockaim-autohit-preserved-20261018, rebuild/autohit-protohax-prelag-20261019, perf/autohit-tick-throttle-20261019]
+    branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017, test/autohit-autototem-mainline-20261017, feature/diagnostics-download-autosave-20261017, fix/autohit-input-diagnostics-20261017, fix/autohit-gamemode-runtime-diagnostics-20261018, recovery/bedrockaim-autohit-preserved-20261018, rebuild/autohit-protohax-prelag-20261019, perf/autohit-tick-throttle-20261019, fix/autohit-route-abi-memory-20261019]
   pull_request:
   workflow_dispatch:
 
