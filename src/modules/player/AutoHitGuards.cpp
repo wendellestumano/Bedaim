@@ -67,7 +67,16 @@ bool NoHitFeedbackGuard::observe(const void* target, bool accepted, int hurtTime
         reset();
         m_target = target;
     }
-    if (m_blocked) return true;
+    if (m_blocked) {
+        // Quarantine is retained as a diagnostic state only. AutoHit's CPS
+        // limiter bounds dispatch, and delayed server state must not permanently
+        // suppress valid attack attempts based on one immediate local snapshot.
+        if (!accepted || hurtTimeAfter > hurtTimeBefore) {
+            m_consecutiveNoFeedback = 0;
+            m_blocked = false;
+        }
+        return false;
+    }
 
     // A rejected wrapper call or a positive local hurt-time transition breaks
     // the "accepted but no immediate hit feedback" streak.
