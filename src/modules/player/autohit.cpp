@@ -339,6 +339,17 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
+    // Do not rescan targets, inspect inventory, or resolve native GameMode on
+    // every local tick while the weapon's CPS timer is still active.
+    {
+        const auto tickNow = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (m_nextAttack.time_since_epoch().count() != 0 && tickNow < m_nextAttack) {
+            reportGate(110, "cooldown_waiting", "");
+            return;
+        }
+    }
+
     // ProtoHax's useful separation is preserved here: target acquisition,
     // weapon eligibility, reach/cooldown, and native dispatch are independent
     // gates. Bedaim uses the engine's validated native route rather than
@@ -352,15 +363,26 @@ void AutoHitModule::processPlayerTick(Player* player) {
     void* target = nullptr;
     AABB targetBounds{};
     float aimRange = 0.0f;
-    const bool targetFresh = aim->currentTargetSnapshot(target, targetBounds, aimRange);
+    const bool targetFresh = aim->currentTargetSnapshot(target, targetBounds, aimRange, player);
     if (!targetFresh || !target) {
-        reportGate(6, "target_snapshot_missing_or_stale", "no fresh target snapshot is available");
+        reportGate(6, "target_snapshot_missing_or_stale",
+            "no fresh target snapshot belongs to the current local player");
         return;
     }
-    if (!validBounds(targetBounds)) {
-        reportGate(7, "target_bounds_invalid", "native target AABB failed finite/dimension checks");
+
+    // The shared snapshot avoids a second target-selection pass. Before a native
+    // call, verify that this actor still belongs to the live engine actor set and
+    // refresh its bounds; this happens only when the CPS gate is open, not every tick.
+    AABB liveTargetBounds{};
+    float liveTargetRange = 0.0f;
+    if (!aim->targetBoundsSnapshot(target, liveTargetBounds, liveTargetRange) ||
+        !validBounds(liveTargetBounds)) {
+        reportGate(7, "target_not_in_live_actor_snapshot",
+            "cached target could not be revalidated against the current engine actor set");
         return;
     }
+    targetBounds = liveTargetBounds;
+    aimRange = std::min(aimRange, liveTargetRange);
 
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
