@@ -1409,11 +1409,11 @@ bool survivalModeInteractDetour(void* gameMode, void* target, const void* locati
     return result;
 }
 
-bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
+bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound, const void* attackContext) {
     static std::atomic_bool loggedNativeAttack{false};
     if (!loggedNativeAttack.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Native attack detour received its first call (target={}, hitPosition={}, trampoline={}).",
-            target != nullptr, hitPosition != nullptr, gameModeAttackOriginal != nullptr);
+        gameHooksLogger().info("Native attack detour received its first call (target={}, attackContext={}, trampoline={}).",
+            target != nullptr, attackContext != nullptr, gameModeAttackOriginal != nullptr);
     const bool eventsAlreadyPublished = syntheticAttackEventsPrepublished;
     const AttackKind kind = attackKindFor(gameMode);
     if (!eventsAlreadyPublished) {
@@ -1421,7 +1421,7 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
         GameModeActionScope scope{modeKind, gameMode};
         scope.publish(GameModeAction::Attack);
         AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
-            reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), const_cast<void*>(hitPosition)};
+            reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), const_cast<void*>(attackContext)};
         bus().publish(event);
         if (event.cancelled()) {
             static std::atomic_bool cancelled{false};
@@ -1430,7 +1430,7 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
             return false;
         }
     }
-    const bool result = gameModeAttackOriginal ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition) : false;
+    const bool result = gameModeAttackOriginal ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, attackContext) : false;
     if (syntheticAttackDispatchActive) {
         syntheticAttackResultObserved = true;
         syntheticAttackNativeResult = result;
@@ -1920,8 +1920,8 @@ bool attackAvailable(void* gameMode) {
     return true;
 }
 
-bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    if (!gameMode || !target || !hitPosition) return false;
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* attackContext) {
+    if (!gameMode || !target || !attackContext) return false;
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack || currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
     std::size_t matchedSlot = 0;
@@ -1952,7 +1952,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     GameModeActionEvent actionEvent{modeKind, GameModeAction::Attack, gameMode};
     bus().publish(actionEvent);
     AttackEvent attackEvent{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
-        reinterpret_cast<void*>(static_cast<std::uintptr_t>(true)), const_cast<void*>(hitPosition)};
+        reinterpret_cast<void*>(static_cast<std::uintptr_t>(true)), const_cast<void*>(attackContext)};
     bus().publish(attackEvent);
     if (attackEvent.cancelled()) {
         AttackResultEvent cancelled{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), false};
@@ -1987,8 +1987,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     // entry was validated to tail-branch to the matching four-argument attack
     // implementation. Never call that entry through the three-argument ABI.
     const bool publicResult = usesFourArgumentAbi
-        ? nativeAttack(gameMode, target, playPredictiveSound, hitPosition)
-        : publicAttack(gameMode, target, hitPosition);
+        ? nativeAttack(gameMode, target, playPredictiveSound, attackContext)
+        : publicAttack(gameMode, target, attackContext);
     // If the internal observer installed successfully but did not see this call,
     // do not trust a wrapper's "true" return: that mismatch produced particles/
     // swing with no target damage in the latest runtime logs.
