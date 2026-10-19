@@ -602,8 +602,12 @@ bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation 
 #endif
     return false;
 }
-// Find the exact public wrapper in the object's live vtable rather than
-// assuming every patched Bedrock build keeps GameMode::attack at index 16.
+// Forward declaration; the exact useItem slot acts as a vtable-layout anchor for the public ABI fallback.
+std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlot);
+
+// Find the exact public wrapper in the object's live vtable. Prefer exported signatures and
+// recognized adapters; when these symbols are stripped, use the current public GameMode
+// declaration's vtable order, anchored by the independently validated useItem method.
 std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr,
                                         std::size_t* matchedSlot = nullptr,
                                         std::uintptr_t* implementationOut = nullptr) {
@@ -649,40 +653,109 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         const auto missNs = cachedMissAtNs.load(std::memory_order_acquire);
         if (k == 0 && nowNs >= missNs && nowNs - missNs < 1000000000LL) return 0;
     }
-    for (std::size_t i = 0; i < 64; ++i) {
-        const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
-        if (!isReadableMemory(slot, sizeof(void*))) break;
-        std::uintptr_t address = 0;
-        std::memcpy(&address, slot, sizeof(address));
-        if (!address) break;
-        const auto canon = canonicalArm64Entry(address);
-        const bool survivalSymbol = symbols.survival && (address == symbols.survival ||
-            canon == canonicalArm64Entry(symbols.survival) || boundedArm64BranchReaches(address, symbols.survival));
-        const bool baseSymbol = symbols.base && (address == symbols.base ||
-            canon == canonicalArm64Entry(symbols.base) || boundedArm64BranchReaches(address, symbols.base));
-        std::uintptr_t internal = 0; bool trialGuard = false;
-        const bool adapter = isPublicAttackAdapter(address, &internal, &trialGuard);
-        if (!survivalSymbol && !baseSymbol && !adapter) continue;
-        const AttackKind found = (survivalSymbol || (adapter && trialGuard))
-            ? AttackKind::SurvivalMode : AttackKind::GameMode;
-        cachedEntry.store(address, std::memory_order_relaxed);
-        cachedImplementation.store(adapter ? internal : 0, std::memory_order_relaxed);
-        cachedSlot.store(i, std::memory_order_relaxed);
-        cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
-        cachedVtable.store(vtable, std::memory_order_relaxed);
-        cachedObject.store(gameMode, std::memory_order_release);
-        if (kind) *kind = found;
-        if (matchedSlot) *matchedSlot = i;
-        if (implementationOut) *implementationOut = adapter ? internal : 0;
-        static std::atomic_bool logged{false};
-        if (!logged.exchange(true, std::memory_order_acq_rel)) {
-            char msg[200]{};
-            std::snprintf(msg, sizeof(msg), "validated public 3-argument attack route: slot=%zu; adapter=%s; internal_target=%p",
-                i, adapter ? (trialGuard ? "survival" : "base") : "symbol", reinterpret_cast<void*>(internal));
-            gameHooksLogger().info("{}", msg);
+    // Avoid a 64-slot / 64-instruction scan every retry when this runtime strips
+    // both public method exports. The ABI-anchored slot fallback below handles that case.
+    if (symbols.base || symbols.survival) {
+        for (std::size_t i = 0; i < 64; ++i) {
+            const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
+            if (!isReadableMemory(slot, sizeof(void*))) break;
+            std::uintptr_t address = 0;
+            std::memcpy(&address, slot, sizeof(address));
+            if (!address) break;
+            const auto canon = canonicalArm64Entry(address);
+            const bool survivalSymbol = symbols.survival && (address == symbols.survival ||
+                canon == canonicalArm64Entry(symbols.survival) || boundedArm64BranchReaches(address, symbols.survival));
+            const bool baseSymbol = symbols.base && (address == symbols.base ||
+                canon == canonicalArm64Entry(symbols.base) || boundedArm64BranchReaches(address, symbols.base));
+            std::uintptr_t internal = 0; bool trialGuard = false;
+            const bool adapter = isPublicAttackAdapter(address, &internal, &trialGuard);
+            if (!survivalSymbol && !baseSymbol && !adapter) continue;
+            const AttackKind found = (survivalSymbol || (adapter && trialGuard))
+                ? AttackKind::SurvivalMode : AttackKind::GameMode;
+            cachedEntry.store(address, std::memory_order_relaxed);
+            cachedImplementation.store(adapter ? internal : 0, std::memory_order_relaxed);
+            cachedSlot.store(i, std::memory_order_relaxed);
+            cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
+            cachedVtable.store(vtable, std::memory_order_relaxed);
+            cachedObject.store(gameMode, std::memory_order_release);
+            if (kind) *kind = found;
+            if (matchedSlot) *matchedSlot = i;
+            if (implementationOut) *implementationOut = adapter ? internal : 0;
+            static std::atomic_bool logged{false};
+            if (!logged.exchange(true, std::memory_order_acq_rel)) {
+                char msg[200]{};
+                std::snprintf(msg, sizeof(msg), "validated public 3-argument attack route: slot=%zu; adapter=%s; internal_target=%p",
+                    i, adapter ? (trialGuard ? "survival" : "base") : "symbol", reinterpret_cast<void*>(internal));
+                gameHooksLogger().info("{}", msg);
+            }
+            return address;
         }
-        return address;
+    
     }
+
+    // LeviLamina's public GameMode declaration orders the virtuals as:
+    // destructor(2 ABI slots), startDestroy/destroy/continue/stop, build/start,
+    // tick, getPickRange, useItem, useItemAsAttack, useItemOn, interact, attack.
+    // On this ABI that places useItem at vtable slot 12 and attack at slot 16.
+    // We do not trust the numeric slot by itself: slot 12 must first match the
+    // independently resolved public useItem method, and slots 13..16 must all be
+    // readable native functions in libminecraftpe.so.
+    std::size_t useItemSlot = 0;
+    const auto useItemEntry = publicUseItemVirtualEntry(gameMode, &useItemSlot);
+    if (useItemEntry && useItemSlot == 12) {
+        std::array<std::uintptr_t, 4> adjacent{};
+        bool adjacentValid = true;
+        for (std::size_t slotIndex = 13; slotIndex <= 16; ++slotIndex) {
+            const auto* slot = reinterpret_cast<const void*>(
+                reinterpret_cast<std::uintptr_t>(vtable) + slotIndex * sizeof(void*));
+            std::uintptr_t entry = 0;
+            if (!isReadableMemory(slot, sizeof(void*))) {
+                adjacentValid = false;
+                break;
+            }
+            std::memcpy(&entry, slot, sizeof(entry));
+            if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry)) ||
+                !isReadableMemory(reinterpret_cast<const void*>(entry), sizeof(std::uint32_t))) {
+                adjacentValid = false;
+                break;
+            }
+            adjacent[slotIndex - 13] = entry;
+        }
+        if (adjacentValid) {
+            const auto publicAttackEntry = adjacent[3];
+            std::uintptr_t internal = 0;
+            bool trialGuard = false;
+            const bool adapter = isPublicAttackAdapter(publicAttackEntry, &internal, &trialGuard);
+            // SurvivalMode's guarded implementation can be identified even if
+            // its public wrapper is not the simple adapter shape above.
+            if (!trialGuard) {
+                const auto canonical = canonicalArm64Entry(publicAttackEntry);
+                std::uint32_t firstInstruction = 0;
+                if (canonical && isReadableMemory(reinterpret_cast<const void*>(canonical), sizeof(firstInstruction))) {
+                    std::memcpy(&firstInstruction, reinterpret_cast<const void*>(canonical), sizeof(firstInstruction));
+                    trialGuard = firstInstruction == 0x39432008u; // ldrb w8,[x0,#0xc8]
+                }
+            }
+            const AttackKind found = trialGuard ? AttackKind::SurvivalMode : AttackKind::GameMode;
+            cachedEntry.store(publicAttackEntry, std::memory_order_relaxed);
+            cachedImplementation.store(adapter ? internal : 0, std::memory_order_relaxed);
+            cachedSlot.store(16, std::memory_order_relaxed);
+            cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
+            cachedVtable.store(vtable, std::memory_order_relaxed);
+            cachedObject.store(gameMode, std::memory_order_release);
+            if (kind) *kind = found;
+            if (matchedSlot) *matchedSlot = 16;
+            if (implementationOut) *implementationOut = adapter ? internal : 0;
+            gameHooksLogger().info(
+                "Validated public GameMode::attack through ABI vtable layout: useItem_slot=12, attack_slot=16, adapter={}",
+                adapter ? "recognized" : "anchored_by_useItem_and_neighbor_slots");
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "GameHooks", "attack_route", "public_attack_validated_by_vtable_layout",
+                std::string("useItem_slot=12; attack_slot=16; adapter=") + (adapter ? "recognized" : "layout_anchor"));
+            return publicAttackEntry;
+        }
+    }
+
     cachedEntry.store(0, std::memory_order_relaxed);
     cachedImplementation.store(0, std::memory_order_relaxed);
     cachedSlot.store(0, std::memory_order_relaxed);
@@ -708,7 +781,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     return 0;
 }
 
-std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlot = nullptr) {
+std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlot) {
     if (!plausibleGameMode(gameMode)) return 0;
     void** vtable = nullptr;
     std::memcpy(&vtable, gameMode, sizeof(vtable));
@@ -739,6 +812,39 @@ std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlo
         }
         return out;
     }();
+
+    // This resolver is reached repeatedly while AutoHit is enabled. Cache both
+    // exact matches and misses per object/vtable so a missing optional method
+    // cannot trigger a full scan of 64 slots on every local-player tick.
+    static std::atomic<void*> cachedObject{nullptr}, cachedVtable{nullptr};
+    static std::atomic<std::uintptr_t> cachedEntry{0};
+    static std::atomic<std::size_t> cachedSlot{0};
+    static std::atomic<int> cachedState{-1}; // -1 unknown, 0 miss, 1 hit
+    static std::atomic<std::int64_t> cachedMissAtNs{0};
+    const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (cachedObject.load(std::memory_order_acquire) == gameMode &&
+        cachedVtable.load(std::memory_order_acquire) == vtable) {
+        const int state = cachedState.load(std::memory_order_acquire);
+        if (state == 1) {
+            const auto slotIndex = cachedSlot.load(std::memory_order_relaxed);
+            const auto entry = cachedEntry.load(std::memory_order_relaxed);
+            const auto* slot = reinterpret_cast<const void*>(
+                reinterpret_cast<std::uintptr_t>(vtable) + slotIndex * sizeof(void*));
+            std::uintptr_t liveEntry = 0;
+            if (entry && isReadableMemory(slot, sizeof(void*))) {
+                std::memcpy(&liveEntry, slot, sizeof(liveEntry));
+                if (liveEntry == entry) {
+                    if (matchedSlot) *matchedSlot = slotIndex;
+                    return entry;
+                }
+            }
+        } else if (state == 0) {
+            const auto missNs = cachedMissAtNs.load(std::memory_order_acquire);
+            if (nowNs >= missNs && nowNs - missNs < 5000000000LL) return 0;
+        }
+    }
+
     for (std::size_t i = 0; i < 64; ++i) {
         const auto* slot = reinterpret_cast<const void*>(
             reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
@@ -756,6 +862,11 @@ std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlo
             matchesPublicUseItem(address, symbols.base) ||
             matchesPublicUseItem(address, survivalSignature) ||
             matchesPublicUseItem(address, symbols.survival)) {
+            cachedEntry.store(address, std::memory_order_relaxed);
+            cachedSlot.store(i, std::memory_order_relaxed);
+            cachedState.store(1, std::memory_order_relaxed);
+            cachedVtable.store(vtable, std::memory_order_relaxed);
+            cachedObject.store(gameMode, std::memory_order_release);
             if (matchedSlot) *matchedSlot = i;
             static std::atomic_bool loggedMatch{false};
             if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
@@ -763,6 +874,13 @@ std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlo
             return address;
         }
     }
+
+    cachedEntry.store(0, std::memory_order_relaxed);
+    cachedSlot.store(0, std::memory_order_relaxed);
+    cachedMissAtNs.store(nowNs, std::memory_order_relaxed);
+    cachedState.store(0, std::memory_order_relaxed);
+    cachedVtable.store(vtable, std::memory_order_relaxed);
+    cachedObject.store(gameMode, std::memory_order_release);
     static std::atomic_bool loggedMiss{false};
     if (!loggedMiss.exchange(true, std::memory_order_acq_rel))
         gameHooksLogger().warn("No exact public GameMode::useItem method found in the live vtable.");
