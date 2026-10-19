@@ -89,9 +89,10 @@ bool shouldResolveLocalPlayer(void* client) {
  if (!client) return false;
  const void* old = g_localPlayerResolveClient.exchange(client, std::memory_order_acq_rel);
  if (old != client) g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
+ // Retry quicker during world/player initialization, while keeping a hard bound on work in ClientInstance::update.
  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
  auto due = g_nextLocalPlayerResolveNs.load(std::memory_order_acquire);
- for (;;) { if (now < due) return false; if (g_nextLocalPlayerResolveNs.compare_exchange_weak(due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire)) return true; }
+ for (;;) { if (now < due) return false; if (g_nextLocalPlayerResolveNs.compare_exchange_weak(due, now + 50000000, std::memory_order_acq_rel, std::memory_order_acquire)) return true; }
 }
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
