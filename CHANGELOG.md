@@ -1,3 +1,9 @@
+## 2026-10-19 — AutoHit LocalPlayer capture recovery (experimental)
+
+- Reduced the bounded retry interval for resolving ClientInstance's local player from 250 ms to 50 ms during spawn/world transitions; valid captures remain cached, so this only affects unresolved startup windows.
+- Added a narrowly gated recovery path for the LocalPlayer candidate when the exact export and known vtable getter fail: it must match the validated NormalTick implementation and be stored as an exact pointer in the validated live ClientInstance (or its validated MinecraftGame owner) before acceptance. No guessed getter index or arbitrary actor is trusted by this fallback.
+- Kept changes on `fix/autohit-localplayer-resolution-20261019`; this is an attempt to restore verified local-player tick events, not a claim that the native attack route or server damage is fixed. Build and in-game runtime diagnostics are required.
+
 ## 2026-10-19 — AutoHit native-route retry throttling (experimental)
 
 - Increased the AutoHit retry delay after an unavailable native attack route from 1 to 5 seconds, and aligned the `GameHooks` negative-cache TTL to the same interval.
