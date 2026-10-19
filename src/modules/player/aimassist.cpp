@@ -376,6 +376,7 @@ void AimAssistModule::resetTrackingState() {
     m_lastPlayer = nullptr;
     m_lastTarget = nullptr;
     m_targetPresent = false;
+    m_targetGraceOnly = false;
     m_lastTargetIsPlayer = false;
     m_cachedHeldWeaponCode = 0;
     m_cachedWeaponSlot = -1;
@@ -539,6 +540,14 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
     const auto now = std::chrono::steady_clock::now();
+    // A short camera-only grace state is deliberately not an attackable target.
+    // The cached AABB may guide camera smoothing, but consumers must wait for a
+    // fresh selection and live actor-list validation before performing actions.
+    if (m_targetGraceOnly) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "target_snapshot", "grace_only_suppressed");
+        return false;
+    }
     if (!m_lastPlayer || (expectedPlayer && m_lastPlayer != expectedPlayer) ||
         !m_lastTarget || !m_targetPresent ||
         !validBounds(m_lastTargetBounds) ||
@@ -567,7 +576,7 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
         ? std::clamp(maxQueryRange, 2.0f, 80.0f) : 80.0f;
     range = std::clamp(std::min(m_range, safeQueryRange), 2.0f, 80.0f);
     auto* player = m_lastPlayer;
-    if ((!enabled && !autoHitNeedsTargeting()) || !player || !desiredTarget || !g_fetchNearbyActors) return false;
+    if (m_targetGraceOnly || (!enabled && !autoHitNeedsTargeting()) || !player || !desiredTarget || !g_fetchNearbyActors) return false;
 
     // Resolve the desired actor against a fresh engine-owned actor snapshot before
     // dereferencing it. This lets short multi-tick actions (such as a mace swap)
@@ -597,7 +606,7 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     const auto now = std::chrono::steady_clock::now();
     if (!enabled || !player || player != m_lastPlayer || !target ||
-        target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds) ||
+        target != m_lastTarget || !m_targetPresent || m_targetGraceOnly || !validBounds(m_lastTargetBounds) ||
         m_lastTargetSeen.time_since_epoch().count() == 0 ||
         now < m_lastTargetSeen ||
         now - m_lastTargetSeen > std::chrono::milliseconds(250)) {
@@ -967,12 +976,13 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
             "BedrockAim", "target_selection", "none",
             "no eligible actor in the scan radius passed the current filters");
-        // Keep the last target briefly while it crosses the player's immediate
-        // area or the native nearby-actor list skips one tick. Do not dereference
-        // the cached entity or auto-hit it while it is missing from the list.
+        // Preserve camera steering for a very short scan dropout, using only the
+        // previously validated bounds. Do not refresh lastTargetSeen and do not
+        // expose this pointer to AutoHit, crosshair checks, or other actions.
         const auto now = std::chrono::steady_clock::now();
-        if (m_lastTarget && validBounds(m_lastTargetBounds) &&
+        if (m_lastPlayer == player && m_lastTarget && validBounds(m_lastTargetBounds) &&
             m_lastTargetSeen.time_since_epoch().count() != 0 &&
+            now >= m_lastTargetSeen &&
             now - m_lastTargetSeen <= std::chrono::milliseconds(250)) {
             const Vec3 nearestOnPreviousTarget{
                 std::clamp(playerCenter.x, m_lastTargetBounds.min.x, m_lastTargetBounds.max.x),
@@ -980,7 +990,15 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                 std::clamp(playerCenter.z, m_lastTargetBounds.min.z, m_lastTargetBounds.max.z)
             };
             if (distanceSquared(playerCenter, nearestOnPreviousTarget) <= retentionRadiusSq) {
-                m_targetPresent = false;
+                m_targetPresent = true;
+                m_targetGraceOnly = true;
+                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+                    "BedrockAim", "target_tracking", "camera_grace_only",
+                    std::string("target=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(m_lastTarget)) +
+                        "; age_ms=" + std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now - m_lastTargetSeen).count()) +
+                        "; attackable=no; source=cached_bounds_only");
                 return;
             }
         }
@@ -1062,6 +1080,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     m_lastTarget = bestTarget;
     m_lastTargetIsPlayer = bestTargetIsPlayer;
     m_targetPresent = true;
+    m_targetGraceOnly = false;
     m_lastTargetBounds = bestTargetBounds;
     m_lastTargetSeen = motionSampleTime;
 }
