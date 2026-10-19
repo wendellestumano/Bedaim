@@ -116,6 +116,9 @@ void SwordSwapperModule::onDisable() {
 void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    // Every module receives the shared player tick even when disabled. Avoid
+    // inventory access and tick bookkeeping unless a swap must be restored.
+    if (!enabled && !m_ownsSwap) return;
     auto& inventory = bedrocktools::core::InventoryAccess::get();
     ++m_playerTickCounter;
     auto reportStatus = [this](std::string status, bedrocktools::diagnostics::Level level = bedrocktools::diagnostics::Level::Debug) {
