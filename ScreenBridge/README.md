@@ -1,26 +1,26 @@
 # ScreenBridge Android (prototype)
 
-ScreenBridge is an Android foreground service that offers an authenticated, loopback-only HTTP bridge for screen capture and accessibility gestures. It is being developed on a separate branch; it does not modify Bedaim's main branch.
+ScreenBridge is an Android foreground service for authenticated screen capture and accessibility gestures. It lives on the separate `feature/screenbridge-android-app-20261019` branch; Bedaim's `main` branch is not changed.
 
-## Permissions and setup
+## Setup and permission model
 1. Install the debug APK built by GitHub Actions.
-2. Open ScreenBridge and enable **ScreenBridge Remote Control** in Android Accessibility settings.
-3. Return to the app and tap **Authorize screen and start service**. Android will show the system screen-capture consent dialog.
-4. Keep the ongoing notification visible while remote access is needed.
+2. Enable **ScreenBridge Remote Control** in Android Accessibility settings.
+3. Open ScreenBridge and tap **Authorize screen and start service**. Confirm Android's screen-capture dialog.
+4. Keep the foreground-service notification visible while you want control enabled.
 
-The HTTP listener binds only to `127.0.0.1:18766`; it is not exposed to Wi-Fi or the public internet. Each install generates a random access token. Never share the token publicly. The user can stop capture from the app or Android's active screen-capture controls.
+Screen capture requires explicit Android consent. If Android revokes the session or kills the service, open ScreenBridge and authorize again. The app must not silently bypass that OS permission. The local HTTP listener binds only to `127.0.0.1:18766`; it is not exposed to Wi-Fi or the public internet. A random per-install token protects control and image endpoints. Never share that token publicly.
 
 ## Local endpoints
-- `GET /health` — status and current dimensions (local diagnostic endpoint).
-- `GET /<token>/screen.jpg` — current JPEG frame.
-- `GET /<token>/action?op=tap&x=120&y=240` — tap, then returns a JPEG frame.
-- `GET /<token>/action?op=swipe&x1=100&y1=300&x2=400&y2=300&ms=180` — swipe and return a frame.
-- `GET /<token>/action?op=back` or `op=home` — global navigation, then frame.
+- `GET /health` — service, projection, accessibility, cached-frame freshness, frame count, and capture error diagnostics.
+- `GET /<token>/screen.jpg` — most recently captured JPEG frame.
+- `GET /<token>/action?op=tap&x=120&y=240` — dispatch a tap and return the next available frame.
+- `GET /<token>/action?op=swipe&x1=100&y1=300&x2=400&y2=300&ms=180` — dispatch a swipe and return the next frame.
+- `GET /<token>/action?op=back` or `op=home` — global navigation and the next frame.
 
-Coordinates use the current full-display pixel dimensions reported by `/health`. Accessibility gestures are asynchronous: an HTTP success means the gesture was accepted, not proof that the intended app action succeeded; inspect the returned frame.
+Coordinates use full-display pixel dimensions from `/health`. An accepted gesture is not proof that the intended action succeeded; inspect the returned frame. Frame encoding is continuous and cached, so reading `screen.jpg` does not depend on catching the exact moment that a request arrives. The health endpoint distinguishes an active projection from a usable frame.
 
-## Current limitations
-- Android requires explicit screen-capture consent. If the OS terminates the service or revokes projection, the user must authorize a new capture session.
-- Gesture control requires the user to enable the accessibility service manually.
-- This bridge is local only. ChatGPT still needs an authorized tool/relay that can reach the device's loopback endpoint; installing the APK alone does not make the chat a continuous live-video receiver.
-- Prototype; test on the intended Android/HyperOS build before relying on it.
+## Architecture and limits
+- **ScreenBridge is the intended UI-control path.** Termux/ADB-based input is not required for ordinary tap, swipe, back, or home operations.
+- Termux or a remote-device tool may still be needed for diagnostics, file transfer, logs, installation, and recovery.
+- This build still exposes only a loopback endpoint. ChatGPT cannot directly reach the phone's `127.0.0.1` from its remote execution environment without an explicitly configured, authenticated relay/connector. Do not expose the HTTP server publicly or forward the token to an untrusted endpoint as a workaround.
+- ScreenBridge is a prototype; verify on the target Android/HyperOS build before relying on it for time-sensitive interactions.
