@@ -1,3 +1,10 @@
+## 2026-10-19 — AutoHit native-route retry throttling (experimental)
+
+- Increased the AutoHit retry delay after an unavailable native attack route from 1 to 5 seconds, and aligned the `GameHooks` negative-cache TTL to the same interval.
+- This is a performance containment change for repeated failed signature/vtable validation; it does **not** claim to restore attacks. The native route still must be validated on the target runtime before dispatch is enabled.
+- ProtoHax UserScript research confirmed that its `localPlayer.interactEntity(..., "attack")` helper queues a protocol/session-level entity interaction, whereas Bedaim currently dispatches through the in-process native GameMode virtual. The API cannot be copied directly without a compatible protocol/session layer.
+- Experimental branch only; `main` remains untouched. Build and runtime tests are still required.
+
 ## 2026-10-19 — Public attack route accepts validated call thunks (experimental)
 
 - Extended the ARM64 public `GameMode::attack(Actor&, Vec3 const&)` adapter recognizer to handle both a tail branch (`B`) and a normal call (`BL`) to the separately resolved four-argument implementation.
