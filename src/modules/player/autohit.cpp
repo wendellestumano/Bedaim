@@ -12,11 +12,9 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
-#include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <pl/ModMenu.hpp>
-#include <pl/Input.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -27,35 +25,6 @@
 
 namespace {
 thread_local bool g_autoHitSyntheticAttack = false;
-
-std::string inputLabel(int keyCode, int mouseButton, unsigned int unicodeChar = 0) {
-    if (keyCode >= 0) {
-        // Prefer the actual character reported by Levi's input event. Numeric
-        // key codes are backend-specific: code 7 is not universally the '0' key.
-        if (unicodeChar >= 32 && unicodeChar <= 126) {
-            return std::string(1, static_cast<char>(unicodeChar)) + " (code " + std::to_string(keyCode) + ")";
-        }
-        switch (keyCode) {
-            case 19: return "Arrow Up (code 19)";
-            case 20: return "Arrow Down (code 20)";
-            case 21: return "Arrow Left (code 21)";
-            case 22: return "Arrow Right (code 22)";
-            case 59: return "Left Shift (code 59)";
-            case 60: return "Right Shift (code 60)";
-            case 66: return "Enter (code 66)";
-            case 67: return "Backspace (code 67)";
-            case 111: return "Escape (code 111)";
-            case 112: return "Delete (code 112)";
-            default: return "Key code " + std::to_string(keyCode);
-        }
-    }
-    switch (mouseButton) {
-        case 0: return "Mouse Left";
-        case 1: return "Mouse Right";
-        case 2: return "Mouse Middle";
-        default: return mouseButton >= 0 ? "Mouse Button " + std::to_string(mouseButton) : "None (null)";
-    }
-}
 
 using bedrocktools::sdk::AABB;
 using bedrocktools::sdk::Player;
@@ -98,7 +67,7 @@ Vec3 eyePosition(Player* player) {
 
 AutoHitModule::AutoHitModule()
     : Module("Auto Hit",
-             "Experimental held-attack helper; uses the player tick path and requires a fresh BedrockAim target plus a validated native attack route.") {
+             "Automatically attacks eligible in-range targets while enabled; no attack key or mouse binding is required.") {
     keybind = 0;
 }
 
@@ -134,51 +103,9 @@ void AutoHitModule::onInit() {
                 }
             }
         });
-    pl::input::registerKeyCallback([this](const pl::input::KeyEvent& input) {
-        return onKeyEvent(input.keyCode, input.isKeyDown, input.unicodeChar);
-    });
-    // The launcher mouse callback may not receive Bedrock's native touchscreen
-    // attack button. Observe ordinary engine attack actions as a mobile-compatible
-    // activation signal, then permit a bounded repeat window. Synthetic attacks
-    // are explicitly ignored so AutoHit cannot re-arm itself.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
-        [this](auto& event) {
-            const bool nativeAttack = event.action == bedrocktools::events::GameModeAction::Attack;
-            const bool itemAsAttack = event.action == bedrocktools::events::GameModeAction::UseItemAsAttack;
-            if (!nativeAttack && !itemAsAttack) return;
-
-            const char* actionName = nativeAttack ? "Attack" : "UseItemAsAttack";
-            if (!enabled) return;
-            if (g_autoHitSyntheticAttack) {
-                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
-                    "AutoHit", "touch_activation", "synthetic_action_ignored", actionName);
-                return;
-            }
-            if (m_containerOpen.load(std::memory_order_acquire) ||
-                m_chatOpen.load(std::memory_order_acquire)) {
-                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-                    "AutoHit", "touch_activation", "blocked_by_screen", actionName);
-                return;
-            }
-
-            std::lock_guard<std::mutex> lock(m_stateMutex);
-            if (!m_touchRepeatEnabled) {
-                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                    "AutoHit", "touch_activation",
-                    nativeAttack ? "attack_seen_repeat_disabled" : "item_as_attack_seen_repeat_disabled",
-                    "native action was observed, but touchscreen repeat is disabled");
-                return;
-            }
-            const auto window = std::chrono::milliseconds(std::clamp(m_touchRepeatWindowMs, 100, 1000));
-            m_touchRepeatUntil = std::chrono::steady_clock::now() + window;
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                "AutoHit", "touch_input",
-                nativeAttack ? "attack_repeat_window_armed" : "item_as_attack_repeat_window_armed",
-                std::string("source=") + actionName + "; window_ms=" + std::to_string(window.count()));
-        });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "initialized",
-        "mouse-held input plus optional bounded native-attack repeat for touchscreen input");
+        "automatic attack while enabled; no attack input binding is used");
 }
 
 void AutoHitModule::onEnable() {
@@ -189,101 +116,29 @@ void AutoHitModule::onEnable() {
         "AutoHit", "inventory_reader", "retry_requested",
         "reinitialized native inventory accessors on enable");
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackHeld = false;
-    m_keyboardAttackHeld = false;
-    m_heldButton = -1;
-    m_touchRepeatUntil = {};
     m_nextAttack = {};
     m_lastGateDecision.store(-1, std::memory_order_release);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "enabled");
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "AutoHit", "activation_mode", m_requireAttackInput ? "input_required" : "automatic_when_enabled");
+        "AutoHit", "activation_mode", "automatic_when_enabled_no_attack_binding");
 }
 
 void AutoHitModule::onDisable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackHeld = false;
-    m_keyboardAttackHeld = false;
-    m_heldButton = -1;
-    m_touchRepeatUntil = {};
     m_nextAttack = {};
     m_lastGateDecision.store(-1, std::memory_order_release);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "disabled");
 }
 
-bool AutoHitModule::onKeyEvent(int keyCode, bool isDown, unsigned int unicodeChar) {
-    std::unique_lock<std::mutex> lock(m_stateMutex);
-    if (m_captureNextInput && isDown && keyCode >= 0 &&
-        std::chrono::steady_clock::now() - m_captureArmedAt >= std::chrono::milliseconds(200)) {
-        m_attackKeyCode = keyCode;
-        m_attackKeyUnicode = unicodeChar;
-        m_captureNextInput = false;
-        m_keyboardAttackHeld = false;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "input_capture", "keyboard_key_captured",
-            std::string("label=") + inputLabel(keyCode, -1, unicodeChar) +
-                "; key_code=" + std::to_string(keyCode) +
-                "; unicode=" + std::to_string(unicodeChar));
-        lock.unlock();
-        // Schema updates can touch launcher UI state; never do that while
-        // holding the module's input mutex.
-        onMenuRegistered();
-        return false;
-    }
-    if (keyCode == m_attackKeyCode && m_attackKeyCode >= 0)
-        m_keyboardAttackHeld = isDown;
+bool AutoHitModule::onKeyEvent(int, bool, unsigned int) {
+    // Attack input is deliberately not part of AutoHit's activation contract.
     return false;
 }
 
-bool AutoHitModule::onMouseEvent(int button, bool isDown) {
-    std::unique_lock<std::mutex> lock(m_stateMutex);
-    if (m_captureNextInput && isDown &&
-        std::chrono::steady_clock::now() - m_captureArmedAt >= std::chrono::milliseconds(200)) {
-        m_attackButton = std::clamp(button, 0, 16);
-        m_captureNextInput = false;
-        m_attackHeld = false;
-        m_heldButton = -1;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "input_capture", "mouse_button_captured",
-            std::string("button=") + std::to_string(m_attackButton));
-        lock.unlock();
-        onMenuRegistered();
-        return false;
-    }
-    const bool screenBlocked = m_containerOpen.load(std::memory_order_acquire) ||
-        m_chatOpen.load(std::memory_order_acquire);
-    if (screenBlocked) {
-        m_attackHeld = false;
-        m_heldButton = -1;
-        return false;
-    }
-    if (enabled) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
-            "AutoHit", "raw_mouse_input",
-            std::string("button_") + std::to_string(button) + (isDown ? "_down" : "_up"),
-            "raw button index observed by the launcher input bridge");
-    }
-    if (!enabled) {
-        if (!isDown && button == m_heldButton) {
-            m_attackHeld = false;
-            m_heldButton = -1;
-        }
-        return false; // Never consume or cancel the user's normal mouse input.
-    }
-
-    if (isDown && button == m_attackButton) {
-        m_attackHeld = true;
-        m_heldButton = button;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "AutoHit", "input", "attack_button_held");
-    } else if (!isDown && button == m_heldButton) {
-        m_attackHeld = false;
-        m_heldButton = -1;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "AutoHit", "input", "attack_button_released");
-    }
+bool AutoHitModule::onMouseEvent(int, bool) {
+    // Do not consume or require launcher mouse input; module state controls activation.
     return false;
 }
 
@@ -317,34 +172,19 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    bool attackHeld = false;
+    // AutoHit has no attack key/button gate: enabling the module is sufficient.
+    // Copy the weapon profile and reach under one short lock, then leave the
+    // render/tick-critical path free of input-capture bookkeeping.
     float configuredRange = 3.2f;
     bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
     float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        const auto now = std::chrono::steady_clock::now();
-        const bool repeatWindow = m_touchRepeatUntil.time_since_epoch().count() != 0 &&
-            now < m_touchRepeatUntil;
-#if defined(__ANDROID__)
-        // This build targets Android touch controls. The "Require attack input"
-        // option is explicitly a desktop-only gate; on Android, enabling AutoHit
-        // must not silently require a mouse/key state that the input bridge never
-        // reports. Range, target, weapon and native-route guards still apply.
-        attackHeld = true;
-#else
-        attackHeld = !m_requireAttackInput || m_attackHeld || m_keyboardAttackHeld ||
-            (m_touchRepeatEnabled && repeatWindow);
-#endif
         configuredRange = m_attackRange;
         swordEnabled = m_swordEnabled; swordCps = m_swordCps;
         axeEnabled = m_axeEnabled; axeCps = m_axeCps;
         maceEnabled = m_maceEnabled; maceCps = m_maceCps;
         tridentEnabled = m_tridentEnabled; tridentCps = m_tridentCps;
-    }
-    if (!attackHeld) {
-        reportGate(4, "waiting_for_attack_input", "activation mode requires a held input or an active touch-repeat window");
-        return;
     }
 
     // Do not rescan targets, inspect inventory, or resolve native GameMode on
@@ -536,13 +376,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), -1, 16);
-    m_attackKeyCode = json.value("m_attackKeyCode", m_attackKeyCode);
-    m_attackKeyUnicode = json.value("m_attackKeyUnicode", m_attackKeyUnicode);
-    m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
-    m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
-    m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
     const float legacyInterval = std::clamp(json.value("m_attackIntervalMs", 180.0f), 80.0f, 1000.0f);
     const float legacySwordCps = std::clamp(1000.0f / legacyInterval, 1.0f, 20.0f);
     m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
@@ -558,13 +392,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
 void AutoHitModule::saveConfig(nlohmann::json& json) {
     Module::saveConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    json["m_attackButton"] = m_attackButton;
-    json["m_attackKeyCode"] = m_attackKeyCode;
-    json["m_attackKeyUnicode"] = m_attackKeyUnicode;
-    json["m_requireAttackInput"] = m_requireAttackInput;
     json["m_attackRange"] = m_attackRange;
-    json["m_touchRepeatEnabled"] = m_touchRepeatEnabled;
-    json["m_touchRepeatWindowMs"] = m_touchRepeatWindowMs;
     json["m_attackIntervalMs"] = 1000.0f / m_swordCps; // legacy config compatibility
     json["m_swordEnabled"] = m_swordEnabled;
     json["m_swordCps"] = m_swordCps;
@@ -580,7 +408,7 @@ void AutoHitModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
     schema.defaultCategory("combat")
-        .category("combat", "Combat", "Experimental held-input attack and per-weapon CPS profiles")
+        .category("combat", "Combat", "Automatic attack while enabled, reach and per-weapon CPS profiles")
         .category("weapon_profiles", "Weapon Profiles", "Choose which held weapons may activate AutoHit and their CPS cap");
 
     auto slider = [&](const char* key, const char* title, const char* category,
@@ -608,45 +436,7 @@ void AutoHitModule::onMenuRegistered() {
         schema.node(std::move(node));
     };
 
-    ConfigNodeV2 captureNode;
-    captureNode.id = "m_captureNextInput";
-    captureNode.key = "m_captureNextInput";
-    captureNode.title = "Capture next keyboard/mouse input";
-    captureNode.description = std::string("Press this button, then press a key or mouse button. Current keyboard binding: ") +
-        inputLabel(m_attackKeyCode, -1, m_attackKeyUnicode) + "; mouse binding: " +
-        inputLabel(-1, m_attackButton) + ". Numeric codes vary by input backend; the label uses the character reported by the input event when available.";
-    captureNode.category = "combat";
-    captureNode.type = ConfigControlTypeV2::Button;
-    captureNode.actionValue = "capture";
-    schema.node(std::move(captureNode));
-    ConfigNodeV2 clearKeyNode;
-    clearKeyNode.id = "m_clearAttackKey";
-    clearKeyNode.key = "m_clearAttackKey";
-    clearKeyNode.title = "Clear keyboard binding";
-    clearKeyNode.description = "Removes the recorded keyboard key without changing the mouse binding.";
-    clearKeyNode.category = "combat";
-    clearKeyNode.type = ConfigControlTypeV2::Button;
-    clearKeyNode.actionValue = "clear";
-    schema.node(std::move(clearKeyNode));
-    ConfigNodeV2 clearMouseNode;
-    clearMouseNode.id = "m_clearAttackMouse";
-    clearMouseNode.key = "m_clearAttackMouse";
-    clearMouseNode.title = "Clear mouse binding";
-    clearMouseNode.description = "Resets the recorded mouse button to left mouse.";
-    clearMouseNode.category = "combat";
-    clearMouseNode.type = ConfigControlTypeV2::Button;
-    clearMouseNode.actionValue = "clear";
-    schema.node(std::move(clearMouseNode));
-    ConfigNodeV2 activationNode;
-    activationNode.id = "m_requireAttackInput";
-    activationNode.key = "m_requireAttackInput";
-    activationNode.title = "Require attack input (desktop)";
-    activationNode.category = "combat";
-    activationNode.type = ConfigControlTypeV2::Toggle;
-    schema.node(std::move(activationNode));
     slider("m_attackRange", "Attack range", "combat", "2", "6", "0.1", " blocks");
-    toggle("m_touchRepeatEnabled", "Enable touchscreen attack repeat");
-    slider("m_touchRepeatWindowMs", "Touch repeat window", "combat", "100", "1000", "50", " ms");
     toggle("m_swordEnabled", "Enable sword profile");
     slider("m_swordCps", "Sword CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
     toggle("m_axeEnabled", "Enable axe profile");
@@ -668,62 +458,6 @@ void AutoHitModule::onMenuRegistered() {
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
-    if (key == "m_clearAttackKey") {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_attackKeyCode = -1;
-        m_attackKeyUnicode = 0;
-        m_keyboardAttackHeld = false;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "input_capture", "keyboard_binding_cleared");
-        onMenuRegistered();
-        return true;
-    }
-    if (key == "m_clearAttackMouse") {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_attackButton = 0;
-        m_attackHeld = false;
-        m_heldButton = -1;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "input_capture", "mouse_binding_reset", "button=0");
-        onMenuRegistered();
-        return true;
-    }
-    if (key == "m_captureNextInput") {
-        if (value != "capture" && value != "true" && value != "1") return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_captureNextInput = true;
-        m_captureArmedAt = std::chrono::steady_clock::now();
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "input_capture", "armed",
-            "waiting for one keyboard key or mouse button after a 200 ms arming delay");
-        return true;
-    }
-    if (key == "m_requireAttackInput") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_requireAttackInput = on;
-        if (!on) {
-            m_attackHeld = false;
-            m_heldButton = -1;
-            m_touchRepeatUntil = {};
-        }
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "activation_mode", on ? "input_required" : "automatic_when_enabled");
-        return true;
-    }
-    if (key == "m_touchRepeatEnabled") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_touchRepeatEnabled = on;
-        if (!on) m_touchRepeatUntil = {};
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "touch_input", on ? "enabled" : "disabled");
-        return true;
-    }
     if (key == "m_swordEnabled" || key == "m_axeEnabled" ||
         key == "m_maceEnabled" || key == "m_tridentEnabled") {
         const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
@@ -745,9 +479,7 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
         while (parsed < raw.size() && std::isspace(static_cast<unsigned char>(raw[parsed]))) ++parsed;
         if (parsed != raw.size() || !std::isfinite(number)) return false;
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (key == "m_attackButton") m_attackButton = std::clamp(static_cast<int>(std::lround(number)), 0, 16);
-        else if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
-        else if (key == "m_touchRepeatWindowMs") m_touchRepeatWindowMs = std::clamp(static_cast<int>(std::lround(number)), 100, 1000);
+        if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
         else if (key == "m_swordCps") m_swordCps = std::clamp(number, 1.0f, 20.0f);
         else if (key == "m_axeCps") m_axeCps = std::clamp(number, 1.0f, 20.0f);
         else if (key == "m_maceCps") m_maceCps = std::clamp(number, 1.0f, 20.0f);
