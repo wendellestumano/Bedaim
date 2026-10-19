@@ -1,3 +1,13 @@
+## 2026-10-19 — AutoHit route ABI fix after runtime evidence (experimental)
+
+- Replaced the layout-only fallback that accepted vtable slot 16 whenever `useItem` appeared at slot 12. Neighboring readable function pointers do not prove method identity or ABI.
+- Added a separately validated four-argument route for guarded ARM64 thunks that have both a conditional guard/alternate return and a direct tail branch to the resolved `GameModeAttack` implementation. The live vtable entry is called using its validated four-argument ABI; validated public three-argument adapters remain preferred when present.
+- The resolver scans for known public adapters even when exports are stripped, and emits the selected slot, ABI, and implementation target. If the native observer installed successfully but does not see the call, a public wrapper's `true` return is no longer reported as an accepted attack.
+- Changed the immediate local `hurtTime` threshold from an attack-dispatch lockout to a one-shot diagnostic warning. Hurt-time is sampled before authoritative server state necessarily arrives; the configured weapon CPS remains the repeat limiter.
+- Root-cause evidence: the user-provided runtime log dispatched through slot 16, reported `public_virtual_returned_true`, did not reach the internal observer, and recorded target hurt-time `0 -> 0`. The user's isolated Termux test against the matching `libminecraftpe.so` reports slot 2 branching to `0xF89FE18` and slot 16 branching to `0xF89FA80`; this supports removing slot-16-by-layout inference. No hard-coded slot is used by the new resolver.
+- ProtoHax UserScript's `interactEntity(..., "attack")` is a protocol/session action, not a native C++ `GameMode` call, so it remains an architectural reference rather than a directly copied function. The Apollon APK config contains `emulateNativeAttack` and KillAura settings, but the stripped `libReverseSigma.so` strings alone do not establish its implementation ABI.
+- Experimental branch only. Build and host regression tests are required; a successful build does not prove server-confirmed damage. In-game verification is still pending.
+
 ## 2026-10-19 — AutoHit native-route retry throttling (experimental)
 
 - Increased the AutoHit retry delay after an unavailable native attack route from 1 to 5 seconds, and aligned the `GameHooks` negative-cache TTL to the same interval.
