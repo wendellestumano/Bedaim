@@ -373,6 +373,18 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
+    // Resolve the native route before asking the shared target provider to scan
+    // entities. If this Minecraft build cannot validate attack(), repeated 80-block
+    // target scans are wasted work and were a major source of the observed lag.
+    void* gameMode = core::gamehooks::gameModeForPlayer(player);
+    const bool routeAvailable = gameMode && core::gamehooks::attackAvailable(gameMode);
+    if (!gameMode || !routeAvailable) {
+        reportGate(11, "native_attack_route_unavailable",
+            std::string("game_mode=") + (gameMode ? "present" : "missing") +
+            "; attack_route=" + (routeAvailable ? "ready" : "unavailable"));
+        return;
+    }
+
     // ProtoHax's useful separation is preserved here: target acquisition,
     // weapon eligibility, reach/cooldown, and native dispatch are independent
     // gates. Bedaim uses the engine's validated native route rather than
@@ -439,10 +451,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    // Resolve the owned GameMode and verify the public attack route before
-    // reserving the CPS slot. A missing native route must not consume cooldown.
-    void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    const bool routeAvailable = gameMode && core::gamehooks::attackAvailable(gameMode);
+    // The native route was preflighted before target acquisition; re-check only
+    // the cooldown immediately before reserving the CPS slot.
     const auto now = std::chrono::steady_clock::now();
     bool cooldownReady = false;
     {
