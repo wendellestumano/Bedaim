@@ -1920,6 +1920,13 @@ bool attackAvailable(void* gameMode) {
     return true;
 }
 
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
+    bool nativeResultOut = false;
+    bool nativeResultOutUsed = false;
+    return attack(gameMode, target, playPredictiveSound, hitPosition,
+                  &nativeResultOut, &nativeResultOutUsed);
+}
+
 bool attack(void* gameMode, void* target, bool playPredictiveSound,
             const void* hitPosition, bool* nativeResultOut, bool* nativeResultOutUsed) {
     if (nativeResultOutUsed) *nativeResultOutUsed = false;
