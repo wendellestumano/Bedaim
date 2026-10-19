@@ -2014,9 +2014,20 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
     // If the internal observer installed successfully but did not see this call,
     // do not trust a wrapper's "true" return: that mismatch produced particles/
     // swing with no target damage in the latest runtime logs.
-    const bool accepted = syntheticAttackResultObserved
-        ? syntheticAttackNativeResult
-        : (observe ? false : publicResult);
+    // A public wrapper's bool return is not proof that the internal attack
+    // action ran. The current runtime logs showed "true" with the observer
+    // never reached and no hurt-time change; treating that as accepted caused
+    // AutoHit's no-hit guard to learn a false success state. Only trust a
+    // result observed from the resolved internal attack implementation.
+    const bool accepted = syntheticAttackResultObserved && syntheticAttackNativeResult;
+    if (!syntheticAttackResultObserved) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "attack", "internal_observer_not_reached",
+            std::string("vtable_slot=") + std::to_string(matchedSlot) +
+            "; abi=" + (usesFourArgumentAbi ? "four_argument" : "three_argument") +
+            "; public_return=" + (publicResult ? "true" : "false") +
+            "; public return is not counted as an observed attack result");
+    }
     AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), accepted};
     bus().publish(resultEvent);
     bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
