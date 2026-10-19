@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ScreenBridge</string>
+    <string name="accessibility_label">ScreenBridge Remote Control</string>
+    <string name="accessibility_description">Allows ScreenBridge to perform user-requested taps and swipes when remote control is enabled.</string>
+</resources>
