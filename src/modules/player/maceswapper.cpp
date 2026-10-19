@@ -142,6 +142,15 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    // Disabled modules still receive the shared player tick. Avoid position
+    // reads, fall tracking, and per-tick diagnostics unless a pending swap
+    // must be cancelled/restored safely.
+    if ((!enabled || !m_enableMaceSwapper) && !m_pendingAttack) {
+        m_hasLastPlayerY = false;
+        m_hasPeakY = false;
+        return;
+    }
+
     const Vec3 playerPosition = player->position();
     if (!finiteVec(playerPosition)) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
@@ -257,11 +266,6 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    if (!enabled || !m_enableMaceSwapper) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "MaceSwapper", "action_gate", "disabled");
-        return;
-    }
     if (!bedaim::macefall::shouldBeginMaceAction(verticalDelta, fallDistance, m_minimumFallDistance)) {
         const char* fallState = verticalDelta >= -0.025f ? "not_descending" : "fall_below_minimum";
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
