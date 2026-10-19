@@ -313,7 +313,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // ProtoHax's KillAura model separates eligible-target selection from CPS pacing.
     // Reuse AimAssist's cached target so this module never performs a second actor scan.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase || !aimBase->enabled) return;
+    if (!aimBase) return;
     auto* aim = static_cast<AimAssistModule*>(aimBase);
 
     void* target = nullptr;
