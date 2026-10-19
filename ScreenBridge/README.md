@@ -31,3 +31,6 @@ Coordinates use full-display pixel dimensions from `/health`. An accepted gestur
 - Termux or a remote-device tool may still be needed for diagnostics, file transfer, logs, installation, and recovery.
 - This build still exposes only a loopback endpoint. ChatGPT cannot directly reach the phone's `127.0.0.1` from its remote execution environment without an explicitly configured, authenticated relay/connector. Do not expose the HTTP server publicly or forward the token to an untrusted endpoint as a workaround.
 - ScreenBridge is a prototype; verify on the target Android/HyperOS build before relying on it for time-sensitive interactions.
+
+## Release verification
+Every distributed APK must be built with the persistent signing bundle. Verify the artifact's certificate before installation, and do not publish an APK if the signing secret is missing.
