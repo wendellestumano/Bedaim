@@ -1186,6 +1186,28 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
                 "; getter=" + std::to_string(reinterpret_cast<std::uintptr_t>(nativeGetter)));
     }
 
+    // If the documented getter is absent or returns null, recover LocalPlayer
+    // only from a live NormalTick receiver that ClientInstance demonstrably owns.
+    // This avoids trusting a guessed field offset or treating an arbitrary Actor as self.
+    void* tickCandidate = currentLocalPlayer.load(std::memory_order_acquire);
+    if (tickCandidate && isReadableMemory(tickCandidate, sizeof(void*)) &&
+        isLocalPlayerTickObject(tickCandidate)) {
+        std::size_t ownerOffset = 0;
+        if (clientInstanceDirectlyOwnsPlayer(clientInstance, tickCandidate, &ownerOffset)) {
+            if (acceptCandidate(tickCandidate, "clientinstance_owned_normal_tick")) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "verified_local_player", "captured_from_clientinstance_owned_tick",
+                    std::string("ownership_offset=0x") + [] (std::size_t value) {
+                        char buffer[32]{};
+                        std::snprintf(buffer, sizeof(buffer), "%zX", value);
+                        return std::string(buffer);
+                    }(ownerOffset));
+                return tickCandidate;
+            }
+        }
+    }
+
     // Keep only a player captured by one of the independently validated routes.
     void* cachedPlayer = currentLocalPlayer.load(std::memory_order_acquire);
     if (cachedPlayer && isReadableMemory(cachedPlayer, sizeof(void*))) return cachedPlayer;
