@@ -13,8 +13,10 @@ void* gameMode();
 void* gameModeForPlayer(void* player);
 // Checks the live GameMode and the exact public attack vtable/signature route without dispatching an attack.
 bool attackAvailable(void* gameMode);
-// The final argument is the native route's bool output parameter; it is not a hit-position pointer.
-bool attack(void* gameMode, void* target, bool playPredictiveSound, bool* resultOut);
+// The public three-argument route consumes hitPosition; the guarded four-argument route consumes nativeResultOut.
+// nativeResultOutUsed reports which ABI was selected so callers don't confuse an output flag with damage confirmation.
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition,
+            bool* nativeResultOut, bool* nativeResultOutUsed);
 // Calls the exact validated public GameMode::useItem route for a player's selected stack.
 bool useItem(void* player, const void* itemStack);
 
