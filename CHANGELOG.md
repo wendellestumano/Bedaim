@@ -122,3 +122,9 @@
 
 - Added bounded ARM64 branch-target validation for guarded public attack wrappers: a vtable entry is accepted only when its first 16 instructions contain a direct branch to the unique resolved attack signature. The validated entry is cached per GameMode/vtable identity.
 - AutoHit now preflights the native attack route before requesting a target snapshot; AutoHit-only tracking is skipped while the build's native attack route is unavailable, preventing repeated expensive scans that cannot lead to an attack.
+
+
+## AutoHit input-free activation — 2026-10-19
+- Removed keyboard/mouse capture, held-input checks, and touchscreen repeat-window requirements from AutoHit. Enabling the module is now the only activation gate; target, weapon, range, cooldown, screen-state, and native-route validation remain.
+- Removed obsolete attack-input controls from the AutoHit settings. The module's own keybind, if configured in the launcher, still only toggles the module and is not required to attack.
+- Reduced unnecessary input-event subscriptions and state bookkeeping. The latest runtime logs still require a fresh test with AutoHit enabled: the most recent current-session log showed no AutoHit enable/dispatch events, and an earlier native trampoline result was false.
