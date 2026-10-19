@@ -1,4 +1,6 @@
 #include "autohit.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
+#include <cstdio>
 
 #include "aimassist.hpp"
 #include "AutoHitGuards.hpp"
@@ -102,29 +104,11 @@ AutoHitModule::AutoHitModule()
 
 void AutoHitModule::onInit() {
     bedrocktools::core::InventoryAccess::get().initialize();
-    // The verified pre-tick event is not emitted on this runtime when the
-    // NormalTick/ClientInstance identity probe fails. AutoHit must use the same
-    // actor tick stream as AimAssist, but only process an exact local-player match;
-    // never dispatch against a mob or a remote player's tick.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    // One verified post-tick callback, never one expensive AutoHit pass per actor.
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) {
             if (!enabled || !event.player) return;
-
-            auto* knownLocalPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(
-                bedrocktools::core::gamehooks::localPlayer());
-            if (!knownLocalPlayer) {
-                bedrocktools::diagnostics::probe(
-                    bedrocktools::diagnostics::Level::Warning, "AutoHit",
-                    "tick_source", "local_player_unresolved",
-                    "LocalPlayerTickEvent arrived, but GameHooks could not verify the local-player pointer; refusing arbitrary actors.");
-                return;
-            }
-            if (event.player != knownLocalPlayer) return;
-
-            bedrocktools::diagnostics::probe(
-                bedrocktools::diagnostics::Level::Debug, "AutoHit",
-                "tick_source", "local_player_tick_confirmed");
-            processPlayerTick(knownLocalPlayer);
+            processPlayerTick(event.player);
         });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
         [this](auto& event) {
@@ -303,189 +287,82 @@ bool AutoHitModule::onMouseEvent(int button, bool isDown) {
 
 void AutoHitModule::processPlayerTick(Player* player) {
     using namespace bedrocktools;
+    if (!enabled || !player ||
+        m_containerOpen.load(std::memory_order_acquire) ||
+        m_chatOpen.load(std::memory_order_acquire)) return;
+
     bool attackHeld = false;
-    bool requireAttackInput = false;
-    int attackButton = 0;
-    int heldButton = -1;
-    bool touchRepeatEnabled = false;
-    int touchWindowRemainingMs = 0;
     float configuredRange = 3.2f;
     bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
     float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        const auto tickNow = std::chrono::steady_clock::now();
-        requireAttackInput = m_requireAttackInput;
-        // On Android, the default is automatic activation when enabled, so a
-        // missing launcher touch callback does not block mobile users. If the
-        // user explicitly requires input, however, the repeat toggle alone is
-        // not a press: a real observed input or a currently armed repeat window
-        // is required. This keeps the desktop and mobile setting semantics aligned.
-        const bool activeRepeatWindow = m_touchRepeatUntil.time_since_epoch().count() != 0 &&
-            tickNow < m_touchRepeatUntil;
-        attackHeld = !requireAttackInput || m_attackHeld || m_keyboardAttackHeld ||
-            (m_touchRepeatEnabled && activeRepeatWindow);
-        attackButton = m_attackButton;
-        heldButton = m_heldButton;
-        touchRepeatEnabled = m_touchRepeatEnabled;
-        if (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil) {
-            touchWindowRemainingMs = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                m_touchRepeatUntil - tickNow).count());
-        }
+        const auto now = std::chrono::steady_clock::now();
+        const bool repeatWindow = m_touchRepeatUntil.time_since_epoch().count() != 0 &&
+            now < m_touchRepeatUntil;
+        attackHeld = !m_requireAttackInput || m_attackHeld || m_keyboardAttackHeld ||
+            (m_touchRepeatEnabled && repeatWindow);
         configuredRange = m_attackRange;
-        swordEnabled = m_swordEnabled;
-        swordCps = m_swordCps;
-        axeEnabled = m_axeEnabled;
-        axeCps = m_axeCps;
-        maceEnabled = m_maceEnabled;
-        maceCps = m_maceCps;
-        tridentEnabled = m_tridentEnabled;
-        tridentCps = m_tridentCps;
+        swordEnabled = m_swordEnabled; swordCps = m_swordCps;
+        axeEnabled = m_axeEnabled; axeCps = m_axeCps;
+        maceEnabled = m_maceEnabled; maceCps = m_maceCps;
+        tridentEnabled = m_tridentEnabled; tridentCps = m_tridentCps;
     }
+    if (!attackHeld) return;
 
-    if (!enabled) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "disabled");
-        return;
-    }
-    if (!player) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dispatch_gate", "missing_player");
-        return;
-    }
-    if (m_containerOpen.load(std::memory_order_acquire) ||
-        m_chatOpen.load(std::memory_order_acquire)) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
-        return;
-    }
-    // Check native dispatch availability before waiting for input. Otherwise an
-    // unsupported runtime looks like a broken input button forever, hiding the
-    // actual blocker from diagnostics. This check never performs an attack.
-    void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable",
-            std::string("pre_tick_player_address=") + std::to_string(reinterpret_cast<std::uintptr_t>(player)));
-        return;
-    }
-    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
-    if (!attackRouteAvailable) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable",
-            "public GameMode attack vtable/signature route failed runtime validation");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
+    // ProtoHax's KillAura model separates eligible-target selection from CPS pacing.
+    // Reuse AimAssist's cached target so this module never performs a second actor scan.
+    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    if (!aimBase || !aimBase->enabled) return;
+    auto* aim = static_cast<AimAssistModule*>(aimBase);
 
-    if (!attackHeld) {
-        const std::string inputState = std::string("waiting_for_attack_input_button_") +
-            std::to_string(attackButton) + (touchRepeatEnabled ? "_touch_repeat_on" : "_touch_repeat_off");
-        const std::string inputDetail = std::string("configured_button=") + std::to_string(attackButton) +
-            "; held_button=" + std::to_string(heldButton) +
-            "; touch_repeat=" + (touchRepeatEnabled ? "enabled" : "disabled") +
-            "; repeat_window_remaining_ms=" + std::to_string(touchWindowRemainingMs);
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", inputState, inputDetail);
-        return;
-    }
+    void* target = nullptr;
+    AABB targetBounds{};
+    float aimRange = 0.0f;
+    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) ||
+        !target || !validBounds(targetBounds)) return;
 
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
     const auto weapon = bedaim::autohit::weapon::classify(heldItem);
     const auto profile = bedaim::autohit::weapon::resolve(
-        weapon, swordEnabled, swordCps, axeEnabled, axeCps,
-        maceEnabled, maceCps, tridentEnabled, tridentCps);
-    if (!profile.enabled) {
-        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile", "blocked",
-            std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; item=" +
-                (heldItem.empty() ? "empty_or_unreadable" : heldItem));
-        return;
-    }
-    const float configuredCps = profile.cps;
-    const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(configuredCps);
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
-        std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; cps=" + std::to_string(configuredCps));
-
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase || !aimBase->enabled) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dependency", "bedrockaim_disabled",
-            "enable BedrockAim to provide target tracking");
-        return;
-    }
-
-    auto* aim = static_cast<AimAssistModule*>(aimBase);
-    void* target = nullptr;
-    AABB targetBounds{};
-    float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "target", "missing_or_stale");
-        return;
-    }
-    if (!validBounds(targetBounds)) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "target", "invalid_bounds");
-        return;
-    }
-    if (!aim->currentTargetInCrosshair(player, target)) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair", "target_not_centered");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair", "confirmed");
+        weapon, swordEnabled, swordCps, axeEnabled, axeCps, maceEnabled, maceCps,
+        tridentEnabled, tridentCps);
+    if (!profile.enabled) return;
 
     const Vec3 eye = eyePosition(player);
-    if (!finiteVec(eye)) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "hit_point", "invalid_player_eye");
-        return;
-    }
-    const Vec3 hitPoint{
+    if (!finiteVec(eye)) return;
+    const Vec3 nearestPoint{
         std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
         std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
         std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
     };
-    const float distanceSq = distanceSquared(eye, hitPoint);
+    const float distanceSq = distanceSquared(eye, nearestPoint);
     const float maxRange = std::clamp(std::min(configuredRange, aimRange), 2.0f, 6.0f);
-    if (!finiteVec(hitPoint) || !std::isfinite(distanceSq) || distanceSq > maxRange * maxRange) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "out_of_range");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "in_range");
+    if (!finiteVec(nearestPoint) || !std::isfinite(distanceSq) ||
+        distanceSq > maxRange * maxRange) return;
 
     const auto now = std::chrono::steady_clock::now();
+    const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(profile.cps);
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) {
-            diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "cooldown", "waiting");
-            return;
-        }
+        if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) return;
+        // Reserve the CPS slot before entering native code to prevent reentrant attempts.
+        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
     }
 
-    // Resolve the receiver again immediately before dispatch. Target selection,
-    // inventory reads and cooldown checks above can span several engine callbacks;
-    // a cached global GameMode may have changed or become stale during that work.
-    // Revalidate the player-owned receiver and exact public attack route at the
-    // point of use rather than relying on the earlier preflight result.
-    void* dispatchGameMode = core::gamehooks::gameModeForPlayer(player);
-    if (!dispatchGameMode || !core::gamehooks::attackAvailable(dispatchGameMode)) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dispatch_gate",
-            "gamemode_or_attack_route_changed",
-            "fresh GameMode lookup failed final exact attack-route validation");
-        return;
-    }
-
-    // Final native-free gate is shared with host tests. The earlier checks are
-    // intentionally retained for precise per-stage diagnostics; this last gate
-    // ensures no dispatch occurs if any prerequisite becomes invalid.
-    const bedaim::autohit::Inputs dispatchFacts{
-        enabled,
-        player != nullptr,
-        target != nullptr,
-        validBounds(targetBounds),
-        true, // currentTargetSnapshot rejects stale target data
-        dispatchGameMode != nullptr,
-        true,
-        finiteVec(hitPoint),
-        true, // cooldown was checked immediately before resolving GameMode
-        std::sqrt(distanceSq),
-        maxRange
+    // Use a stable point inside the selected target's real bounds. No guessed slot,
+    // stale actor, or duplicate attack-route preflight is used by this core.
+    const Vec3 hitPoint{
+        (targetBounds.min.x + targetBounds.max.x) * 0.5f,
+        (targetBounds.min.y + targetBounds.max.y) * 0.5f,
+        (targetBounds.min.z + targetBounds.max.z) * 0.5f
     };
-    const auto dispatchDecision = bedaim::autohit::evaluate(dispatchFacts);
-    if (dispatchDecision != bedaim::autohit::Decision::Ready) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "final_guard",
-            "blocked", "native dispatch prerequisites changed or failed validation");
+    if (!finiteVec(hitPoint)) return;
+
+    void* gameMode = core::gamehooks::gameModeForPlayer(player);
+    if (!gameMode) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dispatch", "game_mode_unavailable");
         return;
     }
 
@@ -493,18 +370,23 @@ void AutoHitModule::processPlayerTick(Player* player) {
         bool previous;
         SyntheticAttackGuard() : previous(g_autoHitSyntheticAttack) { g_autoHitSyntheticAttack = true; }
         ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
-    } syntheticAttackGuard;
-    const bool attacked = core::gamehooks::attack(dispatchGameMode, target, true, &hitPoint);
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        // CPS is an attempt-rate cap, not only a success-rate cap. Failed native
-        // dispatches must not bypass the selected weapon profile and retry at 10 Hz.
-        m_nextAttack = now + std::chrono::milliseconds(
-            std::clamp(intervalMs, 50, 1000));
-    }
-    diagnostics::probe(attacked ? diagnostics::Level::Info : diagnostics::Level::Warning,
-        "AutoHit", "attack_result", attacked ? "accepted" : "rejected",
-        attacked ? "native attack wrapper returned success" : "native attack wrapper returned false");
+    } syntheticGuard;
+
+    const bool accepted = core::gamehooks::attack(gameMode, target, true, &hitPoint);
+    const auto pointerHex = [](const void* ptr) {
+        char buffer[32]{};
+        std::snprintf(buffer, sizeof(buffer), "%llX",
+            static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(ptr)));
+        return std::string(buffer);
+    };
+    diagnostics::probe(accepted ? diagnostics::Level::Info : diagnostics::Level::Warning,
+        "AutoHit", "dispatch", accepted ? "native_attack_accepted" : "native_attack_rejected",
+        std::string("target=0x") + pointerHex(target) +
+        "; player=0x" + pointerHex(player) +
+        "; distance=" + std::to_string(std::sqrt(std::max(distanceSq, 0.0f))) +
+        "; range=" + std::to_string(maxRange) +
+        "; weapon=" + bedaim::autohit::weapon::name(weapon) +
+        "; cps=" + std::to_string(profile.cps));
 }
 
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
