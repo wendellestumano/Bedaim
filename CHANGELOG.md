@@ -111,3 +111,11 @@
 - Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
 - Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
 - Added `docs/MODULE_DIAGNOSTICS.md` with export instructions, log interpretation, and runtime-validation limits.
+
+
+## Experimental AutoHit performance pass — 2026-10-19
+- Cached ClientInstance vtable validation while the receiver/vtable identity remains stable, avoiding repeated module-range checks on the per-frame update hook.
+- Bounded target selection to the 256 nearest entries per player tick and reduced AutoHit-only target acquisition to an 8-block search cube when Aim Assist is disabled.
+- Limited AutoHit's live target revalidation to a small query radius derived from configured attack reach instead of rescanning the Aim Assist's full configured range.
+- Treated the attack-input requirement as desktop-only on Android builds; enabling AutoHit on Android now activates automatically while retaining weapon, target, reach, cooldown, and native attack-route validation.
+- This is a performance/activation hypothesis pending Android runtime testing. A successful compile or wrapper return does not prove server-confirmed damage or eliminate all FPS drops.
