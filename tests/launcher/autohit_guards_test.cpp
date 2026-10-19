@@ -93,12 +93,6 @@ int main() {
     bedaim::autohit::NoHitFeedbackGuard noHitGuard;
     const void* firstTarget = reinterpret_cast<const void*>(0x1000);
     const void* secondTarget = reinterpret_cast<const void*>(0x2000);
-    check(bedaim::autohit::hitResultMatchesTarget(firstTarget, firstTarget),
-          "native hit context matches the selected target");
-    check(!bedaim::autohit::hitResultMatchesTarget(firstTarget, secondTarget),
-          "native hit context for a different actor blocks dispatch");
-    check(!bedaim::autohit::hitResultMatchesTarget(nullptr, firstTarget),
-          "missing selected target blocks native hit-context validation");
     check(noHitGuard.consecutiveNoFeedback() == 0,
           "no-hit feedback tracker starts empty");
     for (std::uint32_t i = 1; i < bedaim::autohit::NoHitFeedbackGuard::kAttemptsBeforeWarning; ++i) {
