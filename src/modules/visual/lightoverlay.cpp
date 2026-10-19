@@ -1,4 +1,5 @@
 #include "lightoverlay.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
@@ -432,7 +433,7 @@ void LightOverlayModule::onInit() {
     uintptr_t isb = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock);
     if (isb) s_isSolidBlockingBlock = (BlockSource_isSolidBlockingBlock_t)isb;
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_lightOverlayTickCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { s_lightOverlayTickCallback(event.player); });
 }
 
 void LightOverlayModule::applyPatch() {
