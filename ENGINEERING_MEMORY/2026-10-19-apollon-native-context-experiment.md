@@ -13,17 +13,15 @@
 - Source repository: https://github.com/TheChuan1503/apollon-client-for-minecraft-pe
 - In `main.cpp`, `emulateNativeAttack` uses a pending flag and calls `ClientInstance::handleDestoryOrAttackButtonPress()` during `ClientInstance_onTick`. This is an engine input-callback route, distinct from directly calling `GameMode::attack`.
 - The source's hard-coded offsets are stale for the analyzed `libminecraftpe.so`: address `0xCCC075C` disassembles inside `Java_com_mojang_minecraftpe_AppExitInfoHelper_nativeSendApplicationExitInfo`, and `0x6462B60` contains non-code data. Do not copy these offsets into Bedaim.
-- The analyzed library at `Testing2/extracted/minecraft/libminecraftpe.so` is 328,419,680 bytes. A candidate four-argument function body reads from the fourth argument at offsets beyond `0xAD`; the current Bedaim caller was passing the address of a 12-byte `Vec3`. This makes the old `hitPosition` assumption unsafe. The exact native context type is not claimed as fully proven from this alone.
+- The analyzed library at `Testing2/extracted/minecraft/libminecraftpe.so` is 328,419,680 bytes. Re-inspecting the candidate at `0xF89FE18` corrected an earlier mistaken read: x3 is saved as x21 and the function writes a byte through `[x21]` on several result paths (`strb wzr,[x21]`, then writes to `[x21]` again). This is evidence that the guarded four-argument route's fourth argument is a writable output flag, not a `Vec3*` or `HitResult*`. The earlier HitResult-context experiment was superseded and its code was reverted.
 
 ## Experimental source change
 Branch: `perf/autohit-tick-throttle-20261019`
 
-- Replaced the synthetic `&hitPoint` fourth argument with the engine-owned `Level::storedHitResult()` context.
-- Resolve `HitResultGetEntity` through the BedrockTools signature registry and verify the resolved function belongs to `libminecraftpe.so`.
-- Require the engine HitResult's actor pointer to equal the selected Aim Assist target before dispatch; mismatches are logged and skipped.
-- Use the actual engine HitResult position for the range check.
-- Renamed the API parameter from `hitPosition` to `attackContext` to avoid preserving the unverified type assumption.
-- Added a pure `hitResultMatchesTarget` helper and regression tests for equal, mismatched, and null targets.
+- First attempt (commits `26ea526...` through `3bef088...`) replaced `&hitPoint` with `Level::storedHitResult()`. It was superseded after re-reading the disassembly: x3 is written as an output flag, so a HitResult pointer would corrupt engine state. The code and temporary tests for that hypothesis were reverted.
+- Current experiment passes a writable `bool*` output flag to the guarded four-argument route, while preserving `&hitPoint` only for the separately validated public three-argument route.
+- `GameHooks::attack` now distinguishes the two ABIs and reports whether the native out-parameter was applicable; AutoHit logs the native function return separately from the output flag and hurt-time observation.
+- The output flag is not treated as proof of damage. A private-world health-change test is still required.
 - Source commits, in order:
   - `b5e834622832e5bd778d01a4591261264130f91a` — guard declaration
   - `6a0c7f9090771034b394f60a62583727157ade46` — guard implementation
@@ -36,10 +34,9 @@ Branch: `perf/autohit-tick-throttle-20261019`
 ## Status / test ledger
 | Date | Branch / commit | Static tests/build | In-game damage | Lag/regression |
 |---|---|---|---|---|
-| 2026-10-19 | `perf/autohit-tick-throttle-20261019`, code commit `3bef08891f4586df100fdbf21e9d929964637a0a` | Termux xmake host test build started; result pending | Not tested after patch | Not tested after patch |
+| 2026-10-19 | `perf/autohit-tick-throttle-20261019`, corrected output-parameter commits pending final SHA | Previous HitResult-only experiment: host suite passed, but the code hypothesis was rejected after disassembly review. New ABI correction requires fresh host tests and Android build. | Not tested after corrected patch | Not tested after corrected patch |
 
 ## Interpretation and next steps
-- This is a targeted experiment, not a verified fix. The main hypothesis is that a synthetic `Vec3*` was being passed where the four-argument native route expects an engine-owned context object.
-- If the new diagnostic reports `native_hit_result_target_mismatch`, the next problem is target/rotation synchronization, not native function return handling.
-- If the accessor cannot be resolved, do not replace it with a hard-coded offset; inspect the exact target build and resolve the accessor safely.
-- Run all host regression tests and Android arm64 build. Then test in a private world against a known damageable target and verify actual health change, correct target identity, and no lag. Do not claim success from particles or a true return.
+- This remains an ABI hypothesis based on the observed byte writes through x3; confirm against the exact live function and current build before declaring the signature proven.
+- Preserve separate telemetry for `GameMode` function return, the native out-flag, and target health/hurt-time. None individually proves server damage.
+- Run all host regression tests and Android arm64 build. Then test in a private world against a known damageable target and verify actual health change and no lag. Do not claim success from particles or a true return.
