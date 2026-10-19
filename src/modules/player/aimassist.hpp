@@ -26,7 +26,7 @@ public:
     void processPlayerFrame();
     bool currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range,
                                bedrocktools::sdk::Player* expectedPlayer = nullptr);
-    bool targetBoundsSnapshot(void* desiredTarget, bedrocktools::sdk::AABB& bounds, float& range);
+    bool targetBoundsSnapshot(void* desiredTarget, bedrocktools::sdk::AABB& bounds, float& range, float maxQueryRange = 80.0f);
     bool currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance = 0.12f);
 
     bool m_targetPlayers = true;
