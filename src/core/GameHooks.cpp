@@ -461,6 +461,37 @@ void resolvePlayerGameTypeApi() {
 
 }
 
+// A public virtual entry may be a guarded wrapper rather than a one-instruction
+// ARM64 veneer. Accept it only when its first 16 instructions contain a direct
+// unconditional B to the independently resolved, unique target-build signature.
+// This validates the wrapper-to-method relationship without guessing a vtable slot
+// or calling the scanned signature address directly.
+bool boundedArm64BranchReaches(std::uintptr_t entry, std::uintptr_t target) {
+#if defined(__aarch64__)
+    if (!entry || !target ||
+        !isMinecraftFunction(reinterpret_cast<const void*>(entry)) ||
+        !isMinecraftFunction(reinterpret_cast<const void*>(target))) return false;
+    for (std::size_t i = 0; i < 16; ++i) {
+        const std::uintptr_t instructionAddress = entry + i * sizeof(std::uint32_t);
+        if (!isReadableMemory(reinterpret_cast<const void*>(instructionAddress), sizeof(std::uint32_t)))
+            return false;
+        std::uint32_t instruction = 0;
+        std::memcpy(&instruction, reinterpret_cast<const void*>(instructionAddress), sizeof(instruction));
+        // AArch64 B (not BL): op[31:26] == 000101, imm26 is signed in words.
+        if ((instruction & 0xFC000000u) != 0x14000000u) continue;
+        std::int64_t immediate = static_cast<std::int64_t>(instruction & 0x03FFFFFFu);
+        if (immediate & 0x02000000LL) immediate -= 0x04000000LL;
+        const auto branchTarget = static_cast<std::uintptr_t>(
+            static_cast<std::int64_t>(instructionAddress) + immediate * 4);
+        if (branchTarget == target) return true;
+    }
+#else
+    (void)entry;
+    (void)target;
+#endif
+    return false;
+}
+
 bool plausibleGameMode(void* gameMode) {
     if (!gameMode || !isReadableMemory(gameMode, sizeof(void*))) return false;
     void** vtable = nullptr;
@@ -495,6 +526,23 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         for (const char* name : survivalNames) if (void* p = resolveMinecraftFunction(name)) { out.survival = reinterpret_cast<std::uintptr_t>(p); break; }
         return out;
     }();
+    static std::atomic<void*> cachedObject{nullptr};
+    static std::atomic<void*> cachedVtable{nullptr};
+    static std::atomic<std::uintptr_t> cachedEntry{0};
+    static std::atomic<std::size_t> cachedSlot{0};
+    static std::atomic<int> cachedKind{-1}; // -1=unknown, 0=not found, 1=GameMode, 2=SurvivalMode
+    if (cachedObject.load(std::memory_order_acquire) == gameMode &&
+        cachedVtable.load(std::memory_order_acquire) == vtable) {
+        const int resultKind = cachedKind.load(std::memory_order_acquire);
+        if (resultKind >= 0) {
+            const auto resultEntry = cachedEntry.load(std::memory_order_relaxed);
+            if (resultKind == 0 || resultEntry == 0) return 0;
+            if (kind) *kind = resultKind == 2 ? AttackKind::SurvivalMode : AttackKind::GameMode;
+            if (matchedSlot) *matchedSlot = cachedSlot.load(std::memory_order_relaxed);
+            return resultEntry;
+        }
+    }
+
     for (std::size_t i = 0; i < 64; ++i) {
         const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
         if (!isReadableMemory(slot, sizeof(void*))) break;
@@ -506,27 +554,41 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         const auto canonicalAddress = canonicalArm64Entry(address);
         const bool survivalMatch =
             (survivalSignature && (address == survivalSignature ||
-                canonicalAddress == canonicalArm64Entry(survivalSignature))) ||
+                canonicalAddress == canonicalArm64Entry(survivalSignature) ||
+                boundedArm64BranchReaches(address, survivalSignature))) ||
             (symbols.survival && (address == symbols.survival ||
-                canonicalAddress == canonicalArm64Entry(symbols.survival)));
+                canonicalAddress == canonicalArm64Entry(symbols.survival) ||
+                boundedArm64BranchReaches(address, symbols.survival)));
         const bool baseMatch =
             (baseSignature && (address == baseSignature ||
-                canonicalAddress == canonicalArm64Entry(baseSignature))) ||
+                canonicalAddress == canonicalArm64Entry(baseSignature) ||
+                boundedArm64BranchReaches(address, baseSignature))) ||
             (symbols.base && (address == symbols.base ||
-                canonicalAddress == canonicalArm64Entry(symbols.base)));
+                canonicalAddress == canonicalArm64Entry(symbols.base) ||
+                boundedArm64BranchReaches(address, symbols.base)));
         if (survivalMatch) {
             found = AttackKind::SurvivalMode; match = true;
         } else if (baseMatch) {
             found = AttackKind::GameMode; match = true;
         }
         if (!match) continue;
+        cachedEntry.store(address, std::memory_order_relaxed);
+        cachedSlot.store(i, std::memory_order_relaxed);
+        cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
+        cachedVtable.store(vtable, std::memory_order_relaxed);
+        cachedObject.store(gameMode, std::memory_order_release);
         if (kind) *kind = found;
         if (matchedSlot) *matchedSlot = i;
         static std::atomic_bool loggedMatch{false};
         if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
-            gameHooksLogger().info("Validated public attack through exact vtable match at slot {}.", i);
+            gameHooksLogger().info("Validated public attack through vtable entry or bounded branch wrapper at slot {}.", i);
         return address;
     }
+    cachedEntry.store(0, std::memory_order_relaxed);
+    cachedSlot.store(0, std::memory_order_relaxed);
+    cachedKind.store(0, std::memory_order_relaxed);
+    cachedVtable.store(vtable, std::memory_order_relaxed);
+    cachedObject.store(gameMode, std::memory_order_release);
     static std::atomic_bool loggedMiss{false};
     if (!loggedMiss.exchange(true, std::memory_order_acq_rel)) {
         std::uintptr_t slot0 = 0, slot2 = 0, slot16 = 0, slot32 = 0;
