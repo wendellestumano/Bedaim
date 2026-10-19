@@ -1,3 +1,10 @@
+## 2026-10-19 — Actor-vector capacity validation experiment
+
+- Added validation of the full actor-vector range (begin, end, and capacity) before iterating nearby actors or accepting a Hitbox Expander actor snapshot.
+- Rejects null/reversed pointers, capacity < end, misaligned spans, and oversized capacity ranges before pointer iteration.
+- This is a defensive ABI/data-integrity experiment. It may prevent malformed snapshots from being traversed, but it does not establish that the engine function's return ABI or actor-entry layout is correct.
+- Requires host regression tests, Android ARM64 build, and in-game validation of AimAssist/Hitbox Expander behavior. No runtime success is claimed.
+
 ## 2026-10-19 — AutoHit route ABI fix after runtime evidence (experimental)
 
 - Replaced the layout-only fallback that accepted vtable slot 16 whenever `useItem` appeared at slot 12. Neighboring readable function pointers do not prove method identity or ABI.

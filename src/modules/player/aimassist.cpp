@@ -82,9 +82,16 @@ bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& 
     ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
+    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
+    // Treat the returned range as untrusted ABI data. Validate the full
+    // begin/end/capacity ordering before pointer iteration; a plausible span
+    // alone does not make an invalid capacity safe.
+    if (!begin || !end || !capacity ||
+        end < begin || capacity < end ||
         (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 16384) return false;
+        (capacity - begin) % sizeof(DistanceSortedActor) != 0 ||
+        (end - begin) / sizeof(DistanceSortedActor) > 16384 ||
+        (capacity - begin) / sizeof(DistanceSortedActor) > 16384) return false;
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         if (entry->actor && reinterpret_cast<std::uintptr_t>(entry->actor) > 0x1000)
             out.insert(entry->actor);
@@ -1823,10 +1830,15 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
     const auto byteSpan = (end >= begin) ? (end - begin) : 0;
-    const bool malformed = !begin || !end || end < begin ||
+    const auto capacitySpan = (capacity >= begin) ? (capacity - begin) : 0;
+    const bool malformed = !begin || !end || !capacity ||
+        end < begin || capacity < end ||
         byteSpan % sizeof(DistanceSortedActor) != 0 ||
-        byteSpan / sizeof(DistanceSortedActor) > 8192;
+        capacitySpan % sizeof(DistanceSortedActor) != 0 ||
+        byteSpan / sizeof(DistanceSortedActor) > 8192 ||
+        capacitySpan / sizeof(DistanceSortedActor) > 8192;
     if (malformed) {
         // Record the ABI failure mode once instead of flooding the rolling log
         // every tick with the same generic warning.
