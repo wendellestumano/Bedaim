@@ -156,3 +156,10 @@
 - The probe explicitly labels hurt-time as local evidence only: it is not proof of server-authoritative damage. This is a containment measure for the reported repeated-attack/disconnect symptom, not a claim that the missing-damage root cause is solved.
 - The video also shows recurring Hitbox Expander bounds warnings and low FPS; those messages are distinct from the new AutoHit guard and still require the exported runtime logs/source path to diagnose precisely.
 - Change remains on `perf/autohit-tick-throttle-20261019`; `main` and Aim Assist targeting logic remain unchanged. Host regression tests and Android ARM64 packaging must pass before distributing the new build.
+
+
+## 2026-10-19 — AutoHit contact point respects server-side hitbox geometry
+
+- When Hitbox Expander has enlarged an actor's client-side AABB, AutoHit now reads the saved original bounds, translates them by the actor's current movement, and computes the native contact point against that original box. The expanded box remains available for target acquisition, but no longer determines the attack contact coordinate.
+- The original-bounds accessor refuses stale snapshots if the actor's AABB component or level changed, and falls back to the freshly validated live bounds rather than trusting a stale pointer-derived snapshot.
+- This addresses a plausible mismatch between client-expanded geometry and server-validated hit coordinates; it still requires runtime confirmation, and it does not by itself prove that the server accepted damage.
