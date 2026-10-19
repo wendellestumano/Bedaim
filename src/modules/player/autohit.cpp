@@ -84,23 +84,11 @@ void AutoHitModule::onInit() {
             if (event.screen == bedrocktools::events::ScreenKind::Container) {
                 const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
                 m_containerOpen.store(opened, std::memory_order_release);
-                if (opened) {
-                    std::lock_guard<std::mutex> lock(m_stateMutex);
-                    m_attackHeld = false;
-                    m_keyboardAttackHeld = false;
-                    m_heldButton = -1;
-                    m_touchRepeatUntil = {};
-                }
+                // Screen state is the only input-related pause retained.
             } else if (event.screen == bedrocktools::events::ScreenKind::Chat) {
                 const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
                 m_chatOpen.store(opened, std::memory_order_release);
-                if (opened) {
-                    std::lock_guard<std::mutex> lock(m_stateMutex);
-                    m_attackHeld = false;
-                    m_keyboardAttackHeld = false;
-                    m_heldButton = -1;
-                    m_touchRepeatUntil = {};
-                }
+                // Screen state is the only input-related pause retained.
             }
         });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
