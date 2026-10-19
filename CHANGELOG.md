@@ -1,3 +1,12 @@
+## 2026-10-19 — AutoHit lab notes and input-binding investigation (experimental)
+
+- Added `docs/autohit-lab/README.md` as durable experiment memory: branch/build/commit tracking, runtime success criteria, failed hypotheses, and regression guardrails.
+- Added `docs/autohit-lab/2026-10-19-video-and-binding-investigation.md` with current log findings, ProtoHax UserScript references, Apollon research caveats, and a safe investigation plan for a separate Minecraft attack-binding mode.
+- No AutoHit dispatch behavior changed in this commit. The latest evidence still shows `getLocalPlayer` fallback slot 32 returning null, no validated public attack route, and no installed `useItemAsAttack` fallback. An earlier native wrapper acceptance did not produce an immediate hurt-time change.
+- The proposed attack-binding mode is not implemented yet: Bedaim's existing `keybind` is the module-toggle binding, not Minecraft's attack binding. It requires a verified game input/action API for the exact runtime before implementation.
+- The uploaded video could not be decoded by the available runtime in this turn; no frame-by-frame claims are made. See the investigation note for evidence and next steps.
+- `main` remains untouched. Build success alone is not a runtime pass.
+
 ## 2026-10-19 — AutoHit native-route retry throttling (experimental)
 
 - Increased the AutoHit retry delay after an unavailable native attack route from 1 to 5 seconds, and aligned the `GameHooks` negative-cache TTL to the same interval.
