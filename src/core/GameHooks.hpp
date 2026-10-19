@@ -13,7 +13,8 @@ void* gameMode();
 void* gameModeForPlayer(void* player);
 // Checks the live GameMode and the exact public attack vtable/signature route without dispatching an attack.
 bool attackAvailable(void* gameMode);
-bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition);
+// The final argument is an engine-owned attack context (currently sourced from Level::storedHitResult), not a Vec3 pointer.
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* attackContext);
 // Calls the exact validated public GameMode::useItem route for a player's selected stack.
 bool useItem(void* player, const void* itemStack);
 
