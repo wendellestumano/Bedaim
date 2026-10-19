@@ -1,4 +1,5 @@
 #include "ultrakillhud.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 
 #include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
@@ -98,7 +99,7 @@ bool UltrakillHudModule::isMaceEquipped(Player* player) const {
 }
 
 void UltrakillHudModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) { onLocalPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
