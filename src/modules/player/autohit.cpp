@@ -393,7 +393,9 @@ void AutoHitModule::processPlayerTick(Player* player) {
     const int targetHurtTimeBefore =
         reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
     bool nativeAttackResult = false;
-    const bool accepted = core::gamehooks::attack(gameMode, target, true, &nativeAttackResult);
+    bool nativeAttackResultUsed = false;
+    const bool accepted = core::gamehooks::attack(
+        gameMode, target, true, &hitPoint, &nativeAttackResult, &nativeAttackResultUsed);
     // Hurt time is only an immediate local observation: server-authoritative
     // target state can arrive later, so this is evidence, not a damage verdict.
     const int targetHurtTimeAfter =
@@ -423,7 +425,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         "; range=" + std::to_string(maxRange) +
         "; weapon=" + bedaim::autohit::weapon::name(weapon) +
         "; cps=" + std::to_string(profile.cps) +
-        "; native_out_result=" + (nativeAttackResult ? "true" : "false") +
+        "; native_out_result=" + (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
         "; hit_point=(" + std::to_string(hitPoint.x) + "," +
             std::to_string(hitPoint.y) + "," + std::to_string(hitPoint.z) + ")" +
         "; target_hurt_time_before=" + std::to_string(targetHurtTimeBefore) +
