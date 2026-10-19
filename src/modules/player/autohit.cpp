@@ -105,6 +105,7 @@ void AutoHitModule::onEnable() {
         "reinitialized native inventory accessors on enable");
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_nextAttack = {};
+    m_nextNativeRouteProbe = {};
     m_noHitFeedbackGuard.reset();
     m_lastGateDecision.store(-1, std::memory_order_release);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
@@ -190,6 +191,26 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
+    // A failed native-route probe is cached for one second. Skip all inventory,
+    // vtable and target work during this short backoff instead of retrying a known
+    // unavailable route at the full local-player tick rate (which caused the lag).
+    bool routeProbeDeferred = false;
+    long long retryInMs = 0;
+    {
+        const auto now = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (m_nextNativeRouteProbe.time_since_epoch().count() != 0 && now < m_nextNativeRouteProbe) {
+            routeProbeDeferred = true;
+            retryInMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                m_nextNativeRouteProbe - now).count();
+        }
+    }
+    if (routeProbeDeferred) {
+        reportGate(11, "native_attack_route_unavailable",
+            std::string("route probe backoff active; retry_in_ms=") + std::to_string(retryInMs));
+        return;
+    }
+
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
     const auto weapon = bedaim::autohit::weapon::classify(heldItem);
@@ -209,10 +230,19 @@ void AutoHitModule::processPlayerTick(Player* player) {
     void* gameMode = core::gamehooks::gameModeForPlayer(player);
     const bool routeAvailable = gameMode && core::gamehooks::attackAvailable(gameMode);
     if (!gameMode || !routeAvailable) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
         reportGate(11, "native_attack_route_unavailable",
             std::string("game_mode=") + (gameMode ? "present" : "missing") +
-            "; attack_route=" + (routeAvailable ? "ready" : "unavailable"));
+            "; attack_route=" + (routeAvailable ? "ready" : "unavailable") +
+            "; retry_in_ms=1000");
         return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_nextNativeRouteProbe = {};
     }
 
     // ProtoHax's useful separation is preserved here: target acquisition,
