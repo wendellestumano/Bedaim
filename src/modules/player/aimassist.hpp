@@ -134,6 +134,9 @@ public:
     void processPreTick(bedrocktools::sdk::Player* player);
     void processPostTick(bedrocktools::sdk::Player* player);
     bedrocktools::sdk::AABB expandedTargetBounds(bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const;
+    // Returns the movement-adjusted original AABB saved before this module expanded it.
+    // Used for native attack contact points because the server validates real bounds.
+    bool originalTargetBounds(void* actor, bedrocktools::sdk::AABB& bounds);
     bool requiresLineOfSight() const;
     float queryExpansionMargin() const;
     bool shouldShowHitbox() const;
