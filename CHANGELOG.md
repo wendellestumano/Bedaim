@@ -1,3 +1,11 @@
+## 2026-10-19 — AutoHit staged pipeline rewrite (experimental)
+
+- Reorganize AutoHit into explicit input, fresh-target, bounds, selected-weapon, reach, GameMode, validated attack-route, cooldown, and native-dispatch gates, following ProtoHax's separation of target selection from CPS pacing while retaining Bedaim's validated native GameMode route.
+- Validate the public attack route before reserving a CPS slot, so unavailable GameMode/attack routes do not consume the cooldown. Recheck the slot under lock immediately before reserving it.
+- Emit pipeline diagnostics only when the gate state changes; expected cooldown ticks are suppressed to avoid alternating accepted/cooldown records filling the rolling diagnostic buffer.
+- Native wrapper acceptance is explicitly distinguished from server-confirmed damage. No runtime success is claimed until in-game testing confirms actual hits and lag behavior.
+- Kept the work on `rebuild/autohit-protohax-prelag-20261019`; `main` remains unchanged.
+
 ## 2026-10-18 — ARM64 tagged-pointer validation
 - Normalize the top-byte tag only for `/proc/self/maps` range checks in `isReadableMemory`, preserving the original tagged pointer for actual memory access. This addresses Android ARM64 pointers such as `0xB4...` being incorrectly rejected as unreadable.
 - Keep validation strict: the object and its vtable still need to reside in readable mappings, and ClientInstance vtable entries must still match the Minecraft image.
