@@ -96,6 +96,9 @@ bool shouldResolveLocalPlayer(void* client) {
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
 std::mutex installMutex;
+std::mutex attackObserverMutex;
+std::atomic<void*> attackObserverTarget{nullptr};
+bedrocktools::hooks::Handle attackObserverHandle = nullptr;
 bool installed = false;
 std::string gameVersion;
 thread_local std::uint32_t gameModeActionDepth = 0;
@@ -541,7 +544,9 @@ bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation 
 // Find the exact public wrapper in the object's live vtable rather than
 // assuming every patched Bedrock build keeps GameMode::attack at index 16.
 std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr,
-                                        std::size_t* matchedSlot = nullptr) {
+                                        std::size_t* matchedSlot = nullptr,
+                                        std::uintptr_t* implementationOut = nullptr) {
+    if (implementationOut) *implementationOut = 0;
     if (!plausibleGameMode(gameMode)) return 0;
     void** vtable = nullptr;
     std::memcpy(&vtable, gameMode, sizeof(vtable));
@@ -561,7 +566,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         return out;
     }();
     static std::atomic<void*> cachedObject{nullptr}, cachedVtable{nullptr};
-    static std::atomic<std::uintptr_t> cachedEntry{0};
+    static std::atomic<std::uintptr_t> cachedEntry{0}, cachedImplementation{0};
     static std::atomic<std::size_t> cachedSlot{0};
     static std::atomic<int> cachedKind{-1};
     if (cachedObject.load(std::memory_order_acquire) == gameMode &&
@@ -572,6 +577,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
             if (k == 0 || !e) return 0;
             if (kind) *kind = k == 2 ? AttackKind::SurvivalMode : AttackKind::GameMode;
             if (matchedSlot) *matchedSlot = cachedSlot.load(std::memory_order_relaxed);
+            if (implementationOut) *implementationOut = cachedImplementation.load(std::memory_order_relaxed);
             return e;
         }
     }
@@ -592,12 +598,14 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         const AttackKind found = (survivalSymbol || (adapter && trialGuard))
             ? AttackKind::SurvivalMode : AttackKind::GameMode;
         cachedEntry.store(address, std::memory_order_relaxed);
+        cachedImplementation.store(adapter ? internal : 0, std::memory_order_relaxed);
         cachedSlot.store(i, std::memory_order_relaxed);
         cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
         cachedVtable.store(vtable, std::memory_order_relaxed);
         cachedObject.store(gameMode, std::memory_order_release);
         if (kind) *kind = found;
         if (matchedSlot) *matchedSlot = i;
+        if (implementationOut) *implementationOut = adapter ? internal : 0;
         static std::atomic_bool logged{false};
         if (!logged.exchange(true, std::memory_order_acq_rel)) {
             char msg[200]{};
@@ -608,6 +616,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         return address;
     }
     cachedEntry.store(0, std::memory_order_relaxed);
+    cachedImplementation.store(0, std::memory_order_relaxed);
     cachedSlot.store(0, std::memory_order_relaxed);
     cachedKind.store(0, std::memory_order_relaxed);
     cachedVtable.store(vtable, std::memory_order_relaxed);
@@ -1137,6 +1146,47 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     return result;
 }
 
+bool ensureAttackObserver(std::uintptr_t implementation) {
+    if (!implementation ||
+        !isMinecraftFunction(reinterpret_cast<const void*>(implementation)) ||
+        !isReadableMemory(reinterpret_cast<const void*>(implementation), sizeof(std::uint32_t)))
+        return false;
+
+    std::lock_guard<std::mutex> lock(attackObserverMutex);
+    if (attackObserverHandle &&
+        attackObserverTarget.load(std::memory_order_acquire) == reinterpret_cast<void*>(implementation) &&
+        gameModeAttackOriginal)
+        return true;
+
+    if (attackObserverHandle) {
+        bedrocktools::hooks::remove(attackObserverHandle);
+        attackObserverHandle = nullptr;
+        gameModeAttackOriginal = nullptr;
+        attackObserverTarget.store(nullptr, std::memory_order_release);
+    }
+
+    auto handle = bedrocktools::hooks::install(
+        reinterpret_cast<void*>(implementation),
+        reinterpret_cast<void*>(gameModeAttackDetour),
+        reinterpret_cast<void**>(&gameModeAttackOriginal));
+    if (!handle) {
+        gameModeAttackOriginal = nullptr;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "GameHooks", "attack_observer", "install_failed",
+            std::string("validated_adapter_target=0x") +
+                std::to_string(static_cast<unsigned long long>(implementation)));
+        return false;
+    }
+
+    attackObserverHandle = handle;
+    attackObserverTarget.store(reinterpret_cast<void*>(implementation), std::memory_order_release);
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "GameHooks", "attack_observer", "installed_on_validated_adapter_target",
+        std::string("target=0x") +
+            std::to_string(static_cast<unsigned long long>(implementation)));
+    return true;
+}
+
 bool clientUpdateDetour(void* clientInstance, bool value) {
     std::size_t trustedVtableEntries = 0;
     const bool receiverReadable = clientInstance &&
@@ -1295,15 +1345,12 @@ bool install() {
     hookSignature(SignatureId::SurvivalModeUseItemOn, reinterpret_cast<void*>(survivalModeUseItemOnDetour), &survivalModeUseItemOnOriginal);
     hookSignature(SignatureId::GameModeInteract, reinterpret_cast<void*>(gameModeInteractDetour), &gameModeInteractOriginal);
     hookSignature(SignatureId::SurvivalModeInteract, reinterpret_cast<void*>(survivalModeInteractDetour), &survivalModeInteractOriginal);
-    const bool internalAttackHooked = hookSignature(
-        SignatureId::GameModeAttackInternal, reinterpret_cast<void*>(gameModeAttackDetour), &gameModeAttackOriginal);
     const bool publicAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack) != 0;
     const bool survivalAttackSignature = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack) != 0;
-    const bool internalAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0;
+    const bool legacyInternalSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal) != 0;
     gameHooksLogger().info(
-        "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
-        publicAttackSignature, survivalAttackSignature, internalAttackSignature,
-        internalAttackHooked, gameModeAttackOriginal != nullptr);
+        "Attack setup: legacy public-shaped signature={}, legacy survival signature={}, old internal pattern present={}, observer deferred until live public adapter validation.",
+        publicAttackSignature, survivalAttackSignature, legacyInternalSignature);
     // Prefer the exact exported ClientInstance::update(bool) symbol when this
     // Bedrock build exports it; keep the signature scan as a version fallback.
     constexpr const char* clientUpdateSymbols[] = {
@@ -1364,7 +1411,7 @@ bool install() {
         installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
         "GameHooks", installed ? "required tick/client hooks installed" : "required tick/client hooks missing");
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
-        std::string("attack hook available: ") + (gameModeAttackOriginal ? "true" : "false"));
+        "attack observer installation is deferred until a live public three-argument route is validated");
     return installed;
 }
 
@@ -1375,6 +1422,13 @@ void uninstall() {
         handles[i] = nullptr;
     }
     handleCount = 0;
+    {
+        std::lock_guard observerLock(attackObserverMutex);
+        if (attackObserverHandle) bedrocktools::hooks::remove(attackObserverHandle);
+        attackObserverHandle = nullptr;
+        attackObserverTarget.store(nullptr, std::memory_order_release);
+        gameModeAttackOriginal = nullptr;
+    }
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentLocalPlayer.store(nullptr, std::memory_order_release);
@@ -1551,7 +1605,10 @@ bool attackAvailable(void* gameMode) {
     if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
         return false;
     AttackKind ignored = AttackKind::GameMode;
-    return publicAttackVirtualEntry(gameMode, &ignored) != 0;
+    std::uintptr_t implementation = 0;
+    if (!publicAttackVirtualEntry(gameMode, &ignored, nullptr, &implementation)) return false;
+    if (implementation) (void)ensureAttackObserver(implementation);
+    return true;
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
@@ -1562,12 +1619,14 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     if (inSyntheticAttack || currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
     std::size_t matchedSlot = 0;
     AttackKind kind = AttackKind::GameMode;
-    const auto publicEntry = publicAttackVirtualEntry(gameMode, &kind, &matchedSlot);
+    std::uintptr_t implementation = 0;
+    const auto publicEntry = publicAttackVirtualEntry(gameMode, &kind, &matchedSlot, &implementation);
     if (!publicEntry) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "GameHooks", "attack", "public_three_argument_route_unavailable");
         return false;
     }
+    if (implementation) (void)ensureAttackObserver(implementation);
     void** vtable = nullptr;
     std::memcpy(&vtable, gameMode, sizeof(vtable));
     const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + matchedSlot * sizeof(void*);
