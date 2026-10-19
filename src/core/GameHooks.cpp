@@ -475,7 +475,11 @@ bool boundedArm64BranchReaches(std::uintptr_t entry, std::uintptr_t target) {
     if (!entry || !target ||
         !isMinecraftFunction(reinterpret_cast<const void*>(entry)) ||
         !isMinecraftFunction(reinterpret_cast<const void*>(target))) return false;
-    for (std::size_t i = 0; i < 16; ++i) {
+    // Some builds insert additional guard/telemetry instructions before a
+    // wrapper's tail branch. Follow a bounded window, but only accept an
+    // unconditional B whose destination is exactly the independently resolved
+    // target; BL/calls are deliberately not followed.
+    for (std::size_t i = 0; i < 48; ++i) {
         const std::uintptr_t instructionAddress = entry + i * sizeof(std::uint32_t);
         if (!isReadableMemory(reinterpret_cast<const void*>(instructionAddress), sizeof(std::uint32_t)))
             return false;
@@ -515,17 +519,25 @@ bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation 
     if (trialModeGuarded) *trialModeGuarded = false;
     entry = canonicalArm64Entry(entry);
     if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry))) return false;
-    bool forwardsPosition = false, enablesSound = false, trialGuard = false;
-    for (std::size_t i = 0; i < 24; ++i) {
+    bool forwardsPosition = false, setsPredictiveFlag = false, trialGuard = false;
+    for (std::size_t i = 0; i < 64; ++i) {
         const auto pc = entry + i * sizeof(std::uint32_t);
         if (!isReadableMemory(reinterpret_cast<const void*>(pc), sizeof(std::uint32_t))) return false;
         std::uint32_t ins = 0;
         std::memcpy(&ins, reinterpret_cast<const void*>(pc), sizeof(ins));
         if (i == 0 && ins == 0x39432008u) trialGuard = true; // ldrb w8,[x0,#0xc8]
         if (ins == 0xAA0203E3u) forwardsPosition = true; // mov x3,x2
-        if (ins == 0x52800022u) enablesSound = true; // mov w2,#1
-        if ((ins & 0xFC000000u) != 0x14000000u) continue; // direct B, not BL
-        if (!forwardsPosition || !enablesSound) continue;
+        // The public three-argument wrapper moves Vec3* from x2 to x3 and
+        // initializes the hidden internal predictive-sound flag in w2. Some
+        // game versions use true; others use false. Both are valid ABI adapters.
+        if (ins == 0x52800022u || ins == 0x52800002u ||
+            ins == 0x2A1F03E2u) setsPredictiveFlag = true;
+        if ((ins & 0xFC000000u) != 0x14000000u) {
+            // RET ends the wrapper; never search dead trailing bytes for a match.
+            if ((ins & 0xFFFFFC1Fu) == 0xD65F0000u) break;
+            continue;
+        }
+        if (!forwardsPosition || !setsPredictiveFlag) break; // unrelated tail branch
         std::int64_t imm = static_cast<std::int64_t>(ins & 0x03FFFFFFu);
         if (imm & (1LL << 25)) imm -= (1LL << 26);
         const auto target = static_cast<std::uintptr_t>(static_cast<std::int64_t>(pc) + imm * 4);
@@ -569,17 +581,24 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     static std::atomic<std::uintptr_t> cachedEntry{0}, cachedImplementation{0};
     static std::atomic<std::size_t> cachedSlot{0};
     static std::atomic<int> cachedKind{-1};
+    static std::atomic<std::int64_t> cachedMissAtNs{0};
     if (cachedObject.load(std::memory_order_acquire) == gameMode &&
         cachedVtable.load(std::memory_order_acquire) == vtable) {
         const int k = cachedKind.load(std::memory_order_acquire);
-        if (k >= 0) {
+        if (k > 0) {
             const auto e = cachedEntry.load(std::memory_order_relaxed);
-            if (k == 0 || !e) return 0;
+            if (!e) return 0;
             if (kind) *kind = k == 2 ? AttackKind::SurvivalMode : AttackKind::GameMode;
             if (matchedSlot) *matchedSlot = cachedSlot.load(std::memory_order_relaxed);
             if (implementationOut) *implementationOut = cachedImplementation.load(std::memory_order_relaxed);
             return e;
         }
+        // Do not permanently cache a route miss: a candidate may first be seen
+        // while mappings/exports are still settling. Retry at a bounded cadence.
+        const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const auto missNs = cachedMissAtNs.load(std::memory_order_acquire);
+        if (k == 0 && nowNs >= missNs && nowNs - missNs < 1000000000LL) return 0;
     }
     for (std::size_t i = 0; i < 64; ++i) {
         const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
@@ -621,6 +640,10 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     cachedKind.store(0, std::memory_order_relaxed);
     cachedVtable.store(vtable, std::memory_order_relaxed);
     cachedObject.store(gameMode, std::memory_order_release);
+    cachedMissAtNs.store(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(),
+        std::memory_order_release);
     static std::atomic_bool miss{false};
     if (!miss.exchange(true, std::memory_order_acq_rel)) {
         std::uintptr_t s0=0,s2=0,s16=0,s32=0;
@@ -671,8 +694,16 @@ std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlo
         std::uintptr_t address = 0;
         std::memcpy(&address, slot, sizeof(address));
         if (!address) break;
-        if ((baseSignature && address == baseSignature) || (symbols.base && address == symbols.base) ||
-            (survivalSignature && address == survivalSignature) || (symbols.survival && address == symbols.survival)) {
+        const auto matchesPublicUseItem = [&](std::uintptr_t candidate, std::uintptr_t target) {
+            if (!target) return false;
+            return candidate == target ||
+                canonicalArm64Entry(candidate) == canonicalArm64Entry(target) ||
+                boundedArm64BranchReaches(candidate, target);
+        };
+        if (matchesPublicUseItem(address, baseSignature) ||
+            matchesPublicUseItem(address, symbols.base) ||
+            matchesPublicUseItem(address, survivalSignature) ||
+            matchesPublicUseItem(address, symbols.survival)) {
             if (matchedSlot) *matchedSlot = i;
             static std::atomic_bool loggedMatch{false};
             if (!loggedMatch.exchange(true, std::memory_order_acq_rel))
