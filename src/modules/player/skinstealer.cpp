@@ -1,4 +1,5 @@
 #include "skinstealer.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
@@ -152,7 +153,7 @@ void SkinStealerModule::onInit() {
         isPlayerFn = reinterpret_cast<ActorIsPlayerFn>(isPlayerAddr);
     }
     
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { onTickHook(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { onTickHook(event.player); });
     
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>([](auto& event) {
         if (!onAttackHook(event.gameMode, event.target, event.argument2, event.argument3)) event.cancel();

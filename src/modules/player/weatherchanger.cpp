@@ -1,4 +1,5 @@
 #include "weatherchanger.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/world/Weather.hpp>
@@ -128,7 +129,7 @@ void WeatherChangerModule::installHooks() {
 
 void WeatherChangerModule::onInit() {
     installHooks();
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_normalTickCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { s_normalTickCallback(event.player); });
 }
 
 void WeatherChangerModule::onEnable() {
