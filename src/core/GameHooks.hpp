@@ -14,7 +14,8 @@ void* gameModeForPlayer(void* player);
 // Checks the live GameMode and the exact public attack vtable/signature route without dispatching an attack.
 bool attackAvailable(void* gameMode);
 // The public three-argument route consumes hitPosition; the guarded four-argument route consumes nativeResultOut.
-// nativeResultOutUsed reports which ABI was selected so callers don't confuse an output flag with damage confirmation.
+// The four-argument C++ overload preserves existing module call sites; the extended overload exposes the native output flag.
+bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition);
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition,
             bool* nativeResultOut, bool* nativeResultOutUsed);
 // Calls the exact validated public GameMode::useItem route for a player's selected stack.
