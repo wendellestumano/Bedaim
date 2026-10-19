@@ -352,6 +352,19 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
+    auto& inventory = core::InventoryAccess::get();
+    const std::string heldItem = inventory.selectedHotbarIdentifier(player);
+    const auto weapon = bedaim::autohit::weapon::classify(heldItem);
+    const auto profile = bedaim::autohit::weapon::resolve(
+        weapon, swordEnabled, swordCps, axeEnabled, axeCps, maceEnabled, maceCps,
+        tridentEnabled, tridentCps);
+    if (!profile.enabled) {
+        reportGate(8, "weapon_profile_rejected",
+            std::string("identifier=") + (heldItem.empty() ? "<empty>" : heldItem) +
+            "; class=" + bedaim::autohit::weapon::name(weapon));
+        return;
+    }
+
     // ProtoHax's useful separation is preserved here: target acquisition,
     // weapon eligibility, reach/cooldown, and native dispatch are independent
     // gates. Bedaim uses the engine's validated native route rather than
@@ -386,19 +399,6 @@ void AutoHitModule::processPlayerTick(Player* player) {
     targetBounds = liveTargetBounds;
     aimRange = std::min(aimRange, liveTargetRange);
 
-    auto& inventory = core::InventoryAccess::get();
-    const std::string heldItem = inventory.selectedHotbarIdentifier(player);
-    const auto weapon = bedaim::autohit::weapon::classify(heldItem);
-    const auto profile = bedaim::autohit::weapon::resolve(
-        weapon, swordEnabled, swordCps, axeEnabled, axeCps, maceEnabled, maceCps,
-        tridentEnabled, tridentCps);
-    if (!profile.enabled) {
-        reportGate(8, "weapon_profile_rejected",
-            std::string("identifier=") + (heldItem.empty() ? "<empty>" : heldItem) +
-            "; class=" + bedaim::autohit::weapon::name(weapon));
-        return;
-    }
-
     const Vec3 eye = eyePosition(player);
     if (!finiteVec(eye)) {
         reportGate(9, "player_eye_invalid", "player eye position contains non-finite coordinates");
@@ -420,6 +420,13 @@ void AutoHitModule::processPlayerTick(Player* player) {
         std::isfinite(distanceSq) && distanceSq >= 0.0f;
     if (!hitPointFinite) {
         reportGate(10, "hit_geometry_invalid", "computed hit point or distance is not finite");
+        return;
+    }
+
+    if (std::sqrt(std::max(distanceSq, 0.0f)) > maxRange) {
+        reportGate(109, "target_out_of_range",
+            std::string("distance=") + std::to_string(std::sqrt(std::max(distanceSq, 0.0f))) +
+            "; range=" + std::to_string(maxRange));
         return;
     }
 
