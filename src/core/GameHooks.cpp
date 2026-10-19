@@ -296,10 +296,29 @@ bool isPlausibleClientInstance(void* object, std::size_t* trustedEntryCount = nu
 
     void** vtable = nullptr;
     std::memcpy(&vtable, object, sizeof(vtable));
+    if (!vtable || !isReadableMemory(vtable, sizeof(void*))) return false;
+
+    // ClientInstance::update is a hot path. Its receiver and vtable are stable
+    // for the lifetime of a world, so do the expensive module-range scan only
+    // when either identity changes. The object and its first vtable pointer are
+    // still checked on every call; a changed pointer forces full revalidation.
+    static std::atomic<void*> cachedObject{nullptr};
+    static std::atomic<void*> cachedVtable{nullptr};
+    static std::atomic<std::size_t> cachedTrustedEntries{0};
+    static std::atomic<int> cachedValidation{-1};
+    if (cachedObject.load(std::memory_order_acquire) == object &&
+        cachedVtable.load(std::memory_order_acquire) == vtable) {
+        const int validation = cachedValidation.load(std::memory_order_acquire);
+        if (validation >= 0) {
+            if (trustedEntryCount)
+                *trustedEntryCount = cachedTrustedEntries.load(std::memory_order_relaxed);
+            return validation == 1;
+        }
+    }
+
     constexpr std::size_t lastRequiredSlot =
         bedrocktools::sdk::offsets::VTable::ClientInstance_getLocalPlayer;
-    if (!vtable || !isReadableMemory(vtable, sizeof(void*) * (lastRequiredSlot + 1)))
-        return false;
+    if (!isReadableMemory(vtable, sizeof(void*) * (lastRequiredSlot + 1))) return false;
 
     std::size_t trustedEntries = 0;
     for (std::size_t i = 0; i <= lastRequiredSlot; ++i) {
@@ -308,8 +327,13 @@ bool isPlausibleClientInstance(void* object, std::size_t* trustedEntryCount = nu
         if (entry && isMinecraftFunction(reinterpret_cast<const void*>(entry)))
             ++trustedEntries;
     }
+    const bool valid = trustedEntries >= 2;
+    cachedVtable.store(vtable, std::memory_order_relaxed);
+    cachedTrustedEntries.store(trustedEntries, std::memory_order_relaxed);
+    cachedValidation.store(valid ? 1 : 0, std::memory_order_relaxed);
+    cachedObject.store(object, std::memory_order_release);
     if (trustedEntryCount) *trustedEntryCount = trustedEntries;
-    return trustedEntries >= 2;
+    return valid;
 }
 
 // Vtables can contain small ARM64 branch veneers instead of the final method
