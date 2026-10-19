@@ -557,7 +557,7 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
     auto* player = m_lastPlayer;
-    if (!enabled || !player || !desiredTarget || !g_fetchNearbyActors) return false;
+    if ((!enabled && !autoHitNeedsTargeting()) || !player || !desiredTarget || !g_fetchNearbyActors) return false;
 
     // Resolve the desired actor against a fresh engine-owned actor snapshot before
     // dereferencing it. This lets short multi-tick actions (such as a mace swap)
