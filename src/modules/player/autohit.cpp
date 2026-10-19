@@ -105,6 +105,7 @@ void AutoHitModule::onEnable() {
         "reinitialized native inventory accessors on enable");
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_nextAttack = {};
+    m_noHitFeedbackGuard.reset();
     m_lastGateDecision.store(-1, std::memory_order_release);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "enabled");
@@ -115,6 +116,7 @@ void AutoHitModule::onEnable() {
 void AutoHitModule::onDisable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_nextAttack = {};
+    m_noHitFeedbackGuard.reset();
     m_lastGateDecision.store(-1, std::memory_order_release);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "disabled");
@@ -230,6 +232,17 @@ void AutoHitModule::processPlayerTick(Player* player) {
     if (!targetFresh || !target) {
         reportGate(6, "target_snapshot_missing_or_stale",
             "no fresh target snapshot belongs to the current local player");
+        return;
+    }
+
+    bool targetQuarantined = false;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        targetQuarantined = m_noHitFeedbackGuard.isBlocked(target);
+    }
+    if (targetQuarantined) {
+        reportGate(203, "target_quarantined_no_hit_feedback",
+            "six accepted native attempts showed no positive hurt-time transition; target dispatch is paused until target identity changes or AutoHit is toggled");
         return;
     }
 
@@ -350,6 +363,17 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // target state can arrive later, so this is evidence, not a damage verdict.
     const int targetHurtTimeAfter =
         reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
+    bool targetQuarantinedNow = false;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        targetQuarantinedNow = m_noHitFeedbackGuard.observe(
+            target, accepted, targetHurtTimeBefore, targetHurtTimeAfter);
+    }
+    if (targetQuarantinedNow && accepted) {
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit",
+            "safety_guard", "target_quarantined_no_hit_feedback",
+            "six consecutive accepted native calls did not increase local target hurt-time; dispatch to this actor is paused to avoid unbounded repetition. This is not a server-damage verdict.");
+    }
     const auto pointerHex = [](const void* ptr) {
         char buffer[32]{};
         std::snprintf(buffer, sizeof(buffer), "%llX",
