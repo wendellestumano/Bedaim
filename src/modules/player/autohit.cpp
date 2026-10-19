@@ -260,11 +260,11 @@ void AutoHitModule::processPlayerTick(Player* player) {
     };
     const float distanceSq = distanceSquared(eye, nearestPoint);
     const float maxRange = std::clamp(std::min(configuredRange, aimRange), 2.0f, 6.0f);
-    const Vec3 hitPoint{
-        (targetBounds.min.x + targetBounds.max.x) * 0.5f,
-        (targetBounds.min.y + targetBounds.max.y) * 0.5f,
-        (targetBounds.min.z + targetBounds.max.z) * 0.5f
-    };
+    // GameMode::attack receives a hit/contact position, not merely a target
+    // center. Use the closest point on the freshly validated target AABB to the
+    // player's eye. The center can be behind/inside the target and is not the
+    // surface point corresponding to the measured reach distance.
+    const Vec3 hitPoint = nearestPoint;
     const bool hitPointFinite = finiteVec(hitPoint) && finiteVec(nearestPoint) &&
         std::isfinite(distanceSq) && distanceSq >= 0.0f;
     if (!hitPointFinite) {
@@ -343,7 +343,13 @@ void AutoHitModule::processPlayerTick(Player* player) {
         ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
     } syntheticGuard;
 
+    const int targetHurtTimeBefore =
+        reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
     const bool accepted = core::gamehooks::attack(gameMode, target, true, &hitPoint);
+    // Hurt time is only an immediate local observation: server-authoritative
+    // target state can arrive later, so this is evidence, not a damage verdict.
+    const int targetHurtTimeAfter =
+        reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
     const auto pointerHex = [](const void* ptr) {
         char buffer[32]{};
         std::snprintf(buffer, sizeof(buffer), "%llX",
@@ -358,7 +364,11 @@ void AutoHitModule::processPlayerTick(Player* player) {
         "; range=" + std::to_string(maxRange) +
         "; weapon=" + bedaim::autohit::weapon::name(weapon) +
         "; cps=" + std::to_string(profile.cps) +
-        "; accepted means the validated native wrapper returned success, not that the server confirmed damage");
+        "; hit_point=(" + std::to_string(hitPoint.x) + "," +
+            std::to_string(hitPoint.y) + "," + std::to_string(hitPoint.z) + ")" +
+        "; target_hurt_time_before=" + std::to_string(targetHurtTimeBefore) +
+        "; target_hurt_time_after=" + std::to_string(targetHurtTimeAfter) +
+        "; wrapper acceptance and immediate hurt-time observation do not prove server-confirmed damage");
 }
 
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
