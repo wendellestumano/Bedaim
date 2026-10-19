@@ -11,6 +11,7 @@
 #include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -18,9 +19,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <dlfcn.h>
 #include <cctype>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -29,6 +32,24 @@ thread_local bool g_autoHitSyntheticAttack = false;
 using bedrocktools::sdk::AABB;
 using bedrocktools::sdk::Player;
 using bedrocktools::sdk::Vec3;
+
+using HitResultGetEntityFn = void* (*)(void*);
+
+HitResultGetEntityFn hitResultGetEntityFunction() {
+    static HitResultGetEntityFn function = []() -> HitResultGetEntityFn {
+        const auto address = bedrocktools::memory::resolve(
+            bedrocktools::memory::SignatureId::HitResultGetEntity);
+        if (!address) return nullptr;
+        Dl_info info{};
+        if (!dladdr(reinterpret_cast<const void*>(address), &info) ||
+            !info.dli_fname ||
+            std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
+            return nullptr;
+        }
+        return reinterpret_cast<HitResultGetEntityFn>(address);
+    }();
+    return function;
+}
 
 bool finiteVec(const Vec3& value) {
     return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
@@ -302,22 +323,36 @@ void AutoHitModule::processPlayerTick(Player* player) {
         reportGate(9, "player_eye_invalid", "player eye position contains non-finite coordinates");
         return;
     }
-    const Vec3 nearestPoint{
-        std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
-        std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
-        std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
-    };
-    const float distanceSq = distanceSquared(eye, nearestPoint);
+    // The four-argument native attack route consumes an engine-owned context
+    // object. Passing &Vec3 here is unsafe: the native implementation reads
+    // fields beyond a 12-byte vector. Reuse the Level's live HitResult instead.
+    auto* level = player->level();
+    if (!level) {
+        reportGate(12, "native_attack_context_unavailable", "local player has no Level for a current HitResult");
+        return;
+    }
+    auto* hitResult = level->storedHitResult();
+    const auto getHitResultEntity = hitResultGetEntityFunction();
+    if (!hitResult || !getHitResultEntity) {
+        reportGate(12, "native_attack_context_unavailable",
+            std::string("hit_result=") + (hitResult ? "present" : "missing") +
+            "; entity_accessor=" + (getHitResultEntity ? "ready" : "unavailable"));
+        return;
+    }
+    void* hitResultTarget = getHitResultEntity(hitResult);
+    if (!bedaim::autohit::hitResultMatchesTarget(target, hitResultTarget)) {
+        reportGate(13, "native_hit_result_target_mismatch",
+            "current engine HitResult does not identify the selected Aim Assist target; native dispatch skipped");
+        return;
+    }
+
+    const Vec3 hitPoint = hitResult->position();
+    const float distanceSq = distanceSquared(eye, hitPoint);
     const float maxRange = std::clamp(std::min(configuredRange, aimRange), 2.0f, 6.0f);
-    // GameMode::attack receives a hit/contact position, not merely a target
-    // center. Use the closest point on the freshly validated target AABB to the
-    // player's eye. The center can be behind/inside the target and is not the
-    // surface point corresponding to the measured reach distance.
-    const Vec3 hitPoint = nearestPoint;
-    const bool hitPointFinite = finiteVec(hitPoint) && finiteVec(nearestPoint) &&
+    const bool hitPointFinite = finiteVec(hitPoint) &&
         std::isfinite(distanceSq) && distanceSq >= 0.0f;
     if (!hitPointFinite) {
-        reportGate(10, "hit_geometry_invalid", "computed hit point or distance is not finite");
+        reportGate(10, "hit_geometry_invalid", "engine HitResult position or distance is not finite");
         return;
     }
 
@@ -394,7 +429,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     const int targetHurtTimeBefore =
         reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
-    const bool accepted = core::gamehooks::attack(gameMode, target, true, &hitPoint);
+    const bool accepted = core::gamehooks::attack(gameMode, target, true, hitResult);
     // Hurt time is only an immediate local observation: server-authoritative
     // target state can arrive later, so this is evidence, not a damage verdict.
     const int targetHurtTimeAfter =
