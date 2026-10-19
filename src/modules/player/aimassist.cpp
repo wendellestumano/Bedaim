@@ -1823,11 +1823,29 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
-        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 8192) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "actor_snapshot", "malformed");
+    const auto byteSpan = (end >= begin) ? (end - begin) : 0;
+    const bool malformed = !begin || !end || end < begin ||
+        byteSpan % sizeof(DistanceSortedActor) != 0 ||
+        byteSpan / sizeof(DistanceSortedActor) > 8192;
+    if (malformed) {
+        // Record the ABI failure mode once instead of flooding the rolling log
+        // every tick with the same generic warning.
+        static std::atomic_bool loggedMalformedActorSnapshot{false};
+        if (!loggedMalformedActorSnapshot.exchange(true, std::memory_order_acq_rel)) {
+            const char* reason = !begin ? "null_begin" : !end ? "null_end" :
+                end < begin ? "end_before_begin" :
+                byteSpan % sizeof(DistanceSortedActor) != 0 ? "span_not_stride_aligned" :
+                "count_over_limit";
+            const std::string detail =
+                "begin_addr=" + std::to_string(begin) +
+                "; end_addr=" + std::to_string(end) +
+                "; capacity_addr=" + std::to_string(reinterpret_cast<std::uintptr_t>(actors.capacity)) +
+                "; byte_span=" + std::to_string(byteSpan) +
+                "; element_stride=" + std::to_string(sizeof(DistanceSortedActor)) +
+                "; reason=" + reason;
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "HitboxExpander", "actor_snapshot", "malformed", detail);
+        }
         return;
     }
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
