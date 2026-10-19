@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Module.hpp"
+#include "AutoHitGuards.hpp"
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -45,4 +46,7 @@ private:
     float m_tridentCps = 3.0f;
 
     std::chrono::steady_clock::time_point m_nextAttack{};
+    // Stop repeated attacks against one actor if the validated native wrapper
+    // accepts them but local target hurt-time never shows a positive transition.
+    bedaim::autohit::NoHitFeedbackGuard m_noHitFeedbackGuard;
 };
