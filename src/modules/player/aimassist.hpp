@@ -101,6 +101,9 @@ private:
     std::chrono::steady_clock::time_point m_nextHeldWeaponRefresh{};
     bool m_weaponFilterAllowsCurrent = true;
     bool m_targetPresent = false;
+    // During a short scan dropout, preserve camera steering from cached bounds only.
+    // Target snapshots/actions remain blocked until an actor is freshly selected.
+    bool m_targetGraceOnly = false;
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
     bool m_hasAimPoint = false;
