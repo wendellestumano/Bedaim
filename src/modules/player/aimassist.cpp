@@ -60,12 +60,12 @@ bool autoHitNeedsTargeting() {
     if (!cachedAutoHit) cachedAutoHit = ModuleRegistry::get().find("bedrocktools.Auto Hit");
     if (!cachedAutoHit || !cachedAutoHit->enabled) return false;
 
-    // Don't run target acquisition for AutoHit when the current engine build has
-    // no validated native attack route. AutoHit performs its own preflight and
-    // retries on the normal tick/cooldown cadence; AimAssist can still run when
-    // explicitly enabled by the user.
-    void* gameMode = bedrocktools::core::gamehooks::gameMode();
-    return gameMode && bedrocktools::core::gamehooks::attackAvailable(gameMode);
+    // Target tracking and attack dispatch are separate stages. Keep acquiring
+    // fresh targets and updating rotation while AutoHit is enabled, even when a
+    // build-specific native attack route is unavailable. AutoHit independently
+    // gates dispatch on attackAvailable(); using that gate here makes the aim
+    // freeze whenever dispatch validation fails and prevents useful diagnostics.
+    return true;
 }
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
