@@ -647,11 +647,13 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
             return e;
         }
         // Do not permanently cache a route miss: a candidate may first be seen
-        // while mappings/exports are still settling. Retry at a bounded cadence.
+        // while mappings/exports are still settling. Retry at a conservative
+        // five-second cadence; AutoHit also backs off so this validation is not
+        // repeated on a hot tick path when this runtime has no recognized route.
         const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const auto missNs = cachedMissAtNs.load(std::memory_order_acquire);
-        if (k == 0 && nowNs >= missNs && nowNs - missNs < 1000000000LL) return 0;
+        if (k == 0 && nowNs >= missNs && nowNs - missNs < 5000000000LL) return 0;
     }
     // Avoid a 64-slot / 64-instruction scan every retry when this runtime strips
     // both public method exports. The ABI-anchored slot fallback below handles that case.
