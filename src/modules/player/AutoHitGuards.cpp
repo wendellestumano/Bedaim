@@ -42,19 +42,7 @@ float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHi
 void NoHitFeedbackGuard::reset() noexcept {
     m_target = nullptr;
     m_consecutiveNoFeedback = 0;
-    m_blocked = false;
-}
-
-bool NoHitFeedbackGuard::isBlocked(const void* target) noexcept {
-    if (!target) {
-        reset();
-        return false;
-    }
-    if (m_target != target) {
-        reset();
-        m_target = target;
-    }
-    return m_blocked;
+    m_warningEmitted = false;
 }
 
 bool NoHitFeedbackGuard::observe(const void* target, bool accepted, int hurtTimeBefore,
@@ -67,28 +55,18 @@ bool NoHitFeedbackGuard::observe(const void* target, bool accepted, int hurtTime
         reset();
         m_target = target;
     }
-    if (m_blocked) {
-        // Quarantine is retained as a diagnostic state only. AutoHit's CPS
-        // limiter bounds dispatch, and delayed server state must not permanently
-        // suppress valid attack attempts based on one immediate local snapshot.
-        if (!accepted || hurtTimeAfter > hurtTimeBefore) {
-            m_consecutiveNoFeedback = 0;
-            m_blocked = false;
-        }
-        return false;
-    }
 
-    // A rejected wrapper call or a positive local hurt-time transition breaks
-    // the "accepted but no immediate hit feedback" streak.
+    // A rejected call or positive local feedback resets the warning streak.
     if (!accepted || hurtTimeAfter > hurtTimeBefore) {
         m_consecutiveNoFeedback = 0;
+        m_warningEmitted = false;
         return false;
     }
 
-    if (m_consecutiveNoFeedback < kAttemptsBeforeQuarantine)
+    if (m_consecutiveNoFeedback < kAttemptsBeforeWarning)
         ++m_consecutiveNoFeedback;
-    if (m_consecutiveNoFeedback >= kAttemptsBeforeQuarantine) {
-        m_blocked = true;
+    if (m_consecutiveNoFeedback >= kAttemptsBeforeWarning && !m_warningEmitted) {
+        m_warningEmitted = true;
         return true;
     }
     return false;
