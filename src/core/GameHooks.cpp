@@ -625,9 +625,11 @@ bool isGuardedFourArgumentAttackThunk(std::uintptr_t entry,
         if (!target || !isMinecraftFunction(reinterpret_cast<const void*>(target))) return false;
         for (const auto expected : knownImplementations) {
             if (!expected) continue;
+            // Keep this strict: the guarded thunk's direct B target must be
+            // the resolved implementation or a canonical veneer for it. Do not
+            // accept a transitive branch through an unrelated method.
             if (target == expected ||
-                canonicalArm64Entry(target) == canonicalArm64Entry(expected) ||
-                boundedArm64BranchReaches(target, expected)) {
+                canonicalArm64Entry(target) == canonicalArm64Entry(expected)) {
                 return true;
             }
         }
@@ -1920,8 +1922,6 @@ bool attackAvailable(void* gameMode) {
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     if (!gameMode || !target || !hitPosition) return false;
-    (void)playPredictiveSound;
-
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack || currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
     std::size_t matchedSlot = 0;
@@ -1932,7 +1932,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         gameMode, &kind, &matchedSlot, &implementation, &usesFourArgumentAbi);
     if (!publicEntry) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "GameHooks", "attack", "public_three_argument_route_unavailable");
+            "GameHooks", "attack", "native_attack_route_unavailable");
         return false;
     }
     if (implementation) (void)ensureAttackObserver(implementation);
