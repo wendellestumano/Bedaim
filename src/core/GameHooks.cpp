@@ -1682,7 +1682,7 @@ void* gameModeForPlayer(void* player) {
     // object/vtable still belongs to libminecraftpe; attackAvailable() performs
     // the stricter exact-attack check before any synthetic dispatch.
     if (observed && (publicAttackVirtualEntry(observed) != 0 ||
-        publicUseItemVirtualEntry(observed) != 0)) {
+        publicUseItemVirtualEntry(observed, nullptr) != 0)) {
         return observed;
     }
 
@@ -1705,7 +1705,7 @@ void* gameModeForPlayer(void* player) {
     std::memcpy(&candidate, slot, sizeof(candidate));
     auto isValidatedGameMode = [](void* value) {
         return value && (publicAttackVirtualEntry(value) != 0 ||
-                         publicUseItemVirtualEntry(value) != 0);
+                         publicUseItemVirtualEntry(value, nullptr) != 0);
     };
 
     if (isValidatedGameMode(candidate)) {
