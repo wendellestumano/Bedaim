@@ -602,16 +602,98 @@ bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation 
 #endif
     return false;
 }
-// Forward declaration; the exact useItem slot acts as a vtable-layout anchor for the public ABI fallback.
+// Match the guarded four-argument attack thunk found in the target 1.26.52.3
+// binary. Unlike the public three-argument adapter, this entry preserves x0-x3
+// and tail-branches directly into the independently resolved four-argument
+// GameMode::attack implementation. Require both a conditional guard and an
+// alternate return path; a branch target match alone is not sufficient.
+bool isGuardedFourArgumentAttackThunk(std::uintptr_t entry,
+                                      std::uintptr_t* implementation = nullptr,
+                                      bool* trialModeGuarded = nullptr) {
+#if defined(__aarch64__)
+    if (implementation) *implementation = 0;
+    if (trialModeGuarded) *trialModeGuarded = false;
+    if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry))) return false;
+
+    static const std::array<std::uintptr_t, 2> knownImplementations = [] {
+        return std::array<std::uintptr_t, 2>{
+            bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal),
+            bedrocktools::memory::resolve(SignatureId::GameModeAttack)
+        };
+    }();
+    auto matchesKnownImplementation = [&](std::uintptr_t target) {
+        if (!target || !isMinecraftFunction(reinterpret_cast<const void*>(target))) return false;
+        for (const auto expected : knownImplementations) {
+            if (!expected) continue;
+            if (target == expected ||
+                canonicalArm64Entry(target) == canonicalArm64Entry(expected) ||
+                boundedArm64BranchReaches(target, expected)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // A vtable entry can be a short veneer to the guarded thunk. Check both
+    // the live entry and its canonical branch target, while dispatching through
+    // the original live entry once validation succeeds.
+    const std::array<std::uintptr_t, 2> candidates{entry, canonicalArm64Entry(entry)};
+    for (std::size_t candidateIndex = 0; candidateIndex < candidates.size(); ++candidateIndex) {
+        const auto candidate = candidates[candidateIndex];
+        if (!candidate || (candidateIndex == 1 && candidate == entry) ||
+            !isMinecraftFunction(reinterpret_cast<const void*>(candidate))) continue;
+        bool sawGuard = false;
+        bool sawReturn = false;
+        bool trialGuard = false;
+        for (std::size_t i = 0; i < 16; ++i) {
+            const auto pc = candidate + i * sizeof(std::uint32_t);
+            if (!isReadableMemory(reinterpret_cast<const void*>(pc), sizeof(std::uint32_t))) break;
+            std::uint32_t ins = 0;
+            std::memcpy(&ins, reinterpret_cast<const void*>(pc), sizeof(ins));
+            if (i == 0 && ins == 0x39432008u) trialGuard = true; // ldrb w8,[x0,#0xc8]
+            if ((ins & 0xFF000010u) == 0x54000000u || // B.cond
+                (ins & 0x7E000000u) == 0x34000000u || // CBZ/CBNZ
+                (ins & 0x7E000000u) == 0x36000000u) { // TBZ/TBNZ
+                sawGuard = true;
+            }
+            if ((ins & 0xFFFFFC1Fu) == 0xD65F0000u) sawReturn = true; // RET
+
+            const auto opcode = ins & 0xFC000000u;
+            if (opcode != 0x14000000u) continue; // B only; BL changes control flow/return ABI
+            std::int64_t imm = static_cast<std::int64_t>(ins & 0x03FFFFFFu);
+            if (imm & (1LL << 25)) imm -= (1LL << 26);
+            const auto target = static_cast<std::uintptr_t>(
+                static_cast<std::int64_t>(pc) + imm * 4);
+            if (sawGuard && sawReturn && matchesKnownImplementation(target)) {
+                if (implementation) *implementation = target;
+                if (trialModeGuarded) *trialModeGuarded = trialGuard;
+                return true;
+            }
+            // A tail branch ends this candidate's control-flow path.
+            break;
+        }
+    }
+#else
+    (void)entry; (void)implementation; (void)trialModeGuarded;
+#endif
+    return false;
+}
+
+// Forward declaration for independent useItem validation; its numeric slot is not
+// used to infer the attack ABI.
 std::uintptr_t publicUseItemVirtualEntry(void* gameMode, std::size_t* matchedSlot);
 
-// Find the exact public wrapper in the object's live vtable. Prefer exported signatures and
-// recognized adapters; when these symbols are stripped, use the current public GameMode
-// declaration's vtable order, anchored by the independently validated useItem method.
+// Resolve the live attack vtable entry by method identity and ABI. A public
+// three-argument adapter is preferred when independently validated. If the
+// build exposes only a guarded four-argument virtual thunk, call it with the
+// four-argument ABI established by its exact branch target. Never infer attack
+// from "useItem at slot 12, therefore attack at slot 16".
 std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr,
                                         std::size_t* matchedSlot = nullptr,
-                                        std::uintptr_t* implementationOut = nullptr) {
+                                        std::uintptr_t* implementationOut = nullptr,
+                                        bool* usesFourArgumentAbiOut = nullptr) {
     if (implementationOut) *implementationOut = 0;
+    if (usesFourArgumentAbiOut) *usesFourArgumentAbiOut = false;
     if (!plausibleGameMode(gameMode)) return 0;
     void** vtable = nullptr;
     std::memcpy(&vtable, gameMode, sizeof(vtable));
@@ -634,6 +716,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
     static std::atomic<std::uintptr_t> cachedEntry{0}, cachedImplementation{0};
     static std::atomic<std::size_t> cachedSlot{0};
     static std::atomic<int> cachedKind{-1};
+    static std::atomic<bool> cachedFourArgumentAbi{false};
     static std::atomic<std::int64_t> cachedMissAtNs{0};
     if (cachedObject.load(std::memory_order_acquire) == gameMode &&
         cachedVtable.load(std::memory_order_acquire) == vtable) {
@@ -644,6 +727,7 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
             if (kind) *kind = k == 2 ? AttackKind::SurvivalMode : AttackKind::GameMode;
             if (matchedSlot) *matchedSlot = cachedSlot.load(std::memory_order_relaxed);
             if (implementationOut) *implementationOut = cachedImplementation.load(std::memory_order_relaxed);
+            if (usesFourArgumentAbiOut) *usesFourArgumentAbiOut = cachedFourArgumentAbi.load(std::memory_order_relaxed);
             return e;
         }
         // Do not permanently cache a route miss: a candidate may first be seen
@@ -655,112 +739,122 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         const auto missNs = cachedMissAtNs.load(std::memory_order_acquire);
         if (k == 0 && nowNs >= missNs && nowNs - missNs < 5000000000LL) return 0;
     }
-    // Avoid a 64-slot / 64-instruction scan every retry when this runtime strips
-    // both public method exports. The ABI-anchored slot fallback below handles that case.
-    if (symbols.base || symbols.survival) {
-        for (std::size_t i = 0; i < 64; ++i) {
-            const auto* slot = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
-            if (!isReadableMemory(slot, sizeof(void*))) break;
-            std::uintptr_t address = 0;
-            std::memcpy(&address, slot, sizeof(address));
-            if (!address) break;
-            const auto canon = canonicalArm64Entry(address);
-            const bool survivalSymbol = symbols.survival && (address == symbols.survival ||
-                canon == canonicalArm64Entry(symbols.survival) || boundedArm64BranchReaches(address, symbols.survival));
-            const bool baseSymbol = symbols.base && (address == symbols.base ||
-                canon == canonicalArm64Entry(symbols.base) || boundedArm64BranchReaches(address, symbols.base));
-            std::uintptr_t internal = 0; bool trialGuard = false;
-            const bool adapter = isPublicAttackAdapter(address, &internal, &trialGuard);
-            if (!survivalSymbol && !baseSymbol && !adapter) continue;
-            const AttackKind found = (survivalSymbol || (adapter && trialGuard))
-                ? AttackKind::SurvivalMode : AttackKind::GameMode;
-            cachedEntry.store(address, std::memory_order_relaxed);
-            cachedImplementation.store(adapter ? internal : 0, std::memory_order_relaxed);
-            cachedSlot.store(i, std::memory_order_relaxed);
-            cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
-            cachedVtable.store(vtable, std::memory_order_relaxed);
-            cachedObject.store(gameMode, std::memory_order_release);
-            if (kind) *kind = found;
-            if (matchedSlot) *matchedSlot = i;
-            if (implementationOut) *implementationOut = adapter ? internal : 0;
-            static std::atomic_bool logged{false};
-            if (!logged.exchange(true, std::memory_order_acq_rel)) {
-                char msg[200]{};
-                std::snprintf(msg, sizeof(msg), "validated public 3-argument attack route: slot=%zu; adapter=%s; internal_target=%p",
-                    i, adapter ? (trialGuard ? "survival" : "base") : "symbol", reinterpret_cast<void*>(internal));
-                gameHooksLogger().info("{}", msg);
-            }
-            return address;
+    // Phase 1: prefer a verified three-argument public symbol or adapter.
+    // This scan runs even when symbols are stripped; ABI checks do not depend
+    // on finding an exported name.
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto* slot = reinterpret_cast<const void*>(
+            reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
+        if (!isReadableMemory(slot, sizeof(void*))) break;
+        std::uintptr_t address = 0;
+        std::memcpy(&address, slot, sizeof(address));
+        if (!address) break;
+
+        const auto canon = canonicalArm64Entry(address);
+        const bool survivalSymbol = symbols.survival && (address == symbols.survival ||
+            canon == canonicalArm64Entry(symbols.survival) ||
+            boundedArm64BranchReaches(address, symbols.survival));
+        const bool baseSymbol = symbols.base && (address == symbols.base ||
+            canon == canonicalArm64Entry(symbols.base) ||
+            boundedArm64BranchReaches(address, symbols.base));
+        std::uintptr_t internal = 0;
+        bool trialGuard = false;
+        const bool adapter = isPublicAttackAdapter(address, &internal, &trialGuard);
+        if (!survivalSymbol && !baseSymbol && !adapter) continue;
+
+        const AttackKind found = (survivalSymbol || (adapter && trialGuard))
+            ? AttackKind::SurvivalMode : AttackKind::GameMode;
+        cachedEntry.store(address, std::memory_order_relaxed);
+        cachedImplementation.store(adapter ? internal : 0, std::memory_order_relaxed);
+        cachedSlot.store(i, std::memory_order_relaxed);
+        cachedFourArgumentAbi.store(false, std::memory_order_relaxed);
+        cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
+        cachedVtable.store(vtable, std::memory_order_relaxed);
+        cachedObject.store(gameMode, std::memory_order_release);
+        if (kind) *kind = found;
+        if (matchedSlot) *matchedSlot = i;
+        if (implementationOut) *implementationOut = adapter ? internal : 0;
+        if (usesFourArgumentAbiOut) *usesFourArgumentAbiOut = false;
+        static std::atomic_bool loggedThreeArgumentRoute{false};
+        if (!loggedThreeArgumentRoute.exchange(true, std::memory_order_acq_rel)) {
+            char msg[224]{};
+            std::snprintf(msg, sizeof(msg),
+                "validated public three-argument attack route: slot=%zu; source=%s; internal_target=%p",
+                i, adapter ? (trialGuard ? "survival_adapter" : "adapter") : "exported_symbol",
+                reinterpret_cast<void*>(internal));
+            gameHooksLogger().info("{}", msg);
         }
-    
+        return address;
     }
 
-    // LeviLamina's public GameMode declaration orders the virtuals as:
-    // destructor(2 ABI slots), startDestroy/destroy/continue/stop, build/start,
-    // tick, getPickRange, useItem, useItemAsAttack, useItemOn, interact, attack.
-    // On this ABI that places useItem at vtable slot 12 and attack at slot 16.
-    // We do not trust the numeric slot by itself: slot 12 must first match the
-    // independently resolved public useItem method, and slots 13..16 must all be
-    // readable native functions in libminecraftpe.so.
-    std::size_t useItemSlot = 0;
-    const auto useItemEntry = publicUseItemVirtualEntry(gameMode, &useItemSlot);
-    if (useItemEntry && useItemSlot == 12) {
-        std::array<std::uintptr_t, 4> adjacent{};
-        bool adjacentValid = true;
-        for (std::size_t slotIndex = 13; slotIndex <= 16; ++slotIndex) {
-            const auto* slot = reinterpret_cast<const void*>(
-                reinterpret_cast<std::uintptr_t>(vtable) + slotIndex * sizeof(void*));
-            std::uintptr_t entry = 0;
-            if (!isReadableMemory(slot, sizeof(void*))) {
-                adjacentValid = false;
+    // Phase 2: some patched Android builds expose no public adapter. In the
+    // inspected 1.26.52.3 libminecraftpe.so, the validated attack path is a
+    // guarded vtable thunk that tail-branches to the four-argument native
+    // implementation; slot 16 instead branches to a different function. Accept
+    // only exact implementation identity or a guard+return thunk targeting the
+    // attack signature, then dispatch through the live entry with ABI
+    // (this, Actor*, predictiveSound, Vec3 const*).
+    const auto attackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+    const auto internalSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
+    const std::array<std::uintptr_t, 2> knownImplementations{internalSignature, attackSignature};
+    for (std::size_t i = 0; i < 64; ++i) {
+        const auto* slot = reinterpret_cast<const void*>(
+            reinterpret_cast<std::uintptr_t>(vtable) + i * sizeof(void*));
+        if (!isReadableMemory(slot, sizeof(void*))) break;
+        std::uintptr_t address = 0;
+        std::memcpy(&address, slot, sizeof(address));
+        if (!address) break;
+
+        std::uintptr_t implementation = 0;
+        bool trialGuard = false;
+        bool directImplementation = false;
+        for (const auto expected : knownImplementations) {
+            if (!expected) continue;
+            if (address == expected ||
+                canonicalArm64Entry(address) == canonicalArm64Entry(expected)) {
+                implementation = expected;
+                directImplementation = true;
                 break;
             }
-            std::memcpy(&entry, slot, sizeof(entry));
-            if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry)) ||
-                !isReadableMemory(reinterpret_cast<const void*>(entry), sizeof(std::uint32_t))) {
-                adjacentValid = false;
-                break;
-            }
-            adjacent[slotIndex - 13] = entry;
         }
-        if (adjacentValid) {
-            const auto publicAttackEntry = adjacent[3];
-            std::uintptr_t internal = 0;
-            bool trialGuard = false;
-            const bool adapter = isPublicAttackAdapter(publicAttackEntry, &internal, &trialGuard);
-            // SurvivalMode's guarded implementation can be identified even if
-            // its public wrapper is not the simple adapter shape above.
-            if (!trialGuard) {
-                const auto canonical = canonicalArm64Entry(publicAttackEntry);
-                std::uint32_t firstInstruction = 0;
-                if (canonical && isReadableMemory(reinterpret_cast<const void*>(canonical), sizeof(firstInstruction))) {
-                    std::memcpy(&firstInstruction, reinterpret_cast<const void*>(canonical), sizeof(firstInstruction));
-                    trialGuard = firstInstruction == 0x39432008u; // ldrb w8,[x0,#0xc8]
-                }
-            }
-            const AttackKind found = trialGuard ? AttackKind::SurvivalMode : AttackKind::GameMode;
-            cachedEntry.store(publicAttackEntry, std::memory_order_relaxed);
-            cachedImplementation.store(adapter ? internal : 0, std::memory_order_relaxed);
-            cachedSlot.store(16, std::memory_order_relaxed);
-            cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
-            cachedVtable.store(vtable, std::memory_order_relaxed);
-            cachedObject.store(gameMode, std::memory_order_release);
-            if (kind) *kind = found;
-            if (matchedSlot) *matchedSlot = 16;
-            if (implementationOut) *implementationOut = adapter ? internal : 0;
-            gameHooksLogger().info(
-                "Validated public GameMode::attack through ABI vtable layout: useItem_slot=12, attack_slot=16, adapter={}",
-                adapter ? "recognized" : "anchored_by_useItem_and_neighbor_slots");
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                "GameHooks", "attack_route", "public_attack_validated_by_vtable_layout",
-                std::string("useItem_slot=12; attack_slot=16; adapter=") + (adapter ? "recognized" : "layout_anchor"));
-            return publicAttackEntry;
+        const bool guardedThunk = !directImplementation &&
+            isGuardedFourArgumentAttackThunk(address, &implementation, &trialGuard);
+        if (!directImplementation && !guardedThunk) continue;
+
+        const AttackKind found = trialGuard
+            ? AttackKind::SurvivalMode : AttackKind::GameMode;
+        cachedEntry.store(address, std::memory_order_relaxed);
+        cachedImplementation.store(implementation, std::memory_order_relaxed);
+        cachedSlot.store(i, std::memory_order_relaxed);
+        cachedFourArgumentAbi.store(true, std::memory_order_relaxed);
+        cachedKind.store(found == AttackKind::SurvivalMode ? 2 : 1, std::memory_order_relaxed);
+        cachedVtable.store(vtable, std::memory_order_relaxed);
+        cachedObject.store(gameMode, std::memory_order_release);
+        if (kind) *kind = found;
+        if (matchedSlot) *matchedSlot = i;
+        if (implementationOut) *implementationOut = implementation;
+        if (usesFourArgumentAbiOut) *usesFourArgumentAbiOut = true;
+        static std::atomic_bool loggedFourArgumentRoute{false};
+        if (!loggedFourArgumentRoute.exchange(true, std::memory_order_acq_rel)) {
+            char msg[224]{};
+            std::snprintf(msg, sizeof(msg),
+                "validated guarded four-argument attack thunk: slot=%zu; target=%p; source=%s",
+                i, reinterpret_cast<void*>(implementation),
+                directImplementation ? "exact_implementation" : "guarded_branch");
+            gameHooksLogger().info("{}", msg);
         }
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "GameHooks", "attack_route", "four_argument_native_attack_validated",
+            std::string("slot=") + std::to_string(i) +
+            "; implementation=" + std::to_string(implementation) +
+            "; source=" + (directImplementation ? "exact_implementation" : "guarded_branch"));
+        return address;
     }
 
     cachedEntry.store(0, std::memory_order_relaxed);
     cachedImplementation.store(0, std::memory_order_relaxed);
     cachedSlot.store(0, std::memory_order_relaxed);
+    cachedFourArgumentAbi.store(false, std::memory_order_relaxed);
     cachedKind.store(0, std::memory_order_relaxed);
     cachedVtable.store(vtable, std::memory_order_relaxed);
     cachedObject.store(gameMode, std::memory_order_release);
@@ -1819,7 +1913,9 @@ bool attackAvailable(void* gameMode) {
         return false;
     AttackKind ignored = AttackKind::GameMode;
     std::uintptr_t implementation = 0;
-    if (!publicAttackVirtualEntry(gameMode, &ignored, nullptr, &implementation)) return false;
+    bool usesFourArgumentAbi = false;
+    if (!publicAttackVirtualEntry(gameMode, &ignored, nullptr, &implementation,
+                                  &usesFourArgumentAbi)) return false;
     if (implementation) (void)ensureAttackObserver(implementation);
     return true;
 }
@@ -1833,7 +1929,9 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     std::size_t matchedSlot = 0;
     AttackKind kind = AttackKind::GameMode;
     std::uintptr_t implementation = 0;
-    const auto publicEntry = publicAttackVirtualEntry(gameMode, &kind, &matchedSlot, &implementation);
+    bool usesFourArgumentAbi = false;
+    const auto publicEntry = publicAttackVirtualEntry(
+        gameMode, &kind, &matchedSlot, &implementation, &usesFourArgumentAbi);
     if (!publicEntry) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "GameHooks", "attack", "public_three_argument_route_unavailable");
@@ -1845,7 +1943,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
     const auto slotAddress = reinterpret_cast<std::uintptr_t>(vtable) + matchedSlot * sizeof(void*);
     if (!vtable || !isReadableMemory(reinterpret_cast<const void*>(slotAddress), sizeof(void*))) return false;
     auto publicAttack = reinterpret_cast<PublicAttackFn>(vtable[matchedSlot]);
-    if (!publicAttack) return false;
+    auto nativeAttack = reinterpret_cast<AttackFn>(vtable[matchedSlot]);
+    if (usesFourArgumentAbi ? !nativeAttack : !publicAttack) return false;
 
     struct AttackGuard { bool& active; explicit AttackGuard(bool& v) : active(v) { active = true; } ~AttackGuard() { active = false; } } attackGuard{inSyntheticAttack};
 
@@ -1879,20 +1978,31 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
         ~PrepublishedGuard() { syntheticAttackEventsPrepublished = previous; }
     } prepublished{syntheticAttackEventsPrepublished};
 
-    static std::atomic_bool loggedPublic{false};
-    if (!loggedPublic.exchange(true, std::memory_order_acq_rel)) {
-        char msg[144]{};
-        std::snprintf(msg, sizeof(msg), "dispatching public three-argument attack virtual at slot %zu", matchedSlot);
+    static std::atomic_bool loggedDispatchRoute{false};
+    if (!loggedDispatchRoute.exchange(true, std::memory_order_acq_rel)) {
+        char msg[176]{};
+        std::snprintf(msg, sizeof(msg), "dispatching validated %s attack route at slot %zu",
+            usesFourArgumentAbi ? "four-argument native" : "three-argument public", matchedSlot);
         gameHooksLogger().info("{}", msg);
     }
-    // Correct public ABI is (this, Actor*, Vec3 const*), without bool.
-    const bool publicResult = publicAttack(gameMode, target, hitPosition);
-    const bool accepted = syntheticAttackResultObserved ? syntheticAttackNativeResult : publicResult;
+    // The fallback route is callable with four arguments only because its live
+    // entry was validated to tail-branch to the matching four-argument attack
+    // implementation. Never call that entry through the three-argument ABI.
+    const bool publicResult = usesFourArgumentAbi
+        ? nativeAttack(gameMode, target, playPredictiveSound, hitPosition)
+        : publicAttack(gameMode, target, hitPosition);
+    // If the internal observer installed successfully but did not see this call,
+    // do not trust a wrapper's "true" return: that mismatch produced particles/
+    // swing with no target damage in the latest runtime logs.
+    const bool accepted = syntheticAttackResultObserved
+        ? syntheticAttackNativeResult
+        : (observe ? false : publicResult);
     AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), accepted};
     bus().publish(resultEvent);
     bedrocktools::diagnostics::probe(accepted ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
         "GameHooks", "attack", accepted ? "public_virtual_returned_true" : "public_virtual_returned_false",
         std::string("vtable_slot=") + std::to_string(matchedSlot) +
+        "; abi=" + (usesFourArgumentAbi ? "four_argument" : "three_argument") +
         "; internal_observer=" + (syntheticAttackResultObserved ? "observed" : "not_reached") +
         "; return_true_does_not_prove_server_damage");
     return accepted;
