@@ -1913,9 +1913,7 @@ bool attackAvailable(void* gameMode) {
         return false;
     AttackKind ignored = AttackKind::GameMode;
     std::uintptr_t implementation = 0;
-    bool usesFourArgumentAbi = false;
-    if (!publicAttackVirtualEntry(gameMode, &ignored, nullptr, &implementation,
-                                  &usesFourArgumentAbi)) return false;
+    if (!publicAttackVirtualEntry(gameMode, &ignored, nullptr, &implementation)) return false;
     if (implementation) (void)ensureAttackObserver(implementation);
     return true;
 }
