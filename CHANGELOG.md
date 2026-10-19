@@ -1,3 +1,11 @@
+## 2026-10-19 — Public attack route accepts validated call thunks (experimental)
+
+- Extended the ARM64 public `GameMode::attack(Actor&, Vec3 const&)` adapter recognizer to handle both a tail branch (`B`) and a normal call (`BL`) to the separately resolved four-argument implementation.
+- A call/branch only counts when the wrapper first forwards the contact point from `x2` to `x3`, initializes the predictive-sound argument in `w2`, and the control-flow destination matches the resolved attack implementation (or a validated veneer to it).
+- AutoHit continues to dispatch through the live public three-argument vtable entry; the internal method is used only as a validation anchor and optional result observer. No guessed vtable slot or unchecked native address is introduced.
+- Added the internal/legacy signature addresses to route-failure logs to distinguish a missing public export from a missing helper signature.
+- Experimental-only: the host/ARM64 build can validate source integration, but only a clean in-game test can verify that this runtime's public route is found and attack results are accepted.
+
 ## 2026-10-19 — AutoHit public attack ABI correction (experimental)
 
 - Corrected the native attack dispatch to call the public `GameMode::attack(Actor&, Vec3 const&)` virtual with its three-argument ABI. The old resolver could select a different vtable entry because it matched a four-argument internal-helper-shaped signature; a `true` return from that route did not establish that the intended target was attacked.
