@@ -1930,6 +1930,57 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     }
 }
 
+bool HitboxExpanderModule::originalTargetBounds(
+    void* target, bedrocktools::sdk::AABB& bounds) {
+    using namespace bedrocktools::sdk;
+    if (!target || reinterpret_cast<std::uintptr_t>(target) <= 0x1000)
+        return false;
+
+    auto* actor = reinterpret_cast<Actor*>(target);
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(target);
+    auto** componentSlot = reinterpret_cast<void**>(actorAddress +
+        offsets::Actor::mStateVectorComponent +
+        offsets::BuiltInActorComponents::mAABBShapeComponent);
+    void* currentComponent = *componentSlot;
+    void* currentLevel = actor->level();
+    const Vec3 currentPosition = actor->position();
+    if (reinterpret_cast<std::uintptr_t>(currentComponent) <= 0x1000 ||
+        !currentLevel || !finiteVec3(currentPosition))
+        return false;
+
+    NativeBoundsSnapshot snapshot{};
+    {
+        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+        const auto it = m_nativeBoundsOriginal.find(target);
+        if (it == m_nativeBoundsOriginal.end()) return false;
+        snapshot = it->second;
+    }
+
+    // If the actor's component or level changed, this snapshot no longer describes
+    // the current object. Do not guess or return a potentially stale box.
+    if (snapshot.component != currentComponent || snapshot.level != currentLevel ||
+        !validBounds(snapshot.originalBounds) ||
+        !finiteVec3(snapshot.originalActorPosition))
+        return false;
+
+    const Vec3 delta{
+        currentPosition.x - snapshot.originalActorPosition.x,
+        currentPosition.y - snapshot.originalActorPosition.y,
+        currentPosition.z - snapshot.originalActorPosition.z
+    };
+    const AABB original{
+        {snapshot.originalBounds.min.x + delta.x,
+         snapshot.originalBounds.min.y + delta.y,
+         snapshot.originalBounds.min.z + delta.z},
+        {snapshot.originalBounds.max.x + delta.x,
+         snapshot.originalBounds.max.y + delta.y,
+         snapshot.originalBounds.max.z + delta.z}
+    };
+    if (!validBounds(original)) return false;
+    bounds = original;
+    return true;
+}
+
 bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
     bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const {
     using namespace bedrocktools::sdk;
