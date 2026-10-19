@@ -890,20 +890,19 @@ void tickDetour(void* actor) {
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
     const bool verified = actor && local && actor == local;
-    LocalPlayerPreTickEvent pre{actorPlayer};
-    bus().publish(pre);
     if (verified) {
-        VerifiedLocalPlayerPreTickEvent event{reinterpret_cast<bedrocktools::sdk::Player*>(local)};
-        bus().publish(event);
+        LocalPlayerPreTickEvent pre{actorPlayer};
+        bus().publish(pre);
+        VerifiedLocalPlayerPreTickEvent verifiedPre{reinterpret_cast<bedrocktools::sdk::Player*>(local)};
+        bus().publish(verifiedPre);
     }
+
     if (tickOriginal) tickOriginal(actor);
+
     if (verified) {
-        bedaim::events::VerifiedLocalPlayerTickEvent event{reinterpret_cast<bedrocktools::sdk::Player*>(local)};
-        bus().publish(event);
-    }
-    // LocalPlayerTickEvent is reserved for the verified local player. Remote actors
-    // can still be observed through LocalPlayerPreTickEvent when genuinely needed.
-    if (verified) {
+        bedaim::events::VerifiedLocalPlayerTickEvent postTick{
+            reinterpret_cast<bedrocktools::sdk::Player*>(local)};
+        bus().publish(postTick);
         LocalPlayerTickEvent localTick{actorPlayer};
         bus().publish(localTick);
     }
