@@ -93,38 +93,40 @@ int main() {
     bedaim::autohit::NoHitFeedbackGuard noHitGuard;
     const void* firstTarget = reinterpret_cast<const void*>(0x1000);
     const void* secondTarget = reinterpret_cast<const void*>(0x2000);
-    check(!noHitGuard.isBlocked(firstTarget),
-          "no-hit guard starts open for a target");
-    for (std::uint32_t i = 1; i < bedaim::autohit::NoHitFeedbackGuard::kAttemptsBeforeQuarantine; ++i) {
+    check(noHitGuard.consecutiveNoFeedback() == 0,
+          "no-hit feedback tracker starts empty");
+    for (std::uint32_t i = 1; i < bedaim::autohit::NoHitFeedbackGuard::kAttemptsBeforeWarning; ++i) {
         check(!noHitGuard.observe(firstTarget, true, 0, 0),
-              "no-hit guard waits for its configured consecutive-attempt threshold");
+              "no-hit tracker waits for its diagnostic warning threshold");
     }
     check(noHitGuard.observe(firstTarget, true, 0, 0),
-          "six accepted attacks with no positive hurt-time transition quarantine the target");
-    check(noHitGuard.isBlocked(firstTarget),
-          "quarantined target is blocked from repeated dispatch");
-    check(!noHitGuard.isBlocked(secondTarget),
-          "changing target identity clears quarantine");
-    check(noHitGuard.consecutiveNoFeedback() == 0,
-          "new target starts with an empty no-feedback streak");
-
+          "six accepted calls without immediate hurt-time feedback emit one warning");
+    check(!noHitGuard.observe(firstTarget, true, 0, 0),
+          "missing immediate feedback does not repeatedly emit or block dispatch");
+    check(noHitGuard.consecutiveNoFeedback() ==
+              bedaim::autohit::NoHitFeedbackGuard::kAttemptsBeforeWarning,
+          "feedback streak remains observable without disabling AutoHit");
     noHitGuard.observe(secondTarget, true, 0, 0);
+    check(noHitGuard.consecutiveNoFeedback() == 1,
+          "changing target identity starts a new diagnostic streak");
+
     check(!noHitGuard.observe(secondTarget, false, 0, 0),
           "a rejected native call breaks the no-feedback streak");
     check(noHitGuard.consecutiveNoFeedback() == 0,
           "rejected call resets the no-feedback counter");
     noHitGuard.observe(secondTarget, true, 0, 0);
     check(!noHitGuard.observe(secondTarget, true, 0, 10),
-          "positive hurt-time transition resets the guard instead of quarantining");
+          "positive hurt-time transition resets the warning streak");
     check(noHitGuard.consecutiveNoFeedback() == 0,
           "positive hurt-time transition clears the streak");
-    for (std::uint32_t i = 0; i < bedaim::autohit::NoHitFeedbackGuard::kAttemptsBeforeQuarantine; ++i)
-        noHitGuard.observe(secondTarget, true, 0, 0);
-    check(noHitGuard.isBlocked(secondTarget),
-          "same target stays quarantined after threshold until state reset");
+    for (std::uint32_t i = 1; i < bedaim::autohit::NoHitFeedbackGuard::kAttemptsBeforeWarning; ++i)
+        check(!noHitGuard.observe(secondTarget, true, 0, 0),
+              "new no-feedback streak waits until its threshold");
+    check(noHitGuard.observe(secondTarget, true, 0, 0),
+          "new streak can emit a warning after a real reset");
     noHitGuard.reset();
-    check(!noHitGuard.isBlocked(secondTarget),
-          "explicit reset allows a fresh diagnostic attempt");
+    check(noHitGuard.consecutiveNoFeedback() == 0,
+          "explicit reset clears diagnostic state");
 
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
