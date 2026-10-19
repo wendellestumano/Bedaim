@@ -1,4 +1,5 @@
 #include "keystrokes.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
@@ -88,7 +89,7 @@ KeystrokesModule::~KeystrokesModule() {
 }
 
 void KeystrokesModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& event) {
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([this](auto& event) {
         resolveNativeInputTick();
         s_normalTickCallback(event.player);
     });

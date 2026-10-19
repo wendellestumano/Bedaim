@@ -1,4 +1,5 @@
 #include "reachcounter.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -79,7 +80,7 @@ void ReachCounterModule::onInit() {
         getHitResultFn = reinterpret_cast<LevelGetHitResultFn>(getHitResultAddr);
     }
     
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { onTickHook(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { onTickHook(event.player); });
     
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>([](auto& event) {
         if (!onAttackHook(event.gameMode, event.target, event.argument2, event.argument3)) event.cancel();

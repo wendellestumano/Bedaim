@@ -1,4 +1,5 @@
 #include "nick.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/events/EventBus.hpp>
@@ -156,7 +157,7 @@ void NickModule::onInit() {
     }
     
     if (!m_tickHooked) {
-        bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { nickTick(event.player); });
+        bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { nickTick(event.player); });
         m_tickHooked = true;
         uintptr_t setNameTagAddr = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorSetNameTag);
         if (setNameTagAddr != 0) {

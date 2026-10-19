@@ -1,4 +1,5 @@
 #include "playercoords.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -37,7 +38,7 @@ void PlayerCoordsModule::updateCoords(const bedrocktools::sdk::Vec3& pos) {
 }
 
 void PlayerCoordsModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_coordsCallback(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { s_coordsCallback(event.player); });
 }
 
 void PlayerCoordsModule::onEnable() {

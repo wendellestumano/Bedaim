@@ -8,6 +8,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
@@ -53,6 +54,12 @@ struct ActorVector {
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
 
 AimAssistModule* g_aimAssist = nullptr;
+
+bool autoHitNeedsTargeting() {
+    static Module* cachedAutoHit = nullptr;
+    if (!cachedAutoHit) cachedAutoHit = ModuleRegistry::get().find("bedrocktools.Auto Hit");
+    return cachedAutoHit && cachedAutoHit->enabled;
+}
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
@@ -419,9 +426,10 @@ void AimAssistModule::onInit() {
         ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
         ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
 
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [](auto& event) {
-            if (g_aimAssist && g_aimAssist->enabled) {
+            if (g_aimAssist && event.player &&
+                (g_aimAssist->enabled || autoHitNeedsTargeting())) {
                 g_aimAssist->processPlayerTick(event.player);
             }
         });
@@ -517,13 +525,15 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     processPlayerTickLocked(player);
 }
 
-bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range) {
+bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds,
+                                              float& range, bedrocktools::sdk::Player* expectedPlayer) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     target = nullptr;
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
     const auto now = std::chrono::steady_clock::now();
-    if (!enabled || !m_lastPlayer || !m_lastTarget || !m_targetPresent ||
+    if (!m_lastPlayer || (expectedPlayer && m_lastPlayer != expectedPlayer) ||
+        !m_lastTarget || !m_targetPresent ||
         !validBounds(m_lastTargetBounds) ||
         m_lastTargetSeen.time_since_epoch().count() == 0 ||
         now < m_lastTargetSeen ||
@@ -547,7 +557,7 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
     auto* player = m_lastPlayer;
-    if (!enabled || !player || !desiredTarget || !g_fetchNearbyActors) return false;
+    if ((!enabled && !autoHitNeedsTargeting()) || !player || !desiredTarget || !g_fetchNearbyActors) return false;
 
     // Resolve the desired actor against a fresh engine-owned actor snapshot before
     // dereferencing it. This lets short multi-tick actions (such as a mace swap)
@@ -650,8 +660,8 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
 void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
-    if (!enabled || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
-        const char* reason = !enabled ? "disabled" : !player ? "missing_local_player" :
+    if ((!enabled && !autoHitNeedsTargeting()) || !player || !g_fetchNearbyActors || (!m_targetPlayers && !m_targetMobs)) {
+        const char* reason = (!enabled && !autoHitNeedsTargeting()) ? "disabled" : !player ? "missing_local_player" :
             !g_fetchNearbyActors ? "nearby_query_unavailable" : "all_target_categories_disabled";
         bedrocktools::diagnostics::probe(
             !player || !g_fetchNearbyActors ? bedrocktools::diagnostics::Level::Warning :

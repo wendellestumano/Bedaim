@@ -15,6 +15,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/sdk/Offsets.hpp>
 
 #include <algorithm>
@@ -81,7 +82,7 @@ MaceSwapperModule::MaceSwapperModule()
 }
 
 void MaceSwapperModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) {
             processPlayerTick(event.player);
         });

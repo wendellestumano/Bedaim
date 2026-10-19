@@ -27,6 +27,8 @@ private:
     void processPlayerTick(bedrocktools::sdk::Player* player);
 
     std::mutex m_stateMutex;
+    // Emits gate diagnostics only when the pipeline changes state, avoiding per-tick log spam.
+    std::atomic<int> m_lastGateDecision{-1};
     bool m_attackHeld = false;
     // Mobile-friendly default: valid targets and weapon profiles can drive AutoHit
     // without relying on the launcher mouse bridge. Desktop users may require input.

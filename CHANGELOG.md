@@ -1,4 +1,29 @@
+## 2026-10-19 — AutoHit staged pipeline rewrite (experimental)
+
+- Reorganize AutoHit into explicit input, fresh-target, bounds, selected-weapon, reach, GameMode, validated attack-route, cooldown, and native-dispatch gates, following ProtoHax's separation of target selection from CPS pacing while retaining Bedaim's validated native GameMode route.
+- Validate the public attack route before reserving a CPS slot, so unavailable GameMode/attack routes do not consume the cooldown. Recheck the slot under lock immediately before reserving it.
+- Emit pipeline diagnostics only when the gate state changes; expected cooldown ticks are suppressed to avoid alternating accepted/cooldown records filling the rolling diagnostic buffer.
+- Bind target snapshots to the current local-player pointer and revalidate the selected actor against the live engine actor list immediately before an attempt; refresh its AABB instead of dispatching against a stale cached pointer.
+- Return early while the CPS cooldown is active, avoiding repeated target/inventory/GameMode checks on every player tick. Expected cooldown ticks do not emit diagnostic records.
+- Native wrapper acceptance is explicitly distinguished from server-confirmed damage. No runtime success is claimed until in-game testing confirms actual hits and lag behavior.
+- Kept the work on `rebuild/autohit-protohax-prelag-20261019`; `main` remains unchanged.
+
+## 2026-10-18 — ARM64 tagged-pointer validation
+- Normalize the top-byte tag only for `/proc/self/maps` range checks in `isReadableMemory`, preserving the original tagged pointer for actual memory access. This addresses Android ARM64 pointers such as `0xB4...` being incorrectly rejected as unreadable.
+- Keep validation strict: the object and its vtable still need to reside in readable mappings, and ClientInstance vtable entries must still match the Minecraft image.
+- Runtime confirmation is required; this is a focused follow-up to Build #734's `receiver_rejected` diagnostic.
+
+## 2026-10-18 — AutoHit ClientInstance capture ABI fix
+- Match the verified `bool ClientInstance::update(bool)` ABI and prefer its exact exported C++ symbol before falling back to the version-sensitive signature pattern.
+- Validate the hooked receiver's readable object and vtable before caching it; rejected receivers no longer clear a previously verified local player.
+- Add diagnostics that reveal whether the update detour actually runs, which hook route was installed, and why a receiver is rejected. Device runtime verification is still required.
+
 # Changelog
+
+## 2026-10-18 — AutoHit local-player resolution diagnostics
+- Prefer an exact exported `ClientInstance::getLocalPlayer` symbol when available, then fall back to the validated vtable getter; the older ambiguous byte-pattern signature is not called.
+- Add state-change diagnostics for null getter results, unavailable getter routes, invalid player candidates, and successful pointer capture.
+- This is an isolated AutoHit recovery branch. It does not alter AimAssist's targeting algorithm; runtime testing is still required.
 
 ## 2026-10-17 — ElytraMacing module
 - Added an isolated ElytraMacing module with its own configuration for elytra glide gating, minimum fall distance, mace equip/restore, target range, hitpoint height, crosshair tolerance, camera assist speed and attack interval.

@@ -1,4 +1,5 @@
 #include "combocounter.hpp"
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
@@ -65,7 +66,7 @@ void ComboDisplay::onHurt() {
 }
 
 void ComboDisplay::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { onTickHookCombo(event.player); });
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([](auto& event) { onTickHookCombo(event.player); });
     
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>([](auto& event) {
         if (!onAttackHookCombo(event.gameMode, event.target, event.argument2, event.argument3)) event.cancel();

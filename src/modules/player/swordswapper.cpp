@@ -14,6 +14,7 @@
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include "core/VerifiedLocalPlayerTickEvent.hpp"
 #include <bedrocktools/sdk/world/Actor.hpp>
 
 #include <algorithm>
@@ -76,7 +77,7 @@ SwordSwapperModule::SwordSwapperModule()
 }
 
 void SwordSwapperModule::onInit() {
-    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+    bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
         [this](auto& event) {
