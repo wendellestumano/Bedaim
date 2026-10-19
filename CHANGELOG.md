@@ -1,3 +1,10 @@
+## 2026-10-19 — AutoHit contact-point and attack-feedback diagnostics
+
+- Pass the nearest point on the freshly validated target AABB as the native attack contact position instead of the AABB center, aligning the supplied position with the reach geometry.
+- Record the contact point and target hurt-time immediately before/after each native dispatch. Immediate hurt-time changes are diagnostic evidence only; server-authoritative target state may update later, so wrapper acceptance is not treated as confirmed damage.
+- Inspired by ProtoHax UserScript's separation of target identity, server-side rotation, queued entity action and click pacing. The ProtoHax UserScript API is host-runtime-backed and cannot be copied literally into an in-process native module.
+- Experimental branch only; requires ARM64 build and in-game confirmation. `main` and ElytraMacing remain untouched.
+
 ## 2026-10-19 — AutoHit staged pipeline rewrite (experimental)
 
 - Reorganize AutoHit into explicit input, fresh-target, bounds, selected-weapon, reach, GameMode, validated attack-route, cooldown, and native-dispatch gates, following ProtoHax's separation of target selection from CPS pacing while retaining Bedaim's validated native GameMode route.
