@@ -39,4 +39,50 @@ float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHi
     return std::clamp(baseRange + margin, 2.0f, 80.0f);
 }
 
+void NoHitFeedbackGuard::reset() noexcept {
+    m_target = nullptr;
+    m_consecutiveNoFeedback = 0;
+    m_blocked = false;
+}
+
+bool NoHitFeedbackGuard::isBlocked(const void* target) noexcept {
+    if (!target) {
+        reset();
+        return false;
+    }
+    if (m_target != target) {
+        reset();
+        m_target = target;
+    }
+    return m_blocked;
+}
+
+bool NoHitFeedbackGuard::observe(const void* target, bool accepted, int hurtTimeBefore,
+                                 int hurtTimeAfter) noexcept {
+    if (!target) {
+        reset();
+        return false;
+    }
+    if (m_target != target) {
+        reset();
+        m_target = target;
+    }
+    if (m_blocked) return true;
+
+    // A rejected wrapper call or a positive local hurt-time transition breaks
+    // the "accepted but no immediate hit feedback" streak.
+    if (!accepted || hurtTimeAfter > hurtTimeBefore) {
+        m_consecutiveNoFeedback = 0;
+        return false;
+    }
+
+    if (m_consecutiveNoFeedback < kAttemptsBeforeQuarantine)
+        ++m_consecutiveNoFeedback;
+    if (m_consecutiveNoFeedback >= kAttemptsBeforeQuarantine) {
+        m_blocked = true;
+        return true;
+    }
+    return false;
+}
+
 } // namespace bedaim::autohit
