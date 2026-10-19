@@ -525,13 +525,15 @@ void AimAssistModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     processPlayerTickLocked(player);
 }
 
-bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range) {
+bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds,
+                                              float& range, bedrocktools::sdk::Player* expectedPlayer) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     target = nullptr;
     bounds = {};
     range = std::clamp(m_range, 2.0f, 80.0f);
     const auto now = std::chrono::steady_clock::now();
-    if (!m_lastPlayer || !m_lastTarget || !m_targetPresent ||
+    if (!m_lastPlayer || (expectedPlayer && m_lastPlayer != expectedPlayer) ||
+        !m_lastTarget || !m_targetPresent ||
         !validBounds(m_lastTargetBounds) ||
         m_lastTargetSeen.time_since_epoch().count() == 0 ||
         now < m_lastTargetSeen ||
