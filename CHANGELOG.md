@@ -128,3 +128,5 @@
 - Removed keyboard/mouse capture, held-input checks, and touchscreen repeat-window requirements from AutoHit. Enabling the module is now the only activation gate; target, weapon, range, cooldown, screen-state, and native-route validation remain.
 - Removed obsolete attack-input controls from the AutoHit settings. The module's own keybind, if configured in the launcher, still only toggles the module and is not required to attack.
 - Reduced unnecessary input-event subscriptions and state bookkeeping. The latest runtime logs still require a fresh test with AutoHit enabled: the most recent current-session log showed no AutoHit enable/dispatch events, and an earlier native trampoline result was false.
+
+- Added disabled-module fast paths to MaceSwapper and Sword Swapper: when inactive and no slot restoration is pending, they skip player-position/inventory work and repeated per-tick diagnostics.
