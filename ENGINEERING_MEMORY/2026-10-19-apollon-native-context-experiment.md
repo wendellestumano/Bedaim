@@ -20,7 +20,9 @@ Branch: `perf/autohit-tick-throttle-20261019`
 
 - First attempt (commits `26ea526...` through `3bef088...`) replaced `&hitPoint` with `Level::storedHitResult()`. It was superseded after re-reading the disassembly: x3 is written as an output flag, so a HitResult pointer would corrupt engine state. The code and temporary tests for that hypothesis were reverted.
 - Current experiment passes a writable `bool*` output flag to the guarded four-argument route, while preserving `&hitPoint` only for the separately validated public three-argument route.
-- `GameHooks::attack` now distinguishes the two ABIs and reports whether the native out-parameter was applicable; AutoHit logs the native function return separately from the output flag and hurt-time observation.
+- `GameHooks::attack` distinguishes the two ABIs and reports whether the native out-parameter was applicable; AutoHit logs the native function return separately from the output flag and hurt-time observation.
+- A compatibility overload preserves existing four-argument C++ call sites in Mace Swapper and Elytra Macing; the extended overload is used by AutoHit to observe the out flag.
+- `AttackEvent` keeps its hit-position field separate from the native output pointer. Native/manual detour events leave that position field null rather than mislabeling the output flag as a vector.
 - The output flag is not treated as proof of damage. A private-world health-change test is still required.
 - Source commits, in order:
   - `b5e834622832e5bd778d01a4591261264130f91a` — guard declaration
@@ -28,15 +30,17 @@ Branch: `perf/autohit-tick-throttle-20261019`
   - `8692451a3336589da509f5e95f35b96ecb431c89` — tests
   - `26ea526063e1f103871b7a4fffef7a2f0f1eef36` — AutoHit uses engine HitResult context
   - `5385d1d9de291faf127ac7a2ae5e1d90c7f9c033` — API declaration comment
-  - `3bef08891f4586df100fdbf21e9d929964637a0a` — GameHooks parameter rename
+  - `3bef08891f4586df100fdbf21e9d929964637a0a` — superseded GameHooks parameter rename
+  - `44075bf5de22d3dd27dcaf5d897ec6a9e58300cf` — compatibility overload for existing module call sites
+  - `b6e5c33a29d053b7e98c49c839d5d01de34dd029` — final event argument separation; this is the source commit built by workflow run `39253430636`
 - `main` was not modified.
 
 ## Status / test ledger
 | Date | Branch / commit | Static tests/build | In-game damage | Lag/regression |
 |---|---|---|---|---|
-| 2026-10-19 | `perf/autohit-tick-throttle-20261019`, corrected output-parameter commits pending final SHA | Previous HitResult-only experiment: host suite passed, but the code hypothesis was rejected after disassembly review. New ABI correction requires fresh host tests and Android build. | Not tested after corrected patch | Not tested after corrected patch |
+| 2026-10-19 | `perf/autohit-tick-throttle-20261019`, `b6e5c33a29d053b7e98c49c839d5d01de34dd029` | Host regression tests passed; Android arm64 build and package succeeded in workflow run [#891](https://github.com/wendellestumano/Bedaim/actions/runs/39253430636). Artifact: `BedrockTools-levipack`, 680,016 bytes, SHA-256 `d74b136439a27725c7c2deab127ac445d2e0aeb7b6dc0db992de72b991efd2c9`. | Not tested after corrected patch | Not tested after corrected patch |
 
 ## Interpretation and next steps
 - This remains an ABI hypothesis based on the observed byte writes through x3; confirm against the exact live function and current build before declaring the signature proven.
 - Preserve separate telemetry for `GameMode` function return, the native out-flag, and target health/hurt-time. None individually proves server damage.
-- Run all host regression tests and Android arm64 build. Then test in a private world against a known damageable target and verify actual health change and no lag. Do not claim success from particles or a true return.
+- Next, test this build in a private world against a known damageable target. Record `native_out_result`, function return, target health/hurt-time, target identity, and lag. If the output flag is false or damage is still absent, investigate the Apollon-style `ClientInstance::handleDestoryOrAttackButtonPress()` callback as a separate fallback; do not copy its stale offsets. Do not claim success from particles or a true return.
