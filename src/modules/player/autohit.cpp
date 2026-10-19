@@ -294,6 +294,9 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // Keep the tick path deterministic: copy user-controlled state once, then
     // perform all target/inventory/native reads without holding the input mutex.
     auto reportGate = [this](int code, const char* reason, const std::string& detail) {
+        // Cooldown is expected on almost every tick between attacks; do not let
+        // it alternate with "accepted" and flood the rolling diagnostic buffer.
+        if (code == 110 || code == 200) return;
         const int previous = m_lastGateDecision.exchange(code, std::memory_order_acq_rel);
         if (previous != code) {
             diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "pipeline", reason, detail);
