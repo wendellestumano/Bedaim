@@ -3,6 +3,8 @@
 - Reorganize AutoHit into explicit input, fresh-target, bounds, selected-weapon, reach, GameMode, validated attack-route, cooldown, and native-dispatch gates, following ProtoHax's separation of target selection from CPS pacing while retaining Bedaim's validated native GameMode route.
 - Validate the public attack route before reserving a CPS slot, so unavailable GameMode/attack routes do not consume the cooldown. Recheck the slot under lock immediately before reserving it.
 - Emit pipeline diagnostics only when the gate state changes; expected cooldown ticks are suppressed to avoid alternating accepted/cooldown records filling the rolling diagnostic buffer.
+- Bind target snapshots to the current local-player pointer and revalidate the selected actor against the live engine actor list immediately before an attempt; refresh its AABB instead of dispatching against a stale cached pointer.
+- Return early while the CPS cooldown is active, avoiding repeated target/inventory/GameMode checks on every player tick. Expected cooldown ticks do not emit diagnostic records.
 - Native wrapper acceptance is explicitly distinguished from server-confirmed damage. No runtime success is claimed until in-game testing confirms actual hits and lag behavior.
 - Kept the work on `rebuild/autohit-protohax-prelag-20261019`; `main` remains unchanged.
 
