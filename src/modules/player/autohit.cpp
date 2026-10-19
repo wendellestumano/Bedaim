@@ -326,8 +326,16 @@ void AutoHitModule::processPlayerTick(Player* player) {
         const auto now = std::chrono::steady_clock::now();
         const bool repeatWindow = m_touchRepeatUntil.time_since_epoch().count() != 0 &&
             now < m_touchRepeatUntil;
+#if defined(__ANDROID__)
+        // This build targets Android touch controls. The "Require attack input"
+        // option is explicitly a desktop-only gate; on Android, enabling AutoHit
+        // must not silently require a mouse/key state that the input bridge never
+        // reports. Range, target, weapon and native-route guards still apply.
+        attackHeld = true;
+#else
         attackHeld = !m_requireAttackInput || m_attackHeld || m_keyboardAttackHeld ||
             (m_touchRepeatEnabled && repeatWindow);
+#endif
         configuredRange = m_attackRange;
         swordEnabled = m_swordEnabled; swordCps = m_swordCps;
         axeEnabled = m_axeEnabled; axeCps = m_axeCps;
