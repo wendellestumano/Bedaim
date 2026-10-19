@@ -512,6 +512,10 @@ bool plausibleGameMode(void* gameMode) {
 
 // Recognize the public three-argument GameMode::attack adapter. It forwards
 // x2 (Vec3 const*) to x3 and sets the internal helper's predictive-sound bool.
+// Recognize the public three-argument GameMode::attack adapter by its ABI
+// shuffle and its control-flow edge to the independently resolved four-argument
+// helper. Recent builds may tail-branch (B) or make a normal call (BL) and return.
+// The vtable candidate is still called through its public three-argument ABI.
 bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation = nullptr,
                            bool* trialModeGuarded = nullptr) {
 #if defined(__aarch64__)
@@ -519,30 +523,76 @@ bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation 
     if (trialModeGuarded) *trialModeGuarded = false;
     entry = canonicalArm64Entry(entry);
     if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry))) return false;
-    bool forwardsPosition = false, setsPredictiveFlag = false, trialGuard = false;
+
+    // These byte-pattern resolvers identify the four-argument implementation
+    // (this, Actor*, predictiveSound, Vec3 const*), not the public wrapper.
+    // They are used only to validate the wrapper's direct branch/call target;
+    // dispatch always invokes the matching live vtable entry instead.
+    static const std::array<std::uintptr_t, 2> knownImplementations = [] {
+        return std::array<std::uintptr_t, 2>{
+            bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal),
+            bedrocktools::memory::resolve(SignatureId::GameModeAttack)
+        };
+    }();
+
+    auto matchesKnownImplementation = [&](std::uintptr_t target) {
+        if (!target || !isMinecraftFunction(reinterpret_cast<const void*>(target))) return false;
+        for (const auto expected : knownImplementations) {
+            if (!expected) continue;
+            if (target == expected ||
+                canonicalArm64Entry(target) == canonicalArm64Entry(expected) ||
+                boundedArm64BranchReaches(target, expected)) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    bool forwardsPosition = false;
+    bool setsPredictiveFlag = false;
+    bool trialGuard = false;
     for (std::size_t i = 0; i < 64; ++i) {
         const auto pc = entry + i * sizeof(std::uint32_t);
         if (!isReadableMemory(reinterpret_cast<const void*>(pc), sizeof(std::uint32_t))) return false;
         std::uint32_t ins = 0;
         std::memcpy(&ins, reinterpret_cast<const void*>(pc), sizeof(ins));
+
         if (i == 0 && ins == 0x39432008u) trialGuard = true; // ldrb w8,[x0,#0xc8]
-        if (ins == 0xAA0203E3u) forwardsPosition = true; // mov x3,x2
-        // The public three-argument wrapper moves Vec3* from x2 to x3 and
-        // initializes the hidden internal predictive-sound flag in w2. Some
-        // game versions use true; others use false. Both are valid ABI adapters.
+        if (ins == 0xAA0203E3u) forwardsPosition = true;      // mov x3,x2
+        // mov w2,#1; mov w2,#0; orr w2,wzr,wzr. Both predictive-sound
+        // values are legitimate on different runtime builds.
         if (ins == 0x52800022u || ins == 0x52800002u ||
-            ins == 0x2A1F03E2u) setsPredictiveFlag = true;
-        if ((ins & 0xFC000000u) != 0x14000000u) {
-            // RET ends the wrapper; never search dead trailing bytes for a match.
+            ins == 0x2A1F03E2u) {
+            setsPredictiveFlag = true;
+        }
+
+        const auto opcode = ins & 0xFC000000u;
+        const bool directBranch = opcode == 0x14000000u; // B imm26
+        const bool directCall = opcode == 0x94000000u;   // BL imm26
+        if (!directBranch && !directCall) {
+            // Do not scan data after a real return. Calls may occur before
+            // the final RET, which is why BL is considered separately above.
             if ((ins & 0xFFFFFC1Fu) == 0xD65F0000u) break;
             continue;
         }
-        if (!forwardsPosition || !setsPredictiveFlag) break; // unrelated tail branch
+
+        // A public adapter must perform the complete argument shuffle before
+        // transferring control. Unrelated calls are ignored; an unconditional
+        // branch before the shuffle ends this candidate's control-flow path.
+        if (!forwardsPosition || !setsPredictiveFlag) {
+            if (directBranch) break;
+            continue;
+        }
+
         std::int64_t imm = static_cast<std::int64_t>(ins & 0x03FFFFFFu);
         if (imm & (1LL << 25)) imm -= (1LL << 26);
-        const auto target = static_cast<std::uintptr_t>(static_cast<std::int64_t>(pc) + imm * 4);
-        if (!target || !isMinecraftFunction(reinterpret_cast<const void*>(target)) ||
-            !isReadableMemory(reinterpret_cast<const void*>(target), sizeof(std::uint32_t))) return false;
+        const auto target = static_cast<std::uintptr_t>(
+            static_cast<std::int64_t>(pc) + imm * 4);
+        if (!target || !matchesKnownImplementation(target)) {
+            if (directBranch) break;
+            continue;
+        }
+
         if (implementation) *implementation = target;
         if (trialModeGuarded) *trialModeGuarded = trialGuard;
         return true;
@@ -552,7 +602,6 @@ bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation 
 #endif
     return false;
 }
-
 // Find the exact public wrapper in the object's live vtable rather than
 // assuming every patched Bedrock build keeps GameMode::attack at index 16.
 std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullptr,
@@ -649,8 +698,11 @@ std::uintptr_t publicAttackVirtualEntry(void* gameMode, AttackKind* kind = nullp
         std::uintptr_t s0=0,s2=0,s16=0,s32=0;
         auto readSlot=[&](std::size_t n,std::uintptr_t& out){auto a=reinterpret_cast<std::uintptr_t>(vtable)+n*sizeof(void*); if(isReadableMemory(reinterpret_cast<const void*>(a),sizeof(void*)))std::memcpy(&out,reinterpret_cast<const void*>(a),sizeof(out));};
         readSlot(0,s0); readSlot(2,s2); readSlot(16,s16); readSlot(32,s32);
-        gameHooksLogger().warn("No validated public 3-argument attack route: object={:p}, vtable={:p}, public_sig={:p}, survival_sig={:p}, slot0={:p}, slot2={:p}, slot16={:p}, slot32={:p}.",
+        const auto internalSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal);
+        const auto legacyAttackSignature = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
+        gameHooksLogger().warn("No validated public 3-argument attack route: object={:p}, vtable={:p}, public_sig={:p}, survival_sig={:p}, internal_sig={:p}, legacy_attack_sig={:p}, slot0={:p}, slot2={:p}, slot16={:p}, slot32={:p}.",
             gameMode, reinterpret_cast<const void*>(vtable), reinterpret_cast<void*>(symbols.base), reinterpret_cast<void*>(symbols.survival),
+            reinterpret_cast<void*>(internalSignature), reinterpret_cast<void*>(legacyAttackSignature),
             reinterpret_cast<void*>(s0), reinterpret_cast<void*>(s2), reinterpret_cast<void*>(s16), reinterpret_cast<void*>(s32));
     }
     return 0;
