@@ -390,7 +390,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // refresh its bounds; this happens only when the CPS gate is open, not every tick.
     AABB liveTargetBounds{};
     float liveTargetRange = 0.0f;
-    if (!aim->targetBoundsSnapshot(target, liveTargetBounds, liveTargetRange) ||
+    if (!aim->targetBoundsSnapshot(target, liveTargetBounds, liveTargetRange,
+            std::clamp(configuredRange + 2.0f, 4.0f, 8.0f)) ||
         !validBounds(liveTargetBounds)) {
         reportGate(7, "target_not_in_live_actor_snapshot",
             "cached target could not be revalidated against the current engine actor set");
