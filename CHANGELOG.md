@@ -163,3 +163,13 @@
 - When Hitbox Expander has enlarged an actor's client-side AABB, AutoHit now reads the saved original bounds, translates them by the actor's current movement, and computes the native contact point against that original box. The expanded box remains available for target acquisition, but no longer determines the attack contact coordinate.
 - The original-bounds accessor refuses stale snapshots if the actor's AABB component or level changed, and falls back to the freshly validated live bounds rather than trusting a stale pointer-derived snapshot.
 - This addresses a plausible mismatch between client-expanded geometry and server-validated hit coordinates; it still requires runtime confirmation, and it does not by itself prove that the server accepted damage.
+
+
+## 2026-10-19 — GameMode wrapper validation recovery (experimental)
+
+- The latest video shows the attack pipeline stopping before dispatch: `No validated public 3-argument attack route` and `no_validated_player_owned_candidate`. This explains why changing contact points alone could not make the current test deal damage.
+- Extended safe, bounded validation of AArch64 tail thunks: public attack adapters now accept either value of the forwarded predictive-sound flag while still requiring the exact argument shuffle (Vec3* x2 → x3) and a direct tail branch, not a call.
+- Public `useItem` vtable resolution now recognizes a direct thunk to the independently resolved method, which helps identify the player's actual GameMode instance without assuming a fixed vtable slot.
+- Route misses are retried at a one-second cadence instead of being cached permanently for a stable object/vtable pair. This avoids a transient validation miss disabling resolution for the entire world session.
+- The call path remains fail-closed: no direct call to the ambiguous four-argument internal method, no guessed vtable slot, and no weakening of server-side damage claims.
+- This targets route discovery and the disconnect symptom's likely precursor (invalid dispatch), but actual hit registration and long-session stability still require in-game verification. `main` is unchanged.
