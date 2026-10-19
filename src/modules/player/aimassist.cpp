@@ -807,6 +807,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     float retainedTargetScore = std::numeric_limits<float>::max();
     bool retainedTargetInsideBubble = false;
     bool retainedTargetIsPlayer = false;
+    bool retainedTargetOutsideFov = false;
     Vec3 playerCenter = playerPosition;
     if (validBounds(playerBounds)) {
         playerCenter.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
@@ -938,13 +939,18 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // This lets the camera reacquire it without trusting a stale entity pointer.
         const bool outsideFov = angleScore > maxFov && !insideRetentionBubble &&
             !candidateBelowPlayer && !rayHitsExpandedTarget;
-        if (candidate == m_lastTarget && outsideFov) {
+        const auto nowForRetention = std::chrono::steady_clock::now();
+        const bool recentCurrentTarget = m_lastTargetSeen.time_since_epoch().count() != 0 &&
+            nowForRetention >= m_lastTargetSeen &&
+            nowForRetention - m_lastTargetSeen <= std::chrono::milliseconds(250);
+        if (candidate == m_lastTarget && outsideFov && recentCurrentTarget) {
             retainedTarget = candidate;
             retainedTargetBounds = targetBounds;
             retainedTargetIsPlayer = isPlayer;
             retainedTargetScore = (m_targetSelectionMode == "Player")
                 ? targetDistance : angleScore + targetDistance * 0.0001f;
             retainedTargetInsideBubble = false;
+            retainedTargetOutsideFov = true;
             bedrocktools::diagnostics::probe(
                 bedrocktools::diagnostics::Level::Debug, "BedrockAim",
                 "target_tracking", "current_target_outside_fov_retained",
@@ -952,7 +958,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                     std::to_string(reinterpret_cast<std::uintptr_t>(candidate)) +
                     "; angle_error=" + std::to_string(angleScore) +
                     "; fov_limit=" + std::to_string(maxFov) +
-                    "; in_live_actor_vector=yes; actionable_after_selection=yes");
+                    "; in_live_actor_vector=yes; mode=camera_only; age_limit_ms=250");
         }
         // The last target also gets a small 3D retention bubble, including when it
         // passes below the player or behind the camera. This prevents target loss
@@ -972,6 +978,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             retainedTargetIsPlayer = isPlayer;
             retainedTargetScore = score;
             retainedTargetInsideBubble = insideRetentionBubble || candidateBelowPlayer;
+            retainedTargetOutsideFov = false;
         }
         if (score < bestScore) {
             bestScore = score;
@@ -988,10 +995,12 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     const float switchMargin = playerDistanceMode
         ? std::clamp(m_targetSwitchDistanceMargin, 0.0f, 5.0f)
         : std::clamp(m_targetSwitchHysteresis, 0.0f, 12.0f);
+    bool bestTargetCameraOnly = false;
     if (retainedTarget && (retainedTargetInsideBubble || retainedTargetScore <= bestScore + switchMargin)) {
         bestTarget = retainedTarget;
         bestTargetBounds = retainedTargetBounds;
         bestTargetIsPlayer = retainedTargetIsPlayer;
+        bestTargetCameraOnly = retainedTargetOutsideFov;
     }
 
     if (!bestTarget) {
@@ -1102,9 +1111,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     m_lastTarget = bestTarget;
     m_lastTargetIsPlayer = bestTargetIsPlayer;
     m_targetPresent = true;
-    m_targetGraceOnly = false;
+    m_targetGraceOnly = bestTargetCameraOnly;
     m_lastTargetBounds = bestTargetBounds;
-    m_lastTargetSeen = motionSampleTime;
+    // Don't renew the grace timer each scan while the target remains outside
+    // the configured FOV. This is camera recovery only, with a strict 250 ms cap.
+    if (!bestTargetCameraOnly) m_lastTargetSeen = motionSampleTime;
 }
 
 
