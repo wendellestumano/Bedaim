@@ -1,8 +1,8 @@
+import java.util.Properties
+
 plugins {
     id 'com.android.application'
 }
-
-import java.util.Properties
 
 // Persistent signing material is supplied by CI from a protected GitHub Actions secret.
 // Never check the keystore or the signing bundle into this public repository.
