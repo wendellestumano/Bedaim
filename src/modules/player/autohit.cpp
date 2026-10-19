@@ -285,16 +285,23 @@ void AutoHitModule::processPlayerTick(Player* player) {
     targetBounds = liveTargetBounds;
     aimRange = std::min(aimRange, liveTargetRange);
 
-    // Hitbox Expander modifies the client-side native AABB for target acquisition.
-    // Never send a contact point derived only from that enlarged box: the server
-    // validates the real actor bounds. Use the expander's movement-adjusted original
-    // snapshot when available; otherwise keep the freshly validated live bounds.
+    // Hitbox Expander mutates the local actor AABB used by native target queries.
+    // If it is enabled, never treat the live AABB as the server's real bounds when
+    // our saved original snapshot is unavailable or malformed. The screenshot/logs
+    // show actor_snapshot=malformed and restore_query=active_actor_query_failed;
+    // proceeding with that geometry can select a visible target but dispatch a
+    // contact point unrelated to its real hitbox. Fail closed for AutoHit only.
     auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
     if (expanderBase && expanderBase->enabled) {
         auto* expander = static_cast<HitboxExpanderModule*>(expanderBase);
         AABB originalBounds{};
-        if (expander->originalTargetBounds(target, originalBounds) && validBounds(originalBounds))
-            targetBounds = originalBounds;
+        if (!expander->originalTargetBounds(target, originalBounds) ||
+            !validBounds(originalBounds)) {
+            reportGate(8, "hitbox_original_bounds_unavailable",
+                "Hitbox Expander is enabled but its original target bounds are not trustworthy; disable Hitbox Expander or restore a valid actor snapshot before AutoHit can dispatch.");
+            return;
+        }
+        targetBounds = originalBounds;
     }
 
     const Vec3 eye = eyePosition(player);
