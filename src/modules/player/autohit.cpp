@@ -261,6 +261,18 @@ void AutoHitModule::processPlayerTick(Player* player) {
     targetBounds = liveTargetBounds;
     aimRange = std::min(aimRange, liveTargetRange);
 
+    // Hitbox Expander modifies the client-side native AABB for target acquisition.
+    // Never send a contact point derived only from that enlarged box: the server
+    // validates the real actor bounds. Use the expander's movement-adjusted original
+    // snapshot when available; otherwise keep the freshly validated live bounds.
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    if (expanderBase && expanderBase->enabled) {
+        auto* expander = static_cast<HitboxExpanderModule*>(expanderBase);
+        AABB originalBounds{};
+        if (expander->originalTargetBounds(target, originalBounds) && validBounds(originalBounds))
+            targetBounds = originalBounds;
+    }
+
     const Vec3 eye = eyePosition(player);
     if (!finiteVec(eye)) {
         reportGate(9, "player_eye_invalid", "player eye position contains non-finite coordinates");
