@@ -191,9 +191,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    // A failed native-route probe is cached for one second. Skip all inventory,
-    // vtable and target work during this short backoff instead of retrying a known
-    // unavailable route at the full local-player tick rate (which caused the lag).
+    // A failed native-route probe is backed off for five seconds. This route is
+    // build-specific and the current runtime has repeatedly failed validation;
+    // retrying it each second causes needless vtable/signature work without
+    // advancing target selection or dispatch. Re-enable resets the timer.
     bool routeProbeDeferred = false;
     long long retryInMs = 0;
     {
@@ -232,12 +233,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
     if (!gameMode || !routeAvailable) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         }
         reportGate(11, "native_attack_route_unavailable",
             std::string("game_mode=") + (gameMode ? "present" : "missing") +
             "; attack_route=" + (routeAvailable ? "ready" : "unavailable") +
-            "; retry_in_ms=1000");
+            "; retry_in_ms=5000");
         return;
     }
     {
