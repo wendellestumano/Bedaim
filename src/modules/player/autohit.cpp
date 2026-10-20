@@ -466,6 +466,22 @@ void AutoHitModule::processPlayerTick(Player* player) {
             "feedback", "no_immediate_hurt_time_transition",
             "six accepted native calls had no immediate local hurt-time increase; continuing at the configured CPS limit because this observation alone is not proof of a miss or server damage.");
     }
+    // The recording shows native_out_result=false repeatedly. Back off a rejected
+    // route before repeating actor queries and another native call every CPS tick.
+    // This is a performance/failure-containment guard, not a claim that the route is fixed.
+    if (!accepted) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        }
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "native_attack",
+            "rejected_with_backoff",
+            std::string("retry_after_ms=3000; native_out_result=") +
+            (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
+            "; native_call_duration_us=" + std::to_string(nativeCallDurationUs) +
+            "; route rejection is not server damage confirmation");
+    }
+
     const std::string attemptResult =
         attemptContext +
         "; wrapper_result=" + (accepted ? "accepted_by_internal_observer" : "not_accepted_by_internal_observer") +
