@@ -161,3 +161,11 @@ No source code has been edited yet on this new diagnostics-focused experimental 
 - Updating this log on the PR queued a documentation-head validation: https://github.com/wendellestumano/Bedaim/actions/runs/39450581235, head `cb359b07a9bd55a87fc9b51279f9da73322639c4`.
 - At the last actual status check, setup xmake, host test dependency setup, all seven host regression tests, and NDK r28c setup had succeeded. The Android ARM64 `Build and package` step remained in progress; artifact upload had not started. Therefore no success or artifact is claimed for #923 yet.
 - The code revision `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96` was independently validated by Build #922 success and its artifact. #923 differs only by the added persistent validation-results record.
+
+
+## Final CI reconciliation — Build #923 cancelled; Build #924 passed (2026-10-20)
+- Build #923: https://github.com/wendellestumano/Bedaim/actions/runs/39450581235, head cb359b07a9bd55a87fc9b51279f9da73322639c4. Host tests passed and NDK setup passed; Build and package was cancelled by GitHub Actions before the artifact upload. This is recorded as a cancelled run, not a compiler failure.
+- Build #924: https://github.com/wendellestumano/Bedaim/actions/runs/39451137827, head 796923176862552a45d3a855af387855d71cb63c4. Final job result success; all seven host regression targets passed, NDK setup passed, Android ARM64 Build and package passed, and artifact upload passed.
+- Artifact BedrockTools-levipack, ID 12279441407, ZIP size 688,702 bytes, SHA256 099b5fede4e394c7260e3ef21b7dabb43c3ee5b554a25a956159a16fb344b12c; link https://github.com/wendellestumano/Bedaim/actions/runs/39451137827/artifacts/12279441407.
+- Downloaded/verified pack /mnt/data/BedrockTools-build924.levipack: 690,283 bytes, SHA256 bcea381e32ba8ab9e900f4e60dfb050dd0d10dfc671b2523ff581e659c82b028. Contains manifest.json (358 B), libBedrockTools.so (1,326,496 B), icon.png (66,026 B), and resources/minecraft.ttf (70,324 B). This is the same diagnostics I/O throttle source as Build #922, with the persistent results log also included in the checked-out source revision. It remains untested for in-game FPS improvement.
+- PR #47 remains open/draft/unmerged, branch experiment/diagnostics-lifetime-merge-throttle-20261020; main is untouched.
