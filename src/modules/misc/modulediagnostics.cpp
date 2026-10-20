@@ -370,6 +370,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     addOverlaySlider("m_overlayX", "Overlay X position", 0, 1800, 8, " px");
     addOverlaySlider("m_overlayY", "Overlay Y position", 0, 1000, 8, " px");
     addOverlaySlider("m_overlayWidth", "Overlay width", 240, 1400, 480, " px");
+    addOverlaySlider("m_overlayHeight", "Overlay height", 180, 1000, 520, " px");
     addOverlaySlider("m_overlayTextSize", "Overlay text size", 8, 24, 12, " px");
     addOverlaySlider("m_overlayPage", "Log page (newest first)", 0, 4096, 0, "");
 
@@ -430,7 +431,7 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
     }
 
     if (key == "m_overlayX" || key == "m_overlayY" || key == "m_overlayWidth" ||
-        key == "m_overlayTextSize" || key == "m_overlayPage") {
+        key == "m_overlayTextSize" || key == "m_overlayHeight" || key == "m_overlayPage") {
         try {
             std::size_t parsedLength = 0;
             const std::string text(value);
@@ -441,6 +442,7 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             else if (key == "m_overlayY") m_overlayY = std::clamp(v, 0, 1000);
             else if (key == "m_overlayWidth") m_overlayWidth = std::clamp(v, 240, 1400);
             else if (key == "m_overlayTextSize") m_overlayTextSize = std::clamp(v, 8, 24);
+            else if (key == "m_overlayHeight") m_overlayHeight = std::clamp(v, 180, 1000);
             else m_overlayPage = std::clamp(v, 0, 4096);
             return true;
         } catch (...) { return false; }
@@ -468,6 +470,7 @@ void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
         m_overlayY = std::clamp(j.value("m_overlayY", m_overlayY), 0, 1000);
         m_overlayWidth = std::clamp(j.value("m_overlayWidth", m_overlayWidth), 240, 1400);
         m_overlayTextSize = std::clamp(j.value("m_overlayTextSize", m_overlayTextSize), 8, 24);
+        m_overlayHeight = std::clamp(j.value("m_overlayHeight", m_overlayHeight), 180, 1000);
         m_overlayPage = std::clamp(j.value("m_overlayPage", m_overlayPage), 0, 4096);
         const auto format = j.value("m_exportFormat", m_exportFormat);
         m_exportFormat = (format == "json") ? "json" : "txt";
@@ -490,6 +493,7 @@ void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
     j["m_overlayY"] = m_overlayY;
     j["m_overlayWidth"] = m_overlayWidth;
     j["m_overlayTextSize"] = m_overlayTextSize;
+    j["m_overlayHeight"] = m_overlayHeight;
     j["m_overlayPage"] = m_overlayPage;
 }
 
@@ -829,6 +833,7 @@ void ModuleDiagnosticsModule::onFrame() {
     const float originY = static_cast<float>(m_overlayY);
     const float overlayWidth = static_cast<float>(m_overlayWidth);
     const float textSize = static_cast<float>(m_overlayTextSize);
+    const float overlayHeight = static_cast<float>(m_overlayHeight);
     const float lineHeight = textSize + 4.0f;
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
@@ -880,7 +885,7 @@ void ModuleDiagnosticsModule::onFrame() {
     float y = lineHeight * 6.0f;
     const std::size_t approxCharsPerLine = std::max<std::size_t>(12,
         static_cast<std::size_t>(overlayWidth / std::max(1.0f, textSize * 0.58f)));
-    for (std::size_t index = endIndex; index > startIndex && y < 1800.0f; --index) {
+    for (std::size_t index = endIndex; index > startIndex && y < overlayHeight; --index) {
         const auto& entry = runtimeEntries[index - 1];
         const char* tag = entry.level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
             entry.level == bedrocktools::diagnostics::Level::Error ? "ERR" :
@@ -889,7 +894,7 @@ void ModuleDiagnosticsModule::onFrame() {
         const std::string prefix = "[" + std::to_string(entry.sequence) + "] " + tag + " " +
             entry.component + ": ";
         const std::string fullMessage = prefix + entry.message;
-        for (std::size_t offset = 0; offset < fullMessage.size() && y < 1800.0f; offset += approxCharsPerLine) {
+        for (std::size_t offset = 0; offset < fullMessage.size() && y < overlayHeight; offset += approxCharsPerLine) {
             const std::string segment = fullMessage.substr(offset, approxCharsPerLine);
             const std::uint32_t color =
                 entry.level == bedrocktools::diagnostics::Level::Critical ||
