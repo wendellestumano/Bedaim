@@ -39,6 +39,8 @@ private:
     void stopExportWorker();
     void exportWorkerLoop();
     std::chrono::steady_clock::time_point m_nextRefresh{};
+    // Guarded by m_fileWriteMutex; cumulative JSON histories sync less often than rolling snapshots.
+    std::chrono::steady_clock::time_point m_nextLifetimeMerge{};
     ReportSummary m_summary{};
     bool m_reportReady = false;
     bool m_exportLogsNow = false;
