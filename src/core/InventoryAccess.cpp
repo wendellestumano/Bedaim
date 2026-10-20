@@ -422,6 +422,28 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     void* inventory = const_cast<void*>(read<const void*>(player, PlayerInventory));
     if (!inventory) return false;
 
+    using Clock = std::chrono::steady_clock;
+    const auto selectionStarted = Clock::now();
+    const int previousSlot = selectedHotbarSlot(player);
+    constexpr auto slowThreshold = std::chrono::microseconds(2000);
+    auto reportSlowSelection = [&](const char* route, bool nativeResult,
+                                   long long nativeDurationUs, int observedSlot) {
+        const auto totalDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now() - selectionStarted).count();
+        if (totalDurationUs < slowThreshold.count() && nativeDurationUs < slowThreshold.count())
+            return;
+
+        // This path runs only on slow transitions. Keep normal player ticks silent
+        // and avoid dynamic formatting/allocation while the selection is fast.
+        char message[320]{};
+        std::snprintf(message, sizeof(message),
+            "slow_slot_select route=%s previous=%d requested=%d observed=%d native_result=%s native_us=%lld total_us=%lld",
+            route, previousSlot, slot, observedSlot, nativeResult ? "true" : "false",
+            nativeDurationUs, totalDurationUs);
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "InventoryAccess", message);
+    };
+
     // Prefer the engine's native PlayerInventory::selectSlot method if this build exports it.
     using SelectSlotFn = bool (*)(void*, int, int);
     static SelectSlotFn nativeSelectSlot = []() -> SelectSlotFn {
@@ -438,8 +460,18 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     }();
 
     if (nativeSelectSlot) {
-        const bool result = nativeSelectSlot(inventory, slot, 0); // ContainerID::Inventory
-        return result && selectedHotbarSlot(player) == slot;
+        const auto nativeStarted = Clock::now();
+        const bool nativeResult = nativeSelectSlot(inventory, slot, 0); // ContainerID::Inventory
+        const auto nativeDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(
+            Clock::now() - nativeStarted).count();
+        const int observedSlot = selectedHotbarSlot(player);
+        reportSlowSelection("native_selectSlot", nativeResult, nativeDurationUs, observedSlot);
+
+        // The selected slot is the observable postcondition. Do not report failure
+        // solely because the native method's bool is false if the inventory has
+        // already switched to the requested slot; swappers use this result to track
+        // ownership and restore the previous slot on the next tick.
+        return observedSlot == slot;
     }
 
     // Some Android builds strip the native method's symbol. Fall back to the verified
@@ -447,10 +479,16 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     auto* selected = reinterpret_cast<int*>(
         static_cast<std::byte*>(inventory) + PlayerInventorySelectedSlot);
     *selected = slot;
-    if (selectedHotbarSlot(player) != slot) return false;
+    const int observedAfterWrite = selectedHotbarSlot(player);
+    if (observedAfterWrite != slot) {
+        reportSlowSelection("field_write", false, 0, observedAfterWrite);
+        return false;
+    }
     bedrocktools::sdk::virtualCall<void>(
         player, bedrocktools::sdk::offsets::VTable::PlayerSendInventory, true);
-    return selectedHotbarSlot(player) == slot;
+    const int observedSlot = selectedHotbarSlot(player);
+    reportSlowSelection("field_write_send_inventory", true, 0, observedSlot);
+    return observedSlot == slot;
 }
 
 OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* player, int slot) const {
