@@ -301,7 +301,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     autoNode.id = "m_autoExportEnabled";
     autoNode.key = "m_autoExportEnabled";
     autoNode.title = "Automatically export logs";
-    autoNode.description = "While enabled, refreshes bedaim_diagnostics_auto.json for the current session and merges new entries into bedaim_diagnostics_total.json across all sessions.";
+    autoNode.description = "While enabled, refreshes the current-session JSON logs on the selected cadence. Cumulative history files are synced every 60 seconds and when rotating sessions.";
     autoNode.category = "diagnostics";
     autoNode.type = ConfigControlTypeV2::Toggle;
     autoNode.defaultValue = "true";
@@ -313,10 +313,10 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     intervalNode.id = "m_autoExportIntervalSeconds";
     intervalNode.key = "m_autoExportIntervalSeconds";
     intervalNode.title = "Automatic save interval";
-    intervalNode.description = "Time between rolling auto-saves. Minimum 1 second, maximum 5 minutes. Defaults to every 5 seconds for useful diagnostics without excessive file writes.";
+    intervalNode.description = "Time between rolling current-session saves. Minimum 5 seconds, maximum 5 minutes. Cumulative history files sync every 60 seconds to avoid repeatedly rewriting multi-megabyte archives.";
     intervalNode.category = "diagnostics";
     intervalNode.type = ConfigControlTypeV2::SliderFloat;
-    intervalNode.minValue = "1";
+    intervalNode.minValue = "5";
     intervalNode.maxValue = "300";
     intervalNode.step = "1";
     intervalNode.unit = " s";
@@ -392,7 +392,7 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             const std::string text(value);
             const float parsed = std::stof(text, &parsedLength);
             if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
-            const float bounded = std::clamp(parsed, 1.0f, 300.0f);
+            const float bounded = std::clamp(parsed, 5.0f, 300.0f);
             {
                 std::lock_guard<std::mutex> lock(m_exportMutex);
                 m_autoExportIntervalSeconds = static_cast<int>(std::lround(bounded));
@@ -415,11 +415,11 @@ void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
         m_autoExportEnabled = j.value("m_autoExportEnabled", m_autoExportEnabled);
         if (j.contains("m_autoExportIntervalSeconds")) {
             m_autoExportIntervalSeconds = std::clamp(
-                j.value("m_autoExportIntervalSeconds", m_autoExportIntervalSeconds), 1, 300);
+                j.value("m_autoExportIntervalSeconds", m_autoExportIntervalSeconds), 5, 300);
         } else if (j.contains("m_autoExportIntervalMinutes")) {
             // Migrate settings from older builds, which stored the interval in minutes.
             const int oldMinutes = std::clamp(j.value("m_autoExportIntervalMinutes", 1), 1, 60);
-            m_autoExportIntervalSeconds = std::clamp(oldMinutes * 60, 1, 300);
+            m_autoExportIntervalSeconds = std::clamp(oldMinutes * 60, 5, 300);
         }
         const auto format = j.value("m_exportFormat", m_exportFormat);
         m_exportFormat = (format == "json") ? "json" : "txt";
@@ -509,6 +509,12 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
         }
         std::error_code staleError;
         std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
+        // Session rotation already archives the previous current-session files.
+        // Let the new current-session snapshots accumulate for a minute before
+        // rewriting the cumulative archives again.
+        if (rotationOk) {
+            m_nextLifetimeMerge = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        }
     }
     if (!rotationOk) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
@@ -664,22 +670,35 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         ? exportGameplayOnlyJsonTo(gameplayPath, &gameplayError)
         : true;
 
-    // Maintain a separate lifetime JSON containing deduplicated entries from
-    // every gameplay. Merge from the just-written current snapshot, not from
-    // the mutable in-memory buffer, so repeated five-second saves are idempotent.
+    // Cumulative histories are intentionally merged less often than the rolling
+    // current-session snapshots. Parsing and rewriting a growing multi-megabyte
+    // JSON archive every second burns CPU and storage bandwidth on mobile devices.
+    // Session rotation archives the previous session; live history catches up
+    // at least once per minute while the two rolling files keep their own cadence.
+    const auto exportNow = std::chrono::steady_clock::now();
+    const bool lifetimeSyncDue = automatic &&
+        (m_nextLifetimeMerge.time_since_epoch().count() == 0 ||
+         exportNow >= m_nextLifetimeMerge);
     std::string lifetimeError;
-    const bool lifetimeOk = ok && automatic && mergeCurrentSessionIntoLifetime(
-        outputDirectory / "bedaim_diagnostics_auto.json",
-        outputDirectory / "bedaim_diagnostics_total.json", &lifetimeError);
+    bool lifetimeOk = true;
     std::string gameplayLifetimeError;
-    const bool gameplayLifetimeOk = gameplayOk && automatic && mergeCurrentSessionIntoLifetime(
-        gameplayPath, outputDirectory / "bedaim_diagnostics_gameplay_total.json",
-        &gameplayLifetimeError);
+    bool gameplayLifetimeOk = true;
+    if (lifetimeSyncDue) {
+        lifetimeOk = ok && mergeCurrentSessionIntoLifetime(
+            outputDirectory / "bedaim_diagnostics_auto.json",
+            outputDirectory / "bedaim_diagnostics_total.json", &lifetimeError);
+        gameplayLifetimeOk = gameplayOk && mergeCurrentSessionIntoLifetime(
+            gameplayPath, outputDirectory / "bedaim_diagnostics_gameplay_total.json",
+            &gameplayLifetimeError);
+        // Throttle retries too: a corrupt/inaccessible archive should produce a
+        // visible error and retry on the next scheduled sync, not on every snapshot.
+        m_nextLifetimeMerge = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    }
     if (ok && automatic) {
         if (!gameplayOk) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
                 "Diagnostics", "GAMEPLAY_ONLY_LOGS export failed: " + gameplayError);
-        } else if (!gameplayLifetimeOk) {
+        } else if (lifetimeSyncDue && !gameplayLifetimeOk) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
                 "Diagnostics", "GAMEPLAY_ONLY_LOGS lifetime update failed: " + gameplayLifetimeError);
         }
@@ -689,7 +708,7 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
                 "Diagnostics", "could not remove stale rolling text export: " + staleError.message());
         }
-        if (!lifetimeOk) {
+        if (lifetimeSyncDue && !lifetimeOk) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
                 "Diagnostics", "lifetime log update failed: " + lifetimeError);
         }
@@ -704,11 +723,19 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         std::lock_guard<std::mutex> lock(m_exportMutex);
         const std::string completedAt = localClockLabel();
         if (ok) {
-            m_lastExportStatus = automatic
-                ? (lifetimeOk && gameplayOk && gameplayLifetimeOk
-                    ? "ALL + GAMEPLAY_ONLY_LOGS + both histories saved (" + completedAt + ")"
-                    : "Some diagnostic outputs failed (" + completedAt + ")")
-                : "Manual export completed (" + completedAt + ")";
+            if (!automatic) {
+                m_lastExportStatus = "Manual export completed (" + completedAt + ")";
+            } else if (!gameplayOk || (lifetimeSyncDue && (!lifetimeOk || !gameplayLifetimeOk))) {
+                m_lastExportStatus = "Some diagnostic outputs failed (" + completedAt + ")";
+            } else if (lifetimeSyncDue) {
+                m_lastExportStatus = "Rolling logs + lifetime histories synced (" + completedAt + ")";
+            } else {
+                const auto secondsRemaining = std::max<std::int64_t>(0,
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        m_nextLifetimeMerge - std::chrono::steady_clock::now()).count());
+                m_lastExportStatus = "Rolling logs saved; history sync in " +
+                    std::to_string(secondsRemaining) + "s (" + completedAt + ")";
+            }
             m_lastExportPath = outputPath;
             m_lastSuccessfulExportTime = completedAt;
         } else {
