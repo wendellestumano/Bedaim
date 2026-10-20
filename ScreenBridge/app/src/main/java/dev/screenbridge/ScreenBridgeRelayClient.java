@@ -205,7 +205,11 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
                 setStatus("Relay conectado — pronto para parear", currentPairCode(), "");
             } else if ("error".equals(type) || "auth-error".equals(type)) {
                 authenticated = false;
+                registered = false;
                 setStatus("Relay recusou a conexão", currentPairCode(), message.optString("error", "Erro de autenticação"));
+                // The server may have restarted or lost its in-memory session.
+                // Re-register with the persistent device token before reconnecting.
+                webSocket.close(1008, "Relay authentication rejected");
             } else if ("command".equals(type)) {
                 handleCommand(webSocket, message);
             } else if ("stop-control".equals(type)) {
