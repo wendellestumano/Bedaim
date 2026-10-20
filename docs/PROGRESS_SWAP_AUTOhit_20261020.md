@@ -169,3 +169,27 @@ No source code has been edited yet on this new diagnostics-focused experimental 
 - Artifact BedrockTools-levipack, ID 12279441407, ZIP size 688,702 bytes, SHA256 099b5fede4e394c7260e3ef21b7dabb43c3ee5b554a25a956159a16fb344b12c; link https://github.com/wendellestumano/Bedaim/actions/runs/39451137827/artifacts/12279441407.
 - Downloaded/verified pack /mnt/data/BedrockTools-build924.levipack: 690,283 bytes, SHA256 bcea381e32ba8ab9e900f4e60dfb050dd0d10dfc671b2523ff581e659c82b028. Contains manifest.json (358 B), libBedrockTools.so (1,326,496 B), icon.png (66,026 B), and resources/minecraft.ttf (70,324 B). This is the same diagnostics I/O throttle source as Build #922, with the persistent results log also included in the checked-out source revision. It remains untested for in-game FPS improvement.
 - PR #47 remains open/draft/unmerged, branch experiment/diagnostics-lifetime-merge-throttle-20261020; main is untouched.
+
+
+## Normal input callback research — pre-edit record (2026-10-20)
+
+### New evidence
+- LeviLamina SDK header commit `4f1aad4bb9ff2985d2530d3f3ff5bc13e16ff6a6` is explicitly labeled `26.51.1` and declares `MCAPI static void handleBuildOrAttackOrBlockSelectButtonPress(::IClientInstance& client);` in `src-client/mc/client/game/ClientInputCallbacks.h`. Earlier header commit `e7f443cf3fca34b103816f3ea2e79142576e4ec3` (26.20) declares both `handleDestoryOrAttackButtonPress(IClientInstance&)` and the later `handleBuildOrAttackOrBlockSelectButtonPress(IClientInstance&)`.
+- Current Android `libminecraftpe.so` supplied in Termux has no exported dynamic symbols for `ClientInputCallbacks` methods; string scans also did not find the literal names `handleBuildOrAttackOrBlockSelectButtonPress`, `handleDestoryOrAttackButtonPress`, or `BuildActionIntention`. This is not proof that the function is absent—the library is stripped—but means no safe `dlsym` or direct copied offset is available.
+- Apollon's old `0x6462B60` callback offset has already been disproven for this current binary. Do not copy it or substitute `handlePointerPressedButtonPress` blindly: that is a generic pointer callback, not evidence of the attack action.
+- The current `AutoHit` branch logs `explicit_input_callback=not_called_in_this_path`; the crosshair gate and 3.0-block default are present in the Build #924 ancestry, but this does not yet reproduce a normal input callback.
+
+### Hypothesis before next code edit
+The normal input callback for a newer Bedrock SDK is likely the static `ClientInputCallbacks::handleBuildOrAttackOrBlockSelectButtonPress(IClientInstance&)`, but its exact code location in the target Android binary remains unresolved. Locate it by an APK-specific unique signature and confirm that signature scans exactly once within executable `.text`, then validate the candidate's calling convention and receiver path before adding any invocation. Keep the three-argument GameMode route as fallback/diagnostic only until runtime shows the normal-input route works.
+
+### Intended tests before source edit
+1. Inspect existing Termux disassembly/pseudocode and current `.so` metadata for the target function/callsite; avoid rerunning stale Apollon offset experiments.
+2. If and only if a unique validated pattern is found, add a separate experimental signature and a pending-attack flag consumed from a verified ClientInstance update/tick context. Clear the flag after one invocation; enforce the existing crosshair gate, 3-block reach, weapon profile and CPS gates before queuing.
+3. Host regressions, Android ARM64 CI, verify `.levipack`; no claims from build alone.
+4. In-game on exact Minecraft 26.51, compare centred target / offscreen target; the offscreen/back-facing case must show zero normal-input calls, and centred target should cause server-visible health/damage changes without manual input.
+5. Preserve BedrockAim and BedrockBound; no `main` edits or merge.
+
+### Build/artifact ledger
+- Build #922, code commit `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96`: success, tests and ARM64 package passed; artifact ID `12278790729`, 688,117-byte ZIP, SHA256 `70f4070d7f7dd6e44c80889ac5e3c78ae9f7db8807f49dd19cef9966d80d242b`; inner pack `/mnt/data/BedrockTools-build922.levipack`, 689,857 bytes.
+- Build #923, docs commit `cb359b07a9bd55a87fc9b51279f9da73322639c4`: cancelled during Android packaging before artifact upload; host tests and NDK succeeded. Do not label as compile failure.
+- Build #924, docs commit `796923176862552a45d3a855af387855d71cb63c4`: complete success; artifact ID `12279441407`, 688,702-byte ZIP SHA256 `099b5fede4e394c7260e3ef21b7dabb43c3ee5b554a25a956159a16fb344b12c`; verified inner `/mnt/data/BedrockTools-build924.levipack`, 690,283 bytes SHA256 `bcea381e32ba8ab9e900f4e60dfb050dd0d10dfc671b2523ff581e659c82b028`.
