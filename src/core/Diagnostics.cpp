@@ -2,6 +2,7 @@
 #include "../config/AtomicConfigWriter.hpp"
 
 #include <deque>
+#include <algorithm>
 #include <unordered_map>
 #include <chrono>
 #include <cstdio>
@@ -119,6 +120,13 @@ void log(Level level, std::string_view component, std::string_view message) noex
 std::vector<Entry> snapshot() {
     std::lock_guard<std::mutex> lock(gMutex);
     return std::vector<Entry>(gEntries.begin(), gEntries.end());
+}
+
+std::vector<Entry> snapshotTail(std::size_t maxEntries) {
+    std::lock_guard<std::mutex> lock(gMutex);
+    const std::size_t count = std::min(maxEntries, gEntries.size());
+    const auto begin = gEntries.end() - static_cast<std::ptrdiff_t>(count);
+    return std::vector<Entry>(begin, gEntries.end());
 }
 
 std::size_t count() noexcept {
