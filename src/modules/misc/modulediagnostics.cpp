@@ -878,7 +878,7 @@ void ModuleDiagnosticsModule::onFrame() {
     std::vector<std::pair<std::string, std::uint32_t>> displayLines;
     displayLines.reserve(runtimeEntries.size() * 2);
     for (const auto& entry : runtimeEntries) {
-        const char* tag = entry.level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
+        const std::string tag = entry.level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
             entry.level == bedrocktools::diagnostics::Level::Error ? "ERR" :
             entry.level == bedrocktools::diagnostics::Level::Critical ? "CRIT" :
             bedrocktools::diagnostics::levelName(entry.level);
