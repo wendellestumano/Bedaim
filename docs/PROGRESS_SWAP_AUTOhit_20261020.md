@@ -34,3 +34,12 @@ A swap can report failure despite having changed the slot if the native selector
 - This is a new experimental branch based on the current source-fix experiment. No source file has been edited in this cycle yet.
 - The parent AutoHit compile-fix PR #43 is open/draft and unmerged.
 - `main` remains untouched.
+
+
+## First patch implemented — validation pending
+- Changed `src/core/InventoryAccess.cpp` only. Native `selectSlot` now determines success by the observed selected-slot postcondition (`selectedHotbarSlot(player) == slot`) rather than requiring both the native bool and the postcondition. The existing direct-field + `PlayerSendInventory` fallback is unchanged and still runs only when the native symbol is unavailable.
+- Added slow-transition diagnostics only when either the native selector or the total selection method takes at least 2,000 microseconds. The message includes route, previous/requested/observed slot, native return, native duration and total duration. Fast slot changes remain silent.
+- Source commit: `130c5c46581bb22345ababdc6fbe661afdb544c0` — https://github.com/wendellestumano/Bedaim/commit/130c5c46581bb22345ababdc6fbe661afdb544c0
+- Expected risk: this does not avoid the game's own item-model/equip work; it corrects a return-state mismatch and adds measurements. Runtime profiling is needed to determine whether native selection explains the FPS spike.
+- Current tests: not yet run. No local SDK/NDK/build runtime is attached to this session. The parent contains the AutoHit/GameHooks diagnostics compile fixes but their Android build is not confirmed. No new `.levipack` exists for this commit yet.
+- Changed code file: `src/core/InventoryAccess.cpp`; progress file: `docs/PROGRESS_SWAP_AUTOhit_20261020.md`. BedrockAim, BedrockBound, MaceFall and ShiftBlade logic were not edited in this patch.
