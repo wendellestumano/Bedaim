@@ -79,6 +79,7 @@ public class ScreenBridgeService extends Service {
     private volatile long startedAt;
     private volatile long lastActionAtMs;
     private volatile String lastOverlayState = "";
+    private volatile String chatGptState = "unknown";
     private static volatile boolean overlayShown = false;
     private WindowManager overlayWindowManager;
     private TextView statusOverlay;
@@ -283,7 +284,7 @@ public class ScreenBridgeService extends Service {
         try {
             overlayWindowManager = (WindowManager)getSystemService(WINDOW_SERVICE);
             TextView pill = new TextView(this);
-            pill.setText("SB · OCIOSO");
+            pill.setText("SB · OCIOSO  |  GPT · DESCONHECIDO");
             pill.setTextSize(10.5f);
             pill.setTextColor(0xFFFFFFFF);
             pill.setTypeface(null, 1);
@@ -346,11 +347,18 @@ public class ScreenBridgeService extends Service {
         } else {
             state = "idle"; label = "SB · OCIOSO"; color = 0xFF34313A;
         }
-        if (!state.equals(lastOverlayState)) {
-            pill.setText(label);
+        String gptLabel;
+        String gpt = chatGptState;
+        if ("thinking".equals(gpt)) gptLabel = "GPT · PENSANDO";
+        else if ("working".equals(gpt)) gptLabel = "GPT · TRABALHANDO";
+        else if ("done".equals(gpt)) gptLabel = "GPT · CONCLUÍDO";
+        else gptLabel = "GPT · DESCONHECIDO";
+        String combinedState = state + "|" + gpt;
+        if (!combinedState.equals(lastOverlayState)) {
+            pill.setText(label + "  |  " + gptLabel);
             pill.setBackground(statusBackground(color));
-            pill.setContentDescription("ScreenBridge: " + label);
-            lastOverlayState = state;
+            pill.setContentDescription("ScreenBridge: " + label + ". ChatGPT: " + gptLabel);
+            lastOverlayState = combinedState;
         }
     }
 
@@ -424,6 +432,21 @@ public class ScreenBridgeService extends Service {
                 return;
             }
             String route = path.substring(prefix.length());
+            if ("gpt-state".equals(route)) {
+                Map<String,String> q = query(uri.getRawQuery());
+                String next = q.getOrDefault("state", "");
+                if (!("thinking".equals(next) || "working".equals(next) || "done".equals(next) || "unknown".equals(next))) {
+                    respond(s, 400, "application/json", "{\"ok\":false,\"error\":\"invalid state\"}".getBytes(StandardCharsets.UTF_8));
+                    return;
+                }
+                chatGptState = next;
+                main.post(this::updateStatusOverlay);
+                JSONObject j = new JSONObject();
+                j.put("ok", true);
+                j.put("chatGptState", chatGptState);
+                respond(s, 200, "application/json; charset=utf-8", j.toString().getBytes(StandardCharsets.UTF_8));
+                return;
+            }
             if ("screen.jpg".equals(route)) {
                 byte[] jpg = awaitFrame(350);
                 if (jpg == null) {
