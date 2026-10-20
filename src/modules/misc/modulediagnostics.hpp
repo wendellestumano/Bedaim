@@ -6,6 +6,8 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <utility>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <vector>
