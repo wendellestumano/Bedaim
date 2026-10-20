@@ -169,7 +169,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // AutoHit has no attack key/button gate: enabling the module is sufficient.
     // Copy the weapon profile and reach under one short lock, then leave the
     // render/tick-critical path free of input-capture bookkeeping.
-    float configuredRange = 3.2f;
+    float configuredRange = 3.0f;
     bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
     float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
     {
