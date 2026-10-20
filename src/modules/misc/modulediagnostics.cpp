@@ -348,6 +348,31 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     freshSessionNode.currentValue = "false";
     freshSessionNode.hasCurrentValue = true;
     schema.node(std::move(freshSessionNode));
+
+    auto addOverlaySlider = [&](const std::string& id, const std::string& title,
+                                int minimum, int maximum, int initial, const std::string& unit) {
+        ConfigNodeV2 node;
+        node.id = id;
+        node.key = id;
+        node.title = title;
+        node.description = "Adjusts only the Module Diagnostics overlay; log collection and export settings are unchanged.";
+        node.category = "diagnostics";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.minValue = std::to_string(minimum);
+        node.maxValue = std::to_string(maximum);
+        node.step = "1";
+        node.unit = unit;
+        node.defaultValue = std::to_string(initial);
+        node.currentValue = std::to_string(initial);
+        node.hasCurrentValue = true;
+        schema.node(std::move(node));
+    };
+    addOverlaySlider("m_overlayX", "Overlay X position", 0, 1800, 8, " px");
+    addOverlaySlider("m_overlayY", "Overlay Y position", 0, 1000, 8, " px");
+    addOverlaySlider("m_overlayWidth", "Overlay width", 240, 1400, 480, " px");
+    addOverlaySlider("m_overlayTextSize", "Overlay text size", 8, 24, 12, " px");
+    addOverlaySlider("m_overlayPage", "Log page (newest first)", 0, 4096, 0, "");
+
     pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -403,6 +428,23 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             return false;
         }
     }
+
+    if (key == "m_overlayX" || key == "m_overlayY" || key == "m_overlayWidth" ||
+        key == "m_overlayTextSize" || key == "m_overlayPage") {
+        try {
+            std::size_t parsedLength = 0;
+            const std::string text(value);
+            const float parsed = std::stof(text, &parsedLength);
+            if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
+            const int v = static_cast<int>(std::lround(parsed));
+            if (key == "m_overlayX") m_overlayX = std::clamp(v, 0, 1800);
+            else if (key == "m_overlayY") m_overlayY = std::clamp(v, 0, 1000);
+            else if (key == "m_overlayWidth") m_overlayWidth = std::clamp(v, 240, 1400);
+            else if (key == "m_overlayTextSize") m_overlayTextSize = std::clamp(v, 8, 24);
+            else m_overlayPage = std::clamp(v, 0, 4096);
+            return true;
+        } catch (...) { return false; }
+    }
     return false;
 }
 
@@ -421,6 +463,12 @@ void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
             const int oldMinutes = std::clamp(j.value("m_autoExportIntervalMinutes", 1), 1, 60);
             m_autoExportIntervalSeconds = std::clamp(oldMinutes * 60, 5, 300);
         }
+
+        m_overlayX = std::clamp(j.value("m_overlayX", m_overlayX), 0, 1800);
+        m_overlayY = std::clamp(j.value("m_overlayY", m_overlayY), 0, 1000);
+        m_overlayWidth = std::clamp(j.value("m_overlayWidth", m_overlayWidth), 240, 1400);
+        m_overlayTextSize = std::clamp(j.value("m_overlayTextSize", m_overlayTextSize), 8, 24);
+        m_overlayPage = std::clamp(j.value("m_overlayPage", m_overlayPage), 0, 4096);
         const auto format = j.value("m_exportFormat", m_exportFormat);
         m_exportFormat = (format == "json") ? "json" : "txt";
     }
@@ -437,6 +485,12 @@ void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
     j["m_autoExportIntervalSeconds"] = m_autoExportIntervalSeconds;
     j.erase("m_autoExportIntervalMinutes");
     j["m_exportFormat"] = m_exportFormat;
+
+    j["m_overlayX"] = m_overlayX;
+    j["m_overlayY"] = m_overlayY;
+    j["m_overlayWidth"] = m_overlayWidth;
+    j["m_overlayTextSize"] = m_overlayTextSize;
+    j["m_overlayPage"] = m_overlayPage;
 }
 
 ModuleDiagnosticsModule::~ModuleDiagnosticsModule() {
@@ -771,6 +825,11 @@ void ModuleDiagnosticsModule::onFrame() {
     }
 
     std::vector<PLModMenu_DrawCommand> commands;
+    const float originX = static_cast<float>(m_overlayX);
+    const float originY = static_cast<float>(m_overlayY);
+    const float overlayWidth = static_cast<float>(m_overlayWidth);
+    const float textSize = static_cast<float>(m_overlayTextSize);
+    const float lineHeight = textSize + 4.0f;
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
     const std::string line2 = "Logs " + std::to_string(bedrocktools::diagnostics::count()) +
@@ -790,42 +849,55 @@ void ModuleDiagnosticsModule::onFrame() {
     auto addText = [&](const std::string& text, float y, std::uint32_t color) {
         PLModMenu_DrawCommand command{};
         command.type = PL_DRAW_TEXT;
-        command.x = 8.0f;
-        command.y = y;
-        command.w = 480.0f;
-        command.h = 16.0f;
-        command.size = 12.0f;
+        command.x = originX;
+        command.y = originY + y;
+        command.w = overlayWidth;
+        command.h = lineHeight;
+        command.size = textSize;
         command.color = color;
         command.text = text.c_str();
         commands.push_back(command);
     };
 
-    addText(line1, 8.0f, 0xFFFFFFFF);
-    addText(line2, 24.0f, (m_summary.errors || m_summary.warnings) ? 0xFFFFC060 : 0xFF80FF80);
-    addText(line3, 40.0f, m_summary.written ? 0xFF80FF80 : 0xFFFF7070);
-    addText(line4, 56.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
-    addText(line5, 72.0f, 0xFFFFFFFF);
+    addText(line1, 0.0f, 0xFFFFFFFF);
+    addText(line2, lineHeight, (m_summary.errors || m_summary.warnings) ? 0xFFFFC060 : 0xFF80FF80);
+    addText(line3, lineHeight * 2.0f, m_summary.written ? 0xFF80FF80 : 0xFFFF7070);
+    addText(line4, lineHeight * 3.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
+    addText(line5, lineHeight * 4.0f, 0xFFFFFFFF);
 
-    // Show actual runtime warnings/errors, not just registry consistency counts.
-    // Scan newest-first, then display chronologically so a failure gate is visible
-    // in the overlay without opening the JSON export.
+    // Page through the complete log buffer. Entries are not truncated; each
+    // message is wrapped into width-sized lines, and the page slider selects
+    // older/newer chunks without changing collection or export settings.
     const auto runtimeEntries = bedrocktools::diagnostics::snapshot();
-    std::vector<std::string> recentAlerts;
-    recentAlerts.reserve(4);
-    for (auto it = runtimeEntries.rbegin(); it != runtimeEntries.rend() && recentAlerts.size() < 4; ++it) {
-        if (it->level != bedrocktools::diagnostics::Level::Warning &&
-            it->level != bedrocktools::diagnostics::Level::Error &&
-            it->level != bedrocktools::diagnostics::Level::Critical) continue;
-        const char* tag = it->level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
-            it->level == bedrocktools::diagnostics::Level::Critical ? "CRIT" : "ERR";
-        std::string message = std::string("[") + tag + "] " + it->component + ": " + it->message;
-        constexpr std::size_t maxOverlayChars = 76;
-        if (message.size() > maxOverlayChars) message = message.substr(0, maxOverlayChars - 3) + "...";
-        recentAlerts.push_back(std::move(message));
-    }
-    std::reverse(recentAlerts.begin(), recentAlerts.end());
-    for (std::size_t i = 0; i < recentAlerts.size(); ++i) {
-        addText(recentAlerts[i], 92.0f + static_cast<float>(i) * 16.0f, 0xFFFF7070);
+    constexpr std::size_t entriesPerPage = 8;
+    const std::size_t pageCount = std::max<std::size_t>(1, (runtimeEntries.size() + entriesPerPage - 1) / entriesPerPage);
+    const std::size_t page = std::min<std::size_t>(static_cast<std::size_t>(std::max(0, m_overlayPage)), pageCount - 1);
+    const std::size_t endIndex = runtimeEntries.size() > page * entriesPerPage
+        ? runtimeEntries.size() - page * entriesPerPage : 0;
+    const std::size_t startIndex = endIndex > entriesPerPage ? endIndex - entriesPerPage : 0;
+    addText("Log page " + std::to_string(page + 1) + "/" + std::to_string(pageCount) +
+            " (newest first; change Log page in settings)", lineHeight * 5.0f, 0xFFB0D8FF);
+    float y = lineHeight * 6.0f;
+    const std::size_t approxCharsPerLine = std::max<std::size_t>(12,
+        static_cast<std::size_t>(overlayWidth / std::max(1.0f, textSize * 0.58f)));
+    for (std::size_t index = endIndex; index > startIndex && y < 1800.0f; --index) {
+        const auto& entry = runtimeEntries[index - 1];
+        const char* tag = entry.level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
+            entry.level == bedrocktools::diagnostics::Level::Error ? "ERR" :
+            entry.level == bedrocktools::diagnostics::Level::Critical ? "CRIT" :
+            bedrocktools::diagnostics::levelName(entry.level);
+        const std::string prefix = "[" + std::to_string(entry.sequence) + "] " + tag + " " +
+            entry.component + ": ";
+        const std::string fullMessage = prefix + entry.message;
+        for (std::size_t offset = 0; offset < fullMessage.size() && y < 1800.0f; offset += approxCharsPerLine) {
+            const std::string segment = fullMessage.substr(offset, approxCharsPerLine);
+            const std::uint32_t color =
+                entry.level == bedrocktools::diagnostics::Level::Critical ||
+                entry.level == bedrocktools::diagnostics::Level::Error ? 0xFFFF7070 :
+                entry.level == bedrocktools::diagnostics::Level::Warning ? 0xFFFFC060 : 0xFFE8E8E8;
+            addText(segment, y, color);
+            y += lineHeight;
+        }
     }
     submitDrawCommands(moduleId, commands);
 }
