@@ -12,6 +12,10 @@ import android.content.ComponentName;
 import android.text.TextUtils;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
+import android.text.InputType;
+import android.os.Handler;
+import android.os.Looper;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -26,7 +30,16 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView endpoint;
     private Button overlayButton;
+    private EditText relayUrlEdit;
+    private TextView relayStatus;
     private String token;
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final Runnable relayStatusRefresh = new Runnable() {
+        @Override public void run() {
+            updateRelayStatus();
+            if (!isFinishing()) uiHandler.postDelayed(this, 700L);
+        }
+    };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -151,6 +164,65 @@ public class MainActivity extends Activity {
         });
         content.addView(shareRecording);
 
+        TextView relayTitle = new TextView(this);
+        relayTitle.setText("Relay remoto — controle ao vivo");
+        relayTitle.setTextSize(19);
+        relayTitle.setTypeface(null, 1);
+        relayTitle.setTextColor(0xFF241A32);
+        relayTitle.setPadding(0, dp(22), 0, dp(4));
+        content.addView(relayTitle);
+
+        TextView relayHint = new TextView(this);
+        relayHint.setText("Cole a origem HTTPS do ScreenBridge Relay. Ao conectar, um código temporário será exibido para parear o painel de controle. A conexão remota só fica ativa enquanto este serviço estiver autorizado.");
+        relayHint.setTextSize(13);
+        relayHint.setTextColor(0xFF665C70);
+        content.addView(relayHint);
+
+        relayUrlEdit = new EditText(this);
+        relayUrlEdit.setSingleLine(true);
+        relayUrlEdit.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        relayUrlEdit.setHint("https://teu-relay.example");
+        relayUrlEdit.setText(getSharedPreferences("bridge", MODE_PRIVATE).getString("relay_base_url", ""));
+        content.addView(relayUrlEdit, new LinearLayout.LayoutParams(-1, -2));
+
+        Button relayConnect = button("Conectar ao relay seguro");
+        relayConnect.setOnClickListener(v -> {
+            if (!ScreenBridgeService.isRunning()) {
+                Toast.makeText(this, "Autorize a captura e inicie o ScreenBridge antes de conectar.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            String url = relayUrlEdit.getText().toString().trim();
+            if (url.isEmpty()) {
+                Toast.makeText(this, "Insira a URL HTTPS do relay.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            Intent action = new Intent(this, ScreenBridgeService.class);
+            action.setAction(ScreenBridgeService.ACTION_RELAY_CONNECT);
+            action.putExtra(ScreenBridgeService.EXTRA_RELAY_URL, url);
+            startService(action);
+            getSharedPreferences("bridge", MODE_PRIVATE).edit().putString("relay_base_url", url).apply();
+            updateRelayStatus();
+        });
+        content.addView(relayConnect);
+
+        Button relayDisconnect = button("PARAR CONTROLE REMOTO (emergência)");
+        relayDisconnect.setOnClickListener(v -> {
+            Intent action = new Intent(this, ScreenBridgeService.class);
+            action.setAction(ScreenBridgeService.ACTION_RELAY_DISCONNECT);
+            startService(action);
+            Toast.makeText(this, "Controle remoto desconectado neste aparelho.", Toast.LENGTH_SHORT).show();
+            updateRelayStatus();
+        });
+        content.addView(relayDisconnect);
+
+        relayStatus = new TextView(this);
+        relayStatus.setTextSize(14);
+        relayStatus.setTextColor(0xFF241A32);
+        relayStatus.setPadding(dp(12), dp(12), dp(12), dp(12));
+        relayStatus.setBackgroundColor(0xFFEAE4F4);
+        content.addView(relayStatus);
+        updateRelayStatus();
+
         Button health = button("Verificar conexão");
         health.setOnClickListener(v -> {
             endpoint.setText("Base local: " + baseUrl() + "\nCaptura: " + baseUrl() + "/" + token + "/screen.jpg\nEstado: consulte /" + token + "/health");
@@ -200,7 +272,30 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override protected void onResume() { super.onResume(); updateStatus(); }
+    @Override protected void onResume() {
+        super.onResume();
+        updateStatus();
+        uiHandler.removeCallbacks(relayStatusRefresh);
+        uiHandler.post(relayStatusRefresh);
+    }
+
+    @Override protected void onPause() {
+        uiHandler.removeCallbacks(relayStatusRefresh);
+        super.onPause();
+    }
+
+    private void updateRelayStatus() {
+        if (relayStatus == null) return;
+        android.content.SharedPreferences prefs = getSharedPreferences("bridge", MODE_PRIVATE);
+        String state = prefs.getString("relay_state", "Desconectado");
+        String code = prefs.getString("relay_pair_code", "");
+        String error = prefs.getString("relay_error", "");
+        StringBuilder info = new StringBuilder("Estado: ").append(state);
+        if (!code.isEmpty()) info.append("\n\nCÓDIGO DE PAREAMENTO: ").append(code)
+                .append("\nDigite esse código no painel web. Ele expira em até 2 minutos.");
+        if (!error.isEmpty()) info.append("\n\nDetalhes: ").append(error);
+        relayStatus.setText(info.toString());
+    }
 
     private void updateStatus() {
         if (status == null) return;
