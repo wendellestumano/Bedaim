@@ -67,8 +67,9 @@ final class ScreenBridgeRecorder {
 
     ScreenBridgeRecorder(Context context, int sourceWidth, int sourceHeight) throws Exception {
         this.context = context.getApplicationContext();
-        this.width = Math.max(2, sourceWidth & ~1);
-        this.height = Math.max(2, sourceHeight & ~1);
+        float scale = Math.min(1.0f, 1280.0f / Math.max(sourceWidth, sourceHeight));
+        this.width = Math.max(2, ((int)(sourceWidth * scale)) & ~1);
+        this.height = Math.max(2, ((int)(sourceHeight * scale)) & ~1);
 
         MediaFormat format = MediaFormat.createVideoFormat(MIME, width, height);
         int selected = -1;
@@ -140,11 +141,19 @@ final class ScreenBridgeRecorder {
         if (now - lastQueuedAtMs < FRAME_INTERVAL_MS) return;
         lastQueuedAtMs = now;
         int[] pixels = new int[width * height];
+        Bitmap scaled = null;
         try {
-            bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+            Bitmap source = bitmap;
+            if (bitmap.getWidth() != width || bitmap.getHeight() != height) {
+                scaled = Bitmap.createScaledBitmap(bitmap, width, height, true);
+                source = scaled;
+            }
+            source.getPixels(pixels, 0, width, 0, 0, width, height);
         } catch (Exception e) {
             error = "Frame copy failed: " + e.getClass().getSimpleName();
             return;
+        } finally {
+            if (scaled != null && scaled != bitmap) scaled.recycle();
         }
         Frame frame = new Frame(pixels, System.nanoTime());
         if (!frames.offer(frame)) {
