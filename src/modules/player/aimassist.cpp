@@ -861,6 +861,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         resetTrackingState();
         return;
     }
+    const std::size_t availableActors = static_cast<std::size_t>(
+        (actorsEndAddress - actorsBeginAddress) / sizeof(DistanceSortedActor));
 
     void* bestTarget = nullptr;
     AABB bestTargetBounds{};
@@ -1107,12 +1109,13 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             reportTime - lastTargetScanReport >= std::chrono::seconds(1)) {
             lastTargetScanReport = reportTime;
             aimAssistLogger().info(
-                "Target scan rejected all candidates: scanned={}, cap={}, playersEnabled={}, mobsEnabled={}, "
+                "Target scan rejected all candidates: scanned={}, availableActors={}, cap={}, scanCapped={}, playersEnabled={}, mobsEnabled={}, "
                 "actorIsPlayerAvailable={}, invisibilityCheckAvailable={}, losCheckAvailable={}, blockSourceAvailable={}; "
                 "rejects=nullOrLocal:{}, playersDisabled:{}, creativeOrSpectator:{}, mobsDisabled:{}, mobCategory:{}, "
                 "whitelisted:{}, invisible:{}, invalidGeometry:{}, lineOfSight:{}, invalidDistance:{}, outOfRange:{}, "
                 "invalidTargetDistance:{}, invalidAngle:{}, outsideFov:{}, passedFilters:{}",
-                scannedActors, kMaxActorsScannedPerTick, m_targetPlayers, m_targetMobs,
+                scannedActors, availableActors, kMaxActorsScannedPerTick,
+                availableActors > kMaxActorsScannedPerTick, m_targetPlayers, m_targetMobs,
                 g_actorIsPlayer != nullptr, g_actorIsInvisible != nullptr,
                 g_isSolidBlockingBlock != nullptr, blockSource != nullptr,
                 rejects.nullOrLocal, rejects.playersDisabled, rejects.creativeOrSpectator,
