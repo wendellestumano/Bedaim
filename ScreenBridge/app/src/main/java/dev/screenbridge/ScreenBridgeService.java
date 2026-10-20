@@ -752,7 +752,6 @@ public class ScreenBridgeService extends Service {
     }
 
     public static String getLastRecordingUri() { return lastRecordingUri; }
-    public static boolean isRecording() { ScreenBridgeRecorder r = null; return running && lastRecordingUri != null && false; }
 
     private synchronized boolean startRecording() {
         if (recorder != null && recorder.isAccepting()) return true;
