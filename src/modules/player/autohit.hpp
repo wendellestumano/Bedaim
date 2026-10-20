@@ -32,7 +32,7 @@ private:
     std::atomic<int> m_lastGateDecision{-1};
     std::atomic_bool m_containerOpen{false};
     std::atomic_bool m_chatOpen{false};
-    float m_attackRange = 3.2f;
+    float m_attackRange = 3.0f;
 
     // Weapon profiles default to swords only. Each category has its own
     // enable switch and CPS cap; unknown/non-weapon items never dispatch attacks.
