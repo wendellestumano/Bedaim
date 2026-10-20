@@ -57,3 +57,18 @@ The two AutoHit diagnostic calls pass event label and context as separate parame
 - Evidence: after opening draft PR #43 and updating its head to `22147719f4405145d85074613edd3d2c2243f457`, the GitHub connector reports no associated workflow runs and no combined-status checks. The workflow file's push branch allowlist does not include `experiment/build898-autohit-compile-fps-20261020`, although `pull_request` is configured.
 - Hypothesis: a push-triggered workflow run can be made deterministic for this experimental branch by adding its exact name to the existing push allowlist; this does not change build commands or production branches.
 - Intended test: update only the branch allowlist, then inspect the actual run associated with the resulting commit, read the job logs, confirm all host tests, Android ARM64 compilation, and the `BedrockTools-levipack` artifact. If no run appears, record that limitation rather than claiming success.
+
+
+## Follow-up after workflow trigger edit — 2026-10-20
+- Added `experiment/build898-autohit-compile-fps-20261020` to the existing `.github/workflows/build.yml` push branch allowlist, without changing build steps. Commit: `556f5918553b1659ba9d6489d2a549a2d7f05bb8`.
+- After this change, the GitHub connector still returns no workflow runs and no combined-status checks for the new commit. It cannot confirm whether a push-triggered run exists; do not claim CI ran or passed. PR #43 remains open/draft and unmerged.
+- Latest experimental branch commits: `71574a75a17cc5111ed15cddfb702be4ab73a945` (pre-edit hypothesis log), `f4a007bde4b67dbbbd3d86c93e1db1d55962fb4a` (AutoHit diagnostic arity fix), `240a9e9c7fb4cba6d1d6e508523dd223d9aeb3a7` (pre-edit GameHooks evidence), `22147719f4405145d85074613edd3d2c2243f457` (GameHooks diagnostic arity fix), `c2625b7062c01bedfb6047235f1cbccfc3ecdf4b` (CI-trigger hypothesis), `556f5918553b1659ba9d6489d2a549a2d7f05bb8` (experimental branch enabled in push workflow), then this progress update.
+- Current source edits: `src/modules/player/autohit.cpp` and `src/core/GameHooks.cpp`; workflow edit: `.github/workflows/build.yml`; progress log: this file. No unrelated module source changed.
+- Local build is unavailable in this session, and no new `.levipack` artifact is available. Historical Build #900/#901 logs confirm their respective failures; the new revision remains unvalidated by an actual workflow run.
+- Performance code inspection: `MaceSwapperModule::processPlayerTick` holds `m_stateMutex` for the whole callback, including calls into InventoryAccess, AimAssist snapshot, GameMode resolution, attack-route validation and possible slot restoration. `SwordSwapperModule::processPlayerTick` also holds its mutex across tick logic and inventory reads. This is evidence of long critical sections, but not proof that they explain FPS spikes; avoid speculative lock restructuring until profiling or runtime diagnostics correlate the spikes.
+
+## Next steps
+1. Obtain a real Actions run for PR #43 / current head, inspect the latest job logs and verify host tests, Android ARM64 compilation, and the packaged `BedrockTools.levipack` artifact.
+2. If CI does not run, inspect repository Actions permissions/settings or use an authorized manual workflow dispatch; do not repeatedly rewrite source to force a run.
+3. Once compile errors are cleared, return to AutoHit's runtime route: earlier logs indicated missing public/survival signatures and no server-confirmed damage. Capture fresh diagnostics without manual attack input.
+4. Investigate Macefall/ShiftBlade spikes as a separate experimental change after obtaining a timing trace. Preserve BedrockAim and BedrockBound and compare against Build #898.
