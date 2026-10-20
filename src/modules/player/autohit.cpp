@@ -430,7 +430,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         "; contact_point=" + vecText(hitPoint) +
         "; target_bounds=" + boundsText(targetBounds);
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug,
-        "AutoHit", "attack_attempt_begin", attemptContext);
+        "AutoHit", std::string("attack_attempt_begin; ") + attemptContext);
 
     const int targetHurtTimeBefore =
         reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
@@ -466,7 +466,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         "; native_call_duration_us=" + std::to_string(nativeCallDurationUs) +
         "; wrapper_result_is_not_server_damage_confirmation";
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
-        "AutoHit", "attack_attempt_result", attemptResult);
+        "AutoHit", std::string("attack_attempt_result; ") + attemptResult);
     reportGate(accepted ? 201 : 202,
         accepted ? "native_attack_accepted" : "native_attack_rejected",
         std::string("target=0x") + pointerHex(target) +
