@@ -1,4 +1,4 @@
-# Changelog
+## 2026-10-20 — ScreenBridge session recording and live-control groundwork\n\n- Added an experimental MP4 recorder that encodes frames from the existing MediaProjection capture pipeline, avoiding a second VirtualDisplay.\n- Added app controls to start/stop a session and share the finalized MP4 through Android's share sheet (choose ChatGPT to attach it).\n- Added token-protected local recording start/stop/status routes and diagnostics fields.\n- Kept capture permission and foreground-service requirements unchanged.\n- Live AI vision still needs an authenticated remote relay; low-latency action acknowledgement is not equivalent to end-to-end live visual feedback.\n\n# Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
 
