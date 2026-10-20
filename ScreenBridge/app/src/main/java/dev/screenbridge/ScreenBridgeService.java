@@ -55,6 +55,9 @@ public class ScreenBridgeService extends Service {
     public static final String ACTION_TOGGLE_OVERLAY = "dev.screenbridge.action.TOGGLE_OVERLAY";
     public static final String ACTION_START_RECORDING = "dev.screenbridge.action.START_RECORDING";
     public static final String ACTION_STOP_RECORDING = "dev.screenbridge.action.STOP_RECORDING";
+    public static final String ACTION_RELAY_CONNECT = "dev.screenbridge.action.RELAY_CONNECT";
+    public static final String ACTION_RELAY_DISCONNECT = "dev.screenbridge.action.RELAY_DISCONNECT";
+    public static final String EXTRA_RELAY_URL = "relay_base_url";
     private static volatile String lastRecordingUri = "";
     private static final String CHANNEL = "screenbridge_capture";
     private static final int PORT = 18766;
@@ -84,6 +87,7 @@ public class ScreenBridgeService extends Service {
     private final Object frameLock = new Object();
     private volatile byte[] latestJpeg;
     private volatile ScreenBridgeRecorder recorder;
+    private volatile ScreenBridgeRelayClient relayClient;
     // Frame timestamps and state TTLs use monotonic elapsed time, not wall clock.
     private volatile long latestFrameAt;
     private volatile long lastImageCallbackAt;
@@ -162,6 +166,11 @@ public class ScreenBridgeService extends Service {
             startRecording();
         } else if (intent != null && ACTION_STOP_RECORDING.equals(intent.getAction())) {
             new Thread(this::stopRecording, "ScreenBridge-StopRecorder").start();
+        } else if (intent != null && ACTION_RELAY_CONNECT.equals(intent.getAction())) {
+            String relayUrl = intent.getStringExtra(EXTRA_RELAY_URL);
+            main.post(() -> connectRelay(relayUrl));
+        } else if (intent != null && ACTION_RELAY_DISCONNECT.equals(intent.getAction())) {
+            main.post(this::disconnectRelay);
         }
         if (intent != null && intent.hasExtra(EXTRA_RESULT_DATA)) {
             int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
@@ -202,7 +211,8 @@ public class ScreenBridgeService extends Service {
                     projectionStartedAtMs = 0;
                     recoveryAwaitingFreshFrame = false;
                     captureError = "Screen capture permission was revoked; reopen ScreenBridge and authorize again";
-                    stopRecording();
+                    disconnectRelay();
+        stopRecording();
         synchronized (captureLock) { releaseCapture(); }
                 }
             }, main);
@@ -278,11 +288,14 @@ public class ScreenBridgeService extends Service {
             cropped.compress(Bitmap.CompressFormat.JPEG, 72, out);
             byte[] jpeg = out.toByteArray();
             if (jpeg.length > 4) {
+                long capturedAt = SystemClock.elapsedRealtime();
                 synchronized (frameLock) {
                     latestJpeg = jpeg;
-                    latestFrameAt = SystemClock.elapsedRealtime();
+                    latestFrameAt = capturedAt;
                     frameCount++;
                 }
+                ScreenBridgeRelayClient remote = relayClient;
+                if (remote != null) remote.offerFrame(jpeg, capturedAt);
                 // Clear transient capture errors only after a frame is successfully encoded.
                 captureError = "";
                 if (recoveryAwaitingFreshFrame) {
@@ -577,6 +590,8 @@ public class ScreenBridgeService extends Service {
                 j.put("captureReady", freshFrame);
                 j.put("recording", recorder != null && recorder.isAccepting());
                 j.put("lastRecordingUriAvailable", !lastRecordingUri.isEmpty());
+                j.put("relayConnected", relayClient != null && relayClient.isAuthenticated());
+                j.put("relayState", getSharedPreferences("bridge", MODE_PRIVATE).getString("relay_state", "Desconectado"));
                 j.put("cachedFrameAvailable", latestJpeg != null);
                 j.put("frameAgeMs", frameAge);
                 j.put("frameFreshnessLimitMs", FRESH_FRAME_MAX_AGE_MS);
@@ -752,6 +767,40 @@ public class ScreenBridgeService extends Service {
     }
 
     public static String getLastRecordingUri() { return lastRecordingUri; }
+
+    private synchronized void connectRelay(String relayUrl) {
+        if (!running) {
+            getSharedPreferences("bridge", MODE_PRIVATE).edit()
+                    .putString("relay_state", "Inicie a captura antes de conectar")
+                    .putString("relay_error", "ScreenBridge não está ativo")
+                    .apply();
+            return;
+        }
+        disconnectRelay();
+        try {
+            ScreenBridgeRelayClient next = ScreenBridgeRelayClient.create(this, relayUrl);
+            relayClient = next;
+            next.start();
+            getSharedPreferences("bridge", MODE_PRIVATE).edit().putString("relay_base_url", relayUrl.trim()).apply();
+        } catch (Exception e) {
+            relayClient = null;
+            getSharedPreferences("bridge", MODE_PRIVATE).edit()
+                    .putString("relay_state", "URL do relay inválida")
+                    .putString("relay_error", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())
+                    .apply();
+        }
+    }
+
+    private synchronized void disconnectRelay() {
+        ScreenBridgeRelayClient old = relayClient;
+        relayClient = null;
+        if (old != null) old.stop();
+        getSharedPreferences("bridge", MODE_PRIVATE).edit()
+                .putString("relay_state", "Desconectado")
+                .putString("relay_pair_code", "")
+                .putString("relay_error", "")
+                .apply();
+    }
 
     private synchronized boolean startRecording() {
         if (recorder != null && recorder.isAccepting()) return true;
