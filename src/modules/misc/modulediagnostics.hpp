@@ -8,6 +8,7 @@
 #include <thread>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class ModuleDiagnosticsModule final : public Module {
 public:
@@ -63,4 +64,7 @@ private:
     int m_overlayTextSize = 12;
     int m_overlayHeight = 520;
     int m_overlayPage = 0;
+    std::chrono::steady_clock::time_point m_nextOverlayRefresh{};
+    std::size_t m_cachedOverlayPageCount = 1;
+    std::vector<std::pair<std::string, std::uint32_t>> m_cachedOverlayLines;
 };
