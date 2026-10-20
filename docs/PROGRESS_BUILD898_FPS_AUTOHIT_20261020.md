@@ -28,3 +28,10 @@ The two AutoHit diagnostic calls pass event label and context as separate parame
 - No source files changed at the time this hypothesis/test record was written.
 - `main` is untouched. No merge is planned.
 - Build #898 is the user's stated last tested baseline; Builds #900/#901 are reported failures, not assumed to have the same root cause until their logs are inspected.
+
+
+## New evidence discovered after the first source correction (before next edit)
+- Build run https://github.com/wendellestumano/Bedaim/actions/runs/39283185649 failed in Android ARM64 compilation at `src/core/GameHooks.cpp:2080`: the call to `diagnostics::log` passes four arguments, while the declaration accepts three. Its host regression tests passed; no artifact was produced.
+- Build run https://github.com/wendellestumano/Bedaim/actions/runs/39297748350 failed at `src/modules/player/autohit.cpp:433` and `:469` with the same API mismatch. Its host regression tests passed; no artifact was produced.
+- Updated hypothesis: the compile failure is not isolated to AutoHit; at least one analogous four-argument call in GameHooks remains in this branch. The AutoHit-only patch cannot yield an Android package until this independently evidenced mismatch is also fixed.
+- Intended next test: combine the `native_attack_dispatch_result` event name with its existing `dispatchResult` string in one message argument, preserving all attack-route logic. Re-audit this call against the three-argument API, then rerun CI and inspect the actual build log/artifact. Do not modify attack ABI or FPS-related modules in this compile fix.
