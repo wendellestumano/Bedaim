@@ -112,6 +112,45 @@ public class MainActivity extends Activity {
         });
         content.addView(copy);
 
+        Button recordStart = button("Começar a gravar sessão");
+        recordStart.setOnClickListener(v -> {
+            if (!ScreenBridgeService.isRunning()) {
+                Toast.makeText(this, "Autorize a captura e inicie o ScreenBridge primeiro.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            Intent action = new Intent(this, ScreenBridgeService.class);
+            action.setAction(ScreenBridgeService.ACTION_START_RECORDING);
+            startService(action);
+            Toast.makeText(this, "Solicitação de gravação enviada.", Toast.LENGTH_SHORT).show();
+        });
+        content.addView(recordStart);
+
+        Button recordStop = button("Parar gravação e finalizar MP4");
+        recordStop.setOnClickListener(v -> {
+            Intent action = new Intent(this, ScreenBridgeService.class);
+            action.setAction(ScreenBridgeService.ACTION_STOP_RECORDING);
+            startService(action);
+            Toast.makeText(this, "Finalizando vídeo; aguarde alguns segundos antes de compartilhar.", Toast.LENGTH_LONG).show();
+        });
+        content.addView(recordStop);
+
+        Button shareRecording = button("Compartilhar última gravação");
+        shareRecording.setOnClickListener(v -> {
+            String value = ScreenBridgeService.getLastRecordingUri();
+            if (value == null || value.isEmpty()) {
+                Toast.makeText(this, "Nenhum vídeo finalizado disponível ainda.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            Uri video = Uri.parse(value);
+            Intent share = new Intent(Intent.ACTION_SEND);
+            share.setType("video/mp4");
+            share.putExtra(Intent.EXTRA_STREAM, video);
+            share.setClipData(ClipData.newUri(getContentResolver(), "Gravação ScreenBridge", video));
+            share.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(share, "Enviar gravação para análise"));
+        });
+        content.addView(shareRecording);
+
         Button health = button("Verificar conexão");
         health.setOnClickListener(v -> {
             endpoint.setText("Base local: " + baseUrl() + "\nCaptura: " + baseUrl() + "/" + token + "/screen.jpg\nEstado: consulte /" + token + "/health");
