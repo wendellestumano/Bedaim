@@ -1044,17 +1044,14 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
 
     // Include a compact tail of runtime events in the JSON report so the report
     // can show both registry health and the most recent observed failure gates.
-    const auto runtimeEvents = bedrocktools::diagnostics::snapshot();
-    const std::size_t firstRuntimeEvent = runtimeEvents.size() > 128
-        ? runtimeEvents.size() - 128 : 0;
+    const auto runtimeEvents = bedrocktools::diagnostics::snapshotTail(128);
     report["runtime_log"] = {
-        {"buffered_entries", runtimeEvents.size()},
+        {"buffered_entries", bedrocktools::diagnostics::count()},
         {"capacity", bedrocktools::diagnostics::bufferCapacity()},
         {"dropped_entries", bedrocktools::diagnostics::droppedCount()},
         {"recent_entries", json::array()}
     };
-    for (std::size_t i = firstRuntimeEvent; i < runtimeEvents.size(); ++i) {
-        const auto& entry = runtimeEvents[i];
+    for (const auto& entry : runtimeEvents) {
         report["runtime_log"]["recent_entries"].push_back({
             {"timestamp_ms", entry.timestampMs},
             {"monotonic_ns", entry.monotonicNs},
