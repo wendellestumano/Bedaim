@@ -5,8 +5,9 @@ ScreenBridge is an Android foreground service for authenticated screen capture a
 ## Setup and permission model
 1. Install the stable-signed APK produced by the GitHub Actions workflow.
 2. Enable **ScreenBridge Remote Control** in Android Accessibility settings.
-3. Open ScreenBridge and tap **Authorize screen and start service**. Confirm Android's screen-capture dialog.
-4. Keep the foreground-service notification visible while you want control enabled.
+3. Optional: tap **Mostrar indicador flutuante** and grant ScreenBridge permission to display over other apps. Tap the button again to show or hide the small, non-interactive status pill in the top-right corner.
+4. Open ScreenBridge and tap **Authorize screen and start service**. Confirm Android's screen-capture dialog.
+5. Keep the foreground-service notification visible while you want control enabled.
 
 Screen capture requires explicit Android consent. If Android revokes the session or kills the service, open ScreenBridge and authorize again. Android's system consent cannot be silently persisted across new MediaProjection sessions.
 
@@ -16,6 +17,8 @@ Screen capture requires explicit Android consent. If Android revokes the session
 - The bundle must remain unchanged for every future build. A different signing key can prevent an in-place update and require uninstalling/reinstalling the app, which loses app data and usually requires enabling Accessibility again.
 - The first stable-key migration from an earlier CI debug APK may still require one clean reinstall because previous GitHub-hosted runners generated temporary debug keys. After migration, all workflow-built APKs reuse the same certificate and have monotonically increasing CI version codes.
 - A missing signing secret deliberately produces no APK. Do not install locally built/default-debug-signed APKs as replacements for the stable-signed app.
+
+The overlay never consumes touch input (`FLAG_NOT_TOUCHABLE`); it only shows `EXECUTANDO`, `ATIVO`, `OCIOSO`, `INATIVO`, `SEM FRAME`, or `ERRO`. It is optional and can be hidden from the app at any time.
 
 ## Local endpoints
 - `GET /health` — service, projection, accessibility, cached-frame freshness, frame count, and capture error diagnostics.
