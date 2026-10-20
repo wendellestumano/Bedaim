@@ -155,3 +155,9 @@ No source code has been edited yet on this new diagnostics-focused experimental 
 - Code commit built by CI: `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96`. Code changes: `src/modules/misc/modulediagnostics.cpp`, `src/modules/misc/modulediagnostics.hpp`; progress file contained the pre-edit hypothesis. No other source modules changed by PR #47.
 - Meaning: this confirms the diagnostics I/O throttle compiles and packages. It does not prove FPS improved on device; the cumulative files now sync every 60 s and on session rotation, rolling snapshots remain on a minimum 5-second cadence, and manual exports are unchanged. Validate with FPS/frametime comparison and confirm both current-session files stay fresh.
 - `main` remains untouched and there is no merge. A result entry is being appended now; since the PR workflow runs on updates, that documentation-only commit may queue another CI run. The successful artifact above corresponds to the code commit listed above, not any later documentation commit.
+
+
+## Documentation follow-up CI — Build #923 status
+- Updating this log on the PR queued a documentation-head validation: https://github.com/wendellestumano/Bedaim/actions/runs/39450581235, head `cb359b07a9bd55a87fc9b51279f9da73322639c4`.
+- At the last actual status check, setup xmake, host test dependency setup, all seven host regression tests, and NDK r28c setup had succeeded. The Android ARM64 `Build and package` step remained in progress; artifact upload had not started. Therefore no success or artifact is claimed for #923 yet.
+- The code revision `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96` was independently validated by Build #922 success and its artifact. #923 differs only by the added persistent validation-results record.
