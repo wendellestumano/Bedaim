@@ -44,12 +44,20 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
     private volatile boolean registered;
     private volatile boolean authenticated;
     private volatile boolean reconnectScheduled;
+    private volatile boolean controllerConnected;
+    private volatile boolean pairRefreshScheduled;
+    private static final long PAIR_CODE_REFRESH_MS = 125_000L;
     private volatile long lastFrameAtMs;
     private volatile long lastFrameSentAtMs;
     private volatile int reconnectDelayMs = 1500;
     private final Runnable reconnectTask = () -> {
         reconnectScheduled = false;
         if (!stopped) connectOrRegister();
+    };
+    private final Runnable pairRefreshTask = () -> {
+        pairRefreshScheduled = false;
+        if (stopped || controllerConnected) return;
+        new Thread(this::refreshPairingCode, "ScreenBridge-RelayPairRefresh").start();
     };
 
     private ScreenBridgeRelayClient(Context context, String baseUrl) {
@@ -102,6 +110,9 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
     void start() {
         stopped = false;
         registered = false;
+        controllerConnected = false;
+        main.removeCallbacks(pairRefreshTask);
+        pairRefreshScheduled = false;
         setStatus("Registrando dispositivo…", "", "");
         new Thread(this::connectOrRegister, "ScreenBridge-RelayConnect").start();
     }
@@ -110,7 +121,10 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
         stopped = true;
         authenticated = false;
         main.removeCallbacks(reconnectTask);
+        main.removeCallbacks(pairRefreshTask);
         reconnectScheduled = false;
+        pairRefreshScheduled = false;
+        controllerConnected = false;
         WebSocket ws = socket;
         socket = null;
         if (ws != null) ws.close(1000, "User disconnected");
@@ -154,6 +168,7 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
                 reconnectDelayMs = 1500;
                 String code = result.optString("pairCode", "");
                 setStatus(code.isEmpty() ? "Registrado; conectando…" : "Código de pareamento ativo", code, "");
+                if (!code.isEmpty() && !controllerConnected) schedulePairRefreshAfter(PAIR_CODE_REFRESH_MS);
                 return true;
             }
         } catch (Exception e) {
@@ -203,6 +218,19 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
                 authenticated = true;
                 reconnectDelayMs = 1500;
                 setStatus("Relay conectado — pronto para parear", currentPairCode(), "");
+            } else if ("device-status".equals(type)) {
+                String relayStatus = message.optString("status", "");
+                if ("controller-online".equals(relayStatus)) {
+                    controllerConnected = true;
+                    main.removeCallbacks(pairRefreshTask);
+                    pairRefreshScheduled = false;
+                    setStatus("Relay conectado — controlador ativo", "", "");
+                } else if ("controller-disconnected".equals(relayStatus)
+                        || "controller-offline".equals(relayStatus)) {
+                    controllerConnected = false;
+                    setStatus("Relay conectado — aguardando pareamento", "", "");
+                    schedulePairRefreshAfter(1500L);
+                }
             } else if ("error".equals(type) || "auth-error".equals(type)) {
                 authenticated = false;
                 registered = false;
@@ -213,8 +241,11 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
             } else if ("command".equals(type)) {
                 handleCommand(webSocket, message);
             } else if ("stop-control".equals(type)) {
-                sendResult(webSocket, message.optString("id", ""), "stop-control", false, "Controle remoto encerrado pelo relay");
-                stop();
+                controllerConnected = false;
+                sendResult(webSocket, message.optString("id", ""), "stop-control", true,
+                        "Controle remoto encerrado; conexão do dispositivo mantida");
+                setStatus("Relay conectado — aguardando pareamento", "", "");
+                schedulePairRefreshAfter(1500L);
             }
         } catch (Exception e) {
             Log.w(TAG, "Ignoring malformed relay message", e);
@@ -249,8 +280,12 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
                         android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_HOME);
                 if (!accepted) detail = "Accessibility service unavailable";
             } else if ("stop-control".equals(op)) {
-                sendResult(ws, id, op, true, "Remote control disconnected by request");
-                stop();
+                controllerConnected = false;
+                accepted = true;
+                detail = "Remote control ended; device relay remains connected";
+                setStatus("Relay conectado — aguardando pareamento", "", "");
+                schedulePairRefreshAfter(1500L);
+                sendResult(ws, id, op, true, detail);
                 return;
             } else {
                 detail = "Unsupported operation";
@@ -320,6 +355,24 @@ final class ScreenBridgeRelayClient extends WebSocketListener {
         int delay = reconnectDelayMs;
         reconnectDelayMs = Math.min(30000, reconnectDelayMs * 2);
         main.postDelayed(reconnectTask, delay);
+    }
+
+    private void refreshPairingCode() {
+        if (stopped || controllerConnected) return;
+        if (!registerDevice()) {
+            schedulePairRefreshAfter(10_000L);
+            return;
+        }
+        if (authenticated && !controllerConnected) {
+            setStatus("Relay conectado — aguardando pareamento", currentPairCode(), "");
+        }
+    }
+
+    private void schedulePairRefreshAfter(long delayMs) {
+        if (stopped || controllerConnected) return;
+        main.removeCallbacks(pairRefreshTask);
+        pairRefreshScheduled = true;
+        main.postDelayed(pairRefreshTask, Math.max(1_000L, delayMs));
     }
 
     private String currentPairCode() {
