@@ -20,6 +20,7 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.WindowManager;
@@ -54,6 +55,9 @@ public class ScreenBridgeService extends Service {
     public static final String ACTION_TOGGLE_OVERLAY = "dev.screenbridge.action.TOGGLE_OVERLAY";
     private static final String CHANNEL = "screenbridge_capture";
     private static final int PORT = 18766;
+    private static final long FRESH_FRAME_MAX_AGE_MS = 1800L;
+    private static final long FRAME_WAIT_TIMEOUT_MS = 900L;
+    private static final long GPT_STATE_TTL_MS = 90000L;
     private static volatile boolean running = false;
 
     private final AtomicBoolean stopped = new AtomicBoolean(false);
@@ -64,17 +68,27 @@ public class ScreenBridgeService extends Service {
     private ServerSocket server;
     private Thread acceptThread;
     private volatile MediaProjection projection;
-    private VirtualDisplay virtualDisplay;
-    private ImageReader imageReader;
+    private volatile VirtualDisplay virtualDisplay;
+    private volatile ImageReader imageReader;
     private DisplayManager displayManager;
     private String token = "";
     private volatile int width, height, density;
     private final Object captureLock = new Object();
     private final Object frameLock = new Object();
     private volatile byte[] latestJpeg;
+    // Frame timestamps and state TTLs use monotonic elapsed time, not wall clock.
     private volatile long latestFrameAt;
+    private volatile long lastImageCallbackAt;
     private volatile long frameCount;
+    private volatile long imageCallbackCount;
+    private volatile long nullImageCount;
+    private volatile long encodingFailureCount;
+    private volatile long captureConfigCount;
     private volatile String captureError = "";
+    private volatile String lastControlError = "";
+    private volatile String lastAction = "none";
+    private volatile boolean lastActionAccepted;
+    private volatile long chatGptStateUpdatedAtMs;
     private volatile boolean projectionActive;
     private volatile long startedAt;
     private volatile long lastActionAtMs;
@@ -184,6 +198,7 @@ public class ScreenBridgeService extends Service {
             width = newW;
             height = newH;
             density = newD;
+            captureConfigCount++;
             ImageReader newReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
             newReader.setOnImageAvailableListener(this::onImageAvailable, captureHandler);
             if (virtualDisplay == null) {
@@ -202,12 +217,17 @@ public class ScreenBridgeService extends Service {
     }
 
     private void onImageAvailable(ImageReader reader) {
+        lastImageCallbackAt = SystemClock.elapsedRealtime();
+        imageCallbackCount++;
         Image image = null;
         Bitmap padded = null;
         Bitmap cropped = null;
         try {
             image = reader.acquireLatestImage();
-            if (image == null) return;
+            if (image == null) {
+                nullImageCount++;
+                return;
+            }
             Image.Plane plane = image.getPlanes()[0];
             ByteBuffer buffer = plane.getBuffer();
             int pixelStride = plane.getPixelStride();
@@ -223,13 +243,19 @@ public class ScreenBridgeService extends Service {
             if (jpeg.length > 4) {
                 synchronized (frameLock) {
                     latestJpeg = jpeg;
-                    latestFrameAt = System.currentTimeMillis();
+                    latestFrameAt = SystemClock.elapsedRealtime();
                     frameCount++;
                 }
+                // Clear transient capture errors only after a frame is successfully encoded.
                 captureError = "";
+            } else {
+                encodingFailureCount++;
+                captureError = "Frame encoding returned an empty JPEG";
             }
         } catch (Exception e) {
+            encodingFailureCount++;
             captureError = "Frame encoding failed: " + e.getClass().getSimpleName();
+            Log.w("ScreenBridge", captureError, e);
         } finally {
             if (image != null) image.close();
             if (cropped != null && cropped != padded) cropped.recycle();
@@ -250,6 +276,7 @@ public class ScreenBridgeService extends Service {
         }
         latestJpeg = null;
         latestFrameAt = 0;
+        lastImageCallbackAt = 0;
     }
 
     private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
@@ -284,7 +311,7 @@ public class ScreenBridgeService extends Service {
         try {
             overlayWindowManager = (WindowManager)getSystemService(WINDOW_SERVICE);
             TextView pill = new TextView(this);
-            pill.setText("SB · OCIOSO  |  GPT · DESCONHECIDO");
+            pill.setText("SB · INICIANDO | CTRL · … | GPT · DESCONHECIDO");
             pill.setTextSize(10.5f);
             pill.setTextColor(0xFFFFFFFF);
             pill.setTypeface(null, 1);
@@ -329,35 +356,54 @@ public class ScreenBridgeService extends Service {
     private void updateStatusOverlay() {
         TextView pill = statusOverlay;
         if (pill == null) return;
-        long now = System.currentTimeMillis();
-        String state;
-        String label;
-        int color;
+        long now = SystemClock.elapsedRealtime();
         long frameAge = latestFrameAt == 0 ? Long.MAX_VALUE : Math.max(0, now - latestFrameAt);
-        if (!captureError.isEmpty()) {
-            state = "error"; label = "SB · ERRO"; color = 0xFFB3261E;
-        } else if (!running || !projectionActive || latestJpeg == null) {
-            state = "idle"; label = "SB · INATIVO"; color = 0xFF34313A;
-        } else if (now - lastActionAtMs < 900) {
-            state = "working"; label = "SB · EXECUTANDO"; color = 0xFF8A4F00;
-        } else if (frameAge > 3000) {
-            state = "stale"; label = "SB · SEM FRAME"; color = 0xFF8B2D22;
-        } else if (lastActionAtMs > 0 && now - lastActionAtMs < 8000) {
-            state = "active"; label = "SB · ATIVO"; color = 0xFF146C43;
+        String captureLabel;
+        String captureState;
+        int color;
+
+        if (!running) {
+            captureState = "stopped"; captureLabel = "SB · INATIVO"; color = 0xFF34313A;
+        } else if (!projectionActive || projection == null) {
+            captureState = "no-projection"; captureLabel = "SB · SEM PROJEÇÃO"; color = 0xFF8B2D22;
+        } else if (!captureError.isEmpty()) {
+            captureState = "error"; captureLabel = "SB · ERRO"; color = 0xFFB3261E;
+        } else if (latestJpeg == null || frameAge > 3000L) {
+            captureState = "no-frame"; captureLabel = "SB · SEM FRAME"; color = 0xFF8B2D22;
+        } else if (frameAge > FRESH_FRAME_MAX_AGE_MS) {
+            captureState = "delayed"; captureLabel = "SB · FRAME ATRASADO"; color = 0xFF8A4F00;
+        } else if (lastActionAtMs > 0 && now - lastActionAtMs < 900L) {
+            captureState = "working"; captureLabel = "SB · EXECUTANDO"; color = 0xFF8A4F00;
+        } else if (lastActionAtMs > 0 && now - lastActionAtMs < 8000L) {
+            captureState = "active"; captureLabel = "SB · ATIVO"; color = 0xFF146C43;
         } else {
-            state = "idle"; label = "SB · OCIOSO"; color = 0xFF34313A;
+            captureState = "idle"; captureLabel = "SB · OCIOSO"; color = 0xFF34313A;
         }
+
+        String controlLabel;
+        String controlState;
+        if (!ScreenControlAccessibilityService.isConnected()) {
+            controlState = "offline"; controlLabel = "CTRL · OFF";
+        } else if (!lastControlError.isEmpty()) {
+            controlState = "error"; controlLabel = "CTRL · ERRO";
+        } else if (lastActionAtMs > 0 && now - lastActionAtMs < 900L) {
+            controlState = "working"; controlLabel = "CTRL · EXECUTANDO";
+        } else {
+            controlState = "ready"; controlLabel = "CTRL · PRONTO";
+        }
+
+        String gpt = getEffectiveChatGptState();
         String gptLabel;
-        String gpt = chatGptState;
         if ("thinking".equals(gpt)) gptLabel = "GPT · PENSANDO";
         else if ("working".equals(gpt)) gptLabel = "GPT · TRABALHANDO";
         else if ("done".equals(gpt)) gptLabel = "GPT · CONCLUÍDO";
         else gptLabel = "GPT · DESCONHECIDO";
-        String combinedState = state + "|" + gpt;
+
+        String combinedState = captureState + "|" + controlState + "|" + gpt;
         if (!combinedState.equals(lastOverlayState)) {
-            pill.setText(label + "  |  " + gptLabel);
+            pill.setText(captureLabel + "  |  " + controlLabel + "  |  " + gptLabel);
             pill.setBackground(statusBackground(color));
-            pill.setContentDescription("ScreenBridge: " + label + ". ChatGPT: " + gptLabel);
+            pill.setContentDescription("Captura: " + captureLabel + ". Controle: " + controlLabel + ". ChatGPT: " + gptLabel);
             lastOverlayState = combinedState;
         }
     }
@@ -409,16 +455,40 @@ public class ScreenBridgeService extends Service {
             while (true) { String line = in.readLine(); if (line == null || line.isEmpty()) break; }
             URI uri = URI.create(target);
             String path = uri.getPath();
-            if ("/health".equals(path)) {
+            if ("/health".equals(path) || "/diagnostics".equals(path)) {
                 JSONObject j = new JSONObject();
+                long now = SystemClock.elapsedRealtime();
+                long frameAge = latestFrameAt == 0 ? -1 : Math.max(0, now - latestFrameAt);
+                long callbackAge = lastImageCallbackAt == 0 ? -1 : Math.max(0, now - lastImageCallbackAt);
+                long actionAge = lastActionAtMs == 0 ? -1 : Math.max(0, now - lastActionAtMs);
+                long gptAge = chatGptStateUpdatedAtMs == 0 ? -1 : Math.max(0, now - chatGptStateUpdatedAtMs);
+                boolean controlReady = ScreenControlAccessibilityService.isConnected();
+                boolean freshFrame = latestJpeg != null && latestFrameAt > 0 && frameAge >= 0 && frameAge <= FRESH_FRAME_MAX_AGE_MS;
                 j.put("ok", true);
                 j.put("running", running);
                 j.put("projection", projectionActive && projection != null);
-                j.put("accessibility", ScreenControlAccessibilityService.isConnected());
-                j.put("captureReady", latestJpeg != null);
-                j.put("frameAgeMs", latestFrameAt == 0 ? -1 : Math.max(0, System.currentTimeMillis() - latestFrameAt));
+                j.put("accessibility", controlReady);
+                j.put("controlReady", controlReady);
+                j.put("captureReady", freshFrame);
+                j.put("cachedFrameAvailable", latestJpeg != null);
+                j.put("frameAgeMs", frameAge);
+                j.put("frameFreshnessLimitMs", FRESH_FRAME_MAX_AGE_MS);
                 j.put("frameCount", frameCount);
+                j.put("imageCallbackCount", imageCallbackCount);
+                j.put("nullImageCount", nullImageCount);
+                j.put("encodingFailureCount", encodingFailureCount);
+                j.put("captureConfigCount", captureConfigCount);
+                j.put("lastImageCallbackAgeMs", callbackAge);
+                j.put("virtualDisplayActive", virtualDisplay != null);
+                j.put("imageReaderActive", imageReader != null);
                 j.put("captureError", captureError);
+                j.put("lastAction", lastAction);
+                j.put("lastActionAccepted", lastActionAccepted);
+                j.put("lastActionAgeMs", actionAge);
+                j.put("lastControlError", lastControlError);
+                j.put("chatGptState", getEffectiveChatGptState());
+                j.put("chatGptStateAgeMs", gptAge);
+                j.put("chatGptStateTtlMs", GPT_STATE_TTL_MS);
                 j.put("serverUptimeMs", Math.max(0, System.currentTimeMillis() - startedAt));
                 int[] size = ScreenControlAccessibilityService.screenSize();
                 j.put("controlWidth", size[0] > 0 ? size[0] : width);
@@ -440,17 +510,34 @@ public class ScreenBridgeService extends Service {
                     return;
                 }
                 chatGptState = next;
+                chatGptStateUpdatedAtMs = SystemClock.elapsedRealtime();
                 main.post(this::updateStatusOverlay);
                 JSONObject j = new JSONObject();
                 j.put("ok", true);
-                j.put("chatGptState", chatGptState);
+                j.put("chatGptState", getEffectiveChatGptState());
+                j.put("chatGptStateAgeMs", 0);
+                j.put("chatGptStateTtlMs", GPT_STATE_TTL_MS);
                 respond(s, 200, "application/json; charset=utf-8", j.toString().getBytes(StandardCharsets.UTF_8));
                 return;
             }
             if ("screen.jpg".equals(route)) {
-                byte[] jpg = awaitFrame(350);
+                byte[] jpg = awaitFreshFrame(FRAME_WAIT_TIMEOUT_MS);
                 if (jpg == null) {
-                    respond(s, 503, "application/json", ("{\"ok\":false,\"error\":\"No frame available\",\"detail\":\"" + jsonEscape(captureError) + "\"}").getBytes(StandardCharsets.UTF_8));
+                    JSONObject j = new JSONObject();
+                    long now = SystemClock.elapsedRealtime();
+                    long age = latestFrameAt == 0 ? -1 : Math.max(0, now - latestFrameAt);
+                    long callbackAge = lastImageCallbackAt == 0 ? -1 : Math.max(0, now - lastImageCallbackAt);
+                    j.put("ok", false);
+                    j.put("error", "No fresh frame available");
+                    j.put("frameAgeMs", age);
+                    j.put("frameFreshnessLimitMs", FRESH_FRAME_MAX_AGE_MS);
+                    j.put("frameCount", frameCount);
+                    j.put("lastImageCallbackAgeMs", callbackAge);
+                    j.put("projection", projectionActive && projection != null);
+                    j.put("virtualDisplayActive", virtualDisplay != null);
+                    j.put("imageReaderActive", imageReader != null);
+                    j.put("captureError", captureError);
+                    respond(s, 503, "application/json; charset=utf-8", j.toString().getBytes(StandardCharsets.UTF_8));
                     return;
                 }
                 respond(s, 200, "image/jpeg", jpg);
@@ -482,10 +569,18 @@ public class ScreenBridgeService extends Service {
                     return;
                 }
                 if (!accepted) {
+                    lastAction = op;
+                    lastActionAccepted = false;
+                    lastActionAtMs = SystemClock.elapsedRealtime();
+                    lastControlError = "Accessibility unavailable or coordinates invalid";
                     respond(s, 409, "application/json", "{\"ok\":false,\"error\":\"accessibility unavailable or coordinates invalid\"}".getBytes(StandardCharsets.UTF_8));
                     return;
                 }
-                lastActionAtMs = System.currentTimeMillis();
+                lastActionAtMs = SystemClock.elapsedRealtime();
+                lastAction = op;
+                lastActionAccepted = accepted;
+                if (accepted) lastControlError = "";
+                else lastControlError = "Accessibility unavailable or coordinates invalid";
                 // Fast-control mode: acknowledge the gesture immediately instead of
                 // blocking the HTTP client while waiting for a new screen frame.
                 // Add async=0 (or waitFrame=1) to preserve the legacy image-after-action response.
@@ -518,22 +613,59 @@ public class ScreenBridgeService extends Service {
         } catch (Exception ignored) { }
     }
 
-    private byte[] awaitFrame(long timeoutMs) {
-        long until = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < until) {
-            byte[] frame = latestJpeg;
-            if (frame != null) return frame.clone();
-            try { Thread.sleep(15); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+    private long ageMs(long timestamp) {
+        if (timestamp <= 0) return -1;
+        return Math.max(0, SystemClock.elapsedRealtime() - timestamp);
+    }
+
+    private String getEffectiveChatGptState() {
+        String state = chatGptState;
+        long updated = chatGptStateUpdatedAtMs;
+        if ("unknown".equals(state) || updated <= 0) return "unknown";
+        long age = Math.max(0, SystemClock.elapsedRealtime() - updated);
+        return age <= GPT_STATE_TTL_MS ? state : "unknown";
+    }
+
+    // Return only a recent cached frame. When stale, wait for a genuinely newer
+    // frame; never silently relabel an old JPEG as a current screenshot.
+    private byte[] awaitFreshFrame(long timeoutMs) {
+        long now = SystemClock.elapsedRealtime();
+        byte[] frame = latestJpeg;
+        long frameAt = latestFrameAt;
+        if (frame != null && frameAt > 0 && now >= frameAt && now - frameAt <= FRESH_FRAME_MAX_AGE_MS) {
+            return frame.clone();
+        }
+
+        long previousFrameAt = frameAt;
+        long until = now + timeoutMs;
+        while (SystemClock.elapsedRealtime() < until) {
+            frame = latestJpeg;
+            frameAt = latestFrameAt;
+            now = SystemClock.elapsedRealtime();
+            if (frame != null && frameAt > previousFrameAt && now >= frameAt
+                    && now - frameAt <= FRESH_FRAME_MAX_AGE_MS) {
+                return frame.clone();
+            }
+            try { Thread.sleep(15); } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
         }
         return null;
     }
 
     private byte[] awaitNewFrame(long previousFrameAt, long timeoutMs) {
-        long until = System.currentTimeMillis() + timeoutMs;
-        while (System.currentTimeMillis() < until) {
+        long until = SystemClock.elapsedRealtime() + timeoutMs;
+        while (SystemClock.elapsedRealtime() < until) {
             byte[] frame = latestJpeg;
-            if (frame != null && latestFrameAt > previousFrameAt) return frame.clone();
-            try { Thread.sleep(15); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
+            long frameAt = latestFrameAt;
+            long now = SystemClock.elapsedRealtime();
+            if (frame != null && frameAt > previousFrameAt && now >= frameAt
+                    && now - frameAt <= FRESH_FRAME_MAX_AGE_MS) return frame.clone();
+            try { Thread.sleep(15); } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
         }
         return null;
     }
