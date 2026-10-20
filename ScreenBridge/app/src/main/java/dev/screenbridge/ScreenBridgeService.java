@@ -53,6 +53,9 @@ public class ScreenBridgeService extends Service {
     public static final String EXTRA_RESULT_CODE = "projection_result_code";
     public static final String EXTRA_RESULT_DATA = "projection_result_data";
     public static final String ACTION_TOGGLE_OVERLAY = "dev.screenbridge.action.TOGGLE_OVERLAY";
+    public static final String ACTION_START_RECORDING = "dev.screenbridge.action.START_RECORDING";
+    public static final String ACTION_STOP_RECORDING = "dev.screenbridge.action.STOP_RECORDING";
+    private static volatile String lastRecordingUri = "";
     private static final String CHANNEL = "screenbridge_capture";
     private static final int PORT = 18766;
     private static final long FRESH_FRAME_MAX_AGE_MS = 1800L;
@@ -80,6 +83,7 @@ public class ScreenBridgeService extends Service {
     private final Object captureLock = new Object();
     private final Object frameLock = new Object();
     private volatile byte[] latestJpeg;
+    private volatile ScreenBridgeRecorder recorder;
     // Frame timestamps and state TTLs use monotonic elapsed time, not wall clock.
     private volatile long latestFrameAt;
     private volatile long lastImageCallbackAt;
@@ -154,6 +158,10 @@ public class ScreenBridgeService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_TOGGLE_OVERLAY.equals(intent.getAction())) {
             main.post(this::toggleStatusOverlay);
+        } else if (intent != null && ACTION_START_RECORDING.equals(intent.getAction())) {
+            startRecording();
+        } else if (intent != null && ACTION_STOP_RECORDING.equals(intent.getAction())) {
+            new Thread(this::stopRecording, "ScreenBridge-StopRecorder").start();
         }
         if (intent != null && intent.hasExtra(EXTRA_RESULT_DATA)) {
             int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
@@ -194,7 +202,8 @@ public class ScreenBridgeService extends Service {
                     projectionStartedAtMs = 0;
                     recoveryAwaitingFreshFrame = false;
                     captureError = "Screen capture permission was revoked; reopen ScreenBridge and authorize again";
-                    synchronized (captureLock) { releaseCapture(); }
+                    stopRecording();
+        synchronized (captureLock) { releaseCapture(); }
                 }
             }, main);
             configureCapture();
@@ -263,6 +272,8 @@ public class ScreenBridgeService extends Service {
             buffer.rewind();
             padded.copyPixelsFromBuffer(buffer);
             cropped = Bitmap.createBitmap(padded, 0, 0, image.getWidth(), image.getHeight());
+            ScreenBridgeRecorder activeRecorder = recorder;
+            if (activeRecorder != null) activeRecorder.submitFrame(cropped);
             ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(16 * 1024, width * height / 8));
             cropped.compress(Bitmap.CompressFormat.JPEG, 72, out);
             byte[] jpeg = out.toByteArray();
@@ -564,6 +575,8 @@ public class ScreenBridgeService extends Service {
                 j.put("accessibility", controlReady);
                 j.put("controlReady", controlReady);
                 j.put("captureReady", freshFrame);
+                j.put("recording", recorder != null && recorder.isAccepting());
+                j.put("lastRecordingUriAvailable", !lastRecordingUri.isEmpty());
                 j.put("cachedFrameAvailable", latestJpeg != null);
                 j.put("frameAgeMs", frameAge);
                 j.put("frameFreshnessLimitMs", FRESH_FRAME_MAX_AGE_MS);
@@ -618,6 +631,31 @@ public class ScreenBridgeService extends Service {
                 j.put("chatGptStateAgeMs", 0);
                 j.put("chatGptStateTtlMs", GPT_STATE_TTL_MS);
                 respond(s, 200, "application/json; charset=utf-8", j.toString().getBytes(StandardCharsets.UTF_8));
+                return;
+            }
+            if ("recording".equals(route)) {
+                Map<String,String> q = query(uri.getRawQuery());
+                String op = q.getOrDefault("op", "status");
+                JSONObject j = new JSONObject();
+                if ("start".equals(op)) {
+                    boolean ok = startRecording();
+                    j.put("ok", ok);
+                    j.put("recording", recorder != null && recorder.isAccepting());
+                    j.put("error", ok ? "" : captureError);
+                    respond(s, ok ? 200 : 409, "application/json; charset=utf-8", j.toString().getBytes(StandardCharsets.UTF_8));
+                } else if ("stop".equals(op)) {
+                    stopRecording();
+                    j.put("ok", !lastRecordingUri.isEmpty());
+                    j.put("recording", recorder != null && recorder.isAccepting());
+                    j.put("uri", lastRecordingUri);
+                    j.put("error", captureError);
+                    respond(s, lastRecordingUri.isEmpty() ? 409 : 200, "application/json; charset=utf-8", j.toString().getBytes(StandardCharsets.UTF_8));
+                } else {
+                    j.put("ok", true);
+                    j.put("recording", recorder != null && recorder.isAccepting());
+                    j.put("uri", lastRecordingUri);
+                    respond(s, 200, "application/json; charset=utf-8", j.toString().getBytes(StandardCharsets.UTF_8));
+                }
                 return;
             }
             if ("screen.jpg".equals(route)) {
@@ -711,6 +749,45 @@ public class ScreenBridgeService extends Service {
                 respond(s, 404, "text/plain", "Not found".getBytes(StandardCharsets.UTF_8));
             }
         } catch (Exception ignored) { }
+    }
+
+    public static String getLastRecordingUri() { return lastRecordingUri; }
+    public static boolean isRecording() { ScreenBridgeRecorder r = null; return running && lastRecordingUri != null && false; }
+
+    private synchronized boolean startRecording() {
+        if (recorder != null && recorder.isAccepting()) return true;
+        if (!projectionActive || projection == null || width < 2 || height < 2) {
+            captureError = "Authorize screen capture before recording";
+            return false;
+        }
+        try {
+            lastRecordingUri = "";
+            recorder = new ScreenBridgeRecorder(this, width, height);
+            captureError = "";
+            return true;
+        } catch (Exception e) {
+            recorder = null;
+            captureError = "Recording could not start: " + e.getClass().getSimpleName() + (e.getMessage() == null ? "" : " (" + e.getMessage() + ")");
+            Log.e("ScreenBridge", captureError, e);
+            return false;
+        }
+    }
+
+    private synchronized void stopRecording() {
+        ScreenBridgeRecorder current = recorder;
+        if (current == null) return;
+        recorder = null;
+        current.stopAndFinalize();
+        android.net.Uri completed = ScreenBridgeRecorder.lastCompletedUri();
+        if (completed != null) {
+            lastRecordingUri = completed.toString();
+            captureError = "";
+        } else if (!current.error().isEmpty()) {
+            captureError = current.error();
+        } else {
+            captureError = "Recording ended without a finalized MP4";
+        }
+        main.post(this::updateStatusOverlay);
     }
 
     private long ageMs(long timestamp) {
