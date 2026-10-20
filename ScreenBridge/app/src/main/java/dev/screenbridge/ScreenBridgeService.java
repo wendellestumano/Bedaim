@@ -236,7 +236,7 @@ public class ScreenBridgeService extends Service {
             ImageReader oldReader = imageReader;
             imageReader = newReader;
             if (oldReader != null) oldReader.close();
-            captureError = "";
+            if (!recoveryAwaitingFreshFrame) captureError = "";
         }
     }
 
@@ -318,6 +318,8 @@ public class ScreenBridgeService extends Service {
         lastCaptureRecoveryAtMs = now;
         captureRecoveryAttemptsInWindow++;
         captureRecoveryAttemptCount++;
+        recoveryAwaitingFreshFrame = true;
+        captureError = "Capture stalled; automatic surface recovery in progress";
         try {
             synchronized (captureLock) {
                 if (!projectionActive || projection == null) return;
@@ -343,10 +345,9 @@ public class ScreenBridgeService extends Service {
                     oldReader.close();
                 }
             }
-            recoveryAwaitingFreshFrame = true;
-            captureError = "Capture stalled; automatic surface recovery attempted";
-            Log.w("ScreenBridge", captureError + " (" + captureRecoveryAttemptsInWindow
-                    + "/" + CAPTURE_RECOVERY_MAX_ATTEMPTS + ")");
+            if (recoveryAwaitingFreshFrame) captureError = "Capture stalled; automatic surface recovery attempted";
+            Log.w("ScreenBridge", "Capture stalled; automatic surface recovery attempted ("
+                    + captureRecoveryAttemptsInWindow + "/" + CAPTURE_RECOVERY_MAX_ATTEMPTS + ")");
         } catch (Exception e) {
             captureRecoveryFailureCount++;
             recoveryAwaitingFreshFrame = false;
