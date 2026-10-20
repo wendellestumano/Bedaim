@@ -288,6 +288,16 @@ void AutoHitModule::processPlayerTick(Player* player) {
     targetBounds = liveTargetBounds;
     aimRange = std::min(aimRange, liveTargetRange);
 
+    // AutoHit must behave like a normal attack held only while the current
+    // camera ray actually intersects this target. A retained BedrockAim target
+    // behind/offscreen is not sufficient; this gate is before CPS reservation
+    // and before any native attack/input dispatch.
+    if (!aim->currentTargetInCrosshair(player, target, 0.12f)) {
+        reportGate(12, "target_not_under_crosshair",
+            "attack suppressed: current player view ray does not intersect the fresh target bounds");
+        return;
+    }
+
     // Hitbox Expander mutates the local actor AABB used by native target queries.
     // If it is enabled, never treat the live AABB as the server's real bounds when
     // our saved original snapshot is unavailable or malformed. The screenshot/logs
