@@ -124,3 +124,24 @@ This is a new experimental branch based on the current public-adapter/swap-traci
 - Downloaded and verified inner `/mnt/data/BedrockTools-build920.levipack`: 689,656 bytes, SHA256 `c95d631104f7f9fce41acbf5b4114a83ef5d973e0053ef56ee3f2a153911f41f`; contains manifest.json (358 B, SHA256 `8d43254ab345298d0833dbbe98bfb751c999d84f267eee202d6170eadc455e10`), libBedrockTools.so (1,326,080 B, SHA256 `5e272805bb22771518764965b757fb813fa9730824005094c73116557d5810b9`), icon.png, and resources/minecraft.ttf. Manifest identifies BedrockTools 1.5.7 / preload-native.
 - Important: this proves host tests and Android ARM64 compilation/package for the crosshair-gate + 3.0 default reach revision. It does not prove crosshair gating in actual gameplay, normal engine attack-button callback invocation, actual damage, or FPS improvement.
 - Next: install this pack on the matching Minecraft 26.51 setup and test (1) crosshair centered target <=3 blocks, (2) behind/offscreen target must emit `target_not_under_crosshair` and no attack dispatch, (3) AutoHit-only with AimAssist steering disabled, (4) BedrockAim/BedrockBound still work. Save fresh Module Diagnostics JSON afterwards. Continue separate exact-binary analysis for `ClientInputCallbacks::handleDestoryOrAttackButtonPress`; do not copy Apollon's stale offset `0x6462B60`.
+
+
+## Diagnostics I/O cost investigation — pre-edit hypothesis/test record (2026-10-20)
+
+### Evidence before source edit
+- Screenshot shows Module Diagnostics configured to auto-save every 1 second; it displays `ALL + GAMEPLAY_ONLY_LOGS + both histories saved`.
+- Current local `bedaim_diagnostics_total.json` is about 7.1 MB / 25,668 entries; `bedaim_diagnostics_gameplay_total.json` is about 5.1 MB / 17,503 entries. Current rolling exports are about 306 KB / 828 entries and 268 KB / 691 entries respectively.
+- In `src/modules/misc/modulediagnostics.cpp`, `exportWorkerLoop()` runs `exportLogs(true)` on the user-configured cadence. Each automatic save writes two current-session snapshots, then `mergeCurrentSessionIntoLifetime()` parses and deduplicates the entire cumulative `*_total.json`, serializes it again, and atomically rewrites it; it repeats that for both full and gameplay histories. This heavy CPU/allocation/storage work runs on a background worker, not directly on the render thread, but every-second multi-megabyte JSON parse + rewrite can still contend for CPU and storage bandwidth and plausibly contribute to frame-time spikes.
+- `startFreshLogSession()` already performs a full archive/merge of the previous current-session files before rotating them, so cumulative history does not need to be reparsed and rewritten on every rolling snapshot.
+
+### Hypothesis before source edit
+Keep the current-session `bedaim_diagnostics_auto.json` and `bedaim_diagnostics_gameplay.json` snapshots on the selected rolling cadence, but throttle cumulative-history merges to at most once per 60 seconds (also merge when rotating the session). Prevent a 1-second saved preference from driving the full-history merge path each second by enforcing a safe 5-second minimum for auto-save. This preserves near-current logs for debugging while reducing repeated multi-megabyte archive work; it is a performance mitigation hypothesis, not yet proof of FPS improvement.
+
+### Intended tests
+1. Change only `src/modules/misc/modulediagnostics.hpp/.cpp` and this progress file. Record the lifetime-merge interval separately from the rolling snapshot interval.
+2. Verify a rolling save still updates the two current-session files, while full history files are not reread/rewritten before their 60-second sync is due; on session rotation, preserve the previous session in history.
+3. Enforce the five-second minimum consistently in menu schema, config input, and config load/migration. Keep manual exports unchanged.
+4. Run all seven existing host regressions, check `git diff --check`, and run Android ARM64 CI. Require a real `.levipack` artifact.
+5. On device, compare Module Diagnostics auto-save status and FPS spikes with a one-second old config versus the enforced minimum; verify current logs stay current and combined histories catch up within 60 seconds. Do not claim FPS improvement without gameplay measurements.
+
+No source code has been edited yet on this new diagnostics-focused experimental branch. Preserve the AutoHit crosshair branch, BedrockAim, BedrockBound, and `main`; no merge.
