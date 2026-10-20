@@ -66,6 +66,7 @@ final class ScreenBridgeRecorder {
     String error() { return error; }
 
     ScreenBridgeRecorder(Context context, int sourceWidth, int sourceHeight) throws Exception {
+        lastCompletedUri = null;
         this.context = context.getApplicationContext();
         float scale = Math.min(1.0f, 1280.0f / Math.max(sourceWidth, sourceHeight));
         this.width = Math.max(2, ((int)(sourceWidth * scale)) & ~1);
