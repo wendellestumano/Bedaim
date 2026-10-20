@@ -444,6 +444,8 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             else if (key == "m_overlayTextSize") m_overlayTextSize = std::clamp(v, 8, 24);
             else if (key == "m_overlayHeight") m_overlayHeight = std::clamp(v, 180, 1000);
             else m_overlayPage = std::clamp(v, 0, 4096);
+            m_nextOverlayRefresh = {};
+            m_cachedOverlayLines.clear();
             return true;
         } catch (...) { return false; }
     }
