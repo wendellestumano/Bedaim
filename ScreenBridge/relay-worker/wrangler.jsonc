@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "screenbridge-relay",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-20",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RELAY_HUB",
+        "class_name": "RelayHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["RelayHub"]
+    },
+    {
+      "tag": "v2"
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1,
+    "logs": {
+      "enabled": false,
+      "invocation_logs": false,
+      "persist": false
+    }
+  }
+}
