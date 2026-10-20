@@ -112,7 +112,7 @@ public class ScreenBridgeService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         running = true;
-        startedAt = System.currentTimeMillis();
+        startedAt = SystemClock.elapsedRealtime();
         token = getSharedPreferences("bridge", MODE_PRIVATE).getString("token", "");
         captureThread = new HandlerThread("ScreenBridge-FrameEncoder");
         captureThread.start();
@@ -489,7 +489,7 @@ public class ScreenBridgeService extends Service {
                 j.put("chatGptState", getEffectiveChatGptState());
                 j.put("chatGptStateAgeMs", gptAge);
                 j.put("chatGptStateTtlMs", GPT_STATE_TTL_MS);
-                j.put("serverUptimeMs", Math.max(0, System.currentTimeMillis() - startedAt));
+                j.put("serverUptimeMs", Math.max(0, SystemClock.elapsedRealtime() - startedAt));
                 int[] size = ScreenControlAccessibilityService.screenSize();
                 j.put("controlWidth", size[0] > 0 ? size[0] : width);
                 j.put("controlHeight", size[1] > 0 ? size[1] : height);
@@ -594,7 +594,7 @@ public class ScreenBridgeService extends Service {
                         j.put("ok", true);
                         j.put("accepted", true);
                         j.put("frameUpdated", false);
-                        j.put("frameAgeMs", latestFrameAt == 0 ? -1 : Math.max(0, System.currentTimeMillis() - latestFrameAt));
+                        j.put("frameAgeMs", latestFrameAt == 0 ? -1 : Math.max(0, SystemClock.elapsedRealtime() - latestFrameAt));
                         j.put("detail", captureError);
                         respond(s, 200, "application/json", j.toString().getBytes(StandardCharsets.UTF_8));
                     }
@@ -603,7 +603,7 @@ public class ScreenBridgeService extends Service {
                     j.put("ok", true);
                     j.put("accepted", true);
                     j.put("frameUpdated", false);
-                    j.put("frameAgeMs", latestFrameAt == 0 ? -1 : Math.max(0, System.currentTimeMillis() - latestFrameAt));
+                    j.put("frameAgeMs", latestFrameAt == 0 ? -1 : Math.max(0, SystemClock.elapsedRealtime() - latestFrameAt));
                     j.put("detail", captureError);
                     respond(s, 200, "application/json", j.toString().getBytes(StandardCharsets.UTF_8));
                 }
