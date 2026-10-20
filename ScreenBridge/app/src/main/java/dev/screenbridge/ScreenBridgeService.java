@@ -58,6 +58,10 @@ public class ScreenBridgeService extends Service {
     private static final long FRESH_FRAME_MAX_AGE_MS = 1800L;
     private static final long FRAME_WAIT_TIMEOUT_MS = 900L;
     private static final long GPT_STATE_TTL_MS = 90000L;
+    private static final long CAPTURE_STALL_THRESHOLD_MS = 5000L;
+    private static final long CAPTURE_RECOVERY_COOLDOWN_MS = 15000L;
+    private static final long CAPTURE_RECOVERY_WINDOW_MS = 120000L;
+    private static final int CAPTURE_RECOVERY_MAX_ATTEMPTS = 3;
     private static volatile boolean running = false;
 
     private final AtomicBoolean stopped = new AtomicBoolean(false);
@@ -84,6 +88,14 @@ public class ScreenBridgeService extends Service {
     private volatile long nullImageCount;
     private volatile long encodingFailureCount;
     private volatile long captureConfigCount;
+    private volatile long projectionStartedAtMs;
+    private volatile long lastCaptureRecoveryAtMs;
+    private volatile long captureRecoveryWindowStartedAtMs;
+    private volatile int captureRecoveryAttemptsInWindow;
+    private volatile long captureRecoveryAttemptCount;
+    private volatile long captureRecoverySuccessCount;
+    private volatile long captureRecoveryFailureCount;
+    private volatile boolean recoveryAwaitingFreshFrame;
     private volatile String captureError = "";
     private volatile String lastControlError = "";
     private volatile String lastAction = "none";
@@ -99,6 +111,12 @@ public class ScreenBridgeService extends Service {
     private TextView statusOverlay;
     private WindowManager.LayoutParams overlayParams;
     private final Handler overlayHandler = new Handler(Looper.getMainLooper());
+    private final Runnable captureWatchdog = new Runnable() {
+        @Override public void run() {
+            runCaptureWatchdog();
+            if (running) main.postDelayed(this, 2000L);
+        }
+    };
     private final Runnable overlayTicker = new Runnable() {
         @Override public void run() {
             updateStatusOverlay();
@@ -129,6 +147,8 @@ public class ScreenBridgeService extends Service {
         } else startForeground(11, notification);
         displayManager = (DisplayManager)getSystemService(DISPLAY_SERVICE);
         if (displayManager != null) displayManager.registerDisplayListener(displayListener, main);
+        main.removeCallbacks(captureWatchdog);
+        main.postDelayed(captureWatchdog, 2000L);
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -164,11 +184,15 @@ public class ScreenBridgeService extends Service {
             }
             projection = newProjection;
             projectionActive = true;
+            projectionStartedAtMs = SystemClock.elapsedRealtime();
+            recoveryAwaitingFreshFrame = false;
             captureError = "";
             newProjection.registerCallback(new MediaProjection.Callback() {
                 @Override public void onStop() {
                     projectionActive = false;
                     projection = null;
+                    projectionStartedAtMs = 0;
+                    recoveryAwaitingFreshFrame = false;
                     captureError = "Screen capture permission was revoked; reopen ScreenBridge and authorize again";
                     synchronized (captureLock) { releaseCapture(); }
                 }
@@ -217,6 +241,8 @@ public class ScreenBridgeService extends Service {
     }
 
     private void onImageAvailable(ImageReader reader) {
+        // Ignore callbacks already queued by a reader that the watchdog replaced.
+        if (reader != imageReader) return;
         lastImageCallbackAt = SystemClock.elapsedRealtime();
         imageCallbackCount++;
         Image image = null;
@@ -248,6 +274,10 @@ public class ScreenBridgeService extends Service {
                 }
                 // Clear transient capture errors only after a frame is successfully encoded.
                 captureError = "";
+                if (recoveryAwaitingFreshFrame) {
+                    captureRecoverySuccessCount++;
+                    recoveryAwaitingFreshFrame = false;
+                }
             } else {
                 encodingFailureCount++;
                 captureError = "Frame encoding returned an empty JPEG";
@@ -260,6 +290,68 @@ public class ScreenBridgeService extends Service {
             if (image != null) image.close();
             if (cropped != null && cropped != padded) cropped.recycle();
             if (padded != null) padded.recycle();
+        }
+    }
+
+    private void runCaptureWatchdog() {
+        long now = SystemClock.elapsedRealtime();
+        if (!running || !projectionActive || projection == null) return;
+
+        long frameAt = latestFrameAt;
+        if (frameAt > 0 && now >= frameAt && now - frameAt <= CAPTURE_STALL_THRESHOLD_MS) return;
+        if (frameAt == 0 && projectionStartedAtMs > 0
+                && now - projectionStartedAtMs <= CAPTURE_STALL_THRESHOLD_MS) return;
+        if (lastCaptureRecoveryAtMs > 0
+                && now - lastCaptureRecoveryAtMs < CAPTURE_RECOVERY_COOLDOWN_MS) return;
+
+        if (captureRecoveryWindowStartedAtMs == 0
+                || now - captureRecoveryWindowStartedAtMs >= CAPTURE_RECOVERY_WINDOW_MS) {
+            captureRecoveryWindowStartedAtMs = now;
+            captureRecoveryAttemptsInWindow = 0;
+        }
+        if (captureRecoveryAttemptsInWindow >= CAPTURE_RECOVERY_MAX_ATTEMPTS) {
+            captureError = "Capture stalled; automatic recovery limit reached";
+            recoveryAwaitingFreshFrame = false;
+            return;
+        }
+
+        lastCaptureRecoveryAtMs = now;
+        captureRecoveryAttemptsInWindow++;
+        captureRecoveryAttemptCount++;
+        try {
+            synchronized (captureLock) {
+                if (!projectionActive || projection == null) return;
+                VirtualDisplay display = virtualDisplay;
+                ImageReader oldReader = imageReader;
+                if (display == null || oldReader == null) {
+                    // Reuse the current MediaProjection; never start a second projection.
+                    configureCapture();
+                } else {
+                    ImageReader replacement = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
+                    try {
+                        replacement.setOnImageAvailableListener(this::onImageAvailable, captureHandler);
+                        display.setSurface(replacement.getSurface());
+                        imageReader = replacement;
+                        replacement = null;
+                    } finally {
+                        if (replacement != null) {
+                            replacement.setOnImageAvailableListener(null, null);
+                            replacement.close();
+                        }
+                    }
+                    oldReader.setOnImageAvailableListener(null, null);
+                    oldReader.close();
+                }
+            }
+            recoveryAwaitingFreshFrame = true;
+            captureError = "Capture stalled; automatic surface recovery attempted";
+            Log.w("ScreenBridge", captureError + " (" + captureRecoveryAttemptsInWindow
+                    + "/" + CAPTURE_RECOVERY_MAX_ATTEMPTS + ")");
+        } catch (Exception e) {
+            captureRecoveryFailureCount++;
+            recoveryAwaitingFreshFrame = false;
+            captureError = "Automatic capture recovery failed: " + e.getClass().getSimpleName();
+            Log.e("ScreenBridge", captureError, e);
         }
     }
 
@@ -277,6 +369,7 @@ public class ScreenBridgeService extends Service {
         latestJpeg = null;
         latestFrameAt = 0;
         lastImageCallbackAt = 0;
+        recoveryAwaitingFreshFrame = false;
     }
 
     private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
@@ -478,6 +571,12 @@ public class ScreenBridgeService extends Service {
                 j.put("nullImageCount", nullImageCount);
                 j.put("encodingFailureCount", encodingFailureCount);
                 j.put("captureConfigCount", captureConfigCount);
+                j.put("captureRecoveryAttemptCount", captureRecoveryAttemptCount);
+                j.put("captureRecoverySuccessCount", captureRecoverySuccessCount);
+                j.put("captureRecoveryFailureCount", captureRecoveryFailureCount);
+                j.put("captureRecoveryAttemptsInWindow", captureRecoveryAttemptsInWindow);
+                j.put("lastCaptureRecoveryAgeMs", lastCaptureRecoveryAtMs == 0 ? -1 : Math.max(0, now - lastCaptureRecoveryAtMs));
+                j.put("recoveryAwaitingFreshFrame", recoveryAwaitingFreshFrame);
                 j.put("lastImageCallbackAgeMs", callbackAge);
                 j.put("virtualDisplayActive", virtualDisplay != null);
                 j.put("imageReaderActive", imageReader != null);
@@ -716,6 +815,7 @@ public class ScreenBridgeService extends Service {
 
     @Override public void onDestroy() {
         removeStatusOverlay();
+        main.removeCallbacks(captureWatchdog);
         running = false;
         stopped.set(true);
         try { if (server != null) server.close(); } catch (Exception ignored) { }
