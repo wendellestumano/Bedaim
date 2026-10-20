@@ -1,6 +1,6 @@
 # ScreenBridge Android (prototype)
 
-ScreenBridge is an Android foreground service for authenticated screen capture and accessibility gestures. It lives on the separate `feature/screenbridge-android-app-20261019` branch; Bedaim's `main` branch is not changed.
+ScreenBridge is an Android foreground service for authenticated screen capture and accessibility gestures. These updates live on the isolated `feature/screenbridge-status-overlay-20261019` branch; Bedaim's `main` branch is not changed.
 
 ## Setup and permission model
 1. Install the stable-signed APK produced by the GitHub Actions workflow.
@@ -21,14 +21,14 @@ Screen capture requires explicit Android consent. If Android revokes the session
 The overlay never consumes touch input (`FLAG_NOT_TOUCHABLE`). It shows capture status (`SB · …`), accessibility/control status (`CTRL · …`), and the independent GPT status (`GPT · …`). Capture values distinguish `SEM PROJEÇÃO`, `SEM FRAME`, `FRAME ATRASADO`, and `ERRO`; control values distinguish `PRONTO`, `EXECUTANDO`, `OFF`, and `ERRO`. The pill is optional and can be hidden from the app at any time.
 
 ## Local endpoints
-- `GET /health` or `/diagnostics` — detailed status including projection, accessibility readiness, image-reader/virtual-display availability, frame age and count, callback count, empty-image count, JPEG encoding failures, action result, last errors, and GPT-state age/TTL.
+- `GET /health` or `/diagnostics` — detailed status including projection, accessibility readiness, image-reader/virtual-display availability, frame age and count, callback count, empty-image count, JPEG encoding failures, automatic-recovery attempts/successes/failures, action result, last errors, and GPT-state age/TTL.
 - `GET /<token>/screen.jpg` — returns a JPEG only if it is fresh (≤1.8 seconds old). If no fresh frame arrives within 900 ms, it returns HTTP 503 with JSON diagnostics rather than silently returning an old screenshot.
 - `GET /<token>/ui.json` — cached active-window accessibility tree with text, descriptions, IDs, clickability and display bounds. Add `?refresh=1` to queue a fresh snapshot on the accessibility-service thread; normal reads use the event-updated cache and avoid spawning `uiautomator dump`.
 - `GET /<token>/action?op=tap&x=120&y=240` — dispatch a tap and return the next available frame.
 - `GET /<token>/action?op=swipe&x1=100&y1=300&x2=400&y2=300&ms=180` — dispatch a swipe and return the next frame.
 - `GET /<token>/action?op=back` or `op=home` — global navigation and the next frame.
 
-Coordinates use full-display pixel dimensions from `/health`. An accepted gesture is not proof that the intended action succeeded; inspect a fresh screenshot and check `lastActionAccepted`. `frameAgeMs` uses monotonic elapsed time. `/screen.jpg` never labels an old cache entry as current; when capture stalls, inspect `imageCallbackCount`, `lastImageCallbackAgeMs`, `frameCount`, `virtualDisplayActive`, `imageReaderActive`, and `captureError`. The health endpoint distinguishes an active projection, fresh capture, and available accessibility control.
+Coordinates use full-display pixel dimensions from `/health`. An accepted gesture is not proof that the intended action succeeded; inspect a fresh screenshot and check `lastActionAccepted`. `frameAgeMs` uses monotonic elapsed time. `/screen.jpg` never labels an old cache entry as current; when capture stalls, inspect `imageCallbackCount`, `lastImageCallbackAgeMs`, `frameCount`, `virtualDisplayActive`, `imageReaderActive`, and `captureError`. A watchdog detects a stalled frame stream after about 5 seconds and safely attempts to rebind the `ImageReader` surface on the same `MediaProjection` session, with a 15-second cooldown and at most three attempts per two-minute window. It does not silently create another projection or a second `VirtualDisplay`. The health endpoint distinguishes an active projection, fresh capture, and available accessibility control.
 
 ## Architecture and limits
 - **ScreenBridge is the intended UI-control path.** Termux/ADB-based input is not required for ordinary tap, swipe, back, or home operations.
