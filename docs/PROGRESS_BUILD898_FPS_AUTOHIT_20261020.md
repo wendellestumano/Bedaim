@@ -51,3 +51,9 @@ The two AutoHit diagnostic calls pass event label and context as separate parame
 - Confirmed code structure: `MaceSwapperModule::processPlayerTick` takes `m_stateMutex` at entry and holds it across position reads, inventory slot selection, target snapshot checks, GameMode resolution, and potential swap/attack/restore logic. This is a plausible long critical section on the local-player tick, but no profiler trace proves it causes the user's spikes yet.
 - Do not refactor the lock or add throttling based only on this suspicion. Next: inspect the remainder of `maceswapper.cpp` and the actual ShiftBlade source file; correlate a diagnostic trace with spikes, then make a separate experimental performance patch with a bounded test. Keep BedrockAim and BedrockBound untouched.
 - AutoHit remains runtime-unverified: previous logs indicate the route can be unavailable (`public_sig=0x0`, `survival_sig=0x0`). This compile-only patch does not fix native route discovery and does not claim working attacks.
+
+
+## CI trigger investigation (pre-edit record)
+- Evidence: after opening draft PR #43 and updating its head to `22147719f4405145d85074613edd3d2c2243f457`, the GitHub connector reports no associated workflow runs and no combined-status checks. The workflow file's push branch allowlist does not include `experiment/build898-autohit-compile-fps-20261020`, although `pull_request` is configured.
+- Hypothesis: a push-triggered workflow run can be made deterministic for this experimental branch by adding its exact name to the existing push allowlist; this does not change build commands or production branches.
+- Intended test: update only the branch allowlist, then inspect the actual run associated with the resulting commit, read the job logs, confirm all host tests, Android ARM64 compilation, and the `BedrockTools-levipack` artifact. If no run appears, record that limitation rather than claiming success.
