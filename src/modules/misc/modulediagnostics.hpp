@@ -56,4 +56,10 @@ private:
     std::string m_lastExportStatus = "No export attempted yet";
     std::string m_lastExportPath;
     std::string m_lastSuccessfulExportTime = "never";
+    // HUD layout controls; independent from log collection/export settings.
+    int m_overlayX = 8;
+    int m_overlayY = 8;
+    int m_overlayWidth = 480;
+    int m_overlayTextSize = 12;
+    int m_overlayPage = 0;
 };
