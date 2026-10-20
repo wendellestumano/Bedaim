@@ -124,3 +124,22 @@ This is a new experimental branch based on the current public-adapter/swap-traci
 - Downloaded and verified inner `/mnt/data/BedrockTools-build920.levipack`: 689,656 bytes, SHA256 `c95d631104f7f9fce41acbf5b4114a83ef5d973e0053ef56ee3f2a153911f41f`; contains manifest.json (358 B, SHA256 `8d43254ab345298d0833dbbe98bfb751c999d84f267eee202d6170eadc455e10`), libBedrockTools.so (1,326,080 B, SHA256 `5e272805bb22771518764965b757fb813fa9730824005094c73116557d5810b9`), icon.png, and resources/minecraft.ttf. Manifest identifies BedrockTools 1.5.7 / preload-native.
 - Important: this proves host tests and Android ARM64 compilation/package for the crosshair-gate + 3.0 default reach revision. It does not prove crosshair gating in actual gameplay, normal engine attack-button callback invocation, actual damage, or FPS improvement.
 - Next: install this pack on the matching Minecraft 26.51 setup and test (1) crosshair centered target <=3 blocks, (2) behind/offscreen target must emit `target_not_under_crosshair` and no attack dispatch, (3) AutoHit-only with AimAssist steering disabled, (4) BedrockAim/BedrockBound still work. Save fresh Module Diagnostics JSON afterwards. Continue separate exact-binary analysis for `ClientInputCallbacks::handleDestoryOrAttackButtonPress`; do not copy Apollon's stale offset `0x6462B60`.
+
+
+## AutoHit crosshair gate — fresh bounds correction (pre-edit hypothesis, 2026-10-20)
+
+### Evidence before edit
+- In `src/modules/player/autohit.cpp`, AutoHit refreshes `liveTargetBounds` through `AimAssistModule::targetBoundsSnapshot` and uses those bounds for reach, but `currentTargetInCrosshair(player, target, 0.12f)` reads the cached `m_lastTargetBounds` instead. The cached target is accepted for up to 250 ms, so movement between target snapshots can make the crosshair gate and the reach gate evaluate different geometry.
+- The crosshair gate currently runs before the Hitbox Expander check restores a trustworthy original AABB. When the expander is enabled, the ray gate and reach check can therefore use different bounds.
+- The crosshair gate is already before CPS reservation and dispatch. Default reach is 3.0 blocks, but saved configuration remains adjustable. The actual normal input callback is still unresolved: the dispatch context explicitly records `explicit_input_callback=not_called_in_this_path` and calls the GameMode vtable route.
+
+### Hypothesis before source edit
+Add an optional, validated AABB override to `AimAssistModule::currentTargetInCrosshair`. Move AutoHit's crosshair gate after the live/original bounds have been validated and after the reach check, then pass the exact `targetBounds` used by the reach calculation. Existing MaceSwapper callers keep the old cached-bounds behavior through the default argument. This should make AutoHit's aim gate use the same fresh geometry as its reach gate; it does not identify or implement the normal engine input callback and does not prove damage.
+
+### Intended tests
+1. Run all seven existing host regression targets and `git diff --check` through CI; require a real Android ARM64 build and confirmed `.levipack` artifact.
+2. On Minecraft Bedrock 26.51, test a centered target within configured reach, an offscreen/back-facing target, a moving target, Hitbox Expander on/off, and AutoHit with AimAssist steering disabled.
+3. Verify no dispatch for off-crosshair/out-of-range targets and confirm BedrockAim and BedrockBound remain unchanged. Separately continue the exact-binary investigation for the normal input callback; do not treat a wrapper return as damage.
+
+### Status before edit
+This section is the pre-edit record. No source files have been changed for this hypothesis yet.
