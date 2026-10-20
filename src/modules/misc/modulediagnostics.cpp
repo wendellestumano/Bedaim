@@ -12,6 +12,7 @@
 #include <cctype>
 #include <ctime>
 #include <cstddef>
+#include <deque>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -831,6 +832,9 @@ void ModuleDiagnosticsModule::onFrame() {
     }
 
     std::vector<PLModMenu_DrawCommand> commands;
+    // Draw commands retain raw text pointers until submitDrawCommands returns.
+    // Own every string for the whole batch, including temporary page labels.
+    std::deque<std::string> drawTextStorage;
     const float originX = static_cast<float>(m_overlayX);
     const float originY = static_cast<float>(m_overlayY);
     const float overlayWidth = static_cast<float>(m_overlayWidth);
@@ -862,7 +866,8 @@ void ModuleDiagnosticsModule::onFrame() {
         command.h = lineHeight;
         command.size = textSize;
         command.color = color;
-        command.text = text.c_str();
+        drawTextStorage.emplace_back(text);
+        command.text = drawTextStorage.back().c_str();
         commands.push_back(command);
     };
 
