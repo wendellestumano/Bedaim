@@ -145,3 +145,13 @@ Keep the current-session `bedaim_diagnostics_auto.json` and `bedaim_diagnostics_
 5. On device, compare Module Diagnostics auto-save status and FPS spikes with a one-second old config versus the enforced minimum; verify current logs stay current and combined histories catch up within 60 seconds. Do not claim FPS improvement without gameplay measurements.
 
 No source code has been edited yet on this new diagnostics-focused experimental branch. Preserve the AutoHit crosshair branch, BedrockAim, BedrockBound, and `main`; no merge.
+
+
+## PR #47 / Build #922 — actual CI and artifact results (2026-10-20)
+- PR: https://github.com/wendellestumano/Bedaim/pull/47 (open, draft, unmerged), experimental branch `experiment/diagnostics-lifetime-merge-throttle-20261020`.
+- Workflow: https://github.com/wendellestumano/Bedaim/actions/runs/39449994407. Job `build` concluded `success`. Host regressions all passed: menu config 64 checks/0 failures, AimAssist math 27/0, atomic writer 10/0, diagnostics exit 0, AutoHit guards 48/0, AutoHit weapon profile exit 0, AutoTotem policy 14/0. NDK setup succeeded; Android ARM64 build/package succeeded (`build ok`); artifact upload succeeded.
+- Artifact `BedrockTools-levipack`, ID `12278790729`, uploaded ZIP size 688,117 bytes, ZIP SHA256 `70f4070d7f7dd6e44c80889ac5e3c78ae9f7db8807f49dd19cef9966d80d242b`; link https://github.com/wendellestumano/Bedaim/actions/runs/39449994407/artifacts/12278790729.
+- Downloaded and verified `/mnt/data/BedrockTools-build922.levipack`: size 689,857 bytes, SHA256 `2f0e2fd490bb4c7494912196442bf96cbd3546f527e554f7a1eb14320d464282`. Contents: `manifest.json` 358 B, `libBedrockTools.so` 1,326,416 B, `icon.png` 66,026 B, `resources/minecraft.ttf` 70,324 B. Manifest is BedrockTools 1.5.7, preload-native.
+- Code commit built by CI: `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96`. Code changes: `src/modules/misc/modulediagnostics.cpp`, `src/modules/misc/modulediagnostics.hpp`; progress file contained the pre-edit hypothesis. No other source modules changed by PR #47.
+- Meaning: this confirms the diagnostics I/O throttle compiles and packages. It does not prove FPS improved on device; the cumulative files now sync every 60 s and on session rotation, rolling snapshots remain on a minimum 5-second cadence, and manual exports are unchanged. Validate with FPS/frametime comparison and confirm both current-session files stay fresh.
+- `main` remains untouched and there is no merge. A result entry is being appended now; since the PR workflow runs on updates, that documentation-only commit may queue another CI run. The successful artifact above corresponds to the code commit listed above, not any later documentation commit.
