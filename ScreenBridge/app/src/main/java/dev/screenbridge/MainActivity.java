@@ -7,6 +7,7 @@ import android.media.projection.MediaProjectionManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.net.Uri;
 import android.content.ComponentName;
 import android.text.TextUtils;
 import android.view.View;
@@ -24,6 +25,7 @@ public class MainActivity extends Activity {
     private static final int REQUEST_CAPTURE = 701;
     private TextView status;
     private TextView endpoint;
+    private Button overlayButton;
     private String token;
 
     @Override public void onCreate(Bundle state) {
@@ -73,6 +75,26 @@ public class MainActivity extends Activity {
         Button start = button("2. Autorizar tela e iniciar serviço");
         start.setOnClickListener(v -> requestCapture());
         content.addView(start);
+
+        overlayButton = button("Mostrar indicador flutuante");
+        overlayButton.setOnClickListener(v -> {
+            if (!Settings.canDrawOverlays(this)) {
+                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + getPackageName())));
+                Toast.makeText(this, "Permita a sobreposição e toque no botão novamente.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (!ScreenBridgeService.isRunning()) {
+                Toast.makeText(this, "Inicie a captura do ScreenBridge primeiro.", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            Intent toggle = new Intent(this, ScreenBridgeService.class);
+            toggle.setAction(ScreenBridgeService.ACTION_TOGGLE_OVERLAY);
+            startService(toggle);
+            overlayButton.setText(ScreenBridgeService.isOverlayShown()
+                    ? "Mostrar indicador flutuante" : "Ocultar indicador flutuante");
+        });
+        content.addView(overlayButton);
 
         endpoint = new TextView(this);
         endpoint.setTextSize(13);
@@ -144,6 +166,10 @@ public class MainActivity extends Activity {
     private void updateStatus() {
         if (status == null) return;
         boolean running = ScreenBridgeService.isRunning();
+        if (overlayButton != null) {
+            overlayButton.setText(ScreenBridgeService.isOverlayShown()
+                    ? "Ocultar indicador flutuante" : "Mostrar indicador flutuante");
+        }
         boolean accessibilityOn = ScreenControlAccessibilityService.isConnected();
         status.setText("Serviço: " + (running ? "ativo" : "parado") + "\nControle de gestos: " + (accessibilityOn ? "conectado" : "precisa ser ativado nas configurações") + "\nEndereço: 127.0.0.1:18766");
     }
