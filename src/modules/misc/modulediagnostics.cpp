@@ -870,39 +870,45 @@ void ModuleDiagnosticsModule::onFrame() {
     addText(line4, lineHeight * 3.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
     addText(line5, lineHeight * 4.0f, 0xFFFFFFFF);
 
-    // Page through the complete log buffer. Entries are not truncated; each
-    // message is wrapped into width-sized lines, and the page slider selects
-    // older/newer chunks without changing collection or export settings.
+    // Flatten every entry into wrapped display lines, then page the lines rather
+    // than entries. Even a very long message remains readable across pages.
     const auto runtimeEntries = bedrocktools::diagnostics::snapshot();
-    constexpr std::size_t entriesPerPage = 8;
-    const std::size_t pageCount = std::max<std::size_t>(1, (runtimeEntries.size() + entriesPerPage - 1) / entriesPerPage);
-    const std::size_t page = std::min<std::size_t>(static_cast<std::size_t>(std::max(0, m_overlayPage)), pageCount - 1);
-    const std::size_t endIndex = runtimeEntries.size() > page * entriesPerPage
-        ? runtimeEntries.size() - page * entriesPerPage : 0;
-    const std::size_t startIndex = endIndex > entriesPerPage ? endIndex - entriesPerPage : 0;
-    addText("Log page " + std::to_string(page + 1) + "/" + std::to_string(pageCount) +
-            " (newest first; change Log page in settings)", lineHeight * 5.0f, 0xFFB0D8FF);
-    float y = lineHeight * 6.0f;
     const std::size_t approxCharsPerLine = std::max<std::size_t>(12,
         static_cast<std::size_t>(overlayWidth / std::max(1.0f, textSize * 0.58f)));
-    for (std::size_t index = endIndex; index > startIndex && y < overlayHeight; --index) {
-        const auto& entry = runtimeEntries[index - 1];
+    std::vector<std::pair<std::string, std::uint32_t>> displayLines;
+    displayLines.reserve(runtimeEntries.size() * 2);
+    for (const auto& entry : runtimeEntries) {
         const char* tag = entry.level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
             entry.level == bedrocktools::diagnostics::Level::Error ? "ERR" :
             entry.level == bedrocktools::diagnostics::Level::Critical ? "CRIT" :
             bedrocktools::diagnostics::levelName(entry.level);
-        const std::string prefix = "[" + std::to_string(entry.sequence) + "] " + tag + " " +
-            entry.component + ": ";
-        const std::string fullMessage = prefix + entry.message;
-        for (std::size_t offset = 0; offset < fullMessage.size() && y < overlayHeight; offset += approxCharsPerLine) {
-            const std::string segment = fullMessage.substr(offset, approxCharsPerLine);
-            const std::uint32_t color =
-                entry.level == bedrocktools::diagnostics::Level::Critical ||
-                entry.level == bedrocktools::diagnostics::Level::Error ? 0xFFFF7070 :
-                entry.level == bedrocktools::diagnostics::Level::Warning ? 0xFFFFC060 : 0xFFE8E8E8;
-            addText(segment, y, color);
-            y += lineHeight;
+        const std::string fullMessage = "[" + std::to_string(entry.sequence) + "] " + tag + " " +
+            entry.component + ": " + entry.message;
+        const std::uint32_t color =
+            entry.level == bedrocktools::diagnostics::Level::Critical ||
+            entry.level == bedrocktools::diagnostics::Level::Error ? 0xFFFF7070 :
+            entry.level == bedrocktools::diagnostics::Level::Warning ? 0xFFFFC060 : 0xFFE8E8E8;
+        if (fullMessage.empty()) {
+            displayLines.emplace_back(std::string{}, color);
+        } else {
+            for (std::size_t offset = 0; offset < fullMessage.size(); offset += approxCharsPerLine)
+                displayLines.emplace_back(fullMessage.substr(offset, approxCharsPerLine), color);
         }
+    }
+    const std::size_t availableLines = std::max<std::size_t>(1,
+        static_cast<std::size_t>(std::max(1.0f, (overlayHeight - lineHeight * 6.0f) / lineHeight)));
+    const std::size_t pageCount = std::max<std::size_t>(1,
+        (displayLines.size() + availableLines - 1) / availableLines);
+    const std::size_t page = std::min<std::size_t>(
+        static_cast<std::size_t>(std::max(0, m_overlayPage)), pageCount - 1);
+    addText("Log page " + std::to_string(page + 1) + "/" + std::to_string(pageCount) +
+            " (oldest to newest; change Log page in settings)", lineHeight * 5.0f, 0xFFB0D8FF);
+    const std::size_t firstLine = page * availableLines;
+    const std::size_t lastLine = std::min(displayLines.size(), firstLine + availableLines);
+    float y = lineHeight * 6.0f;
+    for (std::size_t i = firstLine; i < lastLine; ++i) {
+        addText(displayLines[i].first, y, displayLines[i].second);
+        y += lineHeight;
     }
     submitDrawCommands(moduleId, commands);
 }
