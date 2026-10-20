@@ -28,6 +28,15 @@ int main() {
     bedrocktools::diagnostics::probe(Level::Warning, "ProbeTest", "target", "missing",
                                      "native query returned no actor");
     assert(bedrocktools::diagnostics::count() == 8);
+    const auto tailTwo = bedrocktools::diagnostics::snapshotTail(2);
+    assert(tailTwo.size() == 2);
+    assert(tailTwo.front().sequence == 7);
+    assert(tailTwo.back().sequence == 8);
+    const auto tailAll = bedrocktools::diagnostics::snapshotTail(100);
+    assert(tailAll.size() == 8);
+    const auto tailZero = bedrocktools::diagnostics::snapshotTail(0);
+    assert(tailZero.empty());
+
     const auto entries = bedrocktools::diagnostics::snapshot();
     assert(entries.size() == 8);
     assert(entries.front().level == Level::Trace);

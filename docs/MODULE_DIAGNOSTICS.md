@@ -38,3 +38,18 @@ Repeated identical state probes are deduplicated, so a status that persists acro
 ## Limits
 
 Diagnostics can identify which observable gate failed, but cannot prove that an internal game call has the intended in-game effect. Verify native hooks and inventory actions in a controlled test world on the exact Bedrock/Levi version. Do not merge experimental combat modules based only on a successful compile.
+
+
+## Overlay layout controls
+
+The Module Diagnostics HUD has independent layout controls in its Diagnostics settings. These do not change log collection, automatic-save cadence, session rotation, or archive retention:
+
+- **Overlay X position / Overlay Y position** move the panel on screen.
+- **Overlay width / Overlay height** resize the visible panel.
+- **Overlay text size** scales the text.
+- **Log page (newest first)** selects which page of the complete in-memory diagnostic log is shown. Entries are wrapped to the chosen width and are not truncated to a fixed character count; use the page slider to read the entire log buffer in manageable chunks.
+
+The HUD currently uses settings-based repositioning rather than direct finger-drag gestures, because the available draw-command interface does not expose touch coordinates to the module. Position, dimensions, font size and page selection are saved in the existing module config. All original diagnostic/export settings remain unchanged.
+
+
+Build follow-up: the first Android build caught a type mismatch in the wrapped log renderer (`levelName()` returns `std::string`). The renderer now stores the label as `std::string`; a fresh CI build is required to verify the fix.

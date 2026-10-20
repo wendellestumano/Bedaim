@@ -12,6 +12,7 @@
 #include <cctype>
 #include <ctime>
 #include <cstddef>
+#include <deque>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -301,7 +302,7 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     autoNode.id = "m_autoExportEnabled";
     autoNode.key = "m_autoExportEnabled";
     autoNode.title = "Automatically export logs";
-    autoNode.description = "While enabled, refreshes bedaim_diagnostics_auto.json for the current session and merges new entries into bedaim_diagnostics_total.json across all sessions.";
+    autoNode.description = "While enabled, refreshes the current-session JSON logs on the selected cadence. Cumulative history files are synced every 60 seconds and when rotating sessions.";
     autoNode.category = "diagnostics";
     autoNode.type = ConfigControlTypeV2::Toggle;
     autoNode.defaultValue = "true";
@@ -313,10 +314,10 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     intervalNode.id = "m_autoExportIntervalSeconds";
     intervalNode.key = "m_autoExportIntervalSeconds";
     intervalNode.title = "Automatic save interval";
-    intervalNode.description = "Time between rolling auto-saves. Minimum 1 second, maximum 5 minutes. Defaults to every 5 seconds for useful diagnostics without excessive file writes.";
+    intervalNode.description = "Time between rolling current-session saves. Minimum 5 seconds, maximum 5 minutes. Cumulative history files sync every 60 seconds to avoid repeatedly rewriting multi-megabyte archives.";
     intervalNode.category = "diagnostics";
     intervalNode.type = ConfigControlTypeV2::SliderFloat;
-    intervalNode.minValue = "1";
+    intervalNode.minValue = "5";
     intervalNode.maxValue = "300";
     intervalNode.step = "1";
     intervalNode.unit = " s";
@@ -348,6 +349,32 @@ void ModuleDiagnosticsModule::onMenuRegistered() {
     freshSessionNode.currentValue = "false";
     freshSessionNode.hasCurrentValue = true;
     schema.node(std::move(freshSessionNode));
+
+    auto addOverlaySlider = [&](const std::string& id, const std::string& title,
+                                int minimum, int maximum, int initial, const std::string& unit) {
+        ConfigNodeV2 node;
+        node.id = id;
+        node.key = id;
+        node.title = title;
+        node.description = "Adjusts only the Module Diagnostics overlay; log collection and export settings are unchanged.";
+        node.category = "diagnostics";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.minValue = std::to_string(minimum);
+        node.maxValue = std::to_string(maximum);
+        node.step = "1";
+        node.unit = unit;
+        node.defaultValue = std::to_string(initial);
+        node.currentValue = std::to_string(initial);
+        node.hasCurrentValue = true;
+        schema.node(std::move(node));
+    };
+    addOverlaySlider("m_overlayX", "Overlay X position", 0, 1800, 8, " px");
+    addOverlaySlider("m_overlayY", "Overlay Y position", 0, 1000, 8, " px");
+    addOverlaySlider("m_overlayWidth", "Overlay width", 240, 1400, 480, " px");
+    addOverlaySlider("m_overlayHeight", "Overlay height", 180, 1000, 520, " px");
+    addOverlaySlider("m_overlayTextSize", "Overlay text size", 8, 24, 12, " px");
+    addOverlaySlider("m_overlayPage", "Log page (newest first)", 0, 4096, 0, "");
+
     pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -392,7 +419,7 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
             const std::string text(value);
             const float parsed = std::stof(text, &parsedLength);
             if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
-            const float bounded = std::clamp(parsed, 1.0f, 300.0f);
+            const float bounded = std::clamp(parsed, 5.0f, 300.0f);
             {
                 std::lock_guard<std::mutex> lock(m_exportMutex);
                 m_autoExportIntervalSeconds = static_cast<int>(std::lround(bounded));
@@ -402,6 +429,26 @@ bool ModuleDiagnosticsModule::onMenuConfigChanged(std::string_view key, std::str
         } catch (...) {
             return false;
         }
+    }
+
+    if (key == "m_overlayX" || key == "m_overlayY" || key == "m_overlayWidth" ||
+        key == "m_overlayTextSize" || key == "m_overlayHeight" || key == "m_overlayPage") {
+        try {
+            std::size_t parsedLength = 0;
+            const std::string text(value);
+            const float parsed = std::stof(text, &parsedLength);
+            if (parsedLength != text.size() || !std::isfinite(parsed)) return false;
+            const int v = static_cast<int>(std::lround(parsed));
+            if (key == "m_overlayX") m_overlayX = std::clamp(v, 0, 1800);
+            else if (key == "m_overlayY") m_overlayY = std::clamp(v, 0, 1000);
+            else if (key == "m_overlayWidth") m_overlayWidth = std::clamp(v, 240, 1400);
+            else if (key == "m_overlayTextSize") m_overlayTextSize = std::clamp(v, 8, 24);
+            else if (key == "m_overlayHeight") m_overlayHeight = std::clamp(v, 180, 1000);
+            else m_overlayPage = std::clamp(v, 0, 4096);
+            m_nextOverlayRefresh = {};
+            m_cachedOverlayLines.clear();
+            return true;
+        } catch (...) { return false; }
     }
     return false;
 }
@@ -415,12 +462,19 @@ void ModuleDiagnosticsModule::loadConfig(const nlohmann::json& j) {
         m_autoExportEnabled = j.value("m_autoExportEnabled", m_autoExportEnabled);
         if (j.contains("m_autoExportIntervalSeconds")) {
             m_autoExportIntervalSeconds = std::clamp(
-                j.value("m_autoExportIntervalSeconds", m_autoExportIntervalSeconds), 1, 300);
+                j.value("m_autoExportIntervalSeconds", m_autoExportIntervalSeconds), 5, 300);
         } else if (j.contains("m_autoExportIntervalMinutes")) {
             // Migrate settings from older builds, which stored the interval in minutes.
             const int oldMinutes = std::clamp(j.value("m_autoExportIntervalMinutes", 1), 1, 60);
-            m_autoExportIntervalSeconds = std::clamp(oldMinutes * 60, 1, 300);
+            m_autoExportIntervalSeconds = std::clamp(oldMinutes * 60, 5, 300);
         }
+
+        m_overlayX = std::clamp(j.value("m_overlayX", m_overlayX), 0, 1800);
+        m_overlayY = std::clamp(j.value("m_overlayY", m_overlayY), 0, 1000);
+        m_overlayWidth = std::clamp(j.value("m_overlayWidth", m_overlayWidth), 240, 1400);
+        m_overlayTextSize = std::clamp(j.value("m_overlayTextSize", m_overlayTextSize), 8, 24);
+        m_overlayHeight = std::clamp(j.value("m_overlayHeight", m_overlayHeight), 180, 1000);
+        m_overlayPage = std::clamp(j.value("m_overlayPage", m_overlayPage), 0, 4096);
         const auto format = j.value("m_exportFormat", m_exportFormat);
         m_exportFormat = (format == "json") ? "json" : "txt";
     }
@@ -437,6 +491,13 @@ void ModuleDiagnosticsModule::saveConfig(nlohmann::json& j) {
     j["m_autoExportIntervalSeconds"] = m_autoExportIntervalSeconds;
     j.erase("m_autoExportIntervalMinutes");
     j["m_exportFormat"] = m_exportFormat;
+
+    j["m_overlayX"] = m_overlayX;
+    j["m_overlayY"] = m_overlayY;
+    j["m_overlayWidth"] = m_overlayWidth;
+    j["m_overlayTextSize"] = m_overlayTextSize;
+    j["m_overlayHeight"] = m_overlayHeight;
+    j["m_overlayPage"] = m_overlayPage;
 }
 
 ModuleDiagnosticsModule::~ModuleDiagnosticsModule() {
@@ -509,6 +570,12 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
         }
         std::error_code staleError;
         std::filesystem::remove(outputDirectory / "bedaim_diagnostics_auto.txt", staleError);
+        // Session rotation already archives the previous current-session files.
+        // Let the new current-session snapshots accumulate for a minute before
+        // rewriting the cumulative archives again.
+        if (rotationOk) {
+            m_nextLifetimeMerge = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        }
     }
     if (!rotationOk) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
@@ -664,22 +731,35 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         ? exportGameplayOnlyJsonTo(gameplayPath, &gameplayError)
         : true;
 
-    // Maintain a separate lifetime JSON containing deduplicated entries from
-    // every gameplay. Merge from the just-written current snapshot, not from
-    // the mutable in-memory buffer, so repeated five-second saves are idempotent.
+    // Cumulative histories are intentionally merged less often than the rolling
+    // current-session snapshots. Parsing and rewriting a growing multi-megabyte
+    // JSON archive every second burns CPU and storage bandwidth on mobile devices.
+    // Session rotation archives the previous session; live history catches up
+    // at least once per minute while the two rolling files keep their own cadence.
+    const auto exportNow = std::chrono::steady_clock::now();
+    const bool lifetimeSyncDue = automatic &&
+        (m_nextLifetimeMerge.time_since_epoch().count() == 0 ||
+         exportNow >= m_nextLifetimeMerge);
     std::string lifetimeError;
-    const bool lifetimeOk = ok && automatic && mergeCurrentSessionIntoLifetime(
-        outputDirectory / "bedaim_diagnostics_auto.json",
-        outputDirectory / "bedaim_diagnostics_total.json", &lifetimeError);
+    bool lifetimeOk = true;
     std::string gameplayLifetimeError;
-    const bool gameplayLifetimeOk = gameplayOk && automatic && mergeCurrentSessionIntoLifetime(
-        gameplayPath, outputDirectory / "bedaim_diagnostics_gameplay_total.json",
-        &gameplayLifetimeError);
+    bool gameplayLifetimeOk = true;
+    if (lifetimeSyncDue) {
+        lifetimeOk = ok && mergeCurrentSessionIntoLifetime(
+            outputDirectory / "bedaim_diagnostics_auto.json",
+            outputDirectory / "bedaim_diagnostics_total.json", &lifetimeError);
+        gameplayLifetimeOk = gameplayOk && mergeCurrentSessionIntoLifetime(
+            gameplayPath, outputDirectory / "bedaim_diagnostics_gameplay_total.json",
+            &gameplayLifetimeError);
+        // Throttle retries too: a corrupt/inaccessible archive should produce a
+        // visible error and retry on the next scheduled sync, not on every snapshot.
+        m_nextLifetimeMerge = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+    }
     if (ok && automatic) {
         if (!gameplayOk) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
                 "Diagnostics", "GAMEPLAY_ONLY_LOGS export failed: " + gameplayError);
-        } else if (!gameplayLifetimeOk) {
+        } else if (lifetimeSyncDue && !gameplayLifetimeOk) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
                 "Diagnostics", "GAMEPLAY_ONLY_LOGS lifetime update failed: " + gameplayLifetimeError);
         }
@@ -689,7 +769,7 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
                 "Diagnostics", "could not remove stale rolling text export: " + staleError.message());
         }
-        if (!lifetimeOk) {
+        if (lifetimeSyncDue && !lifetimeOk) {
             bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
                 "Diagnostics", "lifetime log update failed: " + lifetimeError);
         }
@@ -704,11 +784,19 @@ bool ModuleDiagnosticsModule::exportLogs(bool automatic) {
         std::lock_guard<std::mutex> lock(m_exportMutex);
         const std::string completedAt = localClockLabel();
         if (ok) {
-            m_lastExportStatus = automatic
-                ? (lifetimeOk && gameplayOk && gameplayLifetimeOk
-                    ? "ALL + GAMEPLAY_ONLY_LOGS + both histories saved (" + completedAt + ")"
-                    : "Some diagnostic outputs failed (" + completedAt + ")")
-                : "Manual export completed (" + completedAt + ")";
+            if (!automatic) {
+                m_lastExportStatus = "Manual export completed (" + completedAt + ")";
+            } else if (!gameplayOk || (lifetimeSyncDue && (!lifetimeOk || !gameplayLifetimeOk))) {
+                m_lastExportStatus = "Some diagnostic outputs failed (" + completedAt + ")";
+            } else if (lifetimeSyncDue) {
+                m_lastExportStatus = "Rolling logs + lifetime histories synced (" + completedAt + ")";
+            } else {
+                const auto secondsRemaining = std::max<std::int64_t>(0,
+                    std::chrono::duration_cast<std::chrono::seconds>(
+                        m_nextLifetimeMerge - std::chrono::steady_clock::now()).count());
+                m_lastExportStatus = "Rolling logs saved; history sync in " +
+                    std::to_string(secondsRemaining) + "s (" + completedAt + ")";
+            }
             m_lastExportPath = outputPath;
             m_lastSuccessfulExportTime = completedAt;
         } else {
@@ -744,6 +832,15 @@ void ModuleDiagnosticsModule::onFrame() {
     }
 
     std::vector<PLModMenu_DrawCommand> commands;
+    // Draw commands retain raw text pointers until submitDrawCommands returns.
+    // Own every string for the whole batch, including temporary page labels.
+    std::deque<std::string> drawTextStorage;
+    const float originX = static_cast<float>(m_overlayX);
+    const float originY = static_cast<float>(m_overlayY);
+    const float overlayWidth = static_cast<float>(m_overlayWidth);
+    const float textSize = static_cast<float>(m_overlayTextSize);
+    const float overlayHeight = static_cast<float>(m_overlayHeight);
+    const float lineHeight = textSize + 4.0f;
     const std::string line1 = "Module Diagnostics: " + std::to_string(m_summary.total) +
         " modules | " + std::to_string(m_summary.enabled) + " enabled";
     const std::string line2 = "Logs " + std::to_string(bedrocktools::diagnostics::count()) +
@@ -763,42 +860,86 @@ void ModuleDiagnosticsModule::onFrame() {
     auto addText = [&](const std::string& text, float y, std::uint32_t color) {
         PLModMenu_DrawCommand command{};
         command.type = PL_DRAW_TEXT;
-        command.x = 8.0f;
-        command.y = y;
-        command.w = 480.0f;
-        command.h = 16.0f;
-        command.size = 12.0f;
+        command.x = originX;
+        command.y = originY + y;
+        command.w = overlayWidth;
+        command.h = lineHeight;
+        command.size = textSize;
         command.color = color;
-        command.text = text.c_str();
+        drawTextStorage.emplace_back(text);
+        command.text = drawTextStorage.back().c_str();
         commands.push_back(command);
     };
 
-    addText(line1, 8.0f, 0xFFFFFFFF);
-    addText(line2, 24.0f, (m_summary.errors || m_summary.warnings) ? 0xFFFFC060 : 0xFF80FF80);
-    addText(line3, 40.0f, m_summary.written ? 0xFF80FF80 : 0xFFFF7070);
-    addText(line4, 56.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
-    addText(line5, 72.0f, 0xFFFFFFFF);
+    addText(line1, 0.0f, 0xFFFFFFFF);
+    addText(line2, lineHeight, (m_summary.errors || m_summary.warnings) ? 0xFFFFC060 : 0xFF80FF80);
+    addText(line3, lineHeight * 2.0f, m_summary.written ? 0xFF80FF80 : 0xFFFF7070);
+    addText(line4, lineHeight * 3.0f, exportStatus.find("failed") != std::string::npos ? 0xFFFF7070 : 0xFFFFFFFF);
+    addText(line5, lineHeight * 4.0f, 0xFFFFFFFF);
 
-    // Show actual runtime warnings/errors, not just registry consistency counts.
-    // Scan newest-first, then display chronologically so a failure gate is visible
-    // in the overlay without opening the JSON export.
-    const auto runtimeEntries = bedrocktools::diagnostics::snapshot();
-    std::vector<std::string> recentAlerts;
-    recentAlerts.reserve(4);
-    for (auto it = runtimeEntries.rbegin(); it != runtimeEntries.rend() && recentAlerts.size() < 4; ++it) {
-        if (it->level != bedrocktools::diagnostics::Level::Warning &&
-            it->level != bedrocktools::diagnostics::Level::Error &&
-            it->level != bedrocktools::diagnostics::Level::Critical) continue;
-        const char* tag = it->level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
-            it->level == bedrocktools::diagnostics::Level::Critical ? "CRIT" : "ERR";
-        std::string message = std::string("[") + tag + "] " + it->component + ": " + it->message;
-        constexpr std::size_t maxOverlayChars = 76;
-        if (message.size() > maxOverlayChars) message = message.substr(0, maxOverlayChars - 3) + "...";
-        recentAlerts.push_back(std::move(message));
+    // Rebuild the visible log page at most twice per second. The previous renderer
+    // copied the full 32k-entry ring and allocated strings for every wrapped line
+    // on every frame; at hundreds/thousands of entries this can dominate mobile FPS.
+    const auto displayNow = std::chrono::steady_clock::now();
+    if (m_cachedOverlayLines.empty() || displayNow >= m_nextOverlayRefresh) {
+        const auto runtimeEntries = bedrocktools::diagnostics::snapshot();
+        const std::size_t approxCharsPerLine = std::max<std::size_t>(12,
+            static_cast<std::size_t>(overlayWidth / std::max(1.0f, textSize * 0.58f)));
+        const std::size_t availableLines = std::max<std::size_t>(1,
+            static_cast<std::size_t>(std::max(1.0f, (overlayHeight - lineHeight * 6.0f) / lineHeight)));
+
+        // First count wrapped lines without allocating line strings. This is linear
+        // in the current bounded ring but runs only twice per second, not each frame.
+        std::size_t totalLines = 0;
+        for (const auto& entry : runtimeEntries) {
+            const std::size_t prefixLength = 2 + std::to_string(entry.sequence).size() +
+                1 + bedrocktools::diagnostics::levelName(entry.level).size() + 1 +
+                entry.component.size() + 2;
+            const std::size_t chars = prefixLength + entry.message.size();
+            totalLines += std::max<std::size_t>(1, (chars + approxCharsPerLine - 1) / approxCharsPerLine);
+        }
+        m_cachedOverlayPageCount = std::max<std::size_t>(1,
+            (totalLines + availableLines - 1) / availableLines);
+        const std::size_t page = std::min<std::size_t>(
+            static_cast<std::size_t>(std::max(0, m_overlayPage)), m_cachedOverlayPageCount - 1);
+        const std::size_t firstLine = page * availableLines;
+        const std::size_t lastLine = std::min(totalLines, firstLine + availableLines);
+
+        m_cachedOverlayLines.clear();
+        m_cachedOverlayLines.reserve(availableLines);
+        std::size_t lineIndex = 0;
+        for (const auto& entry : runtimeEntries) {
+            const std::string tag = entry.level == bedrocktools::diagnostics::Level::Warning ? "WARN" :
+                entry.level == bedrocktools::diagnostics::Level::Error ? "ERR" :
+                entry.level == bedrocktools::diagnostics::Level::Critical ? "CRIT" :
+                bedrocktools::diagnostics::levelName(entry.level);
+            const std::string fullMessage = "[" + std::to_string(entry.sequence) + "] " + tag + " " +
+                entry.component + ": " + entry.message;
+            const std::uint32_t color =
+                entry.level == bedrocktools::diagnostics::Level::Critical ||
+                entry.level == bedrocktools::diagnostics::Level::Error ? 0xFFFF7070 :
+                entry.level == bedrocktools::diagnostics::Level::Warning ? 0xFFFFC060 : 0xFFE8E8E8;
+            const std::size_t wrappedCount = std::max<std::size_t>(1,
+                (fullMessage.size() + approxCharsPerLine - 1) / approxCharsPerLine);
+            for (std::size_t line = 0; line < wrappedCount; ++line, ++lineIndex) {
+                if (lineIndex < firstLine || lineIndex >= lastLine) continue;
+                const std::size_t offset = line * approxCharsPerLine;
+                m_cachedOverlayLines.emplace_back(
+                    fullMessage.substr(offset, approxCharsPerLine), color);
+            }
+        }
+        m_nextOverlayRefresh = displayNow + std::chrono::milliseconds(500);
     }
-    std::reverse(recentAlerts.begin(), recentAlerts.end());
-    for (std::size_t i = 0; i < recentAlerts.size(); ++i) {
-        addText(recentAlerts[i], 92.0f + static_cast<float>(i) * 16.0f, 0xFFFF7070);
+
+    const std::size_t pageCount = std::max<std::size_t>(1, m_cachedOverlayPageCount);
+    const std::size_t page = std::min<std::size_t>(
+        static_cast<std::size_t>(std::max(0, m_overlayPage)), pageCount - 1);
+    addText("Log page " + std::to_string(page + 1) + "/" + std::to_string(pageCount) +
+            " (oldest to newest; change Log page in settings)", lineHeight * 5.0f, 0xFFB0D8FF);
+    float y = lineHeight * 6.0f;
+    for (const auto& line : m_cachedOverlayLines) {
+        addText(line.first, y, line.second);
+        y += lineHeight;
     }
     submitDrawCommands(moduleId, commands);
 }
@@ -908,17 +1049,14 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
 
     // Include a compact tail of runtime events in the JSON report so the report
     // can show both registry health and the most recent observed failure gates.
-    const auto runtimeEvents = bedrocktools::diagnostics::snapshot();
-    const std::size_t firstRuntimeEvent = runtimeEvents.size() > 128
-        ? runtimeEvents.size() - 128 : 0;
+    const auto runtimeEvents = bedrocktools::diagnostics::snapshotTail(128);
     report["runtime_log"] = {
-        {"buffered_entries", runtimeEvents.size()},
+        {"buffered_entries", bedrocktools::diagnostics::count()},
         {"capacity", bedrocktools::diagnostics::bufferCapacity()},
         {"dropped_entries", bedrocktools::diagnostics::droppedCount()},
         {"recent_entries", json::array()}
     };
-    for (std::size_t i = firstRuntimeEvent; i < runtimeEvents.size(); ++i) {
-        const auto& entry = runtimeEvents[i];
+    for (const auto& entry : runtimeEvents) {
         report["runtime_log"]["recent_entries"].push_back({
             {"timestamp_ms", entry.timestampMs},
             {"monotonic_ns", entry.monotonicNs},

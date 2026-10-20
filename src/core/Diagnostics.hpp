@@ -34,6 +34,8 @@ void probe(Level level, std::string_view component, std::string_view key,
            std::string_view state, std::string_view detail = {}) noexcept;
 void resetProbes() noexcept;
 std::vector<Entry> snapshot();
+// Copy only the newest entries; use for periodic HUD/health reports that display a tail.
+std::vector<Entry> snapshotTail(std::size_t maxEntries);
 std::size_t count() noexcept;
 std::size_t bufferCapacity() noexcept;
 std::uint64_t droppedCount() noexcept;

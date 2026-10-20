@@ -124,3 +124,99 @@ This is a new experimental branch based on the current public-adapter/swap-traci
 - Downloaded and verified inner `/mnt/data/BedrockTools-build920.levipack`: 689,656 bytes, SHA256 `c95d631104f7f9fce41acbf5b4114a83ef5d973e0053ef56ee3f2a153911f41f`; contains manifest.json (358 B, SHA256 `8d43254ab345298d0833dbbe98bfb751c999d84f267eee202d6170eadc455e10`), libBedrockTools.so (1,326,080 B, SHA256 `5e272805bb22771518764965b757fb813fa9730824005094c73116557d5810b9`), icon.png, and resources/minecraft.ttf. Manifest identifies BedrockTools 1.5.7 / preload-native.
 - Important: this proves host tests and Android ARM64 compilation/package for the crosshair-gate + 3.0 default reach revision. It does not prove crosshair gating in actual gameplay, normal engine attack-button callback invocation, actual damage, or FPS improvement.
 - Next: install this pack on the matching Minecraft 26.51 setup and test (1) crosshair centered target <=3 blocks, (2) behind/offscreen target must emit `target_not_under_crosshair` and no attack dispatch, (3) AutoHit-only with AimAssist steering disabled, (4) BedrockAim/BedrockBound still work. Save fresh Module Diagnostics JSON afterwards. Continue separate exact-binary analysis for `ClientInputCallbacks::handleDestoryOrAttackButtonPress`; do not copy Apollon's stale offset `0x6462B60`.
+
+
+## Diagnostics I/O cost investigation — pre-edit hypothesis/test record (2026-10-20)
+
+### Evidence before source edit
+- Screenshot shows Module Diagnostics configured to auto-save every 1 second; it displays `ALL + GAMEPLAY_ONLY_LOGS + both histories saved`.
+- Current local `bedaim_diagnostics_total.json` is about 7.1 MB / 25,668 entries; `bedaim_diagnostics_gameplay_total.json` is about 5.1 MB / 17,503 entries. Current rolling exports are about 306 KB / 828 entries and 268 KB / 691 entries respectively.
+- In `src/modules/misc/modulediagnostics.cpp`, `exportWorkerLoop()` runs `exportLogs(true)` on the user-configured cadence. Each automatic save writes two current-session snapshots, then `mergeCurrentSessionIntoLifetime()` parses and deduplicates the entire cumulative `*_total.json`, serializes it again, and atomically rewrites it; it repeats that for both full and gameplay histories. This heavy CPU/allocation/storage work runs on a background worker, not directly on the render thread, but every-second multi-megabyte JSON parse + rewrite can still contend for CPU and storage bandwidth and plausibly contribute to frame-time spikes.
+- `startFreshLogSession()` already performs a full archive/merge of the previous current-session files before rotating them, so cumulative history does not need to be reparsed and rewritten on every rolling snapshot.
+
+### Hypothesis before source edit
+Keep the current-session `bedaim_diagnostics_auto.json` and `bedaim_diagnostics_gameplay.json` snapshots on the selected rolling cadence, but throttle cumulative-history merges to at most once per 60 seconds (also merge when rotating the session). Prevent a 1-second saved preference from driving the full-history merge path each second by enforcing a safe 5-second minimum for auto-save. This preserves near-current logs for debugging while reducing repeated multi-megabyte archive work; it is a performance mitigation hypothesis, not yet proof of FPS improvement.
+
+### Intended tests
+1. Change only `src/modules/misc/modulediagnostics.hpp/.cpp` and this progress file. Record the lifetime-merge interval separately from the rolling snapshot interval.
+2. Verify a rolling save still updates the two current-session files, while full history files are not reread/rewritten before their 60-second sync is due; on session rotation, preserve the previous session in history.
+3. Enforce the five-second minimum consistently in menu schema, config input, and config load/migration. Keep manual exports unchanged.
+4. Run all seven existing host regressions, check `git diff --check`, and run Android ARM64 CI. Require a real `.levipack` artifact.
+5. On device, compare Module Diagnostics auto-save status and FPS spikes with a one-second old config versus the enforced minimum; verify current logs stay current and combined histories catch up within 60 seconds. Do not claim FPS improvement without gameplay measurements.
+
+No source code has been edited yet on this new diagnostics-focused experimental branch. Preserve the AutoHit crosshair branch, BedrockAim, BedrockBound, and `main`; no merge.
+
+
+## PR #47 / Build #922 — actual CI and artifact results (2026-10-20)
+- PR: https://github.com/wendellestumano/Bedaim/pull/47 (open, draft, unmerged), experimental branch `experiment/diagnostics-lifetime-merge-throttle-20261020`.
+- Workflow: https://github.com/wendellestumano/Bedaim/actions/runs/39449994407. Job `build` concluded `success`. Host regressions all passed: menu config 64 checks/0 failures, AimAssist math 27/0, atomic writer 10/0, diagnostics exit 0, AutoHit guards 48/0, AutoHit weapon profile exit 0, AutoTotem policy 14/0. NDK setup succeeded; Android ARM64 build/package succeeded (`build ok`); artifact upload succeeded.
+- Artifact `BedrockTools-levipack`, ID `12278790729`, uploaded ZIP size 688,117 bytes, ZIP SHA256 `70f4070d7f7dd6e44c80889ac5e3c78ae9f7db8807f49dd19cef9966d80d242b`; link https://github.com/wendellestumano/Bedaim/actions/runs/39449994407/artifacts/12278790729.
+- Downloaded and verified `/mnt/data/BedrockTools-build922.levipack`: size 689,857 bytes, SHA256 `2f0e2fd490bb4c7494912196442bf96cbd3546f527e554f7a1eb14320d464282`. Contents: `manifest.json` 358 B, `libBedrockTools.so` 1,326,416 B, `icon.png` 66,026 B, `resources/minecraft.ttf` 70,324 B. Manifest is BedrockTools 1.5.7, preload-native.
+- Code commit built by CI: `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96`. Code changes: `src/modules/misc/modulediagnostics.cpp`, `src/modules/misc/modulediagnostics.hpp`; progress file contained the pre-edit hypothesis. No other source modules changed by PR #47.
+- Meaning: this confirms the diagnostics I/O throttle compiles and packages. It does not prove FPS improved on device; the cumulative files now sync every 60 s and on session rotation, rolling snapshots remain on a minimum 5-second cadence, and manual exports are unchanged. Validate with FPS/frametime comparison and confirm both current-session files stay fresh.
+- `main` remains untouched and there is no merge. A result entry is being appended now; since the PR workflow runs on updates, that documentation-only commit may queue another CI run. The successful artifact above corresponds to the code commit listed above, not any later documentation commit.
+
+
+## Documentation follow-up CI — Build #923 status
+- Updating this log on the PR queued a documentation-head validation: https://github.com/wendellestumano/Bedaim/actions/runs/39450581235, head `cb359b07a9bd55a87fc9b51279f9da73322639c4`.
+- At the last actual status check, setup xmake, host test dependency setup, all seven host regression tests, and NDK r28c setup had succeeded. The Android ARM64 `Build and package` step remained in progress; artifact upload had not started. Therefore no success or artifact is claimed for #923 yet.
+- The code revision `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96` was independently validated by Build #922 success and its artifact. #923 differs only by the added persistent validation-results record.
+
+
+## Final CI reconciliation — Build #923 cancelled; Build #924 passed (2026-10-20)
+- Build #923: https://github.com/wendellestumano/Bedaim/actions/runs/39450581235, head cb359b07a9bd55a87fc9b51279f9da73322639c4. Host tests passed and NDK setup passed; Build and package was cancelled by GitHub Actions before the artifact upload. This is recorded as a cancelled run, not a compiler failure.
+- Build #924: https://github.com/wendellestumano/Bedaim/actions/runs/39451137827, head 796923176862552a45d3a855af387855d71cb63c4. Final job result success; all seven host regression targets passed, NDK setup passed, Android ARM64 Build and package passed, and artifact upload passed.
+- Artifact BedrockTools-levipack, ID 12279441407, ZIP size 688,702 bytes, SHA256 099b5fede4e394c7260e3ef21b7dabb43c3ee5b554a25a956159a16fb344b12c; link https://github.com/wendellestumano/Bedaim/actions/runs/39451137827/artifacts/12279441407.
+- Downloaded/verified pack /mnt/data/BedrockTools-build924.levipack: 690,283 bytes, SHA256 bcea381e32ba8ab9e900f4e60dfb050dd0d10dfc671b2523ff581e659c82b028. Contains manifest.json (358 B), libBedrockTools.so (1,326,496 B), icon.png (66,026 B), and resources/minecraft.ttf (70,324 B). This is the same diagnostics I/O throttle source as Build #922, with the persistent results log also included in the checked-out source revision. It remains untested for in-game FPS improvement.
+- PR #47 remains open/draft/unmerged, branch experiment/diagnostics-lifetime-merge-throttle-20261020; main is untouched.
+
+
+## Normal input callback research — pre-edit record (2026-10-20)
+
+### New evidence
+- LeviLamina SDK header commit `4f1aad4bb9ff2985d2530d3f3ff5bc13e16ff6a6` is explicitly labeled `26.51.1` and declares `MCAPI static void handleBuildOrAttackOrBlockSelectButtonPress(::IClientInstance& client);` in `src-client/mc/client/game/ClientInputCallbacks.h`. Earlier header commit `e7f443cf3fca34b103816f3ea2e79142576e4ec3` (26.20) declares both `handleDestoryOrAttackButtonPress(IClientInstance&)` and the later `handleBuildOrAttackOrBlockSelectButtonPress(IClientInstance&)`.
+- Current Android `libminecraftpe.so` supplied in Termux has no exported dynamic symbols for `ClientInputCallbacks` methods; string scans also did not find the literal names `handleBuildOrAttackOrBlockSelectButtonPress`, `handleDestoryOrAttackButtonPress`, or `BuildActionIntention`. This is not proof that the function is absent—the library is stripped—but means no safe `dlsym` or direct copied offset is available.
+- Apollon's old `0x6462B60` callback offset has already been disproven for this current binary. Do not copy it or substitute `handlePointerPressedButtonPress` blindly: that is a generic pointer callback, not evidence of the attack action.
+- The current `AutoHit` branch logs `explicit_input_callback=not_called_in_this_path`; the crosshair gate and 3.0-block default are present in the Build #924 ancestry, but this does not yet reproduce a normal input callback.
+
+### Hypothesis before next code edit
+The normal input callback for a newer Bedrock SDK is likely the static `ClientInputCallbacks::handleBuildOrAttackOrBlockSelectButtonPress(IClientInstance&)`, but its exact code location in the target Android binary remains unresolved. Locate it by an APK-specific unique signature and confirm that signature scans exactly once within executable `.text`, then validate the candidate's calling convention and receiver path before adding any invocation. Keep the three-argument GameMode route as fallback/diagnostic only until runtime shows the normal-input route works.
+
+### Intended tests before source edit
+1. Inspect existing Termux disassembly/pseudocode and current `.so` metadata for the target function/callsite; avoid rerunning stale Apollon offset experiments.
+2. If and only if a unique validated pattern is found, add a separate experimental signature and a pending-attack flag consumed from a verified ClientInstance update/tick context. Clear the flag after one invocation; enforce the existing crosshair gate, 3-block reach, weapon profile and CPS gates before queuing.
+3. Host regressions, Android ARM64 CI, verify `.levipack`; no claims from build alone.
+4. In-game on exact Minecraft 26.51, compare centred target / offscreen target; the offscreen/back-facing case must show zero normal-input calls, and centred target should cause server-visible health/damage changes without manual input.
+5. Preserve BedrockAim and BedrockBound; no `main` edits or merge.
+
+### Build/artifact ledger
+- Build #922, code commit `3ba7d0f63649d81b1f30cbfc0764d0aa17165e96`: success, tests and ARM64 package passed; artifact ID `12278790729`, 688,117-byte ZIP, SHA256 `70f4070d7f7dd6e44c80889ac5e3c78ae9f7db8807f49dd19cef9966d80d242b`; inner pack `/mnt/data/BedrockTools-build922.levipack`, 689,857 bytes.
+- Build #923, docs commit `cb359b07a9bd55a87fc9b51279f9da73322639c4`: cancelled during Android packaging before artifact upload; host tests and NDK succeeded. Do not label as compile failure.
+- Build #924, docs commit `796923176862552a45d3a855af387855d71cb63c4`: complete success; artifact ID `12279441407`, 688,702-byte ZIP SHA256 `099b5fede4e394c7260e3ef21b7dabb43c3ee5b554a25a956159a16fb344b12c`; verified inner `/mnt/data/BedrockTools-build924.levipack`, 690,283 bytes SHA256 `bcea381e32ba8ab9e900f4e60dfb050dd0d10dfc671b2523ff581e659c82b028`.
+
+
+## Build #926 — final verification (2026-10-20)
+- Workflow: https://github.com/wendellestumano/Bedaim/actions/runs/39452666734; head `e7fa30907c6b8c38a17589084fe2e3593614d29d`; final job conclusion `success`.
+- Host regression tests all passed (64 menu config, 27 AimAssist math, 10 atomic writer, diagnostics exit 0, 48 AutoHit guards, weapon-profile test exit 0, 14 AutoTotem policy). NDK setup, Android ARM64 Build and package, and artifact upload all completed successfully.
+- Artifact ID `12278793974`, upload ZIP 688,116 bytes, SHA256 `d54f4db55668e50db230bfe610007d7b874b268fc02091555255558b7876cf69`; link https://github.com/wendellestumano/Bedaim/actions/runs/39452666734/artifacts/12278793974.
+- Downloaded and verified `/mnt/data/BedrockTools-build926.levipack`: size 689,857 bytes, SHA256 `ef5e59b1ea9b73006906b48368b03ebac08049b572fa96e5e292555215c3aa91`. Contents and hashes match Build #924 pack except build-specific `libBedrockTools.so`: manifest.json 358 B SHA256 `8d43254ab345298d0833dbbe98bfb751c999d84f267eee202d6170eadc455e10`; `libBedrockTools.so` 1,326,416 B SHA256 `e8d398f42deded1a95dbe742b263c92f5e5c5a182e3e61d1cef4d2d969e529d5`; icon.png 66,026 B; resources/minecraft.ttf 70,324 B. Manifest BedrockTools 1.5.7, preload-native.
+- This is a new verified artifact for the same code as Build #924 plus documentation of the normal input callback investigation. No normal input callback was added by this revision. In-game AutoHit health/damage, the behind/offscreen crosshair rejection, and FPS gains still need user runtime testing.
+
+
+## Diagnostics review after user-provided screenshot — 2026-10-20
+
+### Screenshot evidence
+- Overlay: 57 modules / 11 enabled, in-memory log buffer 631 / 32768, lost entries 0, diagnostics report path is shown, last successful save timestamp visible, FPS reading 5.
+- Four truncated warnings on the overlay appear to include GameHooks attack-route/adapters and MaceSwapper; exact messages cannot be reconstructed reliably from the image. Need the actual JSON/TXT export before assigning root cause.
+- lost 0 means this frame does not suggest diagnostic buffer overflow. It does not rule out CPU/storage contention or an independent native-hook/module performance issue.
+
+### Confirmed diagnostics code review
+- Current ring logger in src/core/Diagnostics.cpp bounds memory at 32,768 entries and performs short mutex-protected append/snapshot operations. Current sample size is small relative to the buffer.
+- Prior automatic export rewrote the two current-session JSON snapshots and also parsed/deduplicated/atomically rewrote the two multi-megabyte lifetime histories on each save. This is avoidable I/O/CPU contention even though it runs in a background worker.
+- Experimental PR #47 retains rolling full/gameplay snapshots, raises the minimum rolling interval to 5 seconds, and throttles lifetime history sync to 60 seconds; it compiled and packaged successfully in Build #927 (all host regressions, Android ARM64 build and artifact upload succeeded). Artifact: https://github.com/wendellestumano/Bedaim/actions/runs/39453541115/artifacts/12277994811. This confirms compile/package only, not an in-game FPS gain.
+- Caution for follow-up review: m_nextLifetimeMerge is guarded by m_fileWriteMutex as intended; ensure a failed rolling export does not get reported as successful. In the current code, if the main full export succeeds but gameplay export fails, lastSuccessfulExportTime and lastExportPath still advance even though status says some outputs failed. This is a status accuracy issue to fix/test; the full JSON may be valid, but 'last successful save' overstates total output success.
+- Caution: throttle deadline is advanced even when archive merge fails, deliberately preventing repeated expensive retries; error is logged and the next retry occurs in about a minute. This behaviour should remain visible in the overlay/status. Validate rotation with both current files present and archive failures.
+
+### AutoHit interpretation
+- Current AutoHit code explicitly logs dispatch_path=GameMode_vtable and explicit_input_callback=not_called_in_this_path. Therefore the diagnostics pipeline may help expose the failure, but the currently validated package still does not prove it invokes the normal engine input callback or produces server-confirmed damage.
+- The screenshot alone does not establish that the visible GameHooks warnings are caused by diagnostics. Need the actual full JSON with exact messages/timestamps, then correlate warning frequency with FPS/frametime and the selected module states.

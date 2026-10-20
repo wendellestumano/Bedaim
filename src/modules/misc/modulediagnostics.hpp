@@ -6,8 +6,11 @@
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <utility>
+#include <vector>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class ModuleDiagnosticsModule final : public Module {
 public:
@@ -39,6 +42,8 @@ private:
     void stopExportWorker();
     void exportWorkerLoop();
     std::chrono::steady_clock::time_point m_nextRefresh{};
+    // Guarded by m_fileWriteMutex; cumulative JSON histories sync less often than rolling snapshots.
+    std::chrono::steady_clock::time_point m_nextLifetimeMerge{};
     ReportSummary m_summary{};
     bool m_reportReady = false;
     bool m_exportLogsNow = false;
@@ -54,4 +59,14 @@ private:
     std::string m_lastExportStatus = "No export attempted yet";
     std::string m_lastExportPath;
     std::string m_lastSuccessfulExportTime = "never";
+    // HUD layout controls; independent from log collection/export settings.
+    int m_overlayX = 8;
+    int m_overlayY = 8;
+    int m_overlayWidth = 480;
+    int m_overlayTextSize = 12;
+    int m_overlayHeight = 520;
+    int m_overlayPage = 0;
+    std::chrono::steady_clock::time_point m_nextOverlayRefresh{};
+    std::size_t m_cachedOverlayPageCount = 1;
+    std::vector<std::pair<std::string, std::uint32_t>> m_cachedOverlayLines;
 };
