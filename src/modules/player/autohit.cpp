@@ -169,7 +169,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // AutoHit has no attack key/button gate: enabling the module is sufficient.
     // Copy the weapon profile and reach under one short lock, then leave the
     // render/tick-critical path free of input-capture bookkeeping.
-    float configuredRange = 3.2f;
+    float configuredRange = 3.0f;
     bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
     float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
     {
@@ -287,6 +287,16 @@ void AutoHitModule::processPlayerTick(Player* player) {
     }
     targetBounds = liveTargetBounds;
     aimRange = std::min(aimRange, liveTargetRange);
+
+    // AutoHit must behave like a normal attack held only while the current
+    // camera ray actually intersects this target. A retained BedrockAim target
+    // behind/offscreen is not sufficient; this gate is before CPS reservation
+    // and before any native attack/input dispatch.
+    if (!aim->currentTargetInCrosshair(player, target, 0.12f)) {
+        reportGate(12, "target_not_under_crosshair",
+            "attack suppressed: current player view ray does not intersect the fresh target bounds");
+        return;
+    }
 
     // Hitbox Expander mutates the local actor AABB used by native target queries.
     // If it is enabled, never treat the live AABB as the server's real bounds when
@@ -456,6 +466,22 @@ void AutoHitModule::processPlayerTick(Player* player) {
             "feedback", "no_immediate_hurt_time_transition",
             "six accepted native calls had no immediate local hurt-time increase; continuing at the configured CPS limit because this observation alone is not proof of a miss or server damage.");
     }
+    // The recording shows native_out_result=false repeatedly. Back off a rejected
+    // route before repeating actor queries and another native call every CPS tick.
+    // This is a performance/failure-containment guard, not a claim that the route is fixed.
+    if (!accepted) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        }
+        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "native_attack",
+            "rejected_with_backoff",
+            std::string("retry_after_ms=3000; native_out_result=") +
+            (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
+            "; native_call_duration_us=" + std::to_string(nativeCallDurationUs) +
+            "; route rejection is not server damage confirmation");
+    }
+
     const std::string attemptResult =
         attemptContext +
         "; wrapper_result=" + (accepted ? "accepted_by_internal_observer" : "not_accepted_by_internal_observer") +

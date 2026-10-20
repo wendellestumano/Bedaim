@@ -84,3 +84,43 @@ No source code has been edited on this new remote branch yet. `main`, BedrockAim
 - Workflow run #916: https://github.com/wendellestumano/Bedaim/actions/runs/39431784071
 - Observed workflow state: host regression tests completed successfully; NDK setup completed successfully; Android ARM64 Build and package was still in progress at this update. Artifact list was empty while the job was running. No build pass or levipack artifact is claimed yet.
 - Next check: inspect the final job conclusion and artifact list; if it fails, fetch the exact compiler log and make a focused correction, recording a new hypothesis before any further source edit.
+
+
+## AutoHit crosshair-only gate — pre-edit hypothesis/test record (2026-10-20)
+
+### Evidence
+- User explicitly requests normal attack activation only when the current target is inside the camera crosshair and at most 3 blocks away.
+- `src/modules/player/aimassist.hpp` already exposes `AimAssistModule::currentTargetInCrosshair(player, target, tolerance)`. Its implementation performs a ray/AABB intersection from the player's current view rotation and can enforce line of sight according to AimAssist settings.
+- `currentTargetInCrosshair` currently requires `AimAssistModule::enabled`, but the module's own event system deliberately continues tracking while AutoHit is enabled (`autoHitNeedsTargeting()`). Thus AutoHit-only mode needs this gate to accept that same AutoHit-driven targeting condition; otherwise the gate rejects all targets when AimAssist itself is toggled off.
+- The existing AutoHit dispatch does not call an explicit engine input callback. Its logs state `explicit_input_callback=not_called_in_this_path`, and 82 observed `GameHooks` dispatch entries in the exported diagnostics used the guarded four-argument route with `native_out_result=false`. These are separate problems: first prevent attacks unless the crosshair/reach gates pass, then separately validate the correct normal input callback ABI.
+- Prior Apollon source names `ClientInstance::handleDestoryOrAttackButtonPress`, but its hard-coded address for Minecraft 26.51 is stale; no copied offset will be used.
+
+### Hypothesis (before source edits)
+1. Add an early AutoHit gate invoking `currentTargetInCrosshair(player, target, 0.12f)` after current target/hitbox validation and before reserving CPS or dispatching any attack. This should prevent attacks at stale targets behind/outside the crosshair while preserving the existing target provider and three-block reach gate.
+2. Adjust only `AimAssistModule::currentTargetInCrosshair`'s enabled predicate to use the same `(!enabled && !autoHitNeedsTargeting())` condition already used by snapshot/bounds methods. This lets AutoHit use the ray test with AimAssist's steering disabled, without enabling AimAssist steering.
+3. Default reach is 3.0 blocks. Preserve explicit user-configured values in existing configs, clamped to the existing 2–6 block range.
+4. Do not change attack dispatch ABI or normal-input callback route in this patch until a version-verified callback signature and invocation context are established.
+
+### Intended tests
+- Add focused host tests for ray/AABB crosshair gate (centered hit, target offscreen/behind, target outside 3 blocks, stale target) if the existing test layout can test the pure geometry without requiring the Minecraft runtime.
+- Run all seven existing host regressions.
+- Run Android ARM64 CI and confirm a generated `.levipack` artifact; inspect actual job logs.
+- Device validation: centered target within 3 blocks should reach the input/dispatch path; behind/offscreen target must produce a gate reason and zero dispatches. AutoHit-only mode (AimAssist disabled) must still run the crosshair predicate.
+- Normal button callback remains a follow-up implementation; don't mark AutoHit fully fixed until a real input callback is invoked and actual target damage is confirmed.
+
+This is a new experimental branch based on the current public-adapter/swap-tracing experiment; no source code has been edited on this branch yet. `main`, BedrockAim steering defaults, and BedrockBound remain untouched; no merge.
+
+
+## Reach default edit — post-gate correction
+- Source: `src/modules/player/autohit.cpp` default `configuredRange` and `src/modules/player/autohit.hpp` default `m_attackRange` changed from 3.2 to 3.0 blocks. Existing saved configuration is still honored by `loadConfig`, and the setting remains configurable in the existing 2–6 block slider.
+- This aligns the default configured reach with the requested 3-block radius; it does not clamp every user's saved setting to 3.0.
+- Tests and Android build for this latest edit are pending; do not claim a new artifact until CI confirms it.
+
+
+## PR #46 / Build #920 — verified package result (2026-10-20)
+- PR: https://github.com/wendellestumano/Bedaim/pull/46 (open, draft, not merged); branch `experiment/autohit-crosshair-gate-20261020`; HEAD at this CI run `215822627ff92b0a9fad5b170d13fceb1b0f7f27`.
+- Workflow: https://github.com/wendellestumano/Bedaim/actions/runs/39447621275 — final job conclusion `success`. Host regression suite passed (menu config 64/0, AimAssist math 27/0, atomic writer 10/0, diagnostics exit 0, AutoHit guards 48/0, AutoHit weapon profile exit 0, AutoTotem policy 14/0). NDK setup completed; Android ARM64 Build and package completed; artifact upload completed.
+- Artifact: `BedrockTools-levipack`, ID `12277168057`, upload size 688,055 bytes, SHA256 of uploaded artifact zip `68f63a7dd0d619799459a6a98a77df28ca30de39347598cbf2b1094274ac649f`; download page https://github.com/wendellestumano/Bedaim/actions/runs/39447621275/artifacts/12277168057.
+- Downloaded and verified inner `/mnt/data/BedrockTools-build920.levipack`: 689,656 bytes, SHA256 `c95d631104f7f9fce41acbf5b4114a83ef5d973e0053ef56ee3f2a153911f41f`; contains manifest.json (358 B, SHA256 `8d43254ab345298d0833dbbe98bfb751c999d84f267eee202d6170eadc455e10`), libBedrockTools.so (1,326,080 B, SHA256 `5e272805bb22771518764965b757fb813fa9730824005094c73116557d5810b9`), icon.png, and resources/minecraft.ttf. Manifest identifies BedrockTools 1.5.7 / preload-native.
+- Important: this proves host tests and Android ARM64 compilation/package for the crosshair-gate + 3.0 default reach revision. It does not prove crosshair gating in actual gameplay, normal engine attack-button callback invocation, actual damage, or FPS improvement.
+- Next: install this pack on the matching Minecraft 26.51 setup and test (1) crosshair centered target <=3 blocks, (2) behind/offscreen target must emit `target_not_under_crosshair` and no attack dispatch, (3) AutoHit-only with AimAssist steering disabled, (4) BedrockAim/BedrockBound still work. Save fresh Module Diagnostics JSON afterwards. Continue separate exact-binary analysis for `ClientInputCallbacks::handleDestoryOrAttackButtonPress`; do not copy Apollon's stale offset `0x6462B60`.
