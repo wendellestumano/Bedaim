@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - feature/screenbridge-android-app-20261019
+      - feature/screenbridge-status-overlay-20261019
     paths:
       - "ScreenBridge/**"
       - ".github/workflows/screenbridge-build.yml"
