@@ -109,3 +109,9 @@ No source code has been edited on this new remote branch yet. `main`, BedrockAim
 - Normal button callback remains a follow-up implementation; don't mark AutoHit fully fixed until a real input callback is invoked and actual target damage is confirmed.
 
 This is a new experimental branch based on the current public-adapter/swap-tracing experiment; no source code has been edited on this branch yet. `main`, BedrockAim steering defaults, and BedrockBound remain untouched; no merge.
+
+
+## Reach default edit — post-gate correction
+- Source: `src/modules/player/autohit.cpp` default `configuredRange` and `src/modules/player/autohit.hpp` default `m_attackRange` changed from 3.2 to 3.0 blocks. Existing saved configuration is still honored by `loadConfig`, and the setting remains configurable in the existing 2–6 block slider.
+- This aligns the default configured reach with the requested 3-block radius; it does not clamp every user's saved setting to 3.0.
+- Tests and Android build for this latest edit are pending; do not claim a new artifact until CI confirms it.
