@@ -54,3 +54,11 @@ The endpoint accepts only the app's existing random token and only the listed st
 ### Recording a reproducible test
 
 For this build, start Android's built-in **Screen record** tile in Quick Settings before running the test, select device audio/microphone only if needed, and stop recording afterward. Save the MP4 under `Download/ScreenBridgeTests/` if the recorder offers a location option. The system recorder is intentionally kept separate from MediaProjection capture: Android 14+ restricts reuse of a MediaProjection session for multiple virtual displays, so this prototype does not start a second recording pipeline that could interrupt live screenshots. Verify that an MP4 exists and plays before relying on the recording.
+
+
+## ScreenBridge session recorder (experimental branch)
+- The recorder consumes frames from the existing authorized MediaProjection/ImageReader session and encodes them to MP4; it does not create a second VirtualDisplay.
+- Use **Começar a gravar sessão**, then **Parar gravação e finalizar MP4**. The output is saved to Movies/ScreenBridgeTests. Use **Compartilhar última gravação** and choose ChatGPT to attach the clip to the conversation.
+- Recording targets up to 10 frames per second to limit the impact on live capture. This is a prototype: validate the resulting MP4 on the target device before relying on it.
+- Authenticated local endpoint: `/<token>/recording?op=start`, `/<token>/recording?op=stop`, and `/<token>/recording` for status.
+- The control endpoint acknowledges tap/swipe dispatch without waiting for a frame. Live AI vision still requires an authenticated remote relay/controller; this app's loopback endpoint alone is not directly reachable by ChatGPT's remote runtime.
