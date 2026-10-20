@@ -61,5 +61,6 @@ private:
     int m_overlayY = 8;
     int m_overlayWidth = 480;
     int m_overlayTextSize = 12;
+    int m_overlayHeight = 520;
     int m_overlayPage = 0;
 };
