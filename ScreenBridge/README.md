@@ -38,3 +38,19 @@ Coordinates use full-display pixel dimensions from `/health`. An accepted gestur
 
 ## Release verification
 Every distributed APK must be built with the persistent signing bundle. Verify the artifact's certificate before installation, and do not publish an APK if the signing secret is missing.
+
+
+## ChatGPT activity indicator and test recording
+
+The floating pill now shows two independent states: `SB · …` for the phone-side ScreenBridge state and `GPT · …` for the ChatGPT state. The GPT state is **not automatically detectable from Android**. A trusted local controller can set it through the token-protected loopback endpoint:
+
+- `GET /<token>/gpt-state?state=thinking`
+- `GET /<token>/gpt-state?state=working`
+- `GET /<token>/gpt-state?state=done`
+- `GET /<token>/gpt-state?state=unknown`
+
+The endpoint accepts only the app's existing random token and only the listed state values. `done` means the controller has explicitly marked the work complete; it is not a claim that Android inferred ChatGPT's internal state.
+
+### Recording a reproducible test
+
+For this build, start Android's built-in **Screen record** tile in Quick Settings before running the test, select device audio/microphone only if needed, and stop recording afterward. Save the MP4 under `Download/ScreenBridgeTests/` if the recorder offers a location option. The system recorder is intentionally kept separate from MediaProjection capture: Android 14+ restricts reuse of a MediaProjection session for multiple virtual displays, so this prototype does not start a second recording pipeline that could interrupt live screenshots. Verify that an MP4 exists and plays before relying on the recording.
