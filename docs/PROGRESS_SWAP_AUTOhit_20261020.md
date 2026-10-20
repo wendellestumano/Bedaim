@@ -201,3 +201,22 @@ The normal input callback for a newer Bedrock SDK is likely the static `ClientIn
 - Artifact ID `12278793974`, upload ZIP 688,116 bytes, SHA256 `d54f4db55668e50db230bfe610007d7b874b268fc02091555255558b7876cf69`; link https://github.com/wendellestumano/Bedaim/actions/runs/39452666734/artifacts/12278793974.
 - Downloaded and verified `/mnt/data/BedrockTools-build926.levipack`: size 689,857 bytes, SHA256 `ef5e59b1ea9b73006906b48368b03ebac08049b572fa96e5e292555215c3aa91`. Contents and hashes match Build #924 pack except build-specific `libBedrockTools.so`: manifest.json 358 B SHA256 `8d43254ab345298d0833dbbe98bfb751c999d84f267eee202d6170eadc455e10`; `libBedrockTools.so` 1,326,416 B SHA256 `e8d398f42deded1a95dbe742b263c92f5e5c5a182e3e61d1cef4d2d969e529d5`; icon.png 66,026 B; resources/minecraft.ttf 70,324 B. Manifest BedrockTools 1.5.7, preload-native.
 - This is a new verified artifact for the same code as Build #924 plus documentation of the normal input callback investigation. No normal input callback was added by this revision. In-game AutoHit health/damage, the behind/offscreen crosshair rejection, and FPS gains still need user runtime testing.
+
+
+## Diagnostics review after user-provided screenshot — 2026-10-20
+
+### Screenshot evidence
+- Overlay: 57 modules / 11 enabled, in-memory log buffer 631 / 32768, lost entries 0, diagnostics report path is shown, last successful save timestamp visible, FPS reading 5.
+- Four truncated warnings on the overlay appear to include GameHooks attack-route/adapters and MaceSwapper; exact messages cannot be reconstructed reliably from the image. Need the actual JSON/TXT export before assigning root cause.
+- lost 0 means this frame does not suggest diagnostic buffer overflow. It does not rule out CPU/storage contention or an independent native-hook/module performance issue.
+
+### Confirmed diagnostics code review
+- Current ring logger in src/core/Diagnostics.cpp bounds memory at 32,768 entries and performs short mutex-protected append/snapshot operations. Current sample size is small relative to the buffer.
+- Prior automatic export rewrote the two current-session JSON snapshots and also parsed/deduplicated/atomically rewrote the two multi-megabyte lifetime histories on each save. This is avoidable I/O/CPU contention even though it runs in a background worker.
+- Experimental PR #47 retains rolling full/gameplay snapshots, raises the minimum rolling interval to 5 seconds, and throttles lifetime history sync to 60 seconds; it compiled and packaged successfully in Build #927 (all host regressions, Android ARM64 build and artifact upload succeeded). Artifact: https://github.com/wendellestumano/Bedaim/actions/runs/39453541115/artifacts/12277994811. This confirms compile/package only, not an in-game FPS gain.
+- Caution for follow-up review: m_nextLifetimeMerge is guarded by m_fileWriteMutex as intended; ensure a failed rolling export does not get reported as successful. In the current code, if the main full export succeeds but gameplay export fails, lastSuccessfulExportTime and lastExportPath still advance even though status says some outputs failed. This is a status accuracy issue to fix/test; the full JSON may be valid, but 'last successful save' overstates total output success.
+- Caution: throttle deadline is advanced even when archive merge fails, deliberately preventing repeated expensive retries; error is logged and the next retry occurs in about a minute. This behaviour should remain visible in the overlay/status. Validate rotation with both current files present and archive failures.
+
+### AutoHit interpretation
+- Current AutoHit code explicitly logs dispatch_path=GameMode_vtable and explicit_input_callback=not_called_in_this_path. Therefore the diagnostics pipeline may help expose the failure, but the currently validated package still does not prove it invokes the normal engine input callback or produces server-confirmed damage.
+- The screenshot alone does not establish that the visible GameHooks warnings are caused by diagnostics. Need the actual full JSON with exact messages/timestamps, then correlate warning frequency with FPS/frametime and the selected module states.
