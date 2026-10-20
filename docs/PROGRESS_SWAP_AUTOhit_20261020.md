@@ -77,3 +77,10 @@ No source code has been edited on this new remote branch yet. `main`, BedrockAim
 - Local validation on the matching source changes: `git diff --check` passed; the target signature matched once at `0xF89F6C0`, and wrapper shuffle/branch bytes matched once at `0xF89F6B4`. Host xmake test project built successfully; seven tests ran, total process exit code 0: menu config 64/0, AimAssist math 27/0, atomic writer 10/0, diagnostics exit 0, AutoHit guards 48/0, weapon profile exit 0, AutoTotem policy 14/0. Syntax-only checks passed for `Signatures.cpp`, `GameHooks.cpp` (using existing Termux EGL stub), and `InventoryAccess.cpp`.
 - Limitations: these checks are not Android ARM64 linking/package output. Termux has no Android NDK/SDK installed, so no local `.levipack` was generated. No new GitHub Actions run has been observed for this remote branch yet. No in-game runtime evidence exists for actual AutoHit damage or FPS improvement.
 - Next step: open a draft PR against `experiment/swap-transition-autohit-diagnostics-20261020` to trigger the normal `pull_request` build, then inspect the actual Android compile log and uploaded `BedrockTools-levipack` artifact. Keep the PR unmerged until clean game testing with fresh logs confirms AutoHit damage and quantifies slot-transition spikes.
+
+
+## CI update — PR #45 / Build #916
+- Draft PR #45: https://github.com/wendellestumano/Bedaim/pull/45
+- Workflow run #916: https://github.com/wendellestumano/Bedaim/actions/runs/39431784071
+- Observed workflow state: host regression tests completed successfully; NDK setup completed successfully; Android ARM64 Build and package was still in progress at this update. Artifact list was empty while the job was running. No build pass or levipack artifact is claimed yet.
+- Next check: inspect the final job conclusion and artifact list; if it fails, fetch the exact compiler log and make a focused correction, recording a new hypothesis before any further source edit.
