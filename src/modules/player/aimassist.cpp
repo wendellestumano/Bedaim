@@ -669,7 +669,7 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     const auto now = std::chrono::steady_clock::now();
-    if (!enabled || !player || player != m_lastPlayer || !target ||
+    if ((!enabled && !autoHitNeedsTargeting()) || !player || player != m_lastPlayer || !target ||
         target != m_lastTarget || !m_targetPresent || !validBounds(m_lastTargetBounds) ||
         m_lastTargetSeen.time_since_epoch().count() == 0 ||
         now < m_lastTargetSeen ||
