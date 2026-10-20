@@ -18,17 +18,17 @@ Screen capture requires explicit Android consent. If Android revokes the session
 - The first stable-key migration from an earlier CI debug APK may still require one clean reinstall because previous GitHub-hosted runners generated temporary debug keys. After migration, all workflow-built APKs reuse the same certificate and have monotonically increasing CI version codes.
 - A missing signing secret deliberately produces no APK. Do not install locally built/default-debug-signed APKs as replacements for the stable-signed app.
 
-The overlay never consumes touch input (`FLAG_NOT_TOUCHABLE`); it only shows `EXECUTANDO`, `ATIVO`, `OCIOSO`, `INATIVO`, `SEM FRAME`, or `ERRO`. It is optional and can be hidden from the app at any time.
+The overlay never consumes touch input (`FLAG_NOT_TOUCHABLE`). It shows capture status (`SB · …`), accessibility/control status (`CTRL · …`), and the independent GPT status (`GPT · …`). Capture values distinguish `SEM PROJEÇÃO`, `SEM FRAME`, `FRAME ATRASADO`, and `ERRO`; control values distinguish `PRONTO`, `EXECUTANDO`, `OFF`, and `ERRO`. The pill is optional and can be hidden from the app at any time.
 
 ## Local endpoints
-- `GET /health` — service, projection, accessibility, cached-frame freshness, frame count, and capture error diagnostics.
-- `GET /<token>/screen.jpg` — most recently captured JPEG frame.
+- `GET /health` or `/diagnostics` — detailed status including projection, accessibility readiness, image-reader/virtual-display availability, frame age and count, callback count, empty-image count, JPEG encoding failures, action result, last errors, and GPT-state age/TTL.
+- `GET /<token>/screen.jpg` — returns a JPEG only if it is fresh (≤1.8 seconds old). If no fresh frame arrives within 900 ms, it returns HTTP 503 with JSON diagnostics rather than silently returning an old screenshot.
 - `GET /<token>/ui.json` — cached active-window accessibility tree with text, descriptions, IDs, clickability and display bounds. Add `?refresh=1` to queue a fresh snapshot on the accessibility-service thread; normal reads use the event-updated cache and avoid spawning `uiautomator dump`.
 - `GET /<token>/action?op=tap&x=120&y=240` — dispatch a tap and return the next available frame.
 - `GET /<token>/action?op=swipe&x1=100&y1=300&x2=400&y2=300&ms=180` — dispatch a swipe and return the next frame.
 - `GET /<token>/action?op=back` or `op=home` — global navigation and the next frame.
 
-Coordinates use full-display pixel dimensions from `/health`. An accepted gesture is not proof that the intended action succeeded; inspect the returned frame. Frame encoding is continuous and cached, so reading `screen.jpg` does not depend on catching the exact moment that a request arrives. The health endpoint distinguishes an active projection from a usable frame.
+Coordinates use full-display pixel dimensions from `/health`. An accepted gesture is not proof that the intended action succeeded; inspect a fresh screenshot and check `lastActionAccepted`. `frameAgeMs` uses monotonic elapsed time. `/screen.jpg` never labels an old cache entry as current; when capture stalls, inspect `imageCallbackCount`, `lastImageCallbackAgeMs`, `frameCount`, `virtualDisplayActive`, `imageReaderActive`, and `captureError`. The health endpoint distinguishes an active projection, fresh capture, and available accessibility control.
 
 ## Architecture and limits
 - **ScreenBridge is the intended UI-control path.** Termux/ADB-based input is not required for ordinary tap, swipe, back, or home operations.
@@ -49,7 +49,7 @@ The floating pill now shows two independent states: `SB · …` for the phone-si
 - `GET /<token>/gpt-state?state=done`
 - `GET /<token>/gpt-state?state=unknown`
 
-The endpoint accepts only the app's existing random token and only the listed state values. `done` means the controller has explicitly marked the work complete; it is not a claim that Android inferred ChatGPT's internal state.
+The endpoint accepts only the app's existing random token and only the listed state values. A set state expires to `unknown` after 90 seconds unless a trusted controller refreshes it; an active controller should refresh the state periodically (for example every 30 seconds). `done` means the controller explicitly marked the work complete; it is not a claim that Android inferred ChatGPT's internal state. Android cannot reliably inspect ChatGPT's internal reasoning/activity itself, so fully automatic GPT status still requires a trusted controller that knows when the work starts and finishes. No public relay or token sharing is needed or recommended.
 
 ### Recording a reproducible test
 
