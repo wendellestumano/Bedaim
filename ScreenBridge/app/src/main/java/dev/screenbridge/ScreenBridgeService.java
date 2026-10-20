@@ -21,6 +21,7 @@ import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.DisplayMetrics;
+import android.util.Log;
 import android.view.WindowManager;
 import android.view.Gravity;
 import android.provider.Settings;
@@ -311,7 +312,7 @@ public class ScreenBridgeService extends Service {
         } catch (Exception e) {
             statusOverlay = null;
             overlayShown = false;
-            captureError = "Status overlay unavailable: " + e.getClass().getSimpleName();
+            Log.w("ScreenBridge", "Status overlay unavailable", e);
         }
     }
 
