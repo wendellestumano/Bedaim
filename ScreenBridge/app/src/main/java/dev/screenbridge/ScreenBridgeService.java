@@ -126,7 +126,8 @@ public class ScreenBridgeService extends Service {
             if (resultData != null && projection == null) startProjection(resultCode, resultData);
         }
         startHttpServer();
-        if (getSharedPreferences("bridge", MODE_PRIVATE).getBoolean("overlay_enabled", false)) {
+        if ((intent == null || !ACTION_TOGGLE_OVERLAY.equals(intent.getAction()))
+                && getSharedPreferences("bridge", MODE_PRIVATE).getBoolean("overlay_enabled", false)) {
             main.postDelayed(this::ensureStatusOverlay, 250);
         }
         return START_STICKY;
