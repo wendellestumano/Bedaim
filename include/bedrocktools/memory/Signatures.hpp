@@ -132,6 +132,7 @@ enum class SignatureId : std::uint16_t {
     MobGetModifiedSwingDuration,
     ContainerScreenControllerHandleAutoPlace,
     ActorGetOffhandSlot,
+    GameModeAttackPublicAdapterTarget,
     Count
 };
 
