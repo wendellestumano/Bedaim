@@ -69,6 +69,9 @@ const std::array<SignatureDefinition, SignatureCount> definitions{{
     // GameMode::attack is a four-argument virtual entry on this runtime (Actor*, predictive-sound flag, hit position).
     SignatureDefinition{SignatureId::GameModeAttack, "FF 83 01 D1 FD 7B 01 A9 F9 13 00 F9 F8 5F 03 A9 F6 57 04 A9 F4 4F 05 A9 FD 43 00 91 59 D0 3B D5 F4 03 00 AA F5 03 03 AA 28 17 40 F9 F6 03 02 2A F3 03 01 AA E8 07 00 F9 00 04 40 F9"},
     SignatureDefinition{SignatureId::GameModeAttackInternal, "? 83 01 D1 FD 7B 01 A9 F9 13 00 F9 F8 5F 03 A9 F6 57 04 A9 F4 4F 05 A9 FD 43 00 91 59 D0 3B D5 F4 03 00 AA F5 03 03 AA 28 17 40 F9 F6 03 02 2A F3 03 01 AA E8 07 00 F9 00 04 40 F9"},
+    // Minecraft Bedrock 26.51: branch target of the public 3-arg attack adapter at 0xF89F6B4.
+    // Its ABI is (GameMode*, Actor*, predictiveSound, Vec3 const*), unlike the bool-out helper above.
+    SignatureDefinition{SignatureId::GameModeAttackPublicAdapterTarget, "FF 43 07 D1 FD 7B 18 A9 FC CB 00 F9 F8 5F 1A A9 F6 57 1B A9 F4 4F 1C A9 FD 03 06 91 58 D0 3B D5 F3 03 00 AA F4 03 03 AA"},
     SignatureDefinition{SignatureId::LevelGetHitResult, "? ? ? F9 C0 03 5F D6 ? ? ? F9 ? ? ? 14 ? ? ? A9 ? ? ? A9 ? ? ? A9 FD 03 00 91 ? ? ? F9 ? ? ? F9 ? ? ? B4 ? ? ? A9 F3 03 00 AA F4 03 08 AA ? ? ? B4 ? ? ? 91 ? ? ? 52 ? ? ? 96 ? ? ? F9 ? ? ? F9 ? ? ? B4 ? ? ? F9 ? ? ? 39 ? ? ? F9 ? ? ? 36 ? ? ? A9 ? ? ? A9 ? ? ? A8 C0 03 5F D6 ? ? ? 96 ? ? ? 91"},
     SignatureDefinition{SignatureId::BlockSourceGetBiome, "? ? ? D1 ? ? ? A9 ? ? ? F9 ? ? ? A9 ? ? ? 91 55 D0 3B D5 F3 03 00 AA F4 03 01 AA ? ? ? F9 ? ? ? F9 ? ? ? F9 ? ? ? F9 00 01 3F D6"},
     SignatureDefinition{SignatureId::BlockSourceGetBlock, "? ? ? D1 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 56 D0 3B D5 ? ? ? F9 ? ? ? F9 ? ? ? B9 ? ? ? 79 1F 01 09 6B ? ? ? 54 ? ? ? 79 F3 03 00 AA 1F 01 09 6B ? ? ? 54 E0 03 00 91"},

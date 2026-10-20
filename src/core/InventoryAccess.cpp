@@ -426,21 +426,27 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     const auto selectionStarted = Clock::now();
     const int previousSlot = selectedHotbarSlot(player);
     constexpr auto slowThreshold = std::chrono::microseconds(2000);
-    auto reportSlowSelection = [&](const char* route, bool nativeResult,
+    auto reportSlotSelection = [&](const char* route, bool nativeResult,
                                    long long nativeDurationUs, int observedSlot) {
         const auto totalDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - selectionStarted).count();
-        if (totalDurationUs < slowThreshold.count() && nativeDurationUs < slowThreshold.count())
-            return;
+        const bool transition = previousSlot != slot && observedSlot == slot;
+        const bool slow = totalDurationUs >= slowThreshold.count() ||
+                          nativeDurationUs >= slowThreshold.count();
+        // Log actual slot changes even when the native call is fast, so a frame
+        // spike immediately after equipment changes can be correlated separately
+        // from time spent inside PlayerInventory::selectSlot itself. No per-tick
+        // logs are emitted for unchanged, fast calls.
+        if (!transition && !slow) return;
 
-        // This path runs only on slow transitions. Keep normal player ticks silent
-        // and avoid dynamic formatting/allocation while the selection is fast.
-        char message[320]{};
+        char message[384]{};
         std::snprintf(message, sizeof(message),
-            "slow_slot_select route=%s previous=%d requested=%d observed=%d native_result=%s native_us=%lld total_us=%lld",
-            route, previousSlot, slot, observedSlot, nativeResult ? "true" : "false",
+            "hotbar_slot_select route=%s transition=%s slow=%s previous=%d requested=%d observed=%d native_result=%s native_us=%lld total_us=%lld",
+            route, transition ? "yes" : "no", slow ? "yes" : "no",
+            previousSlot, slot, observedSlot, nativeResult ? "true" : "false",
             nativeDurationUs, totalDurationUs);
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+        bedrocktools::diagnostics::log(
+            slow ? bedrocktools::diagnostics::Level::Warning : bedrocktools::diagnostics::Level::Info,
             "InventoryAccess", message);
     };
 
@@ -465,7 +471,7 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
         const auto nativeDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(
             Clock::now() - nativeStarted).count();
         const int observedSlot = selectedHotbarSlot(player);
-        reportSlowSelection("native_selectSlot", nativeResult, nativeDurationUs, observedSlot);
+        reportSlotSelection("native_selectSlot", nativeResult, nativeDurationUs, observedSlot);
 
         // The selected slot is the observable postcondition. Do not report failure
         // solely because the native method's bool is false if the inventory has
@@ -481,13 +487,13 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
     *selected = slot;
     const int observedAfterWrite = selectedHotbarSlot(player);
     if (observedAfterWrite != slot) {
-        reportSlowSelection("field_write", false, 0, observedAfterWrite);
+        reportSlotSelection("field_write", false, 0, observedAfterWrite);
         return false;
     }
     bedrocktools::sdk::virtualCall<void>(
         player, bedrocktools::sdk::offsets::VTable::PlayerSendInventory, true);
     const int observedSlot = selectedHotbarSlot(player);
-    reportSlowSelection("field_write_send_inventory", true, 0, observedSlot);
+    reportSlotSelection("field_write_send_inventory", true, 0, observedSlot);
     return observedSlot == slot;
 }
 

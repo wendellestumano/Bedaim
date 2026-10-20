@@ -529,8 +529,9 @@ bool isPublicAttackAdapter(std::uintptr_t entry, std::uintptr_t* implementation 
     // (this, Actor*, predictiveSound, Vec3 const*), not the public wrapper.
     // They are used only to validate the wrapper's direct branch/call target;
     // dispatch always invokes the matching live vtable entry instead.
-    static const std::array<std::uintptr_t, 2> knownImplementations = [] {
-        return std::array<std::uintptr_t, 2>{
+    static const std::array<std::uintptr_t, 3> knownImplementations = [] {
+        return std::array<std::uintptr_t, 3>{
+            bedrocktools::memory::resolve(SignatureId::GameModeAttackPublicAdapterTarget),
             bedrocktools::memory::resolve(SignatureId::GameModeAttackInternal),
             bedrocktools::memory::resolve(SignatureId::GameModeAttack)
         };

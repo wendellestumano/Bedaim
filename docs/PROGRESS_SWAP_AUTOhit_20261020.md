@@ -43,3 +43,44 @@ A swap can report failure despite having changed the slot if the native selector
 - Expected risk: this does not avoid the game's own item-model/equip work; it corrects a return-state mismatch and adds measurements. Runtime profiling is needed to determine whether native selection explains the FPS spike.
 - Current tests: not yet run. No local SDK/NDK/build runtime is attached to this session. The parent contains the AutoHit/GameHooks diagnostics compile fixes but their Android build is not confirmed. No new `.levipack` exists for this commit yet.
 - Changed code file: `src/core/InventoryAccess.cpp`; progress file: `docs/PROGRESS_SWAP_AUTOhit_20261020.md`. BedrockAim, BedrockBound, MaceFall and ShiftBlade logic were not edited in this patch.
+
+
+## Combined AutoHit + swap transition experiment — pre-edit record (2026-10-20)
+
+### Binary evidence and hypothesis (before source edit)
+- Local target file observed in the connected Termux: `~/storage/shared/Download/libminecraftpe.so`, 328,419,680 bytes, identified as the user's Minecraft Bedrock 26.51 binary.
+- On that binary the existing `SignatureId::GameModeAttack` and `GameModeAttackInternal` patterns both resolve to `0xF89FA58`. Disassembly there uses `x3` as a bool output pointer and clears `*x3`.
+- A distinct public 3-argument adapter is at `0xF89F6B4`: `mov x3,x2`, `mov w2,#1`, `b 0xF89F6C0`. The target at `0xF89F6C0` uses the fourth machine-register argument as the hit-position pointer. The existing `isPublicAttackAdapter()` only accepts branch targets matching the two helper signatures, so it cannot recognize this public adapter on the supplied binary. This is a concrete source/binary mismatch hypothesis for AutoHit route discovery; it is not proof of server-side damage.
+- Hypothesis: add an independently resolved signature for the public adapter destination and use it only to validate the public wrapper relationship. Preserve the two existing helper signatures and the guarded four-argument path, avoid fixed vtable slots, and let the resolver select the actual live matching virtual entry.
+- Binary scan expectation: the new target signature must match exactly once at `0xF89F6C0`, while the wrapper's argument-shuffle/branch sequence matches exactly once at `0xF89F6B4`.
+
+### Swap transition hypothesis (before source edit)
+- User repro narrowed FPS spikes to the moment MaceFall/ShiftBlade changes selected item. The current `InventoryAccess::selectHotbarSlot` patch logs only calls exceeding 2 ms; a quick selector followed by an expensive engine equipment/render transition could remain invisible.
+- Hypothesis: record each actual slot transition at info level and retain warning level for native or total method duration >=2 ms. Keep unchanged fast calls silent. This helps separate slow Bedaim selection from downstream game work and is not yet claimed to fix the FPS issue.
+
+### Intended tests
+1. Apply only the exact public-adapter signature/resolver change in `Signatures.hpp`, `Signatures.cpp`, and `GameHooks.cpp`; preserve the existing output-bool route.
+2. Apply only transition-event logging changes to `InventoryAccess.cpp`, without adding a per-tick trace or changing the symbol-missing fallback.
+3. Run all seven host regression targets; run syntax checks for changed translation units where supported.
+4. Obtain a real GitHub Actions Android ARM64 result and require successful packaging of `BedrockTools.levipack`. Host tests or syntax checks alone are not an Android package build.
+5. On the exact Minecraft 26.51 runtime, collect fresh diagnostics with AutoHit enabled and no manual attacks. Validate actual target health/damage separately from native return, observer result, particles, or immediate hurtTime.
+6. Test MaceFall and ShiftBlade separately, compare `hotbar_slot_select` duration and timestamp with frame spikes. Do not attribute improvement without in-game timing evidence.
+
+No source code has been edited on this new remote branch yet. `main`, BedrockAim and BedrockBound are to remain untouched; no merge is planned.
+
+
+## Source edit results — 2026-10-20 (remote experimental branch)
+- Applied the pre-recorded AutoHit resolver hypothesis in three files. New signature ID: `GameModeAttackPublicAdapterTarget`; signature pattern: `FF 43 07 D1 FD 7B 18 A9 FC CB 00 F9 F8 5F 1A A9 F6 57 1B A9 F4 4F 1C A9 FD 03 06 91 58 D0 3B D5 F3 03 00 AA F4 03 03 AA`. It is added only to the allow-list inside `isPublicAttackAdapter()`; the four-argument guarded validator and the existing bool-out signatures remain unchanged.
+- Applied the pre-recorded swap logging hypothesis in `src/core/InventoryAccess.cpp`. Actual observed slot transitions now emit `hotbar_slot_select` at Info level even when the selector is fast. Native or total duration >=2,000 microseconds emits Warning. Unchanged fast calls remain silent. Native selection success is still decided by the observed selected-slot postcondition; no unsafe fallback was added after native-call failure.
+- Remote source commits: enum ID `9d9bfe47ab04ac31923f70d88fdc151e4b64b982`; signature `7f85a160214b2e6d88c68de8a76161569a80a8a4`; resolver `c636bcabc011bd334c0dba20d025a86b6a0f3e39`; inventory transition diagnostics `973e163c2c3b70a721dcee1f603be382a6152503`. They are on `experiment/autohit-public-adapter-26_51-ci-20261020`; no merge.
+- Local source mirror commit (not pushed by git): `2166ff3d5d93be81da42b23d3f4173ede2bff5bc`. The Termux push attempt did not complete, so remote API commits above are the authoritative GitHub branch state.
+- Local validation on the matching source changes: `git diff --check` passed; the target signature matched once at `0xF89F6C0`, and wrapper shuffle/branch bytes matched once at `0xF89F6B4`. Host xmake test project built successfully; seven tests ran, total process exit code 0: menu config 64/0, AimAssist math 27/0, atomic writer 10/0, diagnostics exit 0, AutoHit guards 48/0, weapon profile exit 0, AutoTotem policy 14/0. Syntax-only checks passed for `Signatures.cpp`, `GameHooks.cpp` (using existing Termux EGL stub), and `InventoryAccess.cpp`.
+- Limitations: these checks are not Android ARM64 linking/package output. Termux has no Android NDK/SDK installed, so no local `.levipack` was generated. No new GitHub Actions run has been observed for this remote branch yet. No in-game runtime evidence exists for actual AutoHit damage or FPS improvement.
+- Next step: open a draft PR against `experiment/swap-transition-autohit-diagnostics-20261020` to trigger the normal `pull_request` build, then inspect the actual Android compile log and uploaded `BedrockTools-levipack` artifact. Keep the PR unmerged until clean game testing with fresh logs confirms AutoHit damage and quantifies slot-transition spikes.
+
+
+## CI update — PR #45 / Build #916
+- Draft PR #45: https://github.com/wendellestumano/Bedaim/pull/45
+- Workflow run #916: https://github.com/wendellestumano/Bedaim/actions/runs/39431784071
+- Observed workflow state: host regression tests completed successfully; NDK setup completed successfully; Android ARM64 Build and package was still in progress at this update. Artifact list was empty while the job was running. No build pass or levipack artifact is claimed yet.
+- Next check: inspect the final job conclusion and artifact list; if it fails, fetch the exact compiler log and make a focused correction, recording a new hypothesis before any further source edit.
