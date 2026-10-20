@@ -8,6 +8,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.Image;
@@ -21,6 +22,10 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.util.DisplayMetrics;
 import android.view.WindowManager;
+import android.view.Gravity;
+import android.provider.Settings;
+import android.view.View;
+import android.widget.TextView;
 
 import org.json.JSONObject;
 
@@ -45,6 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ScreenBridgeService extends Service {
     public static final String EXTRA_RESULT_CODE = "projection_result_code";
     public static final String EXTRA_RESULT_DATA = "projection_result_data";
+    public static final String ACTION_TOGGLE_OVERLAY = "dev.screenbridge.action.TOGGLE_OVERLAY";
     private static final String CHANNEL = "screenbridge_capture";
     private static final int PORT = 18766;
     private static volatile boolean running = false;
@@ -70,8 +76,22 @@ public class ScreenBridgeService extends Service {
     private volatile String captureError = "";
     private volatile boolean projectionActive;
     private volatile long startedAt;
+    private volatile long lastActionAtMs;
+    private volatile String lastOverlayState = "";
+    private static volatile boolean overlayShown = false;
+    private WindowManager overlayWindowManager;
+    private TextView statusOverlay;
+    private WindowManager.LayoutParams overlayParams;
+    private final Handler overlayHandler = new Handler(Looper.getMainLooper());
+    private final Runnable overlayTicker = new Runnable() {
+        @Override public void run() {
+            updateStatusOverlay();
+            if (statusOverlay != null) overlayHandler.postDelayed(this, 350);
+        }
+    };
 
     public static boolean isRunning() { return running; }
+    public static boolean isOverlayShown() { return overlayShown; }
 
     @Override public void onCreate() {
         super.onCreate();
@@ -96,12 +116,18 @@ public class ScreenBridgeService extends Service {
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_TOGGLE_OVERLAY.equals(intent.getAction())) {
+            main.post(this::toggleStatusOverlay);
+        }
         if (intent != null && intent.hasExtra(EXTRA_RESULT_DATA)) {
             int resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, 0);
             Intent resultData = getIntentExtra(intent, EXTRA_RESULT_DATA);
             if (resultData != null && projection == null) startProjection(resultCode, resultData);
         }
         startHttpServer();
+        if (getSharedPreferences("bridge", MODE_PRIVATE).getBoolean("overlay_enabled", false)) {
+            main.postDelayed(this::ensureStatusOverlay, 250);
+        }
         return START_STICKY;
     }
 
@@ -235,6 +261,110 @@ public class ScreenBridgeService extends Service {
         }
     };
 
+    private int dp(int value) {
+        return (int)(value * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private void toggleStatusOverlay() {
+        if (statusOverlay != null) {
+            removeStatusOverlay();
+            getSharedPreferences("bridge", MODE_PRIVATE).edit().putBoolean("overlay_enabled", false).apply();
+        } else {
+            if (!Settings.canDrawOverlays(this)) return;
+            getSharedPreferences("bridge", MODE_PRIVATE).edit().putBoolean("overlay_enabled", true).apply();
+            ensureStatusOverlay();
+        }
+    }
+
+    private void ensureStatusOverlay() {
+        if (statusOverlay != null || !Settings.canDrawOverlays(this)) return;
+        try {
+            overlayWindowManager = (WindowManager)getSystemService(WINDOW_SERVICE);
+            TextView pill = new TextView(this);
+            pill.setText("SB · OCIOSO");
+            pill.setTextSize(10.5f);
+            pill.setTextColor(0xFFFFFFFF);
+            pill.setTypeface(null, 1);
+            pill.setPadding(dp(9), dp(5), dp(9), dp(5));
+            pill.setElevation(dp(4));
+            pill.setBackground(statusBackground(0xFF34313A));
+            pill.setAlpha(0.94f);
+            pill.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                    | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+            overlayParams = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    flags, PixelFormat.TRANSLUCENT);
+            overlayParams.gravity = Gravity.TOP | Gravity.RIGHT;
+            overlayParams.x = dp(8);
+            overlayParams.y = dp(58);
+            overlayWindowManager.addView(pill, overlayParams);
+            statusOverlay = pill;
+            overlayShown = true;
+            lastOverlayState = "";
+            updateStatusOverlay();
+            overlayHandler.removeCallbacks(overlayTicker);
+            overlayHandler.postDelayed(overlayTicker, 350);
+        } catch (Exception e) {
+            statusOverlay = null;
+            overlayShown = false;
+            captureError = "Status overlay unavailable: " + e.getClass().getSimpleName();
+        }
+    }
+
+    private GradientDrawable statusBackground(int color) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(color);
+        drawable.setCornerRadius(dp(18));
+        drawable.setStroke(dp(1), 0x55FFFFFF);
+        return drawable;
+    }
+
+    private void updateStatusOverlay() {
+        TextView pill = statusOverlay;
+        if (pill == null) return;
+        long now = System.currentTimeMillis();
+        String state;
+        String label;
+        int color;
+        long frameAge = latestFrameAt == 0 ? Long.MAX_VALUE : Math.max(0, now - latestFrameAt);
+        if (!captureError.isEmpty()) {
+            state = "error"; label = "SB · ERRO"; color = 0xFFB3261E;
+        } else if (!running || !projectionActive || latestJpeg == null) {
+            state = "idle"; label = "SB · INATIVO"; color = 0xFF34313A;
+        } else if (now - lastActionAtMs < 900) {
+            state = "working"; label = "SB · EXECUTANDO"; color = 0xFF8A4F00;
+        } else if (frameAge > 3000) {
+            state = "stale"; label = "SB · SEM FRAME"; color = 0xFF8B2D22;
+        } else if (lastActionAtMs > 0 && now - lastActionAtMs < 8000) {
+            state = "active"; label = "SB · ATIVO"; color = 0xFF146C43;
+        } else {
+            state = "idle"; label = "SB · OCIOSO"; color = 0xFF34313A;
+        }
+        if (!state.equals(lastOverlayState)) {
+            pill.setText(label);
+            pill.setBackground(statusBackground(color));
+            pill.setContentDescription("ScreenBridge: " + label);
+            lastOverlayState = state;
+        }
+    }
+
+    private void removeStatusOverlay() {
+        overlayHandler.removeCallbacks(overlayTicker);
+        TextView pill = statusOverlay;
+        statusOverlay = null;
+        overlayShown = false;
+        lastOverlayState = "";
+        if (pill != null && overlayWindowManager != null) {
+            try { overlayWindowManager.removeView(pill); } catch (Exception ignored) { }
+        }
+        overlayParams = null;
+        overlayWindowManager = null;
+    }
+
     private void startHttpServer() {
         if (acceptThread != null && acceptThread.isAlive()) return;
         stopped.set(false);
@@ -330,6 +460,7 @@ public class ScreenBridgeService extends Service {
                     respond(s, 409, "application/json", "{\"ok\":false,\"error\":\"accessibility unavailable or coordinates invalid\"}".getBytes(StandardCharsets.UTF_8));
                     return;
                 }
+                lastActionAtMs = System.currentTimeMillis();
                 // Fast-control mode: acknowledge the gesture immediately instead of
                 // blocking the HTTP client while waiting for a new screen frame.
                 // Add async=0 (or waitFrame=1) to preserve the legacy image-after-action response.
@@ -427,6 +558,7 @@ public class ScreenBridgeService extends Service {
     @Override public IBinder onBind(Intent intent) { return null; }
 
     @Override public void onDestroy() {
+        removeStatusOverlay();
         running = false;
         stopped.set(true);
         try { if (server != null) server.close(); } catch (Exception ignored) { }
