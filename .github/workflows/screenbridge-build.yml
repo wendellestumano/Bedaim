@@ -3,7 +3,8 @@ on:
   push:
     branches:
       - feature/screenbridge-android-app-20261019
-      - feature/screenbridge-status-overlay-20261019\n      - feature/screenbridge-recorder-live-control-20261020
+      - feature/screenbridge-status-overlay-20261019
+      - feature/screenbridge-recorder-live-control-20261020
     paths:
       - "ScreenBridge/**"
       - ".github/workflows/screenbridge-build.yml"
