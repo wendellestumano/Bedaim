@@ -89,6 +89,7 @@ std::atomic<void*> g_localPlayerResolveClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
 std::atomic<void*> g_localPlayerTickProbeClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerTickProbeNs{0};
+std::atomic<std::int64_t> g_nextRuntimeClientProbeNs{0};
 
 bool shouldResolveLocalPlayer(void* client) {
  if (!client) return false;
@@ -108,6 +109,21 @@ bool shouldProbeLocalPlayerFromTick(void* client) {
  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
  auto due = g_nextLocalPlayerTickProbeNs.load(std::memory_order_acquire);
  for (;;) { if (now < due) return false; if (g_nextLocalPlayerTickProbeNs.compare_exchange_weak(due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire)) return true; }
+}
+
+// The signature-pattern update hook may capture a different but polymorphic
+// receiver on stripped builds. Periodically cross-check the SDK's current
+// ClientInstance independently; never call it on every actor tick.
+bool shouldProbeRuntimeClientInstance() {
+ const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+     std::chrono::steady_clock::now().time_since_epoch()).count();
+ auto due = g_nextRuntimeClientProbeNs.load(std::memory_order_acquire);
+ for (;;) {
+  if (now < due) return false;
+  if (g_nextRuntimeClientProbeNs.compare_exchange_weak(
+          due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire))
+   return true;
+ }
 }
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -1356,22 +1372,34 @@ void tickDetour(void* actor) {
     if (!local && actor && isReadableMemory(actor, sizeof(void*))) {
         void* client = currentClientInstance.load(std::memory_order_acquire);
 
-        // ClientInstance::update can be stripped or mismatched on some releases.
-        // Use the SDK's current-instance entry only after the same vtable checks
-        // used by the normal receiver validator.
-        if (!client || !isPlausibleClientInstance(client)) {
+        // The signature-pattern update hook has no exact exported symbol on
+        // this runtime. A polymorphic receiver can pass a weak vtable check while
+        // still being the wrong object, so periodically cross-check the SDK's
+        // current ClientInstance even when the cached receiver looks plausible.
+        if (shouldProbeRuntimeClientInstance()) {
             auto* runtimeClient = bedrocktools::sdk::ClientInstance::current();
             if (runtimeClient && isPlausibleClientInstance(runtimeClient)) {
-                client = reinterpret_cast<void*>(runtimeClient);
-                void* previous = currentClientInstance.exchange(client, std::memory_order_acq_rel);
-                if (previous != client) {
-                    currentLocalPlayer.store(nullptr, std::memory_order_release);
-                    local = nullptr;
-                    bedrocktools::diagnostics::probe(
-                        bedrocktools::diagnostics::Level::Info, "GameHooks",
-                        "client_instance_capture", "runtime_api_fallback",
-                        "Recovered a validated ClientInstance from the SDK current-instance accessor.");
+                void* runtime = reinterpret_cast<void*>(runtimeClient);
+                if (runtime != client) {
+                    void* previous = currentClientInstance.exchange(runtime, std::memory_order_acq_rel);
+                    client = runtime;
+                    if (previous != runtime) {
+                        currentLocalPlayer.store(nullptr, std::memory_order_release);
+                        local = nullptr;
+                        bedrocktools::diagnostics::probe(
+                            bedrocktools::diagnostics::Level::Info, "GameHooks",
+                            "client_instance_capture", "runtime_api_authoritative",
+                            std::string("SDK current-instance accessor selected receiver=") +
+                                std::to_string(reinterpret_cast<std::uintptr_t>(runtime)) +
+                                "; replaced_cached_receiver=" +
+                                std::to_string(reinterpret_cast<std::uintptr_t>(previous)));
+                    }
                 }
+            } else if (!client || !isPlausibleClientInstance(client)) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                    "client_instance_capture", "no_valid_runtime_instance",
+                    "Neither the SDK current-instance accessor nor the cached update-hook receiver passed ClientInstance validation.");
             }
         }
 
@@ -1433,9 +1461,15 @@ void tickDetour(void* actor) {
     // captured above; unrelated actor ticks continue through the original path.
     local = currentLocalPlayer.load(std::memory_order_acquire);
     const bool verified = actor && local && actor == local;
+
+    // Compatibility contract: LocalPlayerPreTickEvent/LocalPlayerTickEvent are
+    // the legacy NormalTick stream consumed by modules such as AimAssist. Build
+    // #614 published these for every NormalTick actor. Do not silently starve
+    // those modules just because the newer exact-local identity resolver fails.
+    // Security-sensitive/local-state consumers must use Verified* events.
+    LocalPlayerPreTickEvent pre{actorPlayer};
+    bus().publish(pre);
     if (verified) {
-        LocalPlayerPreTickEvent pre{actorPlayer};
-        bus().publish(pre);
         VerifiedLocalPlayerPreTickEvent verifiedPre{
             reinterpret_cast<bedrocktools::sdk::Player*>(local)};
         bus().publish(verifiedPre);
@@ -1447,8 +1481,25 @@ void tickDetour(void* actor) {
         bedaim::events::VerifiedLocalPlayerTickEvent postTick{
             reinterpret_cast<bedrocktools::sdk::Player*>(local)};
         bus().publish(postTick);
-        LocalPlayerTickEvent localTick{actorPlayer};
-        bus().publish(localTick);
+    }
+    LocalPlayerTickEvent localTick{actorPlayer};
+    bus().publish(localTick);
+
+    // Low-volume runtime proof: the startup baseline alone cannot show whether
+    // the hook actually executes during gameplay. One diagnostic per 2048 calls.
+    static std::atomic<std::uint64_t> tickCallCount{0};
+    const auto count = tickCallCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((count & 2047u) == 0) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "GameHooks",
+            "normal_tick_runtime", "hook_executing",
+            std::string("calls=") + std::to_string(count) +
+                "; actor=" + std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                "; client_instance=" + std::to_string(reinterpret_cast<std::uintptr_t>(
+                    currentClientInstance.load(std::memory_order_acquire))) +
+                "; local_player=" + std::to_string(reinterpret_cast<std::uintptr_t>(
+                    currentLocalPlayer.load(std::memory_order_acquire))) +
+                "; original=" + (tickOriginal ? "ready" : "missing"));
     }
 }
 
