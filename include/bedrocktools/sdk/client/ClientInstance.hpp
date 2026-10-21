@@ -22,10 +22,11 @@ public:
     void* minecraftGame() { return virtualCall<void*>(this, offsets::VTable::ClientInstanceGetMinecraftGame); }
     LevelRenderer* levelRenderer() { return field<LevelRenderer*>(this, offsets::ClientInstance::mLevelRenderer); }
 
+    // On Bedrock 1.26.51.01 the legacy signature aliases a helper that is not
+    // a Player* getter. Use the supported ClientInstance vtable slot instead.
     Player* localPlayer(const api::ApiV1* runtime = nullptr) {
-        using Function = Player*(*)(ClientInstance*);
-        auto target = function<Function>(memory::SignatureId::ClientInstanceGetLocalPlayer, runtime);
-        return target ? target(this) : nullptr;
+        (void)runtime;
+        return virtualCall<Player*>(this, offsets::VTable::ClientInstance_getLocalPlayer);
     }
 
     void* packetSender(const api::ApiV1* runtime = nullptr) {
