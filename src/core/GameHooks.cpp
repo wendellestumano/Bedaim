@@ -1392,6 +1392,75 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
         }
     }
 
+    // Last independent getter route: IClientInstance::getCameraActor() is
+    // defined by the public Bedrock interface at slot 39 for this layout. In
+    // normal gameplay it resolves the actor driving the camera, commonly the
+    // LocalPlayer. Treat it only as a candidate: require Actor::isPlayer and
+    // confirm that this exact ClientInstance owns the returned pointer. Never
+    // use getCameraTargetActor, which may legitimately identify another player
+    // while spectating.
+    constexpr std::size_t cameraActorSlot =
+        bedrocktools::sdk::offsets::VTable::ClientInstance_getCameraActor;
+    void* cameraGetter = nullptr;
+    if (vtable && isReadableMemory(vtable, sizeof(void*) * (cameraActorSlot + 1))) {
+        std::memcpy(&cameraGetter, vtable + cameraActorSlot, sizeof(cameraGetter));
+    }
+    bool cameraGetterCallable = cameraGetter &&
+        isMinecraftFunction(cameraGetter);
+    if (!cameraGetterCallable && cameraGetter) {
+        const auto canonical = canonicalArm64Entry(
+            reinterpret_cast<std::uintptr_t>(cameraGetter));
+        cameraGetterCallable = canonical &&
+            canonical != reinterpret_cast<std::uintptr_t>(cameraGetter) &&
+            isMinecraftFunction(reinterpret_cast<const void*>(canonical));
+        if (cameraGetterCallable) cameraGetter = reinterpret_cast<void*>(canonical);
+    }
+
+    if (cameraGetterCallable && actorClassifierReady) {
+        void* cameraActor =
+            reinterpret_cast<GetLocalPlayerFn>(cameraGetter)(clientInstance);
+        if (cameraActor && isReadableMemory(cameraActor, sizeof(void*))) {
+            const bool cameraActorIsPlayer =
+                reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(cameraActor);
+            std::size_t ownedOffset = 0;
+            const bool ownedByClient = cameraActorIsPlayer &&
+                clientInstanceDirectlyOwnsPlayer(clientInstance, cameraActor, &ownedOffset);
+            if (ownedByClient) {
+                currentLocalPlayer.store(cameraActor, std::memory_order_release);
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "verified_local_player", "captured_from_clientinstance_camera_actor",
+                    std::string("client_instance=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+                        "; player=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
+                        "; vtable_slot=" + std::to_string(cameraActorSlot) +
+                        "; ownership_match=yes");
+                return cameraActor;
+            }
+
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "GameHooks",
+                "verified_local_player", "camera_actor_candidate_rejected",
+                std::string("camera_actor=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
+                    "; actor_is_player=" + (cameraActorIsPlayer ? "yes" : "no") +
+                    "; exact_client_ownership=" + (ownedByClient ? "yes" : "no"));
+        } else {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "GameHooks",
+                "verified_local_player", "camera_actor_getter_returned_null",
+                std::string("vtable_slot=") + std::to_string(cameraActorSlot));
+        }
+    } else {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug, "GameHooks",
+            "verified_local_player", "camera_actor_getter_unavailable",
+            std::string("vtable_slot=") + std::to_string(cameraActorSlot) +
+                "; callable=" + (cameraGetterCallable ? "yes" : "no") +
+                "; actor_classifier=" + (actorClassifierReady ? "ready" : "missing"));
+    }
+
     // A cached pointer is not authoritative by itself: after respawn or a
     // LocalPlayer replacement, the old Actor can remain readable. Retain it
     // only when this ClientInstance still owns the exact player pointer.
