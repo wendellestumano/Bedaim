@@ -4,6 +4,13 @@
 
 namespace bedaim::core {
 
+// A camera actor is a LocalPlayer candidate only when its getter result is
+// stable, it is classified as a Player, and the active ClientInstance owns it.
+inline constexpr bool shouldAcceptCameraActorCandidate(
+    bool stableReturn, bool actorIsPlayer, bool clientInstanceOwnsActor) noexcept {
+    return stableReturn && actorIsPlayer && clientInstanceOwnsActor;
+}
+
 // Clear a cached pointer only if it still equals the value observed before a
 // potentially slow validation. A concurrent replacement must never be erased.
 inline bool clearCachedPointerIfUnchanged(

@@ -1428,7 +1428,12 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
         if (stableCameraActor) {
             const bool cameraActorIsPlayer =
                 reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(cameraActor);
-            if (cameraActorIsPlayer) {
+            std::size_t cameraActorOwnedOffset = 0;
+            const bool cameraActorOwned = cameraActorIsPlayer &&
+                clientInstanceDirectlyOwnsPlayer(
+                    clientInstance, cameraActor, &cameraActorOwnedOffset);
+            if (bedaim::core::shouldAcceptCameraActorCandidate(
+                    stableCameraActor, cameraActorIsPlayer, cameraActorOwned)) {
                 currentLocalPlayer.store(cameraActor, std::memory_order_release);
                 bedrocktools::diagnostics::probe(
                     bedrocktools::diagnostics::Level::Info, "GameHooks",
@@ -1438,7 +1443,8 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
                         "; player=" +
                         std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
                         "; vtable_slot=" + std::to_string(cameraActorSlot) +
-                        "; stable_return=yes; actor_is_player=yes");
+                        "; owned_offset=" + std::to_string(cameraActorOwnedOffset) +
+                        "; stable_return=yes; actor_is_player=yes; client_instance_owns_actor=yes");
                 return cameraActor;
             }
 
@@ -1447,16 +1453,10 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
                 "verified_local_player", "camera_actor_candidate_rejected",
                 std::string("camera_actor=") +
                     std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
-                    "; actor_is_player=no; stable_return=yes");
-        } else {
-            bedrocktools::diagnostics::probe(
-                bedrocktools::diagnostics::Level::Debug, "GameHooks",
-                "verified_local_player", "camera_actor_getter_returned_null_or_unstable",
-                std::string("vtable_slot=") + std::to_string(cameraActorSlot) +
-                    "; first=" +
-                    std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
-                    "; second=" +
-                    std::to_string(reinterpret_cast<std::uintptr_t>(confirmedCameraActor)));
+                    "; actor_is_player=" + (cameraActorIsPlayer ? "yes" : "no") +
+                    "; client_instance_owns_actor=" + (cameraActorOwned ? "yes" : "no") +
+                    "; owned_offset=" + std::to_string(cameraActorOwnedOffset) +
+                    "; stable_return=yes");
         }
     } else {
         bedrocktools::diagnostics::probe(
