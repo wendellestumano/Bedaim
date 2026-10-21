@@ -319,6 +319,7 @@ bool isMinecraftFunction(const void* address) {
 // caching it. Signature matches alone only identify code, not the receiver ABI.
 // ClientInstance's known interface extends through getLocalPlayer (vtable slot 32).
 std::uintptr_t canonicalArm64Entry(std::uintptr_t address);
+bool boundedArm64BranchReaches(std::uintptr_t entry, std::uintptr_t target);
 
 bool isPlausibleClientInstance(void* object, std::size_t* trustedEntryCount = nullptr,
                                std::size_t* matchedUpdateSlot = nullptr) {
@@ -380,7 +381,8 @@ bool isPlausibleClientInstance(void* object, std::size_t* trustedEntryCount = nu
         }
 
         if (entry == expectedUpdate ||
-            canonicalArm64Entry(entry) == canonicalExpected) {
+            canonicalArm64Entry(entry) == canonicalExpected ||
+            boundedArm64BranchReaches(entry, expectedUpdate)) {
             updateSlot = i;
             break;
         }
