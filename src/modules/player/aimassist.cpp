@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "ActorVectorValidation.hpp"
 #include "AimAssistMath.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
@@ -76,50 +77,17 @@ BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 HitboxExpanderModule* g_hitboxExpander = nullptr;
 std::once_flag g_hitboxExpanderEventOnce;
 
-bool actorVectorIsEmpty(const ActorVector& actors) noexcept {
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
-    return (!begin && !end && !capacity) ||
-        (begin != 0 && begin == end && capacity >= end &&
-         (capacity - begin) % sizeof(DistanceSortedActor) == 0);
-}
-
 bool actorVectorMetadataValid(const ActorVector& actors, std::size_t maximumElements,
                               const char** reason = nullptr,
                               std::uintptr_t* dataSpanOut = nullptr) noexcept {
-    if (reason) *reason = "unknown";
-    if (dataSpanOut) *dataSpanOut = 0;
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
-    const auto stride = sizeof(DistanceSortedActor);
-    if (!begin && !end && !capacity) return true;
-    if (!begin) { if (reason) *reason = "null_begin"; return false; }
-    if (!end) { if (reason) *reason = "null_end"; return false; }
-    if (!capacity) { if (reason) *reason = "null_capacity"; return false; }
-    if (end < begin) { if (reason) *reason = "end_before_begin"; return false; }
-    if (capacity < end) { if (reason) *reason = "capacity_before_end"; return false; }
-    const auto dataSpan = end - begin;
-    const auto capacitySpan = capacity - begin;
-    if (dataSpanOut) *dataSpanOut = dataSpan;
-    if (dataSpan % stride != 0) {
-        if (reason) *reason = "span_not_stride_aligned";
-        return false;
-    }
-    if (capacitySpan % stride != 0) {
-        if (reason) *reason = "capacity_not_stride_aligned";
-        return false;
-    }
-    if (dataSpan / stride > maximumElements) {
-        if (reason) *reason = "count_over_limit";
-        return false;
-    }
-    if (capacitySpan / stride > maximumElements * 4) {
-        if (reason) *reason = "capacity_over_limit";
-        return false;
-    }
-    return true;
+    const auto result = bedaim::actorsnapshot::validate(
+        {reinterpret_cast<std::uintptr_t>(actors.begin),
+         reinterpret_cast<std::uintptr_t>(actors.end),
+         reinterpret_cast<std::uintptr_t>(actors.capacity)},
+        sizeof(DistanceSortedActor), maximumElements);
+    if (reason) *reason = result.reason;
+    if (dataSpanOut) *dataSpanOut = result.dataSpan;
+    return result.valid;
 }
 
 std::string actorVectorDetail(const ActorVector& actors, std::uintptr_t dataSpan,
@@ -137,11 +105,6 @@ bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& 
     if (!origin || !g_fetchNearbyActors || !std::isfinite(radius) || radius <= 0.0f) return false;
     bedrocktools::sdk::Vec3 extent{radius, radius, radius};
     ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
-    if (actorVectorIsEmpty(actors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "actor_snapshot", "empty");
-        return true;
-    }
     const char* reason = nullptr;
     std::uintptr_t dataSpan = 0;
     if (!actorVectorMetadataValid(actors, 16384, &reason, &dataSpan)) {
@@ -150,6 +113,12 @@ bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& 
             "BedrockAim", "actor_snapshot", state, actorVectorDetail(actors, dataSpan, reason));
         return false;
     }
+    if (dataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "actor_snapshot", "empty");
+        return true;
+    }
+
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         if (entry->actor && reinterpret_cast<std::uintptr_t>(entry->actor) > 0x1000)
             out.insert(entry->actor);
@@ -639,17 +608,17 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
     // keep their original target without trusting a cached raw pointer.
     Vec3 extent{range, range, range};
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    if (actorVectorIsEmpty(actors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "target_bounds_query", "actor_snapshot_empty");
-        return false;
-    }
     const char* reason = nullptr;
     std::uintptr_t dataSpan = 0;
     if (!actorVectorMetadataValid(actors, 4096, &reason, &dataSpan)) {
         const std::string state = std::string("malformed_") + (reason ? reason : "unknown");
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "BedrockAim", "target_bounds_query", state, actorVectorDetail(actors, dataSpan, reason));
+            "BedrockAim", "actor_snapshot", state, actorVectorDetail(actors, dataSpan, reason));
+        return;
+    }
+    if (dataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "actor_snapshot", "actor_snapshot_empty");
         return false;
     }
 
@@ -852,17 +821,25 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     // The native nearby-actors function returns the actual candidate snapshot;
     // don't gate it on Level::mActorManager, an unused offset that can vary by build.
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto actorsBeginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto actorsEndAddress = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!actors.begin || !actors.end || actorsEndAddress < actorsBeginAddress ||
-        (actorsEndAddress - actorsBeginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (actorsEndAddress - actorsBeginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        // Reject malformed native vector metadata before iterating it.
+    const char* actorSnapshotReason = nullptr;
+    std::uintptr_t actorSnapshotDataSpan = 0;
+    if (!actorVectorMetadataValid(actors, 4096, &actorSnapshotReason, &actorSnapshotDataSpan)) {
+        const std::string state = std::string("malformed_") +
+            (actorSnapshotReason ? actorSnapshotReason : "unknown");
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "BedrockAim", "actor_snapshot", state,
+            actorVectorDetail(actors, actorSnapshotDataSpan, actorSnapshotReason));
         resetTrackingState();
         return;
     }
-    const std::size_t availableActors = static_cast<std::size_t>(
-        (actorsEndAddress - actorsBeginAddress) / sizeof(DistanceSortedActor));
+    if (actorSnapshotDataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "actor_snapshot", "empty");
+        resetTrackingState();
+        return;
+    }
+    const std::size_t availableActors =
+        actorSnapshotDataSpan / sizeof(DistanceSortedActor);
 
     void* bestTarget = nullptr;
     AABB bestTargetBounds{};
@@ -1980,11 +1957,6 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
 
     Vec3 extent{32.0f, 32.0f, 32.0f};
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    if (actorVectorIsEmpty(actors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "HitboxExpander", "actor_snapshot", "empty");
-        return;
-    }
     const char* reason = nullptr;
     std::uintptr_t dataSpan = 0;
     if (!actorVectorMetadataValid(actors, 8192, &reason, &dataSpan)) {
@@ -1993,39 +1965,11 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
             "HitboxExpander", "actor_snapshot", state, actorVectorDetail(actors, dataSpan, reason));
         return;
     }
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "actor_snapshot", "valid");
-
-    bool expandPlayers = false;
-    bool expandMobs = false;
-    {
-        std::lock_guard<std::mutex> lock(m_expandMutex);
-        expandPlayers = m_expandPlayers;
-        expandMobs = m_expandMobs;
+    if (dataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "HitboxExpander", "actor_snapshot", "empty");
+        return;
     }
-
-    bool expansionTypesChanged = false;
-    {
-        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
-        expansionTypesChanged = m_hasAppliedExpansionTypes &&
-            (m_lastAppliedExpandPlayers != expandPlayers || m_lastAppliedExpandMobs != expandMobs);
-        m_lastAppliedExpandPlayers = expandPlayers;
-        m_lastAppliedExpandMobs = expandMobs;
-        m_hasAppliedExpansionTypes = true;
-    }
-
-    // If the selected actor types change, restore their original translated boxes
-    // once before reapplying the new policy. If expansion is fully disabled by
-    // configuration, restore all tracked boxes but retain snapshots for re-enable.
-    const std::string policy = std::string(expandPlayers ? "players+" : "players-") +
-        (expandMobs ? "_mobs+" : "_mobs-");
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "HitboxExpander", "expansion_policy", policy);
-    if (expansionTypesChanged) restoreNativeBounds(player);
-    if (!expandPlayers && !expandMobs) return;
-
-    void* playerLevel = reinterpret_cast<Actor*>(player)->level();
-    if (!playerLevel) return;
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* actor = entry->actor;
