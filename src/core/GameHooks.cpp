@@ -1149,9 +1149,8 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
     if (scanObjectForExactPlayerPointer(clientInstance, 0x400, matchedOffset)) return true;
 
     // Some Bedrock layouts expose the local player through MinecraftGame rather
-    // than storing the pointer directly on ClientInstance. This is an existing,
-    // version-profiled virtual accessor (slot 83 in Core.hpp), not a guessed
-    // LocalPlayer getter. Validate the returned object before comparing its fields.
+    // than storing the pointer directly on ClientInstance. This is an existing
+    // SDK accessor; validate the returned object before comparing its fields.
     auto* sdkClient = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
     void* minecraftGame = sdkClient->minecraftGame();
     if (minecraftGame && minecraftGame != clientInstance &&
@@ -1390,6 +1389,82 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
                     "; client_instance=" +
                     std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)));
         }
+    }
+
+    // Last independent getter route: IClientInstance::getCameraActor() is
+    // defined by the public Bedrock interface at slot 39 for this layout. In
+    // normal gameplay it resolves the actor driving the camera, commonly the
+    // LocalPlayer. Treat it only as a candidate: require Actor::isPlayer and
+    // confirm that this exact ClientInstance owns the returned pointer. Never
+    // use getCameraTargetActor, which may legitimately identify another player
+    // while spectating.
+    constexpr std::size_t cameraActorSlot =
+        bedrocktools::sdk::offsets::VTable::ClientInstance_getCameraActor;
+    void* cameraGetter = nullptr;
+    if (vtable && isReadableMemory(vtable, sizeof(void*) * (cameraActorSlot + 1))) {
+        std::memcpy(&cameraGetter, vtable + cameraActorSlot, sizeof(cameraGetter));
+    }
+    bool cameraGetterCallable = cameraGetter &&
+        isMinecraftFunction(cameraGetter);
+    if (!cameraGetterCallable && cameraGetter) {
+        const auto canonical = canonicalArm64Entry(
+            reinterpret_cast<std::uintptr_t>(cameraGetter));
+        cameraGetterCallable = canonical &&
+            canonical != reinterpret_cast<std::uintptr_t>(cameraGetter) &&
+            isMinecraftFunction(reinterpret_cast<const void*>(canonical));
+        if (cameraGetterCallable) cameraGetter = reinterpret_cast<void*>(canonical);
+    }
+
+    if (cameraGetterCallable && actorClassifierReady) {
+        const auto cameraActorGetter =
+            reinterpret_cast<GetLocalPlayerFn>(cameraGetter);
+        void* cameraActor = cameraActorGetter(clientInstance);
+        // Require two identical results from the documented accessor. This
+        // avoids caching a transient/stale camera handoff during world changes.
+        void* confirmedCameraActor = cameraActorGetter(clientInstance);
+        const bool stableCameraActor = cameraActor &&
+            cameraActor == confirmedCameraActor &&
+            isReadableMemory(cameraActor, sizeof(void*));
+        if (stableCameraActor) {
+            const bool cameraActorIsPlayer =
+                reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(cameraActor);
+            std::size_t cameraActorOwnedOffset = 0;
+            const bool cameraActorOwned = cameraActorIsPlayer &&
+                clientInstanceDirectlyOwnsPlayer(
+                    clientInstance, cameraActor, &cameraActorOwnedOffset);
+            if (bedaim::core::shouldAcceptCameraActorCandidate(
+                    stableCameraActor, cameraActorIsPlayer, cameraActorOwned)) {
+                currentLocalPlayer.store(cameraActor, std::memory_order_release);
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "verified_local_player", "captured_from_clientinstance_camera_actor",
+                    std::string("client_instance=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+                        "; player=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
+                        "; vtable_slot=" + std::to_string(cameraActorSlot) +
+                        "; owned_offset=" + std::to_string(cameraActorOwnedOffset) +
+                        "; stable_return=yes; actor_is_player=yes; client_instance_owns_actor=yes");
+                return cameraActor;
+            }
+
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "GameHooks",
+                "verified_local_player", "camera_actor_candidate_rejected",
+                std::string("camera_actor=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
+                    "; actor_is_player=" + (cameraActorIsPlayer ? "yes" : "no") +
+                    "; client_instance_owns_actor=" + (cameraActorOwned ? "yes" : "no") +
+                    "; owned_offset=" + std::to_string(cameraActorOwnedOffset) +
+                    "; stable_return=yes");
+        }
+    } else {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug, "GameHooks",
+            "verified_local_player", "camera_actor_getter_unavailable",
+            std::string("vtable_slot=") + std::to_string(cameraActorSlot) +
+                "; callable=" + (cameraGetterCallable ? "yes" : "no") +
+                "; actor_classifier=" + (actorClassifierReady ? "ready" : "missing"));
     }
 
     // A cached pointer is not authoritative by itself: after respawn or a
