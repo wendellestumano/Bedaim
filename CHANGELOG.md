@@ -12,7 +12,7 @@
 - **AutoTotem remains unregistered**; no other module implementations or block-break mitigation changes are included in this branch.
 - This is a controlled reactivation step, not a claim that attacks work. The experimental branch now attempts exact-symbol resolution for the normal input callback, but the target-build symbol/ABI and actual damage still require in-game validation.
 - Keep this branch isolated. Require host regression tests, Android ARM64 packaging, and in-game confirmation of real target damage before treating AutoHit as restored.
- 
+
 ## 2026-10-21 — Latest experimental build without AutoHit and AutoTotem
 
 - Based on `experiment/actor-vector-alignment-guard-20261021-run5`, preserving the latest experimental AimAssist/vector validation and diagnostics changes.
