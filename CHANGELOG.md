@@ -1,6 +1,6 @@
 ## 2026-10-21 — Validate GameHooks receiver and LocalPlayer getter identity
 
-- Removed the circular call to `ClientInstance::current()` from GameHooks recovery. In this project, `sdk::ClientInstance::current()` calls `Api.cpp`, whose provider returns `GameHooks::clientInstance()`; that merely reads the same cache being diagnosed.
+- Removed circular `ClientInstance::current()` calls from GameHooks recovery and callback validation. In this project, `sdk::ClientInstance::current()` calls `Api.cpp`, whose provider returns `GameHooks::clientInstance()`; that merely reads the same cache being diagnosed.
 - The ClientInstance update receiver is now accepted only when its vtable contains the exact resolved `ClientInstance::update(bool)` entry (or its ARM64 branch veneer). A generic vtable with a few Minecraft methods is no longer enough.
 - The LocalPlayer getter signature is accepted only when its implementation also appears uniquely in the ClientInstance vtable near the documented getter slot. A signature hit in an unrelated function is never called through this route.
 - The documented slot remains a guarded fallback on the verified ClientInstance; both getter routes still require `Actor::isPlayer` before caching a result.
