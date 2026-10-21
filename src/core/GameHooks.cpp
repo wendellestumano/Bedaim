@@ -51,7 +51,7 @@ using UseItemFn = bool(*)(void*, void*);
 using UseItemAsAttackFn = bool(*)(void*, void*, const void*);
 using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::uint8_t, const void*, const void*, bool);
 using InteractFn = bool(*)(void*, void*, const void*);
-using AttackFn = bool(*)(void*, void*, bool, bool*);
+using AttackFn = bool(*)(void*, void*, bool, const void*);
 using PublicAttackFn = bool(*)(void*, void*, const void*);
 using ClientInputAttackCallbackFn = void(*)(void*);
 using ClientInstanceUpdateFn = bool(*)(void*, bool);
@@ -1443,21 +1443,22 @@ bool survivalModeInteractDetour(void* gameMode, void* target, const void* locati
     return result;
 }
 
-bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound, bool* resultOut) {
+bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
     static std::atomic_bool loggedNativeAttack{false};
     if (!loggedNativeAttack.exchange(true, std::memory_order_acq_rel))
-        gameHooksLogger().info("Native attack detour received its first call (target={}, resultOut={}, trampoline={}).",
-            target != nullptr, resultOut != nullptr, gameModeAttackOriginal != nullptr);
+        gameHooksLogger().info("Native attack detour received its first call (target={}, hit_position={}, trampoline={}).",
+            target != nullptr, hitPosition != nullptr, gameModeAttackOriginal != nullptr);
     const bool eventsAlreadyPublished = syntheticAttackEventsPrepublished;
     const AttackKind kind = attackKindFor(gameMode);
     if (!eventsAlreadyPublished) {
         const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
         GameModeActionScope scope{modeKind, gameMode};
         scope.publish(GameModeAction::Attack);
-        // The native fourth argument is an output flag, not a hit position.
-        // Keep the higher-level event's position slot null for native/manual calls.
+        // The native fourth ABI argument is Vec3 const& hitPosition.
+        // Preserve that point in the event instead of treating it as bool*.
         AttackEvent event{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
-            reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)), nullptr};
+            reinterpret_cast<void*>(static_cast<std::uintptr_t>(playPredictiveSound)),
+            const_cast<void*>(hitPosition)};
         bus().publish(event);
         if (event.cancelled()) {
             static std::atomic_bool cancelled{false};
@@ -1466,7 +1467,7 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
             return false;
         }
     }
-    const bool result = gameModeAttackOriginal ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, resultOut) : false;
+    const bool result = gameModeAttackOriginal ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition) : false;
     if (syntheticAttackDispatchActive) {
         syntheticAttackResultObserved = true;
         syntheticAttackNativeResult = result;
@@ -2013,16 +2014,16 @@ bool attackAvailable(void* gameMode) {
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition) {
-    bool nativeResultOut = false;
-    bool nativeResultOutUsed = false;
+    bool routeAcceptedOut = false;
+    bool fourArgumentRouteUsed = false;
     return attack(gameMode, target, playPredictiveSound, hitPosition,
-                  &nativeResultOut, &nativeResultOutUsed);
+                  &routeAcceptedOut, &fourArgumentRouteUsed);
 }
 
 bool attack(void* gameMode, void* target, bool playPredictiveSound,
-            const void* hitPosition, bool* nativeResultOut, bool* nativeResultOutUsed) {
-    if (nativeResultOutUsed) *nativeResultOutUsed = false;
-    if (nativeResultOut) *nativeResultOut = false;
+            const void* hitPosition, bool* routeAcceptedOut, bool* fourArgumentRouteUsed) {
+    if (fourArgumentRouteUsed) *fourArgumentRouteUsed = false;
+    if (routeAcceptedOut) *routeAcceptedOut = false;
     if (!gameMode || !target) return false;
     static thread_local bool inSyntheticAttack = false;
     if (inSyntheticAttack || currentGameMode.load(std::memory_order_acquire) != gameMode) return false;
@@ -2037,14 +2038,15 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
             "GameHooks", "attack", "native_attack_route_unavailable");
         return false;
     }
-    if (usesFourArgumentAbi ? nativeResultOut == nullptr : hitPosition == nullptr) {
+    // Both validated ABIs consume the same Vec3 hit position. In the internal
+    // four-argument form, x3 is Vec3 const&, not a bool* output parameter.
+    if (!hitPosition) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "GameHooks", "attack", "native_attack_argument_missing",
-            usesFourArgumentAbi ? "four-argument route requires a writable bool output pointer" :
-                                  "three-argument public route requires a hit-position pointer");
+            "validated attack route requires a non-null Vec3 hit-position pointer");
         return false;
     }
-    if (nativeResultOutUsed) *nativeResultOutUsed = usesFourArgumentAbi;
+    if (fourArgumentRouteUsed) *fourArgumentRouteUsed = usesFourArgumentAbi;
     const bool observerInstallSucceeded = implementation != 0 &&
         ensureAttackObserver(implementation);
     const bool observerReady = observerInstallSucceeded &&
@@ -2110,23 +2112,18 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
     static std::atomic<std::uint64_t> syntheticDispatchSequence{0};
     const auto dispatchId =
         syntheticDispatchSequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    // The fallback route is callable with four arguments only because its live
-    // entry was validated to tail-branch to the matching four-argument attack
-    // implementation. Never call that entry through the three-argument ABI.
+    // The guarded four-argument thunk forwards (this, Actor*, predictiveSound,
+    // Vec3 const& hitPosition). Preserve the exact contact point through the route.
     const bool publicResult = usesFourArgumentAbi
-        ? nativeAttack(gameMode, target, playPredictiveSound, nativeResultOut)
+        ? nativeAttack(gameMode, target, playPredictiveSound, hitPosition)
         : publicAttack(gameMode, target, hitPosition);
-    // The APK-matched ARM64 body clears x3's output bool at entry and writes
-    // true only along its success branch. A true wrapper/internal return with
-    // output=false must not be counted as a successful native-route result.
-    // This is native-route confirmation, not server-authoritative damage.
-    const bool outputFlagUsed = nativeResultOutUsed && *nativeResultOutUsed;
-    const bool outputFlagTrue = nativeResultOut && *nativeResultOut;
-    const bool nativeOutputConfirmsAttempt = !usesFourArgumentAbi ||
-        (outputFlagUsed && outputFlagTrue);
+    // Neither ABI uses a bool* result-out argument. Count only a native result
+    // actually observed by the validated implementation; a wrapper's true return
+    // by itself is insufficient when the observer was not reached.
     const bool accepted = bedrocktools::core::attackresult::confirmedByNativeRoute(
         syntheticAttackResultObserved, syntheticAttackNativeResult,
-        usesFourArgumentAbi, outputFlagUsed, outputFlagTrue);
+        false, false, false);
+    if (routeAcceptedOut) *routeAcceptedOut = accepted;
     if (!syntheticAttackResultObserved) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "GameHooks", "attack", "internal_observer_not_reached",
@@ -2158,10 +2155,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         "; public_return=" + (publicResult ? "true" : "false") +
         "; internal_native_return=" + (syntheticAttackResultObserved
             ? (syntheticAttackNativeResult ? "true" : "false") : "not_observed") +
-        "; native_out_used=" + (outputFlagUsed ? "true" : "false") +
-        "; native_out_result=" + (outputFlagUsed ? (outputFlagTrue ? "true" : "false") : "not_applicable") +
-        "; native_output_confirms_attempt=" + (nativeOutputConfirmsAttempt ? "true" : "false") +
-        "; acceptance_policy=" + (usesFourArgumentAbi ? "observed_return_and_native_out_flag" : "observed_internal_return") +
+        "; fourth_argument=" + (usesFourArgumentAbi ? "Vec3_const_reference" : "hit_position") +
+        "; acceptance_policy=observed_internal_return" +
         "; accepted_by_observer=" + (accepted ? "true" : "false") +
         "; explicit_input_callback=not_called_in_this_path" +
         "; return_values_do_not_prove_server_damage";
@@ -2176,8 +2171,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         "; observer_ready=" + (observerReady ? "true" : "false") +
         "; internal_observer=" + (syntheticAttackResultObserved ? "observed" : "not_reached") +
         "; public_return=" + (publicResult ? "true" : "false") +
-        "; native_out_result=" + (outputFlagUsed ? (outputFlagTrue ? "true" : "false") : "not_applicable") +
-        "; native_output_confirms_attempt=" + (nativeOutputConfirmsAttempt ? "true" : "false") +
+        "; fourth_argument=" + (usesFourArgumentAbi ? "Vec3_const_reference" : "hit_position") +
         "; native route confirmation is not server damage confirmation");
     return accepted;
 }
