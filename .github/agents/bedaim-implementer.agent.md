@@ -15,10 +15,10 @@ Before editing:
 1. Read AGENTS.md, docs/agent-collaboration/README.md, and the task/handoff.
 2. Inspect the current branch, working-tree changes, recent history, relevant code, and tests.
 3. Confirm the acceptance criteria and list the files you expect to change.
-4. Never overwrite user changes or another agent's work. If the workspace is dirty or the branch is wrong, stop and report it.
+4. Never overwrite user changes or another agent's work. If the workspace is dirty, first determine whether a separate sibling Git worktree can isolate the task. If so, create/use the assigned feature branch there and verify that worktree is clean before editing. Never stash, reset, clean, or switch the user's existing worktree. Stop only if isolation cannot be established safely.
 
 Implementation rules:
-- Work only on the assigned feature branch; never commit directly to main, merge, force-push, or change branch protection.
+- Work only on the assigned feature branch and, when the original worktree is dirty, only inside the verified isolated worktree; never commit directly to main, merge, force-push, or change branch protection.
 - Make the smallest coherent change that satisfies the acceptance criteria.
 - Preserve modules and behavior unrelated to the task.
 - For native code, verify declarations, ownership/lifetime, ABI/calling convention, thread context, and target-version evidence. Never invent offsets, signatures, object layouts, or hook APIs.
