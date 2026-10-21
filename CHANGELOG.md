@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-21 — BedAim stable package without AutoHit and AutoTotem
+
+- Prepared a release branch from the current `main` baseline, which excludes AutoHit and AutoTotem.
+- No source code for other modules was changed for this package variant.
+- CI build and regression tests must pass before distributing the `.levipack` artifact.
+
+
 ## 2026-10-17 — Downloads export and periodic diagnostics
 
 - Changed manual log export to create timestamped `.txt` or structured `.json` files in `/sdcard/Download/Bedaim/`.
