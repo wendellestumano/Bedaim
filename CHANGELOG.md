@@ -1,3 +1,8 @@
+## 2026-10-21 — Prevent block-break crash in Break Indicator
+
+- Guard Break Indicator event listeners while the module is disabled; EventBus callbacks were otherwise still running after module disablement.
+- Validate the current process mapping before reading the version-sensitive `GameMode::mDestroyProgress` field and copy it with `memcpy`; unreadable or out-of-range progress now fails closed instead of risking a native crash.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
