@@ -614,7 +614,7 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
         const std::string state = std::string("malformed_") + (reason ? reason : "unknown");
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "BedrockAim", "actor_snapshot", state, actorVectorDetail(actors, dataSpan, reason));
-        return;
+        return false;
     }
     if (dataSpan == 0) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
@@ -1970,6 +1970,39 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
             "HitboxExpander", "actor_snapshot", "empty");
         return;
     }
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "HitboxExpander", "actor_snapshot", "valid");
+
+    bool expandPlayers = false;
+    bool expandMobs = false;
+    {
+        std::lock_guard<std::mutex> lock(m_expandMutex);
+        expandPlayers = m_expandPlayers;
+        expandMobs = m_expandMobs;
+    }
+
+    bool expansionTypesChanged = false;
+    {
+        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+        expansionTypesChanged = m_hasAppliedExpansionTypes &&
+            (m_lastAppliedExpandPlayers != expandPlayers || m_lastAppliedExpandMobs != expandMobs);
+        m_lastAppliedExpandPlayers = expandPlayers;
+        m_lastAppliedExpandMobs = expandMobs;
+        m_hasAppliedExpansionTypes = true;
+    }
+
+    // If the selected actor types change, restore their original translated boxes
+    // once before reapplying the new policy. If expansion is fully disabled by
+    // configuration, restore all tracked boxes but retain snapshots for re-enable.
+    const std::string policy = std::string(expandPlayers ? "players+" : "players-") +
+        (expandMobs ? "_mobs+" : "_mobs-");
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "HitboxExpander", "expansion_policy", policy);
+    if (expansionTypesChanged) restoreNativeBounds(player);
+    if (!expandPlayers && !expandMobs) return;
+
+    void* playerLevel = reinterpret_cast<Actor*>(player)->level();
+    if (!playerLevel) return;
 
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         void* actor = entry->actor;
