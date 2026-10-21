@@ -1,3 +1,11 @@
+## 2026-10-21 — Emergency block-break render isolation (experimental)
+
+- The previous signature/memory guards did not eliminate the reported in-game hitch/crash when starting or stopping block destruction.
+- Temporarily disable all BedAim block destroy/stop/build detours so Minecraft handles native block interaction without these hooks.
+- Suppress Break Indicator draw submissions when there is no verified breaking state, avoiding per-frame HUD allocations from the default always-show path.
+- This is a diagnostic isolation build, not proof of the root cause. Break Indicator is intentionally unavailable in this experiment. If lag persists, investigate XRay/resource-pack interaction and Minecraft's native crack-stage render path.
+- AutoHit remains unchanged and lower priority; no claims of a fix. The main branch is untouched.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
