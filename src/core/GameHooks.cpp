@@ -1949,7 +1949,7 @@ bool inputAttackCallbackAvailable(void* client, void* expectedLocalPlayer) {
 
     // Resolve the local player from this exact current ClientInstance. Never call
     // the input callback with a stale or foreign receiver from a previous world.
-    void* livePlayer = resolveLocalPlayerFromClientInstance(client);
+    void* livePlayer = localPlayer();
     if (!livePlayer || livePlayer != expectedLocalPlayer) return false;
     return resolveClientInputAttackCallback() != nullptr;
 }
