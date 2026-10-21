@@ -49,3 +49,9 @@ target("autototem_policy_test")
     add_includedirs("../src")
 target_end()
 
+
+target("actor_vector_validation_test")
+    set_kind("binary")
+    add_files("launcher/actor_vector_validation_test.cpp")
+    add_includedirs("../src")
+target_end()

@@ -1,3 +1,9 @@
+## 2026-10-20 — AutoHit target-filter and route-failure attribution (experimental)
+
+- Added a throttled per-filter target-scan breakdown for the no-target state, including player/mob toggles, creative/spectator filtering, whitelist, invisibility, geometry, line of sight, range, FOV, and missing native-filter availability.
+- Added a throttled reason for native route unavailability: null GameMode, GameMode not observed by the runtime hook, or no validated vtable entry. Object addresses are included to compare runtime identity checks.
+- Diagnostic-only change. No attack ABI, offsets, target eligibility, or dispatch behavior was changed. Build and in-game logs are still required before selecting a fix.
+
 ## 2026-10-19 — AutoHit route ABI fix after runtime evidence (experimental)
 
 - Replaced the layout-only fallback that accepted vtable slot 16 whenever `useItem` appeared at slot 12. Neighboring readable function pointers do not prove method identity or ABI.

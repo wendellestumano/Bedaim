@@ -1915,11 +1915,37 @@ bool attackAvailable(void* gameMode) {
     // entry against the resolved public signatures. The internal hook is only
     // used to observe the result/events; requiring it here silently disables
     // native attack dispatch on builds where that secondary signature is unavailable.
-    if (!gameMode || currentGameMode.load(std::memory_order_acquire) != gameMode)
+    const auto observedGameMode = currentGameMode.load(std::memory_order_acquire);
+    auto reportUnavailable = [&](const char* reason) {
+        static std::atomic<std::int64_t> lastUnavailableDiagnosticNs{0};
+        const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        auto lastNs = lastUnavailableDiagnosticNs.load(std::memory_order_acquire);
+        if (lastNs != 0 && (nowNs < lastNs || nowNs - lastNs < 1000000000LL)) return;
+        if (!lastUnavailableDiagnosticNs.compare_exchange_strong(
+                lastNs, nowNs, std::memory_order_acq_rel, std::memory_order_acquire)) return;
+        const std::string detail = std::string("reason=") + reason +
+            "; gameMode=" + std::to_string(reinterpret_cast<std::uintptr_t>(gameMode)) +
+            "; observedGameMode=" + std::to_string(reinterpret_cast<std::uintptr_t>(observedGameMode));
+        gameHooksLogger().info("AutoHit native route unavailable: {}", detail);
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug,
+            "GameHooks", "attack_route_availability", reason, detail);
+    };
+    if (!gameMode) {
+        reportUnavailable("game_mode_null");
         return false;
+    }
+    if (observedGameMode != gameMode) {
+        reportUnavailable("game_mode_not_observed");
+        return false;
+    }
     AttackKind ignored = AttackKind::GameMode;
     std::uintptr_t implementation = 0;
-    if (!publicAttackVirtualEntry(gameMode, &ignored, nullptr, &implementation)) return false;
+    if (!publicAttackVirtualEntry(gameMode, &ignored, nullptr, &implementation)) {
+        reportUnavailable("no_validated_vtable_entry");
+        return false;
+    }
     if (implementation) (void)ensureAttackObserver(implementation);
     return true;
 }

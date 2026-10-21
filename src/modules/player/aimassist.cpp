@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "ActorVectorValidation.hpp"
 #include "AimAssistMath.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
@@ -76,50 +77,17 @@ BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 HitboxExpanderModule* g_hitboxExpander = nullptr;
 std::once_flag g_hitboxExpanderEventOnce;
 
-bool actorVectorIsEmpty(const ActorVector& actors) noexcept {
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
-    return (!begin && !end && !capacity) ||
-        (begin != 0 && begin == end && capacity >= end &&
-         (capacity - begin) % sizeof(DistanceSortedActor) == 0);
-}
-
 bool actorVectorMetadataValid(const ActorVector& actors, std::size_t maximumElements,
                               const char** reason = nullptr,
                               std::uintptr_t* dataSpanOut = nullptr) noexcept {
-    if (reason) *reason = "unknown";
-    if (dataSpanOut) *dataSpanOut = 0;
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
-    const auto stride = sizeof(DistanceSortedActor);
-    if (!begin && !end && !capacity) return true;
-    if (!begin) { if (reason) *reason = "null_begin"; return false; }
-    if (!end) { if (reason) *reason = "null_end"; return false; }
-    if (!capacity) { if (reason) *reason = "null_capacity"; return false; }
-    if (end < begin) { if (reason) *reason = "end_before_begin"; return false; }
-    if (capacity < end) { if (reason) *reason = "capacity_before_end"; return false; }
-    const auto dataSpan = end - begin;
-    const auto capacitySpan = capacity - begin;
-    if (dataSpanOut) *dataSpanOut = dataSpan;
-    if (dataSpan % stride != 0) {
-        if (reason) *reason = "span_not_stride_aligned";
-        return false;
-    }
-    if (capacitySpan % stride != 0) {
-        if (reason) *reason = "capacity_not_stride_aligned";
-        return false;
-    }
-    if (dataSpan / stride > maximumElements) {
-        if (reason) *reason = "count_over_limit";
-        return false;
-    }
-    if (capacitySpan / stride > maximumElements * 4) {
-        if (reason) *reason = "capacity_over_limit";
-        return false;
-    }
-    return true;
+    const auto result = bedaim::actorsnapshot::validate(
+        {reinterpret_cast<std::uintptr_t>(actors.begin),
+         reinterpret_cast<std::uintptr_t>(actors.end),
+         reinterpret_cast<std::uintptr_t>(actors.capacity)},
+        sizeof(DistanceSortedActor), maximumElements);
+    if (reason) *reason = result.reason;
+    if (dataSpanOut) *dataSpanOut = result.dataSpan;
+    return result.valid;
 }
 
 std::string actorVectorDetail(const ActorVector& actors, std::uintptr_t dataSpan,
@@ -137,11 +105,6 @@ bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& 
     if (!origin || !g_fetchNearbyActors || !std::isfinite(radius) || radius <= 0.0f) return false;
     bedrocktools::sdk::Vec3 extent{radius, radius, radius};
     ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
-    if (actorVectorIsEmpty(actors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "actor_snapshot", "empty");
-        return true;
-    }
     const char* reason = nullptr;
     std::uintptr_t dataSpan = 0;
     if (!actorVectorMetadataValid(actors, 16384, &reason, &dataSpan)) {
@@ -150,6 +113,12 @@ bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& 
             "BedrockAim", "actor_snapshot", state, actorVectorDetail(actors, dataSpan, reason));
         return false;
     }
+    if (dataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "actor_snapshot", "empty");
+        return true;
+    }
+
     for (auto* entry = actors.begin; entry < actors.end; ++entry) {
         if (entry->actor && reinterpret_cast<std::uintptr_t>(entry->actor) > 0x1000)
             out.insert(entry->actor);
@@ -639,17 +608,17 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
     // keep their original target without trusting a cached raw pointer.
     Vec3 extent{range, range, range};
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    if (actorVectorIsEmpty(actors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "BedrockAim", "target_bounds_query", "actor_snapshot_empty");
-        return false;
-    }
     const char* reason = nullptr;
     std::uintptr_t dataSpan = 0;
     if (!actorVectorMetadataValid(actors, 4096, &reason, &dataSpan)) {
         const std::string state = std::string("malformed_") + (reason ? reason : "unknown");
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "BedrockAim", "target_bounds_query", state, actorVectorDetail(actors, dataSpan, reason));
+            "BedrockAim", "actor_snapshot", state, actorVectorDetail(actors, dataSpan, reason));
+        return false;
+    }
+    if (dataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "actor_snapshot", "actor_snapshot_empty");
         return false;
     }
 
@@ -852,15 +821,25 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     // The native nearby-actors function returns the actual candidate snapshot;
     // don't gate it on Level::mActorManager, an unused offset that can vary by build.
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto actorsBeginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto actorsEndAddress = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!actors.begin || !actors.end || actorsEndAddress < actorsBeginAddress ||
-        (actorsEndAddress - actorsBeginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (actorsEndAddress - actorsBeginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        // Reject malformed native vector metadata before iterating it.
+    const char* actorSnapshotReason = nullptr;
+    std::uintptr_t actorSnapshotDataSpan = 0;
+    if (!actorVectorMetadataValid(actors, 4096, &actorSnapshotReason, &actorSnapshotDataSpan)) {
+        const std::string state = std::string("malformed_") +
+            (actorSnapshotReason ? actorSnapshotReason : "unknown");
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "BedrockAim", "actor_snapshot", state,
+            actorVectorDetail(actors, actorSnapshotDataSpan, actorSnapshotReason));
         resetTrackingState();
         return;
     }
+    if (actorSnapshotDataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "actor_snapshot", "empty");
+        resetTrackingState();
+        return;
+    }
+    const std::size_t availableActors =
+        actorSnapshotDataSpan / sizeof(DistanceSortedActor);
 
     void* bestTarget = nullptr;
     AABB bestTargetBounds{};
@@ -899,34 +878,76 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     // cannot force thousands of entity checks on the render-critical path.
     constexpr std::size_t kMaxActorsScannedPerTick = 256;
     std::size_t scannedActors = 0;
+    struct TargetScanRejects {
+        std::size_t nullOrLocal = 0;
+        std::size_t playersDisabled = 0;
+        std::size_t creativeOrSpectator = 0;
+        std::size_t mobsDisabled = 0;
+        std::size_t mobCategory = 0;
+        std::size_t whitelisted = 0;
+        std::size_t invisible = 0;
+        std::size_t invalidGeometry = 0;
+        std::size_t lineOfSight = 0;
+        std::size_t invalidDistance = 0;
+        std::size_t outOfRange = 0;
+        std::size_t invalidTargetDistance = 0;
+        std::size_t invalidAngle = 0;
+        std::size_t outsideFov = 0;
+        std::size_t passedFilters = 0;
+    } rejects;
     for (auto* entry = actors.begin;
          entry < actors.end && scannedActors < kMaxActorsScannedPerTick;
          ++entry, ++scannedActors) {
         void* candidate = entry->actor;
-        if (!candidate || candidate == player) continue;
+        if (!candidate || candidate == player) {
+            ++rejects.nullOrLocal;
+            continue;
+        }
 
         const bool isPlayer = g_actorIsPlayer && g_actorIsPlayer(candidate);
         if (isPlayer) {
-            if (!m_targetPlayers) continue;
+            if (!m_targetPlayers) {
+                ++rejects.playersDisabled;
+                continue;
+            }
             if (m_ignoreCreativeSpectator) {
                 std::int32_t gameType = -1;
                 if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
-                    if (gameType == 1 || gameType == 3) continue;
+                    if (gameType == 1 || gameType == 3) {
+                        ++rejects.creativeOrSpectator;
+                        continue;
+                    }
                 } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
                     aimAssistLogger().warn("Creative/Spectator filter unavailable: no verified GameType export; those players may still be eligible.");
                 }
             }
         } else {
-            if (!m_targetMobs || !categoryHasMobBit(candidate)) continue;
+            if (!m_targetMobs) {
+                ++rejects.mobsDisabled;
+                continue;
+            }
+            if (!categoryHasMobBit(candidate)) {
+                ++rejects.mobCategory;
+                continue;
+            }
         }
 
-        if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) continue;
-        if (g_actorIsInvisible && g_actorIsInvisible(candidate)) continue;
+        if (isWhitelistedActor(candidate, isPlayer, m_whitelistNames)) {
+            ++rejects.whitelisted;
+            continue;
+        }
+        if (g_actorIsInvisible && g_actorIsInvisible(candidate)) {
+            ++rejects.invisible;
+            continue;
+        }
 
         auto* target = reinterpret_cast<Actor*>(candidate);
         const Vec3 targetPosition = target->position();
         const AABB targetBounds = target->bounds();
-        if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) continue;
+        if (!finiteVec3(targetPosition) || !validBounds(targetBounds)) {
+            ++rejects.invalidGeometry;
+            continue;
+        }
 
         // Aim at a stable point on the native bounds but allow the bounded
         // expanded client box to participate in target acquisition and automatic attack range.
@@ -949,14 +970,24 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // If the LOS signature is unavailable for this Minecraft build, don't
         // silently discard every candidate. Enforce LOS only when the checker is live.
         if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
-            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
+            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) {
+            ++rejects.lineOfSight;
+            continue;
+        }
 
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
         // Range checks use the nearest point on the selected hitbox geometry, not
         // its center; the box itself still cannot exceed the configured size limits.
         const bool inAimAssistRange = std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxDistanceSq;
-        if (!std::isfinite(d2) || !inAimAssistRange) continue;
+        if (!std::isfinite(d2)) {
+            ++rejects.invalidDistance;
+            continue;
+        }
+        if (!inAimAssistRange) {
+            ++rejects.outOfRange;
+            continue;
+        }
 
         // If the current target is right beside/around the player, keep it locked
         // while it crosses behind the camera. Measure distance to the target AABB,
@@ -980,12 +1011,18 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         const float desiredPitch = -std::atan2(dy, std::max(horizontal, 0.001f)) * kRadToDeg;
 
         const float targetDistance = std::sqrt(std::max(d2, 0.0f));
-        if (!std::isfinite(targetDistance)) continue;
+        if (!std::isfinite(targetDistance)) {
+            ++rejects.invalidTargetDistance;
+            continue;
+        }
 
         const float yawError = wrapDegrees(desiredYaw - currentRotation.y);
         const float pitchError = desiredPitch - currentRotation.x;
         const float angleScore = std::sqrt(yawError * yawError + pitchError * pitchError);
-        if (!std::isfinite(angleScore)) continue;
+        if (!std::isfinite(angleScore)) {
+            ++rejects.invalidAngle;
+            continue;
+        }
 
         // Keep targets directly below the player's feet eligible during a mace
         // slam, and permit a precise ray hit through the configured expanded box.
@@ -999,7 +1036,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // passes below the player or behind the camera. This prevents target loss
         // during the fast vertical movement of a slam.
         if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer &&
-            !rayHitsExpandedTarget) continue;
+            !rayHitsExpandedTarget) {
+            ++rejects.outsideFov;
+            continue;
+        }
+        ++rejects.passedFilters;
 
         // A ray through the expanded box is a high-confidence crosshair match,
         // not an angle-only candidate that happens to fall inside the FOV.
@@ -1037,6 +1078,28 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     }
 
     if (!bestTarget) {
+        // Preserve a bounded, filter-by-filter explanation for the no-target state.
+        // This is intentionally throttled so diagnostics do not add per-tick log work.
+        static thread_local auto lastTargetScanReport = std::chrono::steady_clock::time_point{};
+        const auto reportTime = std::chrono::steady_clock::now();
+        if (lastTargetScanReport.time_since_epoch().count() == 0 ||
+            reportTime - lastTargetScanReport >= std::chrono::seconds(1)) {
+            lastTargetScanReport = reportTime;
+            aimAssistLogger().info(
+                "Target scan rejected all candidates: scanned={}, availableActors={}, cap={}, scanCapped={}, playersEnabled={}, mobsEnabled={}, "
+                "actorIsPlayerAvailable={}, invisibilityCheckAvailable={}, losCheckAvailable={}, blockSourceAvailable={}; "
+                "rejects=nullOrLocal:{}, playersDisabled:{}, creativeOrSpectator:{}, mobsDisabled:{}, mobCategory:{}, "
+                "whitelisted:{}, invisible:{}, invalidGeometry:{}, lineOfSight:{}, invalidDistance:{}, outOfRange:{}, "
+                "invalidTargetDistance:{}, invalidAngle:{}, outsideFov:{}, passedFilters:{}",
+                scannedActors, availableActors, kMaxActorsScannedPerTick,
+                availableActors > kMaxActorsScannedPerTick, m_targetPlayers, m_targetMobs,
+                g_actorIsPlayer != nullptr, g_actorIsInvisible != nullptr,
+                g_isSolidBlockingBlock != nullptr, blockSource != nullptr,
+                rejects.nullOrLocal, rejects.playersDisabled, rejects.creativeOrSpectator,
+                rejects.mobsDisabled, rejects.mobCategory, rejects.whitelisted, rejects.invisible,
+                rejects.invalidGeometry, rejects.lineOfSight, rejects.invalidDistance, rejects.outOfRange,
+                rejects.invalidTargetDistance, rejects.invalidAngle, rejects.outsideFov, rejects.passedFilters);
+        }
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
             "BedrockAim", "target_selection", "none",
             "no eligible actor in the scan radius passed the current filters");
@@ -1894,17 +1957,17 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
 
     Vec3 extent{32.0f, 32.0f, 32.0f};
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    if (actorVectorIsEmpty(actors)) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "HitboxExpander", "actor_snapshot", "empty");
-        return;
-    }
     const char* reason = nullptr;
     std::uintptr_t dataSpan = 0;
     if (!actorVectorMetadataValid(actors, 8192, &reason, &dataSpan)) {
         const std::string state = std::string("malformed_") + (reason ? reason : "unknown");
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "HitboxExpander", "actor_snapshot", state, actorVectorDetail(actors, dataSpan, reason));
+        return;
+    }
+    if (dataSpan == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "HitboxExpander", "actor_snapshot", "empty");
         return;
     }
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
