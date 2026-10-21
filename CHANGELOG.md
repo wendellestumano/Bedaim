@@ -1,3 +1,10 @@
+## 2026-10-21 — Add a validated camera-actor fallback for LocalPlayer
+
+- The user confirmed the prior GameHooks build still showed `verified_local_player=resolution_failed`; this revision adds a genuinely different candidate source instead of repeating the same getter path.
+- After the documented `getLocalPlayer()` and its signature-validated vtable route fail, GameHooks tries `IClientInstance::getCameraActor()` (slot 39 for the documented interface layout).
+- The camera actor is promoted only when `Actor::isPlayer` succeeds and the exact pointer is found in the active ClientInstance object itself. The fallback deliberately does not use `getCameraTargetActor`, which can refer to a remote/spectated player.
+- Added dedicated diagnostics for null camera getter, uncallable getter, rejected candidate, and successful capture. Host and Android ARM64 CI are required; in-game success remains unconfirmed.
+
 ## 2026-10-21 — Validate GameHooks receiver and LocalPlayer getter identity
 
 - Removed circular `ClientInstance::current()` calls from GameHooks recovery and callback validation. In this project, `sdk::ClientInstance::current()` calls `Api.cpp`, whose provider returns `GameHooks::clientInstance()`; that merely reads the same cache being diagnosed.
