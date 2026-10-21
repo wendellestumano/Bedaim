@@ -1362,56 +1362,57 @@ void tickDetour(void* actor) {
         }
 
         if (client && isPlausibleClientInstance(client)) {
-            // Run the getter only at the existing bounded retry cadence. The
-            // tick-based identity recovery below is independent of this result.
-            if (shouldResolveLocalPlayer(client))
+            // One combined probe budget gates both the virtual getter and the
+            // expensive actor/vtable fallback. It remains retryable while no local
+            // player has been captured, without scanning the actor vtable every frame.
+            if (shouldResolveLocalPlayer(client)) {
                 local = resolveLocalPlayerFromClientInstance(client);
+                if (!local) {
+                    const bool matchesNormalTick = isLocalPlayerTickObject(actor);
+                    std::size_t matchedOffset = 0;
+                    const bool ownedByClient = !matchesNormalTick &&
+                        clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset);
 
-            if (!local) {
-                const bool matchesNormalTick = isLocalPlayerTickObject(actor);
-                std::size_t matchedOffset = 0;
-                const bool ownedByClient = !matchesNormalTick &&
-                    clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset);
+                    static const auto actorIsPlayerAddress =
+                        bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+                    const bool actorClassifierReady = actorIsPlayerAddress &&
+                        isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress));
+                    const bool isPlayer = actorClassifierReady &&
+                        reinterpret_cast<bool (*)(void*)>(actorIsPlayerAddress)(actor);
 
-                static const auto actorIsPlayerAddress =
-                    bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
-                const bool actorClassifierReady = actorIsPlayerAddress &&
-                    isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress));
-                const bool isPlayer = actorClassifierReady &&
-                    reinterpret_cast<bool (*)(void*)>(actorIsPlayerAddress)(actor);
-
-                if (isPlayer && (matchesNormalTick || ownedByClient)) {
-                    currentLocalPlayer.store(actor, std::memory_order_release);
-                    local = actor;
-                    const char* route = matchesNormalTick
-                        ? "captured_from_normal_tick_vtable" :
-                          "captured_from_clientinstance_player_field";
-                    const std::string details =
-                        std::string("player=") +
-                        std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
-                        "; client_instance=" +
-                        std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
-                        "; actor_classifier=confirmed" +
-                        (ownedByClient
-                            ? std::string("; matched_offset=0x") + [&] {
-                                char buffer[32]{};
-                                std::snprintf(buffer, sizeof(buffer), "%zX", matchedOffset);
-                                return std::string(buffer);
-                              }()
-                            : std::string("; source=validated_NormalTick_vtable_identity"));
-                    bedrocktools::diagnostics::probe(
-                        bedrocktools::diagnostics::Level::Info, "GameHooks",
-                        "verified_local_player", route, details);
-                } else if (matchesNormalTick && !isPlayer) {
-                    static std::atomic_bool rejectedTickCandidate{false};
-                    if (!rejectedTickCandidate.exchange(true, std::memory_order_acq_rel)) {
+                    if (isPlayer && (matchesNormalTick || ownedByClient)) {
+                        currentLocalPlayer.store(actor, std::memory_order_release);
+                        local = actor;
+                        const char* route = matchesNormalTick
+                            ? "captured_from_normal_tick_vtable" :
+                              "captured_from_clientinstance_player_field";
+                        const std::string details =
+                            std::string("player=") +
+                            std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                            "; client_instance=" +
+                            std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
+                            "; actor_classifier=confirmed" +
+                            (ownedByClient
+                                ? std::string("; matched_offset=0x") + [&] {
+                                    char buffer[32]{};
+                                    std::snprintf(buffer, sizeof(buffer), "%zX", matchedOffset);
+                                    return std::string(buffer);
+                                  }()
+                                : std::string("; source=validated_NormalTick_vtable_identity"));
                         bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Warning, "GameHooks",
-                            "verified_local_player", "normal_tick_candidate_rejected",
-                            std::string("actor=") +
-                                std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
-                                "; actor_classifier=" +
-                                (actorClassifierReady ? "not_player" : "unavailable"));
+                            bedrocktools::diagnostics::Level::Info, "GameHooks",
+                            "verified_local_player", route, details);
+                    } else if (matchesNormalTick && !isPlayer) {
+                        static std::atomic_bool rejectedTickCandidate{false};
+                        if (!rejectedTickCandidate.exchange(true, std::memory_order_acq_rel)) {
+                            bedrocktools::diagnostics::probe(
+                                bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                                "verified_local_player", "normal_tick_candidate_rejected",
+                                std::string("actor=") +
+                                    std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                                    "; actor_classifier=" +
+                                    (actorClassifierReady ? "not_player" : "unavailable"));
+                        }
                     }
                 }
             }
