@@ -1626,18 +1626,56 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
                 "; trusted_vtable_entries=" + std::to_string(trustedVtableEntries));
     }
 
-    // The current Bedrock/LeviLamina ABI is bool ClientInstance::update(bool).
-    // Preserve that exact return type; returning a pointer here corrupts the
-    // caller's bool result on ARM64 even though the hook itself appears installed.
+    // Forward the original update first: some runtime APIs only expose the
+    // active ClientInstance after the engine has completed its transition.
     const bool result = clientUpdateOriginal
         ? clientUpdateOriginal(clientInstance, value) : false;
 
-    if (receiverValid && shouldResolveLocalPlayer(clientInstance)) {
-        // Resolve GameMode from a verified LocalPlayer and install the attack
-        // observer at the public adapter's validated implementation target.
-        // This happens independently of AutoHit being enabled, preserving real
-        // attack events for Keystrokes/ReachCounter/SkinStealer and other modules.
-        void* resolvedPlayer = resolveLocalPlayerFromClientInstance(clientInstance);
+    // New recovery route: resolve from the SDK's authoritative current-instance
+    // accessor on the update path itself, not only when a NormalTick actor exists.
+    // This specifically covers world/menu transitions where the update hook runs
+    // but the tick-based resolver has no trustworthy candidate yet.
+    auto* runtimeClient = bedrocktools::sdk::ClientInstance::current();
+    void* acceptedClient = currentClientInstance.load(std::memory_order_acquire);
+    if (runtimeClient) {
+        void* runtime = reinterpret_cast<void*>(runtimeClient);
+        std::size_t runtimeTrustedEntries = 0;
+        if (isPlausibleClientInstance(runtime, &runtimeTrustedEntries)) {
+            g_runtimeClientInstanceTrusted.store(true, std::memory_order_release);
+            void* previous = currentClientInstance.exchange(runtime, std::memory_order_acq_rel);
+            acceptedClient = runtime;
+            if (previous != runtime) {
+                currentLocalPlayer.store(nullptr, std::memory_order_release);
+                g_localPlayerResolveClient.store(nullptr, std::memory_order_release);
+                g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
+                g_localPlayerTickProbeClient.store(nullptr, std::memory_order_release);
+                g_nextLocalPlayerTickProbeNs.store(0, std::memory_order_release);
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "client_instance_capture", "sdk_update_authoritative",
+                    std::string("runtime_client=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(runtime)) +
+                        "; previous_client=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(previous)) +
+                        "; trusted_vtable_entries=" +
+                        std::to_string(runtimeTrustedEntries));
+            }
+        } else {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                "client_instance_capture", "sdk_update_candidate_rejected",
+                std::string("runtime_client=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(runtime)) +
+                    "; trusted_vtable_entries=" +
+                    std::to_string(runtimeTrustedEntries));
+        }
+    }
+
+    // Resolve using the authoritative cached receiver, not the signature hook's
+    // receiver (which can be a neighboring polymorphic object on stripped builds).
+    if (acceptedClient && isPlausibleClientInstance(acceptedClient) &&
+        shouldResolveLocalPlayer(acceptedClient)) {
+        void* resolvedPlayer = resolveLocalPlayerFromClientInstance(acceptedClient);
         if (resolvedPlayer) {
             void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
             if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
