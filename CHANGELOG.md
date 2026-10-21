@@ -1,3 +1,9 @@
+## 2026-10-21 — Latest experimental build without AutoHit and AutoTotem
+
+- Based on `experiment/actor-vector-alignment-guard-20261021-run5`, preserving the latest experimental AimAssist/vector validation and diagnostics changes.
+- Removed AutoHit and AutoTotem from `ModuleRegistry`: their headers are no longer included and neither module is registered or exposed in the module menu.
+- No implementation code for other modules was edited by this release-specific change. The build and regression tests must pass before treating the package as verified.
+
 ## 2026-10-21 — Actor snapshot alignment validation (experimental)
 
 - Bind the AimAssist actor-vector validator's alignment requirement explicitly to `alignof(DistanceSortedActor)` instead of relying on the pointer-alignment default.
