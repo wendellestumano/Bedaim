@@ -1,7 +1,7 @@
 ## 2026-10-21 — Queued native input and block-hook isolation (experimental)
 
 - Removed GameMode/SurvivalMode destroy/start-stop and build detours from this diagnostic build completely; signature-address equality was insufficient to validate their ABI. Break Indicator now emits no idle render submissions or raw GameMode progress reads when no active validated break session exists.
-- The AutoHit input route now queues a one-shot request and invokes the exact available ClientInputCallbacks method at the beginning of the next validated LocalPlayer::normalTick, instead of calling the input handler synchronously after the previous player tick.
+- AutoHit now prefers the exact validated public GameMode attack route. When that ABI cannot be validated, it queues a one-shot request for the exact available ClientInputCallbacks method at the beginning of the next validated LocalPlayer::normalTick, instead of calling the handler synchronously after the previous player tick.
 - LocalPlayer capture now uses the resolved LocalPlayer::normalTick vtable identity plus Actor::isPlayer when available; it no longer requires the extra linear ClientInstance/MinecraftGame ownership scan that could reject a real local player. The live ClientInstance runtime API is preferred over a cached result from an ambiguous signature fallback.
 - Added per-request diagnostics for queue acceptance, expiry, receiver mismatch, and callback invocation; the log explicitly says callback invocation does not confirm a hit.
 - Keystrokes/LMB telemetry is now emitted only after a validated synthetic GameMode attack route reports acceptance, rather than before dispatch. This prevents the HUD from counting a native route attempt that was rejected.
@@ -13,7 +13,7 @@
 - Added a guarded local-player fallback: the tick receiver is accepted only when its vtable matches the resolved NormalTick entry and the exact actor pointer is owned by the current ClientInstance or validated MinecraftGame object. Vtable decisions are cached and the ownership probe is rate-limited.
 - Once the local player is captured, GameHooks stops repeatedly retrying the version-sensitive ClientInstance getter every 250 ms.
 - Every destroy/build block hook now refuses to install when its resolved entry collides with a public, survival, or internal attack signature. The Bedrock 26.51-specific start-destroy signature remains in use.
-- Rebuilt AutoHit's core decision path around weapon eligibility, a fresh target snapshot, crosshair/reach/CPS gates, and the exact normal engine input callback first. The validated native GameMode route remains a throttled fallback; AutoTotem stays unregistered.
+- Rebuilt AutoHit's core decision path around weapon eligibility, a fresh target snapshot, crosshair/reach/CPS gates, and the validated native GameMode route first. The queued input callback remains a throttled fallback; AutoTotem stays unregistered.
 - Host regression tests, Android ARM64 packaging, and in-game verification on Bedrock 26.51 are still required. Build success alone does not prove an attack registers or that the reported crash is eliminated.
 
 ## 2026-10-21 — AutoHit normal input-callback experiment
