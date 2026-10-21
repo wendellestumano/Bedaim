@@ -22,17 +22,17 @@ struct ValidationResult {
 inline ValidationResult validate(const VectorMetadata& vector,
                                  std::size_t stride,
                                  std::size_t maximumElements) noexcept {
-    const auto reject = [](const char* reason, std::uintptr_t span = 0) noexcept {
+    const auto reject = [](const char* reason, std::uintptr_t span) noexcept {
         return ValidationResult{false, reason, 0, span};
     };
-    if (stride == 0) return reject("invalid_stride");
+    if (stride == 0) return reject("invalid_stride", 0);
     if (vector.begin == 0 && vector.end == 0 && vector.capacity == 0)
         return {true, "empty", 0, 0};
-    if (vector.begin == 0) return reject("null_begin");
-    if (vector.end == 0) return reject("null_end");
-    if (vector.capacity == 0) return reject("null_capacity");
-    if (vector.end < vector.begin) return reject("end_before_begin");
-    if (vector.capacity < vector.end) return reject("capacity_before_end");
+    if (vector.begin == 0) return reject("null_begin", 0);
+    if (vector.end == 0) return reject("null_end", 0);
+    if (vector.capacity == 0) return reject("null_capacity", 0);
+    if (vector.end < vector.begin) return reject("end_before_begin", 0);
+    if (vector.capacity < vector.end) return reject("capacity_before_end", 0);
 
     const auto dataSpan = vector.end - vector.begin;
     const auto capacitySpan = vector.capacity - vector.begin;
