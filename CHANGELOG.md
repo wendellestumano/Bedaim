@@ -1,3 +1,11 @@
+## 2026-10-21 — Emergency block-break render isolation (experimental)
+
+- Based on the user's report that the previous signature/memory guards did not eliminate in-game hitching/crashes when starting or stopping block destruction.
+- Temporarily disable all BedAim block destroy/stop/build detours on this isolated branch so Minecraft's native block interaction/render path runs without these hooks.
+- Suppress Break Indicator draw submissions while no verified breaking state is available, avoiding per-frame vector/string allocation from its default always-show HUD.
+- This is an isolation hotfix, not a proven root-cause fix: it intentionally disables Break Indicator functionality and must be tested in-game. If lag persists with this package, the next step is to inspect XRay/resource-pack interaction and Minecraft's native crack-stage render path.
+- AutoHit source is preserved from the prior experimental branch but remains unverified and lower priority. The main branch is untouched.
+
 ## 2026-10-21 — AutoHit + block-break crash guard (experimental)
 
 - Use the precise Bedrock 1.26.51.01 GameModeStartDestroyBlock signature, which matched once at 0xF8A0DA8 in the analyzed libminecraftpe.so; the old main-branch pattern matched GameModeAttack at 0xF89FA58.

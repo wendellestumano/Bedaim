@@ -1671,55 +1671,17 @@ bool install() {
     gameHooksLogger().info(
         "NormalTick hook installed={}, signature={:p}.", normalTickHooked,
         reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::NormalTick)));
-    // Version-specific signatures are the first defense; this address-level
-    // guard is the second. A stale/generic pattern must never attach a block
-    // callback with an incompatible ABI to any attack entry.
-    const std::array<SignatureId, 3> attackSignatureIds{
-        SignatureId::GameModeAttack,
-        SignatureId::GameModeAttackInternal,
-        SignatureId::SurvivalModeAttack
-    };
-    const auto collidesWithAttackSignature = [&](std::uintptr_t candidate) {
-        if (!candidate) return false;
-        for (const auto attackId : attackSignatureIds) {
-            const auto attackEntry = bedrocktools::memory::resolve(attackId);
-            if (attackEntry && candidate == attackEntry) return true;
-        }
-        return false;
-    };
-    const auto installBlockHookIfSafe = [&](SignatureId id, void* detour, auto original,
-                                             const char* diagnosticName) {
-        const auto candidate = bedrocktools::memory::resolve(id);
-        if (candidate && collidesWithAttackSignature(candidate)) {
-            bedrocktools::diagnostics::probe(
-                bedrocktools::diagnostics::Level::Error, "GameHooks", diagnosticName,
-                "skipped_attack_signature_collision");
-            return false;
-        }
-        return hookSignature(id, detour, original);
-    };
-
-    const bool gameModeStartDestroyBlockHooked = installBlockHookIfSafe(
-        SignatureId::GameModeStartDestroyBlock,
-        reinterpret_cast<void*>(gameModeStartDestroyBlockDetour),
-        &gameModeStartDestroyBlockOriginal, "start_destroy_block_hook");
-    const bool survivalModeStartDestroyBlockHooked = installBlockHookIfSafe(
-        SignatureId::SurvivalModeStartDestroyBlock,
-        reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour),
-        &survivalModeStartDestroyBlockOriginal, "survival_start_destroy_block_hook");
-    gameHooksLogger().info(
-        "Block-start hooks: GameMode={}, SurvivalMode={}",
-        gameModeStartDestroyBlockHooked, survivalModeStartDestroyBlockHooked);
-
-    installBlockHookIfSafe(SignatureId::GameModeStopDestroyBlock,
-        reinterpret_cast<void*>(gameModeStopDestroyBlockDetour),
-        &gameModeStopDestroyBlockOriginal, "stop_destroy_block_hook");
-    installBlockHookIfSafe(SignatureId::GameModeStartBuildBlock,
-        reinterpret_cast<void*>(gameModeStartBuildBlockDetour),
-        &gameModeStartBuildBlockOriginal, "start_build_block_hook");
-    installBlockHookIfSafe(SignatureId::SurvivalModeStartBuildBlock,
-        reinterpret_cast<void*>(survivalModeStartBuildBlockDetour),
-        &survivalModeStartBuildBlockOriginal, "survival_start_build_block_hook");
+    // Emergency isolation for Bedrock 26.51 block-break hitch/crash reports.
+    // Do not install any block destroy/stop/build detours until the render-path
+    // regression is isolated on-device. This intentionally disables Break
+    // Indicator event updates in this experiment; vanilla block interaction is
+    // left entirely to Minecraft, and unrelated hooks remain enabled.
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Warning, "GameHooks",
+        "block_interaction_hooks", "temporarily_disabled_for_render_isolation",
+        "destroy/start-stop and build hooks intentionally not installed");
+    gameHooksLogger().warn(
+        "Block interaction hooks are temporarily disabled for Bedrock 26.51 render/crash isolation.");
     const bool gameModeUseItemHooked = hookSignature(
         SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
     const bool survivalModeUseItemHooked = hookSignature(

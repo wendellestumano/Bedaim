@@ -169,7 +169,11 @@ void BreakIndicatorModule::onDisable() {
 }
 
 void BreakIndicatorModule::onFrame() {
-    if (!enabled) return;
+    // Temporary render-path isolation: block interaction hooks are disabled
+    // in this experiment, so never submit per-frame HUD draw commands. This
+    // also prevents the default alwaysShow setting from continuously allocating
+    // vectors/strings while the block-break regression is being isolated.
+    if (!enabled || !m_breaking) return;
 
     auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastUpdate).count() > 250) {
