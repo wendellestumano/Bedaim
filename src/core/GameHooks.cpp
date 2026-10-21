@@ -53,6 +53,7 @@ using UseItemOnFn = InteractionResultValue(*)(void*, void*, const void*, std::ui
 using InteractFn = bool(*)(void*, void*, const void*);
 using AttackFn = bool(*)(void*, void*, bool, bool*);
 using PublicAttackFn = bool(*)(void*, void*, const void*);
+using ClientInputAttackCallbackFn = void(*)(void*);
 using ClientInstanceUpdateFn = bool(*)(void*, bool);
 using ContainerSlotSelectedFn = std::uint32_t(*)(void*, const std::string&, int);
 using ScreenFn = void*(*)(void*, void*, void*, void*, void*, void*, void*, void*);
@@ -98,6 +99,8 @@ std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
 std::mutex installMutex;
 std::mutex attackObserverMutex;
+std::once_flag clientInputAttackCallbackResolveOnce;
+ClientInputAttackCallbackFn clientInputAttackCallback = nullptr;
 std::atomic<void*> attackObserverTarget{nullptr};
 bedrocktools::hooks::Handle attackObserverHandle = nullptr;
 bool installed = false;
@@ -383,6 +386,33 @@ void* resolveMinecraftFunction(const char* name) {
     const bool valid = isMinecraftFunction(address);
     dlclose(library);
     return valid ? address : nullptr;
+}
+
+ClientInputAttackCallbackFn resolveClientInputAttackCallback() {
+    std::call_once(clientInputAttackCallbackResolveOnce, [] {
+        // These are exact exported C++ symbols, not guessed addresses or vtable slots.
+        // Newer Bedrock builds route the normal button press through
+        // handleBuildOrAttackOrBlockSelectButtonPress(IClientInstance&); older builds
+        // used a destroy/attack button callback. Only call a symbol if the exact
+        // mangled name resolves inside the active libminecraftpe image.
+        const char* symbols[] = {
+            "_ZN20ClientInputCallbacks43handleBuildOrAttackOrBlockSelectButtonPressER15IClientInstance",
+            "_ZN20ClientInputCallbacks32handleDestoryOrAttackButtonPressER14ClientInstance",
+            "_ZN20ClientInputCallbacks32handleDestroyOrAttackButtonPressER14ClientInstance"
+        };
+        for (const char* symbol : symbols) {
+            if (void* address = resolveMinecraftFunction(symbol)) {
+                clientInputAttackCallback = reinterpret_cast<ClientInputAttackCallbackFn>(address);
+                gameHooksLogger().info("Resolved exact ClientInputCallbacks attack-button handler symbol: {}", symbol);
+                return;
+            }
+        }
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "client_input_attack_callback", "exact_symbol_unavailable",
+            "No exact exported supported ClientInputCallbacks button-press symbol resolved; the callback path remains disabled.");
+    });
+    return clientInputAttackCallback;
 }
 
 void* resolveLoadedClientSupportFunction(const char* name) {
@@ -1908,6 +1938,36 @@ bool useItem(void* player, const void* itemStack) {
         "GameHooks", "use_item", accepted ? "native_route_accepted" : "native_route_rejected",
         std::string("vtable_slot=") + std::to_string(slotIndex));
     return accepted;
+}
+
+bool inputAttackCallbackAvailable(void* client, void* expectedLocalPlayer) {
+    if (!client || !expectedLocalPlayer) return false;
+    auto* current = bedrocktools::sdk::ClientInstance::current();
+    if (!current || reinterpret_cast<void*>(current) != client) return false;
+
+    // Resolve the local player from this exact current ClientInstance. Never call
+    // the input callback with a stale or foreign receiver from a previous world.
+    void* livePlayer = resolveLocalPlayerFromClientInstance(client);
+    if (!livePlayer || livePlayer != expectedLocalPlayer) return false;
+    return resolveClientInputAttackCallback() != nullptr;
+}
+
+bool invokeAttackInputCallback(void* client, void* expectedLocalPlayer) {
+    if (!inputAttackCallbackAvailable(client, expectedLocalPlayer)) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "client_input_attack_callback", "receiver_or_symbol_unverified",
+            "Callback not invoked: exact symbol, current ClientInstance, and local-player identity must all validate.");
+        return false;
+    }
+    const auto callback = resolveClientInputAttackCallback();
+    if (!callback) return false;
+    callback(client);
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "GameHooks",
+        "client_input_attack_callback", "callback_invoked",
+        "Normal engine attack-button callback was invoked; invocation alone does not confirm a hit or server damage.");
+    return true;
 }
 
 bool attackAvailable(void* gameMode) {
