@@ -4,7 +4,7 @@ Use this file as a lightweight index, not as a substitute for GitHub Issues or P
 
 | Status | Task / Issue | Owner agent | Branch / PR | Scope / conflicts | Next action |
 |---|---|---|---|---|---|
-| In progress | Initial collaboration smoke test | Coordinator / human | `chore/ai-agent-collaboration-bootstrap` / PR #66 | Documentation/config only; do not change gameplay code | Verify agent discovery and handoffs in Codespaces |
+| Ready | End-to-end custom-agent smoke test | Coordinator → Implementer → Reviewer | [Smoke-test prompt](../../.github/prompts/bedaim-agent-smoke-test.prompt.md) / PR #66 | Documentation-only; use isolated branch `agent/smoke-test-docs`; no gameplay/build changes | Run the prompt from BedAim Coordinator in the active Codespaces Copilot Chat; record whether handoffs actually work |
 | Done | Audit current build/CI commands and artifact outputs | Repository-connected assistant | [Audit report](reports/initial-read-only-audit-2026-10-21.md) | Build/CI evidence recorded for SHA `b05ccb5f6f93d295848033ff47019bc48301ab0b` | Use report links; runtime behavior remains unverified |
 | Blocked | Configure server-side `main` protection | Human maintainer | GitHub repository settings | Rulesets list empty; classic protection read returned 403, so effective state unknown | Open Settings → Rules → Rulesets / Branches and configure PR + required checks |
 
