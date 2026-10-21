@@ -86,6 +86,7 @@ std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
 std::atomic<void*> g_localPlayerResolveClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
+std::atomic<std::int64_t> g_nextRuntimeClientInstanceProbeNs{0};
 bool shouldResolveLocalPlayer(void* client) {
  if (!client) return false;
  const void* old = g_localPlayerResolveClient.exchange(client, std::memory_order_acq_rel);
@@ -93,6 +94,17 @@ bool shouldResolveLocalPlayer(void* client) {
  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
  auto due = g_nextLocalPlayerResolveNs.load(std::memory_order_acquire);
  for (;;) { if (now < due) return false; if (g_nextLocalPlayerResolveNs.compare_exchange_weak(due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire)) return true; }
+}
+bool shouldProbeRuntimeClientInstance() {
+ const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+     std::chrono::steady_clock::now().time_since_epoch()).count();
+ auto due = g_nextRuntimeClientInstanceProbeNs.load(std::memory_order_acquire);
+ for (;;) {
+  if (now < due) return false;
+  if (g_nextRuntimeClientInstanceProbeNs.compare_exchange_weak(
+          due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire))
+   return true;
+ }
 }
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -1299,7 +1311,41 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
 }
 
 void tickDetour(void* actor) {
-    // Per-actor hook: cached identity comparison only; never scan ClientInstance here.
+    // Some Bedrock builds no longer match the ClientInstance::update signature.
+    // When that hook is unavailable, sample the loader's supported runtime API
+    // at a bounded cadence and validate the ClientInstance/vtable before use.
+    if (!clientUpdateOriginal && shouldProbeRuntimeClientInstance()) {
+        auto* runtimeClient = bedrocktools::sdk::ClientInstance::current();
+        void* client = nullptr;
+        if (runtimeClient && isPlausibleClientInstance(runtimeClient)) {
+            client = runtimeClient;
+            void* previous = currentClientInstance.exchange(client, std::memory_order_acq_rel);
+            if (previous != client) {
+                currentLocalPlayer.store(nullptr, std::memory_order_release);
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "client_instance_capture", "runtime_api_fallback",
+                    "Captured a validated ClientInstance from the compatible BedrockTools runtime API.");
+            }
+        } else {
+            client = currentClientInstance.load(std::memory_order_acquire);
+            if (client && !isPlausibleClientInstance(client)) {
+                currentClientInstance.store(nullptr, std::memory_order_release);
+                currentLocalPlayer.store(nullptr, std::memory_order_release);
+                client = nullptr;
+            }
+        }
+
+        if (client) {
+            void* resolved = resolveLocalPlayerFromClientInstance(client);
+            if (resolved && isLocalPlayerTickObject(resolved)) {
+                currentLocalPlayer.store(resolved, std::memory_order_release);
+            } else {
+                currentLocalPlayer.store(nullptr, std::memory_order_release);
+            }
+        }
+    }
+
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
     const bool verified = actor && local && actor == local;
@@ -1313,6 +1359,16 @@ void tickDetour(void* actor) {
     if (tickOriginal) tickOriginal(actor);
 
     if (verified) {
+        // Preserve the update event for subscribers when this build lacks the
+        // ClientInstance::update hook. NormalTick is now the verified fallback.
+        if (!clientUpdateOriginal) {
+            void* publishedClientInstance = currentClientInstance.load(std::memory_order_acquire);
+            if (publishedClientInstance) {
+                ClientInstanceUpdateEvent event{
+                    reinterpret_cast<bedrocktools::sdk::ClientInstance*>(publishedClientInstance)};
+                bus().publish(event);
+            }
+        }
         bedaim::events::VerifiedLocalPlayerTickEvent postTick{
             reinterpret_cast<bedrocktools::sdk::Player*>(local)};
         bus().publish(postTick);
@@ -1719,10 +1775,19 @@ bool install() {
     hookSignature(SignatureId::ContainerScreenControllerOnContainerSlotSelected, reinterpret_cast<void*>(containerSlotSelectedDetour), &containerSlotSelectedOriginal);
     const bool eglHooked = hookEgl();
     gameHooksLogger().info("Frame event hook installed={}; EGL swaps are always forwarded to the original renderer.", eglHooked);
-    installed = tickOriginal != nullptr && clientUpdateOriginal != nullptr;
+    installed = tickOriginal != nullptr;
+    if (!clientUpdateOriginal && tickOriginal) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "client_instance_update_hook", "runtime_api_fallback_armed",
+            "ClientInstance::update signature did not resolve; bounded ClientInstance::current() fallback is enabled.");
+    }
     bedrocktools::diagnostics::log(
         installed ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Error,
-        "GameHooks", installed ? "required tick/client hooks installed" : "required tick/client hooks missing");
+        "GameHooks", installed
+            ? (clientUpdateOriginal ? "required tick/client hooks installed"
+                                    : "tick hook installed; runtime ClientInstance fallback armed")
+            : "required local-player tick hook missing");
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "GameHooks",
         "attack observer installation is deferred until a live public three-argument route is validated");
     return installed;
@@ -1746,6 +1811,9 @@ void uninstall() {
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
+    g_localPlayerResolveClient.store(nullptr, std::memory_order_release);
+    g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
+    g_nextRuntimeClientInstanceProbeNs.store(0, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
@@ -1757,13 +1825,21 @@ void uninstall() {
 }
 
 void* clientInstance() {
-    return currentClientInstance.load(std::memory_order_acquire);
+    void* cached = currentClientInstance.load(std::memory_order_acquire);
+    if (cached && isPlausibleClientInstance(cached)) return cached;
+
+    auto* runtimeClient = bedrocktools::sdk::ClientInstance::current();
+    if (!runtimeClient || !isPlausibleClientInstance(runtimeClient)) return nullptr;
+
+    currentClientInstance.store(runtimeClient, std::memory_order_release);
+    return runtimeClient;
 }
 
 void* localPlayer() {
     void* cached = currentLocalPlayer.load(std::memory_order_acquire);
     if (cached && isReadableMemory(cached, sizeof(void*))) return cached;
     void* client = currentClientInstance.load(std::memory_order_acquire);
+    if (!client) client = clientInstance();
     if (!client || !shouldResolveLocalPlayer(client)) return nullptr;
     return resolveLocalPlayerFromClientInstance(client);
 }
