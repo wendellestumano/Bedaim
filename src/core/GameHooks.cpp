@@ -2237,8 +2237,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
     // This is native-route confirmation, not server-authoritative damage.
     const bool outputFlagUsed = nativeResultOutUsed && *nativeResultOutUsed;
     const bool outputFlagTrue = nativeResultOut && *nativeResultOut;
-    const bool nativeOutputConfirmsAttempt = !usesFourArgumentAbi ||
-        (outputFlagUsed && outputFlagTrue);
+    const bool nativeOutputConfirmsAttempt = usesFourArgumentAbi &&
+        outputFlagUsed && outputFlagTrue;
     const bool accepted = bedrocktools::core::attackresult::confirmedByNativeRoute(
         syntheticAttackResultObserved, syntheticAttackNativeResult,
         usesFourArgumentAbi, outputFlagUsed, outputFlagTrue, publicResult);
@@ -2257,7 +2257,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
             std::string("vtable_slot=") + std::to_string(matchedSlot) +
             "; abi=" + (usesFourArgumentAbi ? "four_argument" : "three_argument") +
             "; public_return=" + (publicResult ? "true" : "false") +
-            "; public return is not counted as an observed attack result");
+            "; the validated three-argument public return may serve as route fallback, never as server-damage confirmation");
     }
     AttackResultEvent resultEvent{kind, reinterpret_cast<bedrocktools::sdk::Actor*>(target), accepted};
     bus().publish(resultEvent);
@@ -2284,8 +2284,11 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
             ? (syntheticAttackNativeResult ? "true" : "false") : "not_observed") +
         "; native_out_used=" + (outputFlagUsed ? "true" : "false") +
         "; native_out_result=" + (outputFlagUsed ? (outputFlagTrue ? "true" : "false") : "not_applicable") +
-        "; native_output_confirms_attempt=" + (nativeOutputConfirmsAttempt ? "true" : "false") +
-        "; acceptance_policy=" + (usesFourArgumentAbi ? "observed_return_and_native_out_flag" : "observed_internal_return") +
+        "; native_output_confirms_attempt=" + (usesFourArgumentAbi
+            ? (nativeOutputConfirmsAttempt ? "true" : "false") : "not_applicable") +
+        "; acceptance_policy=" + (usesFourArgumentAbi
+            ? "observed_return_and_native_out_flag"
+            : (syntheticAttackResultObserved ? "observed_internal_return" : "validated_public_return_fallback")) +
         "; accepted_by_observer=" + (accepted ? "true" : "false") +
         "; explicit_input_callback=not_called_in_this_path" +
         "; return_values_do_not_prove_server_damage";
@@ -2301,7 +2304,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
         "; internal_observer=" + (syntheticAttackResultObserved ? "observed" : "not_reached") +
         "; public_return=" + (publicResult ? "true" : "false") +
         "; native_out_result=" + (outputFlagUsed ? (outputFlagTrue ? "true" : "false") : "not_applicable") +
-        "; native_output_confirms_attempt=" + (nativeOutputConfirmsAttempt ? "true" : "false") +
+        "; native_output_confirms_attempt=" + (usesFourArgumentAbi
+            ? (nativeOutputConfirmsAttempt ? "true" : "false") : "not_applicable") +
         "; native route confirmation is not server damage confirmation");
     return accepted;
 }
