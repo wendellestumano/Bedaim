@@ -87,6 +87,9 @@ std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
 std::atomic<void*> g_localPlayerResolveClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
+std::atomic<void*> g_localPlayerTickProbeClient{nullptr};
+std::atomic<std::int64_t> g_nextLocalPlayerTickProbeNs{0};
+
 bool shouldResolveLocalPlayer(void* client) {
  if (!client) return false;
  const void* old = g_localPlayerResolveClient.exchange(client, std::memory_order_acq_rel);
@@ -94,6 +97,17 @@ bool shouldResolveLocalPlayer(void* client) {
  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
  auto due = g_nextLocalPlayerResolveNs.load(std::memory_order_acquire);
  for (;;) { if (now < due) return false; if (g_nextLocalPlayerResolveNs.compare_exchange_weak(due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire)) return true; }
+}
+
+// Independent cadence: ClientInstance::update consumes shouldResolveLocalPlayer,
+// so the tick-based identity fallback must not share that timer or it can starve.
+bool shouldProbeLocalPlayerFromTick(void* client) {
+ if (!client) return false;
+ const void* old = g_localPlayerTickProbeClient.exchange(client, std::memory_order_acq_rel);
+ if (old != client) g_nextLocalPlayerTickProbeNs.store(0, std::memory_order_release);
+ const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+ auto due = g_nextLocalPlayerTickProbeNs.load(std::memory_order_acquire);
+ for (;;) { if (now < due) return false; if (g_nextLocalPlayerTickProbeNs.compare_exchange_weak(due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire)) return true; }
 }
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
@@ -1331,14 +1345,99 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
 }
 
 void tickDetour(void* actor) {
-    // Per-actor hook: cached identity comparison only; never scan ClientInstance here.
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
+
+    // The ClientInstance virtual getter is absent or returns null on the logged
+    // runtime (slot 32 repeatedly returns null). Do not leave LocalPlayer unset
+    // forever: when the verified NormalTick hook receives an actor, recover the
+    // candidate through independently checked tick-vtable identity or direct
+    // ClientInstance ownership. No guessed pointer offset is dereferenced/called.
+    if (!local && actor && isReadableMemory(actor, sizeof(void*))) {
+        void* client = currentClientInstance.load(std::memory_order_acquire);
+
+        // ClientInstance::update can be stripped or mismatched on some releases.
+        // Use the SDK's current-instance entry only after the same vtable checks
+        // used by the normal receiver validator.
+        if (!client || !isPlausibleClientInstance(client)) {
+            auto* runtimeClient = bedrocktools::sdk::ClientInstance::current();
+            if (runtimeClient && isPlausibleClientInstance(runtimeClient)) {
+                client = reinterpret_cast<void*>(runtimeClient);
+                void* previous = currentClientInstance.exchange(client, std::memory_order_acq_rel);
+                if (previous != client) {
+                    currentLocalPlayer.store(nullptr, std::memory_order_release);
+                    local = nullptr;
+                    bedrocktools::diagnostics::probe(
+                        bedrocktools::diagnostics::Level::Info, "GameHooks",
+                        "client_instance_capture", "runtime_api_fallback",
+                        "Recovered a validated ClientInstance from the SDK current-instance accessor.");
+                }
+            }
+        }
+
+        if (client && isPlausibleClientInstance(client)) {
+            // Independent 250 ms cadence avoids starvation by the update-hook
+            // resolver and prevents actor/vtable scans on every game tick.
+            if (shouldProbeLocalPlayerFromTick(client)) {
+                const bool matchesNormalTick = isLocalPlayerTickObject(actor);
+                std::size_t matchedOffset = 0;
+                const bool ownedByClient = !matchesNormalTick &&
+                    clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset);
+
+                static const auto actorIsPlayerAddress =
+                    bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+                const bool actorClassifierReady = actorIsPlayerAddress &&
+                    isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress));
+                const bool isPlayer = actorClassifierReady &&
+                    reinterpret_cast<bool (*)(void*)>(actorIsPlayerAddress)(actor);
+
+                if (isPlayer && (matchesNormalTick || ownedByClient)) {
+                    currentLocalPlayer.store(actor, std::memory_order_release);
+                    local = actor;
+                    const char* route = matchesNormalTick
+                        ? "captured_from_normal_tick_vtable" :
+                          "captured_from_clientinstance_player_field";
+                    const std::string details =
+                        std::string("player=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                        "; client_instance=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
+                        "; actor_classifier=confirmed" +
+                        (ownedByClient
+                            ? std::string("; matched_offset=0x") + [&] {
+                                char buffer[32]{};
+                                std::snprintf(buffer, sizeof(buffer), "%zX", matchedOffset);
+                                return std::string(buffer);
+                              }()
+                            : std::string("; source=validated_NormalTick_vtable_identity"));
+                    bedrocktools::diagnostics::probe(
+                        bedrocktools::diagnostics::Level::Info, "GameHooks",
+                        "verified_local_player", route, details);
+                } else if (matchesNormalTick && !isPlayer) {
+                    static std::atomic_bool rejectedTickCandidate{false};
+                    if (!rejectedTickCandidate.exchange(true, std::memory_order_acq_rel)) {
+                        bedrocktools::diagnostics::probe(
+                            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                            "verified_local_player", "normal_tick_candidate_rejected",
+                            std::string("actor=") +
+                                std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                                "; actor_classifier=" +
+                                (actorClassifierReady ? "not_player" : "unavailable"));
+                    }
+                }
+            }
+        }
+    }
+
+    // A local actor must match either the trusted getter result or the candidate
+    // captured above; unrelated actor ticks continue through the original path.
+    local = currentLocalPlayer.load(std::memory_order_acquire);
     const bool verified = actor && local && actor == local;
     if (verified) {
         LocalPlayerPreTickEvent pre{actorPlayer};
         bus().publish(pre);
-        VerifiedLocalPlayerPreTickEvent verifiedPre{reinterpret_cast<bedrocktools::sdk::Player*>(local)};
+        VerifiedLocalPlayerPreTickEvent verifiedPre{
+            reinterpret_cast<bedrocktools::sdk::Player*>(local)};
         bus().publish(verifiedPre);
     }
 

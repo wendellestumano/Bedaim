@@ -1,3 +1,11 @@
+## 2026-10-21 — Recover AutoHit LocalPlayer from validated tick identity
+
+- Added a fallback for the logged case where no exact ClientInstance::getLocalPlayer export exists and the documented vtable getter repeatedly returns null.
+- The NormalTick hook now retries LocalPlayer recovery independently of the ClientInstance-update resolver, so the update hook cannot starve the fallback's retry timer.
+- Candidate capture requires a live validated ClientInstance plus either validated NormalTick vtable identity or an exact actor-pointer ownership match; Actor::isPlayer is also required. No guessed vtable slot is called and no candidate pointer is inferred from arbitrary data.
+- Candidate scans are throttled to 250 ms and diagnostics identify the successful capture route. The existing attack ABI correction is preserved; all other modules are unchanged.
+- Experimental only. Build validation and a new in-game log must confirm captured_from_normal_tick_vtable or captured_from_clientinstance_player_field, followed by real AutoHit behavior.
+
 ## 2026-10-21 — Fix AutoHit hit-position ABI
 
 - Corrected the guarded four-argument GameMode attack ABI: argument four is a pointer/reference to the target contact Vec3, not a boolean result-out pointer.
