@@ -1,6 +1,7 @@
 #include "modules/player/ActorVectorValidation.hpp"
 
 #include <cstdlib>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -22,8 +23,9 @@ using bedaim::actorsnapshot::validate;
 
 void expectInvalid(VectorMetadata metadata, std::size_t stride,
                    std::size_t maximum, const char* expectedReason,
-                   std::string_view label) {
-    const auto result = validate(metadata, stride, maximum);
+                   std::string_view label,
+                   std::size_t alignment = alignof(std::uintptr_t)) {
+    const auto result = validate(metadata, stride, maximum, alignment);
     check(!result.valid, label);
     check(std::string_view(result.reason) == expectedReason,
           std::string(label) + " reports the expected reason");
@@ -67,6 +69,13 @@ int main() {
                   "capacity_over_limit", "oversized capacity is rejected even for an empty range");
     expectInvalid({0x1000, 0x1010, 0x1020}, 0, maximum,
                   "invalid_stride", "zero stride is rejected");
+    expectInvalid({0x1004, 0x1024, 0x1044}, stride, maximum,
+                  "begin_not_aligned", "misaligned begin address is rejected");
+    expectInvalid({0x1000, 0x1020, 0x1040}, stride, maximum,
+                  "invalid_alignment", "non-power-of-two alignment is rejected", 3);
+    expectInvalid({0x1000, 0x100c, 0x1018}, 12, maximum,
+                  "stride_not_alignment_multiple",
+                  "stride incompatible with alignment is rejected", 8);
 
     std::cout << "Actor vector validation: " << (checks - failures)
               << "/" << checks << " checks passed\n";

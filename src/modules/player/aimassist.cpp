@@ -84,7 +84,7 @@ bool actorVectorMetadataValid(const ActorVector& actors, std::size_t maximumElem
         {reinterpret_cast<std::uintptr_t>(actors.begin),
          reinterpret_cast<std::uintptr_t>(actors.end),
          reinterpret_cast<std::uintptr_t>(actors.capacity)},
-        sizeof(DistanceSortedActor), maximumElements);
+        sizeof(DistanceSortedActor), maximumElements, alignof(DistanceSortedActor));
     if (reason) *reason = result.reason;
     if (dataSpanOut) *dataSpanOut = result.dataSpan;
     return result.valid;

@@ -1,3 +1,9 @@
+## 2026-10-21 — Actor snapshot alignment validation (experimental)
+
+- Bind the AimAssist actor-vector validator's alignment requirement explicitly to `alignof(DistanceSortedActor)` instead of relying on the pointer-alignment default.
+- Add host regression cases for a misaligned base address, a non-power-of-two alignment, and a stride that is incompatible with the requested alignment.
+- Defensive metadata validation only; no crash or FPS improvement is claimed without CI and in-game evidence.
+
 ## 2026-10-20 — AutoHit target-filter and route-failure attribution (experimental)
 
 - Added a throttled per-filter target-scan breakdown for the no-target state, including player/mob toggles, creative/spectator filtering, whitelist, invisibility, geometry, line of sight, range, FOV, and missing native-filter availability.
