@@ -72,7 +72,10 @@ void BreakIndicatorModule::onDisable() {
 }
 
 void BreakIndicatorModule::onFrame() {
-    if (!enabled) return;
+    // Temporary render-path isolation: without block interaction hooks there is
+    // no trustworthy breaking state. Avoid per-frame draw submissions and the
+    // allocations caused by the default always-show setting during this test.
+    if (!enabled || !m_breaking) return;
 
     auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastUpdate).count() > 250) {
