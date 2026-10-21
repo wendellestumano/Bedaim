@@ -4,9 +4,9 @@ Use this file as a lightweight index, not as a substitute for GitHub Issues or P
 
 | Status | Task / Issue | Owner agent | Branch / PR | Scope / conflicts | Next action |
 |---|---|---|---|---|---|
-| Ready | Initial collaboration smoke test | Coordinator | `chore/ai-agent-collaboration-bootstrap` | Documentation/config only; do not change gameplay code | Verify agent discovery and handoffs in Codespaces |
-| Backlog | Audit current build/CI commands and artifact outputs | Coordinator | Not assigned | Inspect current workflows before adding CI assumptions | Record verified commands and environment limitations |
-| Backlog | Configure server-side `main` protection | Human maintainer | GitHub repository settings | Requires admin settings; do not infer that files enable protection | Require PRs, review, and successful checks |
+| In progress | Initial collaboration smoke test | Coordinator / human | `chore/ai-agent-collaboration-bootstrap` / PR #66 | Documentation/config only; do not change gameplay code | Verify agent discovery and handoffs in Codespaces |
+| Done | Audit current build/CI commands and artifact outputs | Repository-connected assistant | [Audit report](reports/initial-read-only-audit-2026-10-21.md) | Build/CI evidence recorded for SHA `b05ccb5f6f93d295848033ff47019bc48301ab0b` | Use report links; runtime behavior remains unverified |
+| Blocked | Configure server-side `main` protection | Human maintainer | GitHub repository settings | Rulesets list empty; classic protection read returned 403, so effective state unknown | Open Settings → Rules → Rulesets / Branches and configure PR + required checks |
 
 ## Status values
 - **Backlog** — not ready to start.
