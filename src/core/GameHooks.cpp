@@ -361,7 +361,7 @@ bool isPlausibleClientInstance(void* object, std::size_t* trustedEntryCount = nu
         }
     }
 
-    constexpr std::size_t scanSlots = 64;
+    constexpr std::size_t scanSlots = 48;
     constexpr std::size_t trustedSlots =
         bedrocktools::sdk::offsets::VTable::ClientInstance_getLocalPlayer + 1;
     if (!isReadableMemory(vtable, sizeof(void*) * scanSlots)) return false;
