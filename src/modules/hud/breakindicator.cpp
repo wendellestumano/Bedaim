@@ -73,6 +73,10 @@ void BreakIndicatorModule::onDisable() {
 
 void BreakIndicatorModule::onFrame() {
     if (!enabled) return;
+    // Render-only isolation experiment: preserve all event hooks and progress
+    // sampling, but skip HUD draw command creation/submission. This separates
+    // renderer overhead from the block interaction detours.
+    return;
 
     auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastUpdate).count() > 250) {
