@@ -1088,7 +1088,8 @@ std::string versionDetour(void* self) {
     return std::string("\xC2\xA7" "b") + std::string(bedrocktools::Name) + " v" + std::string(bedrocktools::Version) + " " + "\xC2\xA7" "fby " + "\xC2\xA7" "e" + std::string(bedrocktools::Author) + " " + "\xC2\xA7" "f- " + "\xC2\xA7" "r" + version;
 }
 
-bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::size_t* matchedOffset) {
+bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::size_t* matchedOffset,
+                                         bool allowNestedMinecraftGame = true) {
     if (!clientInstance || !actor ||
         !isReadableMemory(clientInstance, sizeof(void*)) ||
         !isReadableMemory(actor, sizeof(void*))) return false;
@@ -1148,10 +1149,13 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
     // LocalPlayer pointer.
     if (scanObjectForExactPlayerPointer(clientInstance, 0x400, matchedOffset)) return true;
 
+    // Only use the legacy nested MinecraftGame accessor when the caller opted
+    // in. The camera-actor route avoids it because its slot is separately checked
+    // and it should be attributable to a pointer owned directly by ClientInstance.
+    if (!allowNestedMinecraftGame) return false;
     // Some Bedrock layouts expose the local player through MinecraftGame rather
-    // than storing the pointer directly on ClientInstance. This is an existing,
-    // version-profiled virtual accessor (slot 83 in Core.hpp), not a guessed
-    // LocalPlayer getter. Validate the returned object before comparing its fields.
+    // than storing the pointer directly on ClientInstance. Validate the returned
+    // object before comparing its fields.
     auto* sdkClient = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
     void* minecraftGame = sdkClient->minecraftGame();
     if (minecraftGame && minecraftGame != clientInstance &&
@@ -1424,7 +1428,8 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
                 reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(cameraActor);
             std::size_t ownedOffset = 0;
             const bool ownedByClient = cameraActorIsPlayer &&
-                clientInstanceDirectlyOwnsPlayer(clientInstance, cameraActor, &ownedOffset);
+                clientInstanceDirectlyOwnsPlayer(
+                    clientInstance, cameraActor, &ownedOffset, false);
             if (ownedByClient) {
                 currentLocalPlayer.store(cameraActor, std::memory_order_release);
                 bedrocktools::diagnostics::probe(
