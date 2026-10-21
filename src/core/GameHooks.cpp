@@ -2068,8 +2068,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound,
     const GameModeType modeKind = kind == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
     GameModeActionEvent actionEvent{modeKind, GameModeAction::Attack, gameMode};
     bus().publish(actionEvent);
-    // Keep AttackEvent.argument3 semantic: hit position supplied by the caller.
-    // The native output flag is passed only to the guarded four-argument ABI below.
+    // Keep the target contact position in AttackEvent for both validated routes.
+    // The guarded four-argument ABI forwards this same Vec3 reference as argument four.
     AttackEvent attackEvent{kind, gameMode, reinterpret_cast<bedrocktools::sdk::Actor*>(target),
         reinterpret_cast<void*>(static_cast<std::uintptr_t>(true)), const_cast<void*>(hitPosition)};
     bus().publish(attackEvent);
