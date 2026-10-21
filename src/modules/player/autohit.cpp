@@ -361,7 +361,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     const bedaim::autohit::Inputs gateInputs{
         true, player != nullptr, target != nullptr, validBounds(targetBounds), targetFresh,
-        gameMode != nullptr, routeAvailable, hitPointFinite, cooldownReady,
+        gameMode != nullptr || inputCallbackAvailable, routeAvailable, hitPointFinite, cooldownReady,
         std::sqrt(std::max(distanceSq, 0.0f)), maxRange
     };
     const Decision decision = bedaim::autohit::evaluate(gateInputs);
