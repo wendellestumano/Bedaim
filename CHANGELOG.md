@@ -4,6 +4,7 @@
 - The callback path is eligible only when the symbol resolves inside the active Minecraft image, the receiver equals the current ClientInstance, and its resolved local player matches AutoHit's expected player.
 - AutoHit prefers this normal engine input path when all checks pass, retaining the existing guarded GameMode route only when the callback is unavailable.
 - Callback invocation is logged separately from native-route acceptance; it does not prove that an attack or server damage occurred. Requires Android ARM64 build and in-game verification. This branch remains experimental and main is untouched.
+- Cross-checked the public Apollon wrapper: it calls the legacy native handler with a ClientInstance receiver, but its hard-coded address was not reused because it is stale for the current binary. The resolver relies only on exact exported symbols.
 
 ## 2026-10-21 — AutoHit-only revival branch (experimental)
 
