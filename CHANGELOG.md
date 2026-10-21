@@ -1,5 +1,13 @@
 ## 2026-10-21 — Recover AutoHit LocalPlayer from validated tick identity
 
+## 2026-10-21 — Restore GameHooks tick delivery and validate ClientInstance identity
+
+- Restored the legacy `LocalPlayerPreTickEvent` / `LocalPlayerTickEvent` stream for every hooked `NormalTick` actor, matching the Build #614 event contract. Exact-local-only work remains gated behind `VerifiedLocalPlayerPreTickEvent` and `VerifiedLocalPlayerTickEvent`.
+- Added a throttled cross-check of `ClientInstance::current()` against the signature-pattern update-hook receiver. This avoids trusting a merely polymorphic receiver as the active client when the update symbol is stripped.
+- Added a low-volume runtime probe every 2048 tick calls so gameplay logs can distinguish “hook installed” from “hook actually executing.”
+- Host/Android CI and in-game verification are required; this change does not claim the LocalPlayer getter is proven on-device.
+
+
 - Added a fallback for the logged case where no exact ClientInstance::getLocalPlayer export exists and the documented vtable getter repeatedly returns null.
 - The NormalTick hook now retries LocalPlayer recovery independently of the ClientInstance-update resolver, so the update hook cannot starve the fallback's retry timer.
 - Candidate capture requires a live validated ClientInstance plus either validated NormalTick vtable identity or an exact actor-pointer ownership match; Actor::isPlayer is also required. No guessed vtable slot is called and no candidate pointer is inferred from arbitrary data.
