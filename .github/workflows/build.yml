@@ -34,6 +34,7 @@ jobs:
           xmake run -P . atomic_config_writer_test
           xmake run -P . diagnostics_test
           xmake run -P . autohit_guards_test
+          xmake run -P . native_attack_result_policy_test
           xmake run -P . autohit_weapon_profile_test
           xmake run -P . autototem_policy_test
 
