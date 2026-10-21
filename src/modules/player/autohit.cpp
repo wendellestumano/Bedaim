@@ -448,14 +448,14 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     const int targetHurtTimeBefore =
         reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
-    bool nativeAttackResult = false;
-    bool nativeAttackResultUsed = false;
+    bool routeAcceptedOut = false;
+    bool fourArgumentRouteUsed = false;
     bool inputCallbackInvoked = false;
     const auto nativeCallStart = std::chrono::steady_clock::now();
     const bool accepted = inputCallbackAvailable
         ? (inputCallbackInvoked = core::gamehooks::invokeAttackInputCallback(client, player))
         : core::gamehooks::attack(
-            gameMode, target, true, &hitPoint, &nativeAttackResult, &nativeAttackResultUsed);
+            gameMode, target, true, &hitPoint, &routeAcceptedOut, &fourArgumentRouteUsed);
     const auto nativeCallDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - nativeCallStart).count();
     // Hurt time is only an immediate local observation: server-authoritative
@@ -473,9 +473,9 @@ void AutoHitModule::processPlayerTick(Player* player) {
             "feedback", "no_immediate_hurt_time_transition",
             "six accepted native calls had no immediate local hurt-time increase; continuing at the configured CPS limit because this observation alone is not proof of a miss or server damage.");
     }
-    // The recording shows native_out_result=false repeatedly. Back off a rejected
-    // route before repeating actor queries and another native call every CPS tick.
-    // This is a performance/failure-containment guard, not a claim that the route is fixed.
+    // Back off a rejected route before repeating actor queries and another native call
+    // every CPS tick. The route output reflects observer acceptance, not a native bool*
+    // argument: the four-argument ABI's fourth parameter is the hit-position Vec3.
     if (!accepted) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
@@ -483,8 +483,9 @@ void AutoHitModule::processPlayerTick(Player* player) {
         }
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "native_attack",
             "rejected_with_backoff",
-            std::string("retry_after_ms=3000; native_out_result=") +
-            (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
+            std::string("retry_after_ms=3000; route_result_out=") +
+            (routeAcceptedOut ? "true" : "false") +
+            "; four_argument_abi=" + (fourArgumentRouteUsed ? "true" : "false") +
             "; native_call_duration_us=" + std::to_string(nativeCallDurationUs) +
             "; route rejection is not server damage confirmation");
     }
@@ -494,7 +495,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         "; dispatch_result=" + (inputCallbackAvailable
             ? (inputCallbackInvoked ? "input_callback_invoked_not_hit_confirmed" : "input_callback_not_invoked")
             : (accepted ? "accepted_by_internal_observer" : "not_accepted_by_internal_observer")) +
-        "; native_out_result=" + (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
+        "; route_result_out=" + (routeAcceptedOut ? "true" : "false") +
+        "; four_argument_abi=" + (fourArgumentRouteUsed ? "true" : "false") +
         "; hurt_time_before=" + std::to_string(targetHurtTimeBefore) +
         "; hurt_time_after=" + std::to_string(targetHurtTimeAfter) +
         "; hurt_time_increased=" + (targetHurtTimeAfter > targetHurtTimeBefore ? "true" : "false") +
@@ -512,7 +514,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         "; range=" + std::to_string(maxRange) +
         "; weapon=" + bedaim::autohit::weapon::name(weapon) +
         "; cps=" + std::to_string(profile.cps) +
-        "; native_out_result=" + (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
+        "; route_result_out=" + (routeAcceptedOut ? "true" : "false") +
+        "; four_argument_abi=" + (fourArgumentRouteUsed ? "true" : "false") +
         "; hit_point=(" + std::to_string(hitPoint.x) + "," +
             std::to_string(hitPoint.y) + "," + std::to_string(hitPoint.z) + ")" +
         "; target_hurt_time_before=" + std::to_string(targetHurtTimeBefore) +
