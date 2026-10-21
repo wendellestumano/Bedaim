@@ -1,3 +1,11 @@
+## 2026-10-21 — Resolve LocalPlayer from the authoritative update path
+
+- New experimental revision after the previously tested GameHooks build. The SDK `ClientInstance::current()` accessor is now checked immediately after the original `ClientInstance::update(bool)` returns, rather than only from the NormalTick detour.
+- A validated SDK instance becomes the authoritative cached receiver; on a client-instance transition, cached LocalPlayer and both retry throttles are reset so a prior world's state cannot starve the next resolution attempt.
+- LocalPlayer resolution and GameMode observer setup use the accepted authoritative receiver, not the signature-pattern hook receiver.
+- Added distinct diagnostics for accepted/rejected SDK candidates and authority transitions.
+- This is an experimental fix; in-game validation is still required. No changes to `main`.
+
 ## 2026-10-21 — Recover AutoHit LocalPlayer from validated tick identity
 
 ## 2026-10-21 — Restore GameHooks tick delivery and validate ClientInstance identity
