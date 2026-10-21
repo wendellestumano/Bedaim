@@ -2106,11 +2106,14 @@ bool useItem(void* player, const void* itemStack) {
 
 bool inputAttackCallbackAvailable(void* client, void* expectedLocalPlayer) {
     if (!client || !expectedLocalPlayer) return false;
-    auto* current = bedrocktools::sdk::ClientInstance::current();
-    if (!current || reinterpret_cast<void*>(current) != client) return false;
 
-    // Resolve the local player from this exact current ClientInstance. Never call
-    // the input callback with a stale or foreign receiver from a previous world.
+    // Avoid ClientInstance::current(): its SDK implementation calls our own
+    // Api.cpp provider, which simply returns GameHooks::clientInstance(). Validate
+    // the cache provenance directly and require the current player's exact identity.
+    void* verifiedClient = currentClientInstance.load(std::memory_order_acquire);
+    if (!verifiedClient || verifiedClient != client ||
+        !isPlausibleClientInstance(verifiedClient)) return false;
+
     void* livePlayer = localPlayer();
     if (!livePlayer || livePlayer != expectedLocalPlayer) return false;
     return resolveClientInputAttackCallback() != nullptr;
