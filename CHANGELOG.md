@@ -1,3 +1,9 @@
+## 2026-10-21 — Block-break hooks-only isolation variant (experimental)
+
+- Disable only the BedAim start/stop-destroy and start-build detours to test whether hook interception causes the block-break hitch/crash.
+- Leave Break Indicator unchanged in this variant, including its always-show rendering, so the effect of disabling hooks can be measured independently from HUD draw suppression.
+- AutoHit remains unchanged and lower priority. This is a diagnostic experiment; do not merge until built and tested in-game. Main is untouched.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
