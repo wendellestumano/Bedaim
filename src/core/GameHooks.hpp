@@ -17,11 +17,11 @@ bool attackAvailable(void* gameMode);
 bool inputAttackCallbackAvailable(void* clientInstance, void* expectedLocalPlayer);
 // Invokes the normal engine attack-button callback; true means invoked, not that an attack or damage was confirmed.
 bool invokeAttackInputCallback(void* clientInstance, void* expectedLocalPlayer);
-// The public three-argument route consumes hitPosition; the guarded four-argument route consumes nativeResultOut.
-// The four-argument C++ overload preserves existing module call sites; the extended overload exposes the native output flag.
+// Both validated routes consume hitPosition. The optional outputs report route acceptance
+// and whether the selected native ABI has four arguments; neither proves server damage.
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition);
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition,
-            bool* nativeResultOut, bool* nativeResultOutUsed);
+            bool* routeAcceptedOut, bool* fourArgumentRouteUsed);
 // Calls the exact validated public GameMode::useItem route for a player's selected stack.
 bool useItem(void* player, const void* itemStack);
 
