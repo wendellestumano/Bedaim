@@ -1,3 +1,9 @@
+## 2026-10-21 — Break Indicator render-only isolation variant (experimental)
+
+- Preserve all block interaction hooks and Break Indicator event/progress sampling, but skip HUD draw command creation and submission.
+- Compare against the hooks-only variant and the combined isolation variant to determine whether frame rendering, hook interception, or both contribute to the block-break hitch/crash.
+- AutoHit remains unchanged and lower priority. This is a diagnostic experiment, not a confirmed fix. Main is untouched.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
