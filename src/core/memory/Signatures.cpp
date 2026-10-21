@@ -51,7 +51,8 @@ const std::array<SignatureDefinition, SignatureCount> definitions{{
     SignatureDefinition{SignatureId::MeshHelpersRenderMeshImmediately2, "? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 FD 03 00 91 ? ? ? D1 57 D0 3B D5 F6 03 00 AA E0 03 01 AA ? ? ? F9 F4 03 03 AA"},
     SignatureDefinition{SignatureId::RenderMaterialGroupCommon, "? ? ? 90 ? ? ? 91 ? ? ? D1 ? ? ? D1 ? ? ? 91 E3 03 14 AA"},
     SignatureDefinition{SignatureId::SurvivalModeStartDestroyBlock, "? ? ? 39 ? ? ? 34 ? ? ? 90 ? ? ? 39 ? ? ? 34 ? ? ? A9 FD 03 00 91 E1 03 1F 2A ? ? ? 94"},
-    SignatureDefinition{SignatureId::GameModeStartDestroyBlock, "? ? ? D1 ? ? ? A9 ? ? ? F9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 59 D0 3B D5 F4 03 00 AA F5 03 03 AA ? ? ? F9 F6 03 02 2A"},
+    // Bedrock 1.26.51.01: exact slot-6 dispatch thunk and following prologue. The previous generic prologue pattern aliased GameModeAttack in this build.
+    SignatureDefinition{SignatureId::GameModeStartDestroyBlock, "08 00 40 F9 1F 40 00 B9 E4 03 1F 2A 05 1D 40 F9 A0 00 1F D6 FF C3 04 D1 FD 7B 0D A9 FC 73 00 F9 FA 67 0F A9 F8 5F 10 A9 F6 57 11 A9 F4 4F 12 A9 FD 43 03 91 5A D0 3B D5"},
     SignatureDefinition{SignatureId::GameModeStopDestroyBlock, "? ? ? A9 ? ? ? F9 FD 03 00 91 F3 03 00 AA ? ? ? F9 ? ? ? BD ? ? ? F9 ? ? ? F9 00 01 3F D6 E0 03 22 1E ? ? ? BD ? ? ? F9 ? ? ? F9 ? ? ? A8 C0 03 5F D6"},
     SignatureDefinition{SignatureId::SurvivalModeStartBuildBlock, "? ? ? 39 ? ? ? 34 ? ? ? 90 ? ? ? 39 ? ? ? 34 E1 03 1F 2A ? ? ? 17"},
     SignatureDefinition{SignatureId::GameModeStartBuildBlock, "? ? ? F9 ? ? ? B9 E3 03 1F 2A ? ? ? F9 80 00 1F D6 ? ? ? D1"},

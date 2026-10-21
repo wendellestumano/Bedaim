@@ -1,3 +1,10 @@
+## 2026-10-21 — Prevent block-break crash in Break Indicator
+
+- Replace the generic block-start signature with the exact Bedrock 1.26.51.01 pattern, statically verified to match once at 0xF8A0DA8; the old pattern instead matched GameModeAttack at 0xF89FA58.
+- Refuse to install block destroy/build hooks that collide with resolved GameMode/SurvivalMode attack signatures, and log skipped_attack_signature_collision.
+- Guard Break Indicator event listeners while the module is disabled; EventBus callbacks were otherwise still running after module disablement.
+- Validate the current process mapping before reading the version-sensitive `GameMode::mDestroyProgress` field and copy it with `memcpy`; unreadable or out-of-range progress now fails closed instead of risking a native crash.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
