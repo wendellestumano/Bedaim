@@ -1,8 +1,16 @@
 ## 2026-10-21 — Recover AutoHit LocalPlayer from validated tick identity
 
+## 2026-10-21 — Restore GameHooks tick delivery and validate ClientInstance identity
+
+- Restored the legacy `LocalPlayerPreTickEvent` / `LocalPlayerTickEvent` stream for every hooked `NormalTick` actor, matching the Build #614 event contract. Exact-local-only work remains gated behind `VerifiedLocalPlayerPreTickEvent` and `VerifiedLocalPlayerTickEvent`.
+- Added a throttled cross-check of `ClientInstance::current()` against the signature-pattern update-hook receiver and prevent the hook from overwriting a validated SDK instance with a different receiver.
+- Added a low-volume runtime probe every 2048 tick calls so gameplay logs can distinguish “hook installed” from “hook actually executing.”
+- Host/Android CI and in-game verification are required; this change does not claim the LocalPlayer getter is proven on-device.
+
+
 - Added a fallback for the logged case where no exact ClientInstance::getLocalPlayer export exists and the documented vtable getter repeatedly returns null.
 - The NormalTick hook now retries LocalPlayer recovery independently of the ClientInstance-update resolver, so the update hook cannot starve the fallback's retry timer.
-- Candidate capture requires a live validated ClientInstance plus either validated NormalTick vtable identity or an exact actor-pointer ownership match; Actor::isPlayer is also required. No guessed vtable slot is called and no candidate pointer is inferred from arbitrary data.
+- Candidate capture requires a live validated ClientInstance and exact ownership of the same Player pointer; a shared `NormalTick` vtable match alone is no longer treated as local-player identity. Actor::isPlayer is also required. No guessed vtable slot is called and no candidate pointer is inferred from arbitrary data.
 - Candidate scans are throttled to 250 ms and diagnostics identify the successful capture route. The existing attack ABI correction is preserved; all other modules are unchanged.
 - Experimental only. Build validation and a new in-game log must confirm captured_from_normal_tick_vtable or captured_from_clientinstance_player_field, followed by real AutoHit behavior.
 
