@@ -1,3 +1,11 @@
+## 2026-10-21 — Fix AutoHit hit-position ABI
+
+- Corrected the guarded four-argument GameMode attack ABI: argument four is a pointer/reference to the target contact Vec3, not a boolean result-out pointer.
+- Updated the native detour/trampoline signature and forwarded the hit position consistently through both the public adapter and validated internal route.
+- Removed the invalid native bool-out success gate. A synthetic attack is accepted only when the validated internal observer actually runs and reports a true native return; this remains distinct from server-confirmed damage.
+- AutoHit diagnostics now report the selected four-argument ABI and route acceptance rather than the nonexistent native output flag.
+- Based on the documented LeviLamina GameMode::_attack(Actor&, bool, Vec3 const&) signature and the uploaded logs repeatedly showing native_out_result=false despite a true wrapper/internal return. Experimental branch only; ARM64 CI and in-game target-damage testing are still required.
+
 ## 2026-10-21 — AutoHit normal input-callback experiment
 
 - Added an exact-export resolver for supported ClientInputCallbacks attack-button handlers (newer handleBuildOrAttackOrBlockSelectButtonPress and older destroy/attack variants). No hard-coded address or guessed vtable slot is used.
