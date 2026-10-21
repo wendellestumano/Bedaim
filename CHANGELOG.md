@@ -10,7 +10,7 @@
 
 - Restored **AutoHit** to the module registry on a branch based on the latest no-AutoHit/no-AutoTotem release candidate.
 - **AutoTotem remains unregistered**; no other module implementations or block-break mitigation changes are included in this branch.
-- This is a controlled reactivation step, not a claim that attacks work. The current native GameMode dispatch still lacks a confirmed normal input-callback path; the next step is to validate the correct 26.51 callback ABI and receiver before changing dispatch.
+- This is a controlled reactivation step, not a claim that attacks work. The experimental branch now attempts exact-symbol resolution for the normal input callback, but the target-build symbol/ABI and actual damage still require in-game validation.
 - Keep this branch isolated. Require host regression tests, Android ARM64 packaging, and in-game confirmation of real target damage before treating AutoHit as restored.
  
 ## 2026-10-21 — Latest experimental build without AutoHit and AutoTotem
