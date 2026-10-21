@@ -19,13 +19,19 @@ struct ValidationResult {
     std::uintptr_t dataSpan;
 };
 
-inline ValidationResult validate(const VectorMetadata& vector,
-                                 std::size_t stride,
-                                 std::size_t maximumElements) noexcept {
+inline ValidationResult validate(
+    const VectorMetadata& vector,
+    std::size_t stride,
+    std::size_t maximumElements,
+    std::size_t alignment = alignof(std::uintptr_t)) noexcept {
     const auto reject = [](const char* reason, std::uintptr_t span) noexcept {
         return ValidationResult{false, reason, 0, span};
     };
     if (stride == 0) return reject("invalid_stride", 0);
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0)
+        return reject("invalid_alignment", 0);
+    if (stride % alignment != 0)
+        return reject("stride_not_alignment_multiple", 0);
     if (vector.begin == 0 && vector.end == 0 && vector.capacity == 0)
         return {true, "empty", 0, 0};
     if (vector.begin == 0) return reject("null_begin", 0);
@@ -33,6 +39,8 @@ inline ValidationResult validate(const VectorMetadata& vector,
     if (vector.capacity == 0) return reject("null_capacity", 0);
     if (vector.end < vector.begin) return reject("end_before_begin", 0);
     if (vector.capacity < vector.end) return reject("capacity_before_end", 0);
+    if (vector.begin % alignment != 0)
+        return reject("begin_not_aligned", 0);
 
     const auto dataSpan = vector.end - vector.begin;
     const auto capacitySpan = vector.capacity - vector.begin;
