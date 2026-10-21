@@ -1421,16 +1421,19 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
     }
 
     if (cameraGetterCallable && actorClassifierReady) {
-        void* cameraActor =
-            reinterpret_cast<GetLocalPlayerFn>(cameraGetter)(clientInstance);
-        if (cameraActor && isReadableMemory(cameraActor, sizeof(void*))) {
+        const auto cameraActorGetter =
+            reinterpret_cast<GetLocalPlayerFn>(cameraGetter);
+        void* cameraActor = cameraActorGetter(clientInstance);
+        // Require two identical results from the documented accessor. This
+        // avoids caching a transient/stale camera handoff during world changes.
+        void* confirmedCameraActor = cameraActorGetter(clientInstance);
+        const bool stableCameraActor = cameraActor &&
+            cameraActor == confirmedCameraActor &&
+            isReadableMemory(cameraActor, sizeof(void*));
+        if (stableCameraActor) {
             const bool cameraActorIsPlayer =
                 reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(cameraActor);
-            std::size_t ownedOffset = 0;
-            const bool ownedByClient = cameraActorIsPlayer &&
-                clientInstanceDirectlyOwnsPlayer(
-                    clientInstance, cameraActor, &ownedOffset, false);
-            if (ownedByClient) {
+            if (cameraActorIsPlayer) {
                 currentLocalPlayer.store(cameraActor, std::memory_order_release);
                 bedrocktools::diagnostics::probe(
                     bedrocktools::diagnostics::Level::Info, "GameHooks",
@@ -1440,7 +1443,7 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
                         "; player=" +
                         std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
                         "; vtable_slot=" + std::to_string(cameraActorSlot) +
-                        "; ownership_match=yes");
+                        "; stable_return=yes; actor_is_player=yes");
                 return cameraActor;
             }
 
@@ -1449,13 +1452,16 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
                 "verified_local_player", "camera_actor_candidate_rejected",
                 std::string("camera_actor=") +
                     std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
-                    "; actor_is_player=" + (cameraActorIsPlayer ? "yes" : "no") +
-                    "; exact_client_ownership=" + (ownedByClient ? "yes" : "no"));
+                    "; actor_is_player=no; stable_return=yes");
         } else {
             bedrocktools::diagnostics::probe(
                 bedrocktools::diagnostics::Level::Debug, "GameHooks",
-                "verified_local_player", "camera_actor_getter_returned_null",
-                std::string("vtable_slot=") + std::to_string(cameraActorSlot));
+                "verified_local_player", "camera_actor_getter_returned_null_or_unstable",
+                std::string("vtable_slot=") + std::to_string(cameraActorSlot) +
+                    "; first=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(cameraActor)) +
+                    "; second=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(confirmedCameraActor)));
         }
     } else {
         bedrocktools::diagnostics::probe(
