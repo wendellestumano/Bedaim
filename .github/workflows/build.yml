@@ -31,6 +31,7 @@ jobs:
           xmake run -P . menu_config_value_test
           xmake run -P . aimassist_math_test
           xmake run -P . actor_vector_validation_test
+          xmake run -P . local_player_cache_policy_test
           xmake run -P . atomic_config_writer_test
           xmake run -P . diagnostics_test
           xmake run -P . autohit_guards_test
