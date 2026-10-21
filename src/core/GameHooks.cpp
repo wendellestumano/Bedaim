@@ -1671,31 +1671,55 @@ bool install() {
     gameHooksLogger().info(
         "NormalTick hook installed={}, signature={:p}.", normalTickHooked,
         reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::NormalTick)));
-    const auto gameModeAttackEntry = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-    const auto gameModeStartDestroyBlockEntry = bedrocktools::memory::resolve(SignatureId::GameModeStartDestroyBlock);
-    const bool gameModeStartDestroyBlockCollision =
-        gameModeStartDestroyBlockEntry != 0 && gameModeStartDestroyBlockEntry == gameModeAttackEntry;
-    const bool gameModeStartDestroyBlockHooked = !gameModeStartDestroyBlockCollision && hookSignature(
-        SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
-    if (gameModeStartDestroyBlockCollision)
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
-            "GameHooks", "start_destroy_block_hook", "skipped_attack_signature_collision");
+    // Version-specific signatures are the first defense; this address-level
+    // guard is the second. A stale/generic pattern must never attach a block
+    // callback with an incompatible ABI to any attack entry.
+    const std::array<SignatureId, 3> attackSignatureIds{
+        SignatureId::GameModeAttack,
+        SignatureId::GameModeAttackInternal,
+        SignatureId::SurvivalModeAttack
+    };
+    const auto collidesWithAttackSignature = [&](std::uintptr_t candidate) {
+        if (!candidate) return false;
+        for (const auto attackId : attackSignatureIds) {
+            const auto attackEntry = bedrocktools::memory::resolve(attackId);
+            if (attackEntry && candidate == attackEntry) return true;
+        }
+        return false;
+    };
+    const auto installBlockHookIfSafe = [&](SignatureId id, void* detour, auto original,
+                                             const char* diagnosticName) {
+        const auto candidate = bedrocktools::memory::resolve(id);
+        if (candidate && collidesWithAttackSignature(candidate)) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Error, "GameHooks", diagnosticName,
+                "skipped_attack_signature_collision");
+            return false;
+        }
+        return hookSignature(id, detour, original);
+    };
 
-    const auto survivalModeAttackEntry = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-    const auto survivalModeStartDestroyBlockEntry = bedrocktools::memory::resolve(SignatureId::SurvivalModeStartDestroyBlock);
-    const bool survivalModeStartDestroyBlockCollision =
-        survivalModeStartDestroyBlockEntry != 0 && survivalModeStartDestroyBlockEntry == survivalModeAttackEntry;
-    const bool survivalModeStartDestroyBlockHooked = !survivalModeStartDestroyBlockCollision && hookSignature(
-        SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour), &survivalModeStartDestroyBlockOriginal);
-    if (survivalModeStartDestroyBlockCollision)
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
-            "GameHooks", "survival_start_destroy_block_hook", "skipped_attack_signature_collision");
+    const bool gameModeStartDestroyBlockHooked = installBlockHookIfSafe(
+        SignatureId::GameModeStartDestroyBlock,
+        reinterpret_cast<void*>(gameModeStartDestroyBlockDetour),
+        &gameModeStartDestroyBlockOriginal, "start_destroy_block_hook");
+    const bool survivalModeStartDestroyBlockHooked = installBlockHookIfSafe(
+        SignatureId::SurvivalModeStartDestroyBlock,
+        reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour),
+        &survivalModeStartDestroyBlockOriginal, "survival_start_destroy_block_hook");
     gameHooksLogger().info(
         "Block-start hooks: GameMode={}, SurvivalMode={}",
         gameModeStartDestroyBlockHooked, survivalModeStartDestroyBlockHooked);
-    hookSignature(SignatureId::GameModeStopDestroyBlock, reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal);
-    hookSignature(SignatureId::GameModeStartBuildBlock, reinterpret_cast<void*>(gameModeStartBuildBlockDetour), &gameModeStartBuildBlockOriginal);
-    hookSignature(SignatureId::SurvivalModeStartBuildBlock, reinterpret_cast<void*>(survivalModeStartBuildBlockDetour), &survivalModeStartBuildBlockOriginal);
+
+    installBlockHookIfSafe(SignatureId::GameModeStopDestroyBlock,
+        reinterpret_cast<void*>(gameModeStopDestroyBlockDetour),
+        &gameModeStopDestroyBlockOriginal, "stop_destroy_block_hook");
+    installBlockHookIfSafe(SignatureId::GameModeStartBuildBlock,
+        reinterpret_cast<void*>(gameModeStartBuildBlockDetour),
+        &gameModeStartBuildBlockOriginal, "start_build_block_hook");
+    installBlockHookIfSafe(SignatureId::SurvivalModeStartBuildBlock,
+        reinterpret_cast<void*>(survivalModeStartBuildBlockDetour),
+        &survivalModeStartBuildBlockOriginal, "survival_start_build_block_hook");
     const bool gameModeUseItemHooked = hookSignature(
         SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
     const bool survivalModeUseItemHooked = hookSignature(
