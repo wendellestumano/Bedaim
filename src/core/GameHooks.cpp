@@ -396,9 +396,11 @@ ClientInputAttackCallbackFn resolveClientInputAttackCallback() {
         // used a destroy/attack button callback. Only call a symbol if the exact
         // mangled name resolves inside the active libminecraftpe image.
         const char* symbols[] = {
-            "_ZN20ClientInputCallbacks43handleBuildOrAttackOrBlockSelectButtonPressER15IClientInstance",
+            // The Bedrock 26.51-era callback is tried first; the newer public SDK
+            // uses the IClientInstance-based build/attack/block-select handler.
             "_ZN20ClientInputCallbacks32handleDestoryOrAttackButtonPressER14ClientInstance",
-            "_ZN20ClientInputCallbacks32handleDestroyOrAttackButtonPressER14ClientInstance"
+            "_ZN20ClientInputCallbacks32handleDestroyOrAttackButtonPressER14ClientInstance",
+            "_ZN20ClientInputCallbacks43handleBuildOrAttackOrBlockSelectButtonPressER15IClientInstance"
         };
         for (const char* symbol : symbols) {
             if (void* address = resolveMinecraftFunction(symbol)) {
