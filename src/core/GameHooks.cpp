@@ -90,6 +90,7 @@ std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
 std::atomic<void*> g_localPlayerTickProbeClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerTickProbeNs{0};
 std::atomic<std::int64_t> g_nextRuntimeClientProbeNs{0};
+std::atomic_bool g_runtimeClientInstanceTrusted{false};
 
 bool shouldResolveLocalPlayer(void* client) {
  if (!client) return false;
@@ -1364,36 +1365,30 @@ void tickDetour(void* actor) {
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
 
-    // The ClientInstance virtual getter is absent or returns null on the logged
-    // runtime (slot 32 repeatedly returns null). Do not leave LocalPlayer unset
-    // forever: when the verified NormalTick hook receives an actor, recover the
-    // candidate through independently checked tick-vtable identity or direct
-    // ClientInstance ownership. No guessed pointer offset is dereferenced/called.
+    // Recover the active ClientInstance from its semantic SDK accessor when
+    // available. The signature-pattern update hook is not sufficient provenance:
+    // its receiver can be another polymorphic object on stripped releases.
     if (!local && actor && isReadableMemory(actor, sizeof(void*))) {
         void* client = currentClientInstance.load(std::memory_order_acquire);
-
-        // The signature-pattern update hook has no exact exported symbol on
-        // this runtime. A polymorphic receiver can pass a weak vtable check while
-        // still being the wrong object, so periodically cross-check the SDK's
-        // current ClientInstance even when the cached receiver looks plausible.
         if (shouldProbeRuntimeClientInstance()) {
             auto* runtimeClient = bedrocktools::sdk::ClientInstance::current();
             if (runtimeClient && isPlausibleClientInstance(runtimeClient)) {
                 void* runtime = reinterpret_cast<void*>(runtimeClient);
+                g_runtimeClientInstanceTrusted.store(true, std::memory_order_release);
                 if (runtime != client) {
                     void* previous = currentClientInstance.exchange(runtime, std::memory_order_acq_rel);
                     client = runtime;
-                    if (previous != runtime) {
-                        currentLocalPlayer.store(nullptr, std::memory_order_release);
-                        local = nullptr;
-                        bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Info, "GameHooks",
-                            "client_instance_capture", "runtime_api_authoritative",
-                            std::string("SDK current-instance accessor selected receiver=") +
-                                std::to_string(reinterpret_cast<std::uintptr_t>(runtime)) +
-                                "; replaced_cached_receiver=" +
-                                std::to_string(reinterpret_cast<std::uintptr_t>(previous)));
-                    }
+                    currentLocalPlayer.store(nullptr, std::memory_order_release);
+                    local = nullptr;
+                    bedrocktools::diagnostics::probe(
+                        bedrocktools::diagnostics::Level::Info, "GameHooks",
+                        "client_instance_capture", "runtime_api_authoritative",
+                        std::string("SDK current-instance accessor selected receiver=") +
+                            std::to_string(reinterpret_cast<std::uintptr_t>(runtime)) +
+                            "; replaced_cached_receiver=" +
+                            std::to_string(reinterpret_cast<std::uintptr_t>(previous)));
+                } else {
+                    client = runtime;
                 }
             } else if (!client || !isPlausibleClientInstance(client)) {
                 bedrocktools::diagnostics::probe(
@@ -1404,53 +1399,40 @@ void tickDetour(void* actor) {
         }
 
         if (client && isPlausibleClientInstance(client)) {
-            // Independent 250 ms cadence avoids starvation by the update-hook
-            // resolver and prevents actor/vtable scans on every game tick.
+            // Retry the real getter on a bounded cadence even if the update hook
+            // did not run with the authoritative ClientInstance receiver.
             if (shouldProbeLocalPlayerFromTick(client)) {
-                const bool matchesNormalTick = isLocalPlayerTickObject(actor);
-                std::size_t matchedOffset = 0;
-                const bool ownedByClient = !matchesNormalTick &&
-                    clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset);
+                void* getterPlayer = resolveLocalPlayerFromClientInstance(client);
+                if (getterPlayer) local = getterPlayer;
+            }
 
+            // A NormalTick vtable match is not a unique local-player identity:
+            // remote Player instances can share the same inherited implementation.
+            // Only promote a tick actor when the active ClientInstance actually
+            // owns that exact Player pointer.
+            if (!local) {
                 static const auto actorIsPlayerAddress =
                     bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
                 const bool actorClassifierReady = actorIsPlayerAddress &&
                     isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress));
                 const bool isPlayer = actorClassifierReady &&
                     reinterpret_cast<bool (*)(void*)>(actorIsPlayerAddress)(actor);
-
-                if (isPlayer && (matchesNormalTick || ownedByClient)) {
-                    currentLocalPlayer.store(actor, std::memory_order_release);
-                    local = actor;
-                    const char* route = matchesNormalTick
-                        ? "captured_from_normal_tick_vtable" :
-                          "captured_from_clientinstance_player_field";
-                    const std::string details =
-                        std::string("player=") +
-                        std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
-                        "; client_instance=" +
-                        std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
-                        "; actor_classifier=confirmed" +
-                        (ownedByClient
-                            ? std::string("; matched_offset=0x") + [&] {
-                                char buffer[32]{};
-                                std::snprintf(buffer, sizeof(buffer), "%zX", matchedOffset);
-                                return std::string(buffer);
-                              }()
-                            : std::string("; source=validated_NormalTick_vtable_identity"));
-                    bedrocktools::diagnostics::probe(
-                        bedrocktools::diagnostics::Level::Info, "GameHooks",
-                        "verified_local_player", route, details);
-                } else if (matchesNormalTick && !isPlayer) {
-                    static std::atomic_bool rejectedTickCandidate{false};
-                    if (!rejectedTickCandidate.exchange(true, std::memory_order_acq_rel)) {
+                if (isPlayer) {
+                    std::size_t matchedOffset = 0;
+                    if (clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset)) {
+                        currentLocalPlayer.store(actor, std::memory_order_release);
+                        local = actor;
+                        char buffer[32]{};
+                        std::snprintf(buffer, sizeof(buffer), "%zX", matchedOffset);
                         bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Warning, "GameHooks",
-                            "verified_local_player", "normal_tick_candidate_rejected",
-                            std::string("actor=") +
+                            bedrocktools::diagnostics::Level::Info, "GameHooks",
+                            "verified_local_player", "captured_from_clientinstance_player_field",
+                            std::string("player=") +
                                 std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
-                                "; actor_classifier=" +
-                                (actorClassifierReady ? "not_player" : "unavailable"));
+                                "; client_instance=" +
+                                std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
+                                "; matched_offset=0x" + buffer +
+                                "; actor_classifier=confirmed");
                     }
                 }
             }
@@ -1681,15 +1663,28 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
         isPlausibleClientInstance(clientInstance, &trustedVtableEntries);
 
     if (receiverValid) {
+        // Once the SDK current-instance accessor has yielded a validated object,
+        // do not let a signature-pattern hook overwrite it with a different
+        // receiver on every update call.
+        void* acceptedClient = clientInstance;
+        if (g_runtimeClientInstanceTrusted.load(std::memory_order_acquire)) {
+            void* trustedClient = currentClientInstance.load(std::memory_order_acquire);
+            if (trustedClient && isPlausibleClientInstance(trustedClient))
+                acceptedClient = trustedClient;
+        }
         void* previousClientInstance =
-            currentClientInstance.exchange(clientInstance, std::memory_order_acq_rel);
-        if (previousClientInstance != clientInstance)
+            currentClientInstance.exchange(acceptedClient, std::memory_order_acq_rel);
+        if (previousClientInstance != acceptedClient)
             currentLocalPlayer.store(nullptr, std::memory_order_release);
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Info, "GameHooks",
             "client_instance_update_detour", "receiver_valid",
             std::string("receiver=") +
                 std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+                "; accepted_receiver=" +
+                std::to_string(reinterpret_cast<std::uintptr_t>(acceptedClient)) +
+                "; sdk_instance_trusted=" +
+                (g_runtimeClientInstanceTrusted.load(std::memory_order_acquire) ? "yes" : "no") +
                 "; trusted_vtable_entries=" + std::to_string(trustedVtableEntries));
     } else {
         // Never poison the cached ClientInstance (or clear a valid LocalPlayer)
@@ -1929,6 +1924,10 @@ void uninstall() {
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
+    g_runtimeClientInstanceTrusted.store(false, std::memory_order_release);
+    g_nextRuntimeClientProbeNs.store(0, std::memory_order_release);
+    g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
+    g_nextLocalPlayerTickProbeNs.store(0, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
