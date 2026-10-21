@@ -8,6 +8,12 @@ namespace VTable {
 inline constexpr std::size_t ClientInstance_getRegion = 31;
 // Adjacent to getRegion in ClientInstance's virtual interface.
 inline constexpr std::size_t ClientInstance_getLocalPlayer = ClientInstance_getRegion + 1;
+// IClientInstance virtuals after getLocalPlayer: setupPrimaryClientEditorManager,
+// getLocalEditorPlayer, getEditorManager, isPlayerInEditor,
+// getLocalPlayerChangedConnector, getLocalUser, then getCameraActor.
+inline constexpr std::size_t ClientInstance_getCameraActor = ClientInstance_getLocalPlayer + 7;
+// setCameraActor, getListenerState, then getCameraTargetActor.
+inline constexpr std::size_t ClientInstance_getCameraTargetActor = ClientInstance_getLocalPlayer + 10;
 inline constexpr std::size_t BlockSource_getDimensionId = 18;
 inline constexpr std::size_t RenderMaterialGroup_getMaterial = 2;
 inline constexpr std::size_t HoverTextRendererRenderHoverBox = 17;
