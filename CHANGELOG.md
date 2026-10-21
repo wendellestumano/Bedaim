@@ -1,3 +1,11 @@
+## 2026-10-21 — Queued native input and block-hook isolation (experimental)
+
+- Removed GameMode/SurvivalMode destroy/start-stop and build detours from this diagnostic build completely; signature-address equality was insufficient to validate their ABI. Break Indicator now emits no idle render submissions or raw GameMode progress reads when no active validated break session exists.
+- The AutoHit input route now queues a one-shot request and invokes the exact available ClientInputCallbacks method at the beginning of the next validated LocalPlayer::normalTick, instead of calling the input handler synchronously after the previous player tick.
+- LocalPlayer capture now uses the resolved LocalPlayer::normalTick vtable identity plus Actor::isPlayer when available; it no longer requires the extra linear ClientInstance/MinecraftGame ownership scan that could reject a real local player. The live ClientInstance runtime API is preferred over a cached result from an ambiguous signature fallback.
+- Added a per-request identifier and explicit diagnostics for queue acceptance, expiry, receiver mismatch, callback invocation, and whether the native attack detour was reached. A callback invocation is not treated as proof of server damage.
+- AutoTotem remains unregistered. Host regression tests, Android ARM64 packaging, and device verification on Bedrock 26.51 are required. If the crash persists with block hooks disabled, collect the new gameplay log and crash tombstone; the disabled hooks are an isolation step, not a claim the native crash has been conclusively fixed.
+
 ## 2026-10-21 — Block-hook safety and AutoHit pipeline rebuild (experimental)
 
 - Added a guarded local-player fallback: the tick receiver is accepted only when its vtable matches the resolved NormalTick entry and the exact actor pointer is owned by the current ClientInstance or validated MinecraftGame object. Vtable decisions are cached and the ownership probe is rate-limited.

@@ -85,6 +85,7 @@ void AutoHitModule::onInit() {
 }
 
 void AutoHitModule::onEnable() {
+    bedrocktools::core::gamehooks::cancelQueuedAttackInput();
     bedrocktools::core::InventoryAccess::get().initialize();
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_nextAttack = {};
@@ -96,6 +97,7 @@ void AutoHitModule::onEnable() {
 }
 
 void AutoHitModule::onDisable() {
+    bedrocktools::core::gamehooks::cancelQueuedAttackInput();
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_nextAttack = {};
     m_nextNativeRouteProbe = {};
@@ -277,7 +279,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     bool nativeResult = false;
     bool nativeResultUsed = false;
     const bool invoked = inputRoute
-        ? core::gamehooks::invokeAttackInputCallback(client, player)
+        ? core::gamehooks::queueAttackInputCallback(client, player, target)
         : core::gamehooks::attack(gameMode, target, true, &hitPoint, &nativeResult, &nativeResultUsed);
 
     if (!invoked) {
@@ -291,7 +293,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    reportGate(201, inputRoute ? "input_callback_invoked_not_hit_confirmed"
+    reportGate(201, inputRoute ? "input_callback_queued_not_hit_confirmed"
                                : "native_attack_accepted_not_damage_confirmed",
         std::string("weapon=") + bedaim::autohit::weapon::name(weapon) +
         "; cps=" + std::to_string(profile.cps) + "; range=" + std::to_string(maxRange));

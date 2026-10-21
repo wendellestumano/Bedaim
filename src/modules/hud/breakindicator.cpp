@@ -47,7 +47,7 @@ void BreakIndicatorModule::onInit() {
     });
 
     bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([this](auto&) {
-        if (!m_breaking || !m_gameMode) return;
+        if (!enabled || !m_breaking || !m_gameMode) return;
         float progress = *reinterpret_cast<float*>(
             reinterpret_cast<std::uintptr_t>(m_gameMode) +
             bedrocktools::sdk::offsets::GameMode::mDestroyProgress);
@@ -74,7 +74,9 @@ void BreakIndicatorModule::onDisable() {
 }
 
 void BreakIndicatorModule::onFrame() {
-    if (!enabled) return;
+    // Block interaction hooks are disabled during crash isolation. Do not allocate
+    // draw commands every frame when there is no validated active block-break session.
+    if (!enabled || !m_breaking || !m_gameMode) return;
 
     auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastUpdate).count() > 250) {

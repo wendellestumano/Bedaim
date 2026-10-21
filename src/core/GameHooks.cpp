@@ -85,6 +85,17 @@ EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
 std::atomic<void*> currentLocalPlayer = nullptr;
 std::atomic<void*> currentGameMode = nullptr;
+
+enum class PendingAttackInputState : int { Idle = 0, Writing = 1, Pending = 2 };
+std::atomic<int> g_pendingAttackInputState{static_cast<int>(PendingAttackInputState::Idle)};
+std::atomic<void*> g_pendingAttackClient{nullptr};
+std::atomic<void*> g_pendingAttackPlayer{nullptr};
+std::atomic<void*> g_pendingAttackTarget{nullptr};
+std::atomic<std::int64_t> g_pendingAttackQueuedAtNs{0};
+std::atomic<std::uint64_t> g_pendingAttackSequence{0};
+thread_local std::uint64_t g_activeQueuedAttackInputSequence = 0;
+thread_local bool g_queuedAttackObservedNativeAttack = false;
+
 std::atomic<void*> g_localPlayerResolveClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
 bool shouldResolveLocalPlayer(void* client) {
@@ -456,6 +467,73 @@ ClientInputAttackCallbackFn resolveClientInputAttackCallback() {
             "No exact exported supported ClientInputCallbacks button-press symbol resolved; the callback path remains disabled.");
     });
     return clientInputAttackCallback;
+}
+
+void dispatchQueuedAttackInput(void* client, void* expectedLocalPlayer) {
+    int expectedState = static_cast<int>(PendingAttackInputState::Pending);
+    if (!g_pendingAttackInputState.compare_exchange_strong(
+            expectedState, static_cast<int>(PendingAttackInputState::Idle),
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return;
+    }
+
+    const auto sequence = g_pendingAttackSequence.load(std::memory_order_acquire);
+    void* queuedClient = g_pendingAttackClient.exchange(nullptr, std::memory_order_acq_rel);
+    void* queuedPlayer = g_pendingAttackPlayer.exchange(nullptr, std::memory_order_acq_rel);
+    void* queuedTarget = g_pendingAttackTarget.exchange(nullptr, std::memory_order_acq_rel);
+    const auto queuedAtNs = g_pendingAttackQueuedAtNs.exchange(0, std::memory_order_acq_rel);
+    const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    auto drop = [&](const char* reason, const std::string& detail) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "client_input_attack_callback", reason,
+            std::string("request_id=") + std::to_string(sequence) + "; " + detail);
+    };
+
+    if (queuedAtNs == 0 || nowNs < queuedAtNs || nowNs - queuedAtNs > 500000000LL) {
+        drop("queued_request_expired", "request expired before a validated local-player tick");
+        return;
+    }
+    if (!client || !expectedLocalPlayer || queuedClient != client ||
+        queuedPlayer != expectedLocalPlayer ||
+        currentClientInstance.load(std::memory_order_acquire) != client ||
+        currentLocalPlayer.load(std::memory_order_acquire) != expectedLocalPlayer) {
+        drop("queued_request_receiver_mismatch",
+            std::string("queued_client=") +
+                std::to_string(reinterpret_cast<std::uintptr_t>(queuedClient)) +
+            "; live_client=" + std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
+            "; queued_player=" + std::to_string(reinterpret_cast<std::uintptr_t>(queuedPlayer)) +
+            "; live_player=" + std::to_string(reinterpret_cast<std::uintptr_t>(expectedLocalPlayer)) +
+            "; target=" + std::to_string(reinterpret_cast<std::uintptr_t>(queuedTarget)));
+        return;
+    }
+
+    const auto callback = resolveClientInputAttackCallback();
+    if (!callback) {
+        drop("queued_request_symbol_unavailable", "exact ClientInputCallbacks method no longer resolves");
+        return;
+    }
+
+    g_activeQueuedAttackInputSequence = sequence;
+    g_queuedAttackObservedNativeAttack = false;
+    callback(client);
+    const bool nativeAttackObserved = g_queuedAttackObservedNativeAttack;
+    g_activeQueuedAttackInputSequence = 0;
+    g_queuedAttackObservedNativeAttack = false;
+
+    bedrocktools::diagnostics::probe(
+        nativeAttackObserved ? bedrocktools::diagnostics::Level::Info
+                             : bedrocktools::diagnostics::Level::Warning,
+        "GameHooks", "client_input_attack_callback",
+        nativeAttackObserved ? "queued_callback_reached_native_attack"
+                             : "queued_callback_invoked_without_observed_native_attack",
+        std::string("request_id=") + std::to_string(sequence) +
+            "; target=" + std::to_string(reinterpret_cast<std::uintptr_t>(queuedTarget)) +
+            "; callback_invoked=yes; native_attack_hook_observed=" +
+            (nativeAttackObserved ? "yes" : "no") +
+            "; callback invocation alone does not confirm server damage");
 }
 
 void* resolveLoadedClientSupportFunction(const char* name) {
@@ -1380,34 +1458,47 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
 }
 
 void tickDetour(void* actor) {
-    // Recover the local player from the tick receiver only when the normal-tick
-    // vtable and direct ClientInstance/MinecraftGame ownership both validate.
-    // This provides a safe fallback when 26.51 does not export the old getter.
+    // The signature/vtable matcher identifies the LocalPlayer::normalTick implementation.
+    // Resolve ClientInstance through the runtime API instead of trusting the legacy
+    // ClientInstance::getLocalPlayer slot, which returns null on Bedrock 26.51.
+    void* client = bedrocktools::core::gamehooks::clientInstance();
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
-    if (actor && local != actor) {
-        void* client = currentClientInstance.load(std::memory_order_acquire);
-        if (client && isLocalPlayerTickObject(actor) &&
-            shouldProbeLocalPlayerFromTick(client)) {
-            std::size_t matchedOffset = 0;
-            if (clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset)) {
-                currentLocalPlayer.store(actor, std::memory_order_release);
-                local = actor;
-                bedrocktools::diagnostics::probe(
-                    bedrocktools::diagnostics::Level::Info, "GameHooks",
-                    "verified_local_player", "captured_from_normal_tick_owner_match",
-                    std::string("player=") +
-                        std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
-                        "; client_instance=" +
-                        std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
-                        "; owner_offset=" + std::to_string(matchedOffset));
-            }
+
+    if (client && actor && actor != local && isLocalPlayerTickObject(actor)) {
+        // LocalPlayer::normalTick is a stronger identity signal than scanning a
+        // version-sensitive ClientInstance object for a matching raw pointer.
+        // Retain Actor::isPlayer as an independent type check when it is resolved.
+        static const auto actorIsPlayerAddress =
+            bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+        bool typeValidated = false;
+        if (actorIsPlayerAddress &&
+            isMinecraftFunction(reinterpret_cast<const void*>(actorIsPlayerAddress))) {
+            using ActorIsPlayerFn = bool (*)(void*);
+            typeValidated = reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(actor);
+        }
+        if (typeValidated || !actorIsPlayerAddress) {
+            currentLocalPlayer.store(actor, std::memory_order_release);
+            local = actor;
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Info, "GameHooks",
+                "verified_local_player", "captured_from_localplayer_normal_tick_vtable",
+                std::string("player=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                    "; client_instance=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
+                    "; actor_type=" + (typeValidated ? "validated" : "normal_tick_vtable_only"));
         }
     }
 
-    auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     local = currentLocalPlayer.load(std::memory_order_acquire);
     const bool verified = actor && local && actor == local;
     if (verified) {
+        // Apollon's working input path queues the button handler and runs it on
+        // the next engine tick. Calling it after NormalTick can be too late for
+        // the current input/action packet. Consume a pending request before the
+        // game's original LocalPlayer::normalTick work begins.
+        dispatchQueuedAttackInput(client, actor);
+        auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
         LocalPlayerPreTickEvent pre{actorPlayer};
         bus().publish(pre);
         VerifiedLocalPlayerPreTickEvent verifiedPre{actorPlayer};
@@ -1417,6 +1508,7 @@ void tickDetour(void* actor) {
     if (tickOriginal) tickOriginal(actor);
 
     if (verified) {
+        auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
         bedaim::events::VerifiedLocalPlayerTickEvent postTick{actorPlayer};
         bus().publish(postTick);
         LocalPlayerTickEvent localTick{actorPlayer};
@@ -1515,6 +1607,8 @@ bool survivalModeInteractDetour(void* gameMode, void* target, const void* locati
 }
 
 bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound, bool* resultOut) {
+    if (g_activeQueuedAttackInputSequence != 0)
+        g_queuedAttackObservedNativeAttack = true;
     static std::atomic_bool loggedNativeAttack{false};
     if (!loggedNativeAttack.exchange(true, std::memory_order_acq_rel))
         gameHooksLogger().info("Native attack detour received its first call (target={}, resultOut={}, trampoline={}).",
@@ -1720,24 +1814,12 @@ bool install() {
     gameHooksLogger().info(
         "NormalTick hook installed={}, signature={:p}.", normalTickHooked,
         reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::NormalTick)));
-    const bool gameModeStartDestroyBlockHooked = hookBlockSignatureIfSafe(
-        SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour),
-        &gameModeStartDestroyBlockOriginal, "GameMode::startDestroyBlock");
-    const bool survivalModeStartDestroyBlockHooked = hookBlockSignatureIfSafe(
-        SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour),
-        &survivalModeStartDestroyBlockOriginal, "SurvivalMode::startDestroyBlock");
-    gameHooksLogger().info(
-        "Block-start hooks installed safely: GameMode={}, SurvivalMode={}",
-        gameModeStartDestroyBlockHooked, survivalModeStartDestroyBlockHooked);
-    hookBlockSignatureIfSafe(SignatureId::GameModeStopDestroyBlock,
-        reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal,
-        "GameMode::stopDestroyBlock");
-    hookBlockSignatureIfSafe(SignatureId::GameModeStartBuildBlock,
-        reinterpret_cast<void*>(gameModeStartBuildBlockDetour), &gameModeStartBuildBlockOriginal,
-        "GameMode::startBuildBlock");
-    hookBlockSignatureIfSafe(SignatureId::SurvivalModeStartBuildBlock,
-        reinterpret_cast<void*>(survivalModeStartBuildBlockDetour), &survivalModeStartBuildBlockOriginal,
-        "SurvivalMode::startBuildBlock");
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Warning, "GameHooks",
+        "block_interaction_hooks", "disabled_for_crash_isolation",
+        "GameMode/SurvivalMode start/stop-destroy and start-build hooks are intentionally not installed.");
+    gameHooksLogger().warn(
+        "Block interaction hooks disabled for crash isolation; vanilla Minecraft handles block input.");
     const bool gameModeUseItemHooked = hookSignature(
         SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
     const bool survivalModeUseItemHooked = hookSignature(
@@ -1855,7 +1937,24 @@ void uninstall() {
 }
 
 void* clientInstance() {
-    return currentClientInstance.load(std::memory_order_acquire);
+    // Prefer LeviLamina/BedrockTools' live runtime handle; the old update signature
+    // fallback has historically produced ambiguous receivers on this build.
+    auto* runtimeClient = bedrocktools::sdk::ClientInstance::current();
+    if (runtimeClient) {
+        void* candidate = reinterpret_cast<void*>(runtimeClient);
+        std::size_t trustedVtableEntries = 0;
+        if (isPlausibleClientInstance(candidate, &trustedVtableEntries)) {
+            void* previousClient =
+                currentClientInstance.exchange(candidate, std::memory_order_acq_rel);
+            if (previousClient && previousClient != candidate)
+                currentLocalPlayer.store(nullptr, std::memory_order_release);
+            return candidate;
+        }
+    }
+
+    void* cached = currentClientInstance.load(std::memory_order_acquire);
+    std::size_t trustedVtableEntries = 0;
+    return cached && isPlausibleClientInstance(cached, &trustedVtableEntries) ? cached : nullptr;
 }
 
 void* localPlayer() {
@@ -2035,6 +2134,62 @@ bool invokeAttackInputCallback(void* client, void* expectedLocalPlayer) {
         "client_input_attack_callback", "callback_invoked",
         "Normal engine attack-button callback was invoked; invocation alone does not confirm a hit or server damage.");
     return true;
+}
+
+bool queueAttackInputCallback(void* client, void* expectedLocalPlayer, void* target) {
+    if (!inputAttackCallbackAvailable(client, expectedLocalPlayer) || !target) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "client_input_attack_callback", "queue_rejected_unvalidated_context",
+            std::string("client_valid=") + (client ? "yes" : "no") +
+                "; player_valid=" + (expectedLocalPlayer ? "yes" : "no") +
+                "; target_valid=" + (target ? "yes" : "no"));
+        return false;
+    }
+
+    int expectedState = static_cast<int>(PendingAttackInputState::Idle);
+    if (!g_pendingAttackInputState.compare_exchange_strong(
+            expectedState, static_cast<int>(PendingAttackInputState::Writing),
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug, "GameHooks",
+            "client_input_attack_callback", "queue_busy",
+            "An earlier one-shot request has not reached the next verified LocalPlayer tick yet.");
+        return false;
+    }
+
+    const auto sequence = g_pendingAttackSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto queuedAtNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    g_pendingAttackClient.store(client, std::memory_order_relaxed);
+    g_pendingAttackPlayer.store(expectedLocalPlayer, std::memory_order_relaxed);
+    g_pendingAttackTarget.store(target, std::memory_order_relaxed);
+    g_pendingAttackQueuedAtNs.store(queuedAtNs, std::memory_order_relaxed);
+    g_pendingAttackInputState.store(
+        static_cast<int>(PendingAttackInputState::Pending), std::memory_order_release);
+
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "GameHooks",
+        "client_input_attack_callback", "attack_input_queued_for_next_local_tick",
+        std::string("request_id=") + std::to_string(sequence) +
+            "; target=" + std::to_string(reinterpret_cast<std::uintptr_t>(target)) +
+            "; dispatch=before_original_LocalPlayer::normalTick");
+    return true;
+}
+
+void cancelQueuedAttackInput() {
+    int state = g_pendingAttackInputState.exchange(
+        static_cast<int>(PendingAttackInputState::Idle), std::memory_order_acq_rel);
+    if (state == static_cast<int>(PendingAttackInputState::Pending) ||
+        state == static_cast<int>(PendingAttackInputState::Writing)) {
+        g_pendingAttackClient.store(nullptr, std::memory_order_release);
+        g_pendingAttackPlayer.store(nullptr, std::memory_order_release);
+        g_pendingAttackTarget.store(nullptr, std::memory_order_release);
+        g_pendingAttackQueuedAtNs.store(0, std::memory_order_release);
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug, "GameHooks",
+            "client_input_attack_callback", "pending_request_cancelled");
+    }
 }
 
 bool attackAvailable(void* gameMode) {

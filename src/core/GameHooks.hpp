@@ -15,7 +15,11 @@ void* gameModeForPlayer(void* player);
 bool attackAvailable(void* gameMode);
 // Uses only an exact exported ClientInputCallbacks symbol and validates that the receiver is the current ClientInstance owning expectedLocalPlayer.
 bool inputAttackCallbackAvailable(void* clientInstance, void* expectedLocalPlayer);
-// Invokes the normal engine attack-button callback; true means invoked, not that an attack or damage was confirmed.
+// Queue the normal engine button handler for the next validated LocalPlayer::normalTick, matching
+// the engine-tick scheduling used by established Bedrock clients. true means queued, not hit-confirmed.
+bool queueAttackInputCallback(void* clientInstance, void* expectedLocalPlayer, void* target);
+void cancelQueuedAttackInput();
+// Legacy immediate invocation retained for diagnostics only; it does not guarantee an attack or damage.
 bool invokeAttackInputCallback(void* clientInstance, void* expectedLocalPlayer);
 // The public three-argument route consumes hitPosition; the guarded four-argument route consumes nativeResultOut.
 // The four-argument C++ overload preserves existing module call sites; the extended overload exposes the native output flag.
