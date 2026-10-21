@@ -9,7 +9,7 @@ constexpr bool confirmedByNativeRoute(bool observerReached,
                                      bool requiresOutputFlag,
                                      bool outputFlagUsed,
                                      bool outputFlagTrue,
-                                     bool validatedPublicReturn) noexcept {
+                                     bool validatedPublicReturn = false) noexcept {
     if (requiresOutputFlag) {
         return observerReached && internalNativeReturn && outputFlagUsed && outputFlagTrue;
     }
