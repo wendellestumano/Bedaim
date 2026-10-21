@@ -430,21 +430,21 @@ void tickDetour(void* actor) {
     bus().publish(event);
 }
 
-bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
+[[maybe_unused]] bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
     GameModeActionScope scope{GameModeType::GameMode, gameMode};
     const bool result = gameModeStartDestroyBlockOriginal ? gameModeStartDestroyBlockOriginal(gameMode, position, face, destroyed) : false;
     scope.publish(GameModeAction::StartDestroyBlock);
     return result;
 }
 
-bool survivalModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
+[[maybe_unused]] bool survivalModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
     GameModeActionScope scope{GameModeType::SurvivalMode, gameMode};
     const bool result = survivalModeStartDestroyBlockOriginal ? survivalModeStartDestroyBlockOriginal(gameMode, position, face, destroyed) : false;
     scope.publish(GameModeAction::StartDestroyBlock);
     return result;
 }
 
-void gameModeStopDestroyBlockDetour(void* gameMode, const void* position) {
+[[maybe_unused]] void gameModeStopDestroyBlockDetour(void* gameMode, const void* position) {
     if (gameMode) currentGameMode.store(gameMode, std::memory_order_release);
     const auto modeKind = attackKindFor(gameMode) == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
     if (gameModeStopDestroyBlockOriginal) gameModeStopDestroyBlockOriginal(gameMode, position);
@@ -452,13 +452,13 @@ void gameModeStopDestroyBlockDetour(void* gameMode, const void* position) {
     bus().publish(event);
 }
 
-void gameModeStartBuildBlockDetour(void* gameMode, const void* position, std::uint8_t face) {
+[[maybe_unused]] void gameModeStartBuildBlockDetour(void* gameMode, const void* position, std::uint8_t face) {
     GameModeActionScope scope{GameModeType::GameMode, gameMode};
     if (gameModeStartBuildBlockOriginal) gameModeStartBuildBlockOriginal(gameMode, position, face);
     scope.publish(GameModeAction::StartBuildBlock);
 }
 
-void survivalModeStartBuildBlockDetour(void* gameMode, const void* position, std::uint8_t face) {
+[[maybe_unused]] void survivalModeStartBuildBlockDetour(void* gameMode, const void* position, std::uint8_t face) {
     GameModeActionScope scope{GameModeType::SurvivalMode, gameMode};
     if (survivalModeStartBuildBlockOriginal) survivalModeStartBuildBlockOriginal(gameMode, position, face);
     scope.publish(GameModeAction::StartBuildBlock);
