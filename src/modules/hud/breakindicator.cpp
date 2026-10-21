@@ -31,6 +31,7 @@ BreakIndicatorModule::BreakIndicatorModule()
 
 void BreakIndicatorModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>([this](auto& event) {
+        if (!enabled || !event.gameMode) return;
         if (event.action == bedrocktools::events::GameModeAction::StartDestroyBlock) {
             m_gameMode = event.gameMode;
             m_breaking = m_gameMode != nullptr;
