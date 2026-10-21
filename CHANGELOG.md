@@ -1,3 +1,10 @@
+## 2026-10-21 — AutoHit + block-break crash guard (experimental)
+
+- Use the precise Bedrock 1.26.51.01 GameModeStartDestroyBlock signature, which matched once at 0xF8A0DA8 in the analyzed libminecraftpe.so; the old main-branch pattern matched GameModeAttack at 0xF89FA58.
+- Guard all block destroy/build hooks against address collisions with resolved attack signatures; emit skipped_attack_signature_collision instead of applying an ABI-incompatible detour.
+- Protect Break Indicator from disabled EventBus callbacks and validate the readable mapping before copying version-sensitive GameMode::mDestroyProgress data.
+- Preserve the experimental AutoHit local-player fallback and native-route diagnostics. AutoHit still needs in-game verification; the current changes do not claim an end-to-end attack fix.
+
 ## 2026-10-20 — AutoHit target-filter and route-failure attribution (experimental)
 
 - Added a throttled per-filter target-scan breakdown for the no-target state, including player/mob toggles, creative/spectator filtering, whitelist, invisibility, geometry, line of sight, range, FOV, and missing native-filter availability.

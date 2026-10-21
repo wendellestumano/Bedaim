@@ -6,6 +6,75 @@
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
 #include <cstdint>
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <iterator>
+#include <limits>
+#include <vector>
+
+
+namespace {
+struct ReadableRegion {
+    std::uintptr_t begin{};
+    std::uintptr_t end{};
+};
+
+bool isReadableRange(const void* pointer, std::size_t size) {
+    if (!pointer || size == 0) return false;
+    const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
+    if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
+    const auto end = begin + size;
+
+    // The GameMode layout is version-sensitive. Refresh a thread-local mapping
+    // snapshot at a bounded cadence, and fail closed if procfs cannot be read.
+    thread_local std::vector<ReadableRegion> readableRegions;
+    thread_local std::chrono::steady_clock::time_point mapsRefreshed{};
+    thread_local bool mapsCacheValid = false;
+    const auto now = std::chrono::steady_clock::now();
+
+    if (!mapsCacheValid || now < mapsRefreshed ||
+        now - mapsRefreshed > std::chrono::milliseconds(250)) {
+        std::vector<ReadableRegion> refreshed;
+        std::FILE* maps = std::fopen("/proc/self/maps", "r");
+        if (!maps) {
+            readableRegions.clear();
+            mapsCacheValid = false;
+            return false;
+        }
+        char line[512]{};
+        while (std::fgets(line, sizeof(line), maps)) {
+            unsigned long long regionBegin = 0, regionEnd = 0;
+            char permissions[5]{};
+            if (std::sscanf(line, "%llx-%llx %4s", &regionBegin, &regionEnd,
+                            permissions) == 3 &&
+                permissions[0] == 'r' && regionEnd > regionBegin) {
+                refreshed.push_back({static_cast<std::uintptr_t>(regionBegin),
+                                     static_cast<std::uintptr_t>(regionEnd)});
+            }
+        }
+        std::fclose(maps);
+        if (refreshed.empty()) {
+            readableRegions.clear();
+            mapsCacheValid = false;
+            return false;
+        }
+        readableRegions.swap(refreshed);
+        mapsRefreshed = now;
+        mapsCacheValid = true;
+    }
+
+    const auto it = std::upper_bound(
+        readableRegions.begin(), readableRegions.end(), begin,
+        [](std::uintptr_t address, const ReadableRegion& region) {
+            return address < region.begin;
+        });
+    if (it == readableRegions.begin()) return false;
+    const auto& region = *std::prev(it);
+    return begin >= region.begin && end <= region.end;
+}
+} // namespace
 
 static void indicatorHSVtoRGB(float h, float s, float v, float& out_r, float& out_g, float& out_b) {
     if (s == 0.0f) { out_r = out_g = out_b = v; return; }
@@ -31,6 +100,14 @@ BreakIndicatorModule::BreakIndicatorModule()
 
 void BreakIndicatorModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>([this](auto& event) {
+        // EventBus subscriptions survive module disablement; reset state here.
+        if (!enabled) {
+            m_gameMode = nullptr;
+            m_breaking = false;
+            m_progress = 0.0f;
+            return;
+        }
+
         if (event.action == bedrocktools::events::GameModeAction::StartDestroyBlock) {
             m_gameMode = event.gameMode;
             m_breaking = m_gameMode != nullptr;
@@ -46,12 +123,31 @@ void BreakIndicatorModule::onInit() {
     });
 
     bedrocktools::events::bus().subscribe<bedaim::events::VerifiedLocalPlayerTickEvent>([this](auto&) {
-        if (!m_breaking || !m_gameMode) return;
-        float progress = *reinterpret_cast<float*>(
-            reinterpret_cast<std::uintptr_t>(m_gameMode) +
-            bedrocktools::sdk::offsets::GameMode::mDestroyProgress);
-        if (std::isfinite(progress) && progress > 0.0f) {
-            m_progress = progress > 1.0f ? 1.0f : progress;
+        if (!enabled || !m_breaking || !m_gameMode) return;
+
+        const auto gameModeAddress = reinterpret_cast<std::uintptr_t>(m_gameMode);
+        constexpr auto progressOffset =
+            bedrocktools::sdk::offsets::GameMode::mDestroyProgress;
+        if (!isReadableRange(m_gameMode, sizeof(void*)) ||
+            gameModeAddress > std::numeric_limits<std::uintptr_t>::max() - progressOffset) {
+            m_progress = 0.0f;
+            return;
+        }
+
+        const auto* progressAddress =
+            reinterpret_cast<const void*>(gameModeAddress + progressOffset);
+        float progress = 0.0f;
+        if (!isReadableRange(progressAddress, sizeof(progress))) {
+            // Invalid/stale native state is optional HUD data: never dereference
+            // it unless the complete range is currently mapped as readable.
+            m_progress = 0.0f;
+            m_lastUpdate = std::chrono::steady_clock::now();
+            return;
+        }
+        std::memcpy(&progress, progressAddress, sizeof(progress));
+
+        if (std::isfinite(progress) && progress >= 0.0f && progress <= 1.05f) {
+            m_progress = std::clamp(progress, 0.0f, 1.0f);
         } else {
             m_progress = 0.0f;
         }
