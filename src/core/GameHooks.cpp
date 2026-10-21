@@ -95,6 +95,22 @@ bool shouldResolveLocalPlayer(void* client) {
  auto due = g_nextLocalPlayerResolveNs.load(std::memory_order_acquire);
  for (;;) { if (now < due) return false; if (g_nextLocalPlayerResolveNs.compare_exchange_weak(due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire)) return true; }
 }
+std::atomic<void*> g_localPlayerTickProbeClient{nullptr};
+std::atomic<std::int64_t> g_nextLocalPlayerTickProbeNs{0};
+bool shouldProbeLocalPlayerFromTick(void* client) {
+    if (!client) return false;
+    const void* old = g_localPlayerTickProbeClient.exchange(client, std::memory_order_acq_rel);
+    if (old != client) g_nextLocalPlayerTickProbeNs.store(0, std::memory_order_release);
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto due = g_nextLocalPlayerTickProbeNs.load(std::memory_order_acquire);
+    for (;;) {
+        if (now < due) return false;
+        if (g_nextLocalPlayerTickProbeNs.compare_exchange_weak(
+                due, now + 250000000, std::memory_order_acq_rel, std::memory_order_acquire))
+            return true;
+    }
+}
 std::array<bedrocktools::hooks::Handle, 26> handles{};
 std::size_t handleCount = 0;
 std::mutex installMutex;
@@ -131,6 +147,31 @@ bool hookSignature(SignatureId id, void* detour, Function** original) {
     if (!handle) return false;
     if (handleCount < handles.size()) handles[handleCount++] = handle;
     return true;
+}
+
+template <class Function>
+bool hookBlockSignatureIfSafe(SignatureId id, void* detour, Function** original, const char* methodName) {
+    const auto address = bedrocktools::memory::resolve(id);
+    if (!address) return false;
+    constexpr SignatureId attackIds[] = {
+        SignatureId::GameModeAttack,
+        SignatureId::SurvivalModeAttack,
+        SignatureId::GameModeAttackInternal
+    };
+    for (const auto attackId : attackIds) {
+        const auto attackAddress = bedrocktools::memory::resolve(attackId);
+        if (attackAddress != 0 && address == attackAddress) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Error, "GameHooks",
+                "block_interaction_hooks", "skipped_attack_signature_collision",
+                std::string("method=") + methodName +
+                "; block hook target collides with attack signature id=" +
+                std::to_string(static_cast<unsigned int>(attackId)) +
+                "; skipped to preserve native ABI");
+            return false;
+        }
+    }
+    return hookSignature(id, detour, original);
 }
 
 class GameModeActionScope {
@@ -1033,7 +1074,6 @@ std::string versionDetour(void* self) {
 
 bool isLocalPlayerTickObject(void* actor) {
     if (!actor || !isReadableMemory(actor, sizeof(void*))) return false;
-
     void** vtable = nullptr;
     std::memcpy(&vtable, actor, sizeof(vtable));
     if (!vtable || !isReadableMemory(vtable, sizeof(void*) * 64)) return false;
@@ -1042,65 +1082,65 @@ bool isLocalPlayerTickObject(void* actor) {
     if (normalTick == 0 || !isMinecraftFunction(reinterpret_cast<const void*>(normalTick)))
         return false;
 
-    // Prefer exact identity: it is cheap and avoids canonicalizing every vtable
-    // entry on the hot path. Some ARM64 builds place a short B-branch veneer in
-    // the vtable, however, so exact equality alone can reject the actual
-    // LocalPlayer vtable even though the veneer resolves to the scanned method.
+    static std::mutex cacheMutex;
+    static std::unordered_map<void**, bool> cache;
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        const auto it = cache.find(vtable);
+        if (it != cache.end()) return it->second;
+    }
+
+    bool matched = false;
+    std::size_t matchedSlot = 0;
     for (std::size_t i = 0; i < 64; ++i) {
         std::uintptr_t entry = 0;
         std::memcpy(&entry, vtable + i, sizeof(entry));
-        if (entry == normalTick) return true;
-    }
-
-    const auto canonicalNormalTick = canonicalArm64Entry(normalTick);
-    if (!canonicalNormalTick) return false;
-    for (std::size_t i = 0; i < 64; ++i) {
-        std::uintptr_t entry = 0;
-        std::memcpy(&entry, vtable + i, sizeof(entry));
-        if (!entry || entry == normalTick) continue;
-        if (canonicalArm64Entry(entry) == canonicalNormalTick) {
-            static std::atomic_bool loggedThunkMatch{false};
-            if (!loggedThunkMatch.exchange(true, std::memory_order_acq_rel)) {
-                bedrocktools::diagnostics::probe(
-                    bedrocktools::diagnostics::Level::Info, "GameHooks",
-                    "verified_local_player", "captured_from_normal_tick_thunk",
-                    std::string("vtable_slot=") + std::to_string(i));
-            }
-            return true;
+        if (entry == normalTick) {
+            matched = true;
+            matchedSlot = i;
+            break;
         }
     }
-
-    static std::atomic_bool loggedVtableMismatch{false};
-    if (!loggedVtableMismatch.exchange(true, std::memory_order_acq_rel)) {
-        // Diagnostic-only: sample the first 64 entries so version drift can be
-        // investigated without accepting an unverified LocalPlayer vtable.
-        std::string detail = std::string("actor=") +
-            std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
-            ";vtable=" + std::to_string(reinterpret_cast<std::uintptr_t>(vtable)) +
-            ";normal_tick=" + std::to_string(normalTick) +
-            ";canonical_tick=" + std::to_string(canonicalNormalTick) + ";entries=";
-        std::size_t reported = 0;
-        for (std::size_t i = 0; i < 64; ++i) {
-            std::uintptr_t entry = 0;
-            std::memcpy(&entry, vtable + i, sizeof(entry));
-            if (!entry) continue;
-            const auto canonical = canonicalArm64Entry(entry);
-            if (!isMinecraftFunction(reinterpret_cast<const void*>(entry)) &&
-                canonical == entry) continue;
-            if (reported++) detail += ",";
-            detail += std::to_string(i) + ":" + std::to_string(entry) +
-                "->" + std::to_string(canonical);
-            if (detail.size() > 1800) {
-                detail += ",truncated";
-                break;
+    if (!matched) {
+        const auto canonicalNormalTick = canonicalArm64Entry(normalTick);
+        if (canonicalNormalTick) {
+            for (std::size_t i = 0; i < 64; ++i) {
+                std::uintptr_t entry = 0;
+                std::memcpy(&entry, vtable + i, sizeof(entry));
+                if (entry && entry != normalTick &&
+                    canonicalArm64Entry(entry) == canonicalNormalTick) {
+                    matched = true;
+                    matchedSlot = i;
+                    break;
+                }
             }
         }
-        if (reported == 0) detail += "none-classified-as-minecraft";
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Warning, "GameHooks",
-            "verified_local_player", "normal_tick_vtable_mismatch", detail);
     }
-    return false;
+
+    {
+        std::lock_guard<std::mutex> lock(cacheMutex);
+        cache.emplace(vtable, matched);
+    }
+    if (matched) {
+        static std::atomic_bool loggedMatch{false};
+        if (!loggedMatch.exchange(true, std::memory_order_acq_rel)) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Info, "GameHooks",
+                "verified_local_player", "normal_tick_vtable_match",
+                std::string("vtable_slot=") + std::to_string(matchedSlot));
+        }
+    } else {
+        static std::atomic_bool loggedMismatch{false};
+        if (!loggedMismatch.exchange(true, std::memory_order_acq_rel)) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                "verified_local_player", "normal_tick_vtable_mismatch",
+                std::string("actor=") + std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                ";vtable=" + std::to_string(reinterpret_cast<std::uintptr_t>(vtable)) +
+                ";normal_tick=" + std::to_string(normalTick));
+        }
+    }
+    return matched;
 }
 
 bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::size_t* matchedOffset) {
@@ -1114,7 +1154,10 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
     // the live ClientInstance object.
     void** clientVtable = nullptr;
     std::memcpy(&clientVtable, clientInstance, sizeof(clientVtable));
-    if (!clientVtable || !isReadableMemory(clientVtable, sizeof(void*) * 32)) return false;
+    constexpr std::size_t minecraftGameSlot =
+        bedrocktools::sdk::offsets::VTable::ClientInstanceGetMinecraftGame;
+    if (!clientVtable ||
+        !isReadableMemory(clientVtable, sizeof(void*) * (minecraftGameSlot + 1))) return false;
 
     bool trustedClientVtable = false;
     for (std::size_t i = 0; i < 32; ++i) {
@@ -1144,12 +1187,11 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
     // candidate pointer is dereferenced or called.
     const auto scanObjectForExactPlayerPointer = [&](void* object, std::size_t scanLimit,
                                                         std::size_t* foundOffset) {
-        if (!object || !isReadableMemory(object, sizeof(void*))) return false;
+        if (!object || scanLimit < sizeof(void*) || !isReadableMemory(object, scanLimit)) return false;
         const auto base = reinterpret_cast<std::uintptr_t>(object);
+        if (base > std::numeric_limits<std::uintptr_t>::max() - scanLimit) return false;
         for (std::size_t offset = sizeof(void*); offset < scanLimit; offset += alignof(void*)) {
-            if (base > std::numeric_limits<std::uintptr_t>::max() - offset) break;
             const auto* field = reinterpret_cast<const void*>(base + offset);
-            if (!isReadableMemory(field, sizeof(void*))) continue;
             void* value = nullptr;
             std::memcpy(&value, field, sizeof(value));
             if (value != actor) continue;
@@ -1167,8 +1209,15 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
     // than storing the pointer directly on ClientInstance. This is an existing,
     // version-profiled virtual accessor (slot 83 in Core.hpp), not a guessed
     // LocalPlayer getter. Validate the returned object before comparing its fields.
+    std::uintptr_t minecraftGameGetter = 0;
+    std::memcpy(&minecraftGameGetter, clientVtable + minecraftGameSlot, sizeof(minecraftGameGetter));
+    const auto canonicalMinecraftGameGetter = canonicalArm64Entry(minecraftGameGetter);
+    const bool minecraftGameGetterTrusted =
+        (minecraftGameGetter && isMinecraftFunction(reinterpret_cast<const void*>(minecraftGameGetter))) ||
+        (canonicalMinecraftGameGetter && canonicalMinecraftGameGetter != minecraftGameGetter &&
+         isMinecraftFunction(reinterpret_cast<const void*>(canonicalMinecraftGameGetter)));
     auto* sdkClient = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-    void* minecraftGame = sdkClient->minecraftGame();
+    void* minecraftGame = minecraftGameGetterTrusted ? sdkClient->minecraftGame() : nullptr;
     if (minecraftGame && minecraftGame != clientInstance &&
         isReadableMemory(minecraftGame, sizeof(void*))) {
         void** gameVtable = nullptr;
@@ -1331,22 +1380,44 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
 }
 
 void tickDetour(void* actor) {
-    // Per-actor hook: cached identity comparison only; never scan ClientInstance here.
-    auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    // Recover the local player from the tick receiver only when the normal-tick
+    // vtable and direct ClientInstance/MinecraftGame ownership both validate.
+    // This provides a safe fallback when 26.51 does not export the old getter.
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
+    if (actor && local != actor) {
+        void* client = currentClientInstance.load(std::memory_order_acquire);
+        if (client && isLocalPlayerTickObject(actor) &&
+            shouldProbeLocalPlayerFromTick(client)) {
+            std::size_t matchedOffset = 0;
+            if (clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset)) {
+                currentLocalPlayer.store(actor, std::memory_order_release);
+                local = actor;
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info, "GameHooks",
+                    "verified_local_player", "captured_from_normal_tick_owner_match",
+                    std::string("player=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                        "; client_instance=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(client)) +
+                        "; owner_offset=" + std::to_string(matchedOffset));
+            }
+        }
+    }
+
+    auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    local = currentLocalPlayer.load(std::memory_order_acquire);
     const bool verified = actor && local && actor == local;
     if (verified) {
         LocalPlayerPreTickEvent pre{actorPlayer};
         bus().publish(pre);
-        VerifiedLocalPlayerPreTickEvent verifiedPre{reinterpret_cast<bedrocktools::sdk::Player*>(local)};
+        VerifiedLocalPlayerPreTickEvent verifiedPre{actorPlayer};
         bus().publish(verifiedPre);
     }
 
     if (tickOriginal) tickOriginal(actor);
 
     if (verified) {
-        bedaim::events::VerifiedLocalPlayerTickEvent postTick{
-            reinterpret_cast<bedrocktools::sdk::Player*>(local)};
+        bedaim::events::VerifiedLocalPlayerTickEvent postTick{actorPlayer};
         bus().publish(postTick);
         LocalPlayerTickEvent localTick{actorPlayer};
         bus().publish(localTick);
@@ -1558,7 +1629,9 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
     const bool result = clientUpdateOriginal
         ? clientUpdateOriginal(clientInstance, value) : false;
 
-    if (receiverValid && shouldResolveLocalPlayer(clientInstance)) {
+    if (receiverValid &&
+        !currentLocalPlayer.load(std::memory_order_acquire) &&
+        shouldResolveLocalPlayer(clientInstance)) {
         // Resolve GameMode from a verified LocalPlayer and install the attack
         // observer at the public adapter's validated implementation target.
         // This happens independently of AutoHit being enabled, preserving real
@@ -1647,31 +1720,24 @@ bool install() {
     gameHooksLogger().info(
         "NormalTick hook installed={}, signature={:p}.", normalTickHooked,
         reinterpret_cast<void*>(bedrocktools::memory::resolve(SignatureId::NormalTick)));
-    const auto gameModeAttackEntry = bedrocktools::memory::resolve(SignatureId::GameModeAttack);
-    const auto gameModeStartDestroyBlockEntry = bedrocktools::memory::resolve(SignatureId::GameModeStartDestroyBlock);
-    const bool gameModeStartDestroyBlockCollision =
-        gameModeStartDestroyBlockEntry != 0 && gameModeStartDestroyBlockEntry == gameModeAttackEntry;
-    const bool gameModeStartDestroyBlockHooked = !gameModeStartDestroyBlockCollision && hookSignature(
-        SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
-    if (gameModeStartDestroyBlockCollision)
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
-            "GameHooks", "start_destroy_block_hook", "skipped_attack_signature_collision");
-
-    const auto survivalModeAttackEntry = bedrocktools::memory::resolve(SignatureId::SurvivalModeAttack);
-    const auto survivalModeStartDestroyBlockEntry = bedrocktools::memory::resolve(SignatureId::SurvivalModeStartDestroyBlock);
-    const bool survivalModeStartDestroyBlockCollision =
-        survivalModeStartDestroyBlockEntry != 0 && survivalModeStartDestroyBlockEntry == survivalModeAttackEntry;
-    const bool survivalModeStartDestroyBlockHooked = !survivalModeStartDestroyBlockCollision && hookSignature(
-        SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour), &survivalModeStartDestroyBlockOriginal);
-    if (survivalModeStartDestroyBlockCollision)
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Error,
-            "GameHooks", "survival_start_destroy_block_hook", "skipped_attack_signature_collision");
+    const bool gameModeStartDestroyBlockHooked = hookBlockSignatureIfSafe(
+        SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour),
+        &gameModeStartDestroyBlockOriginal, "GameMode::startDestroyBlock");
+    const bool survivalModeStartDestroyBlockHooked = hookBlockSignatureIfSafe(
+        SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour),
+        &survivalModeStartDestroyBlockOriginal, "SurvivalMode::startDestroyBlock");
     gameHooksLogger().info(
-        "Block-start hooks: GameMode={}, SurvivalMode={}",
+        "Block-start hooks installed safely: GameMode={}, SurvivalMode={}",
         gameModeStartDestroyBlockHooked, survivalModeStartDestroyBlockHooked);
-    hookSignature(SignatureId::GameModeStopDestroyBlock, reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal);
-    hookSignature(SignatureId::GameModeStartBuildBlock, reinterpret_cast<void*>(gameModeStartBuildBlockDetour), &gameModeStartBuildBlockOriginal);
-    hookSignature(SignatureId::SurvivalModeStartBuildBlock, reinterpret_cast<void*>(survivalModeStartBuildBlockDetour), &survivalModeStartBuildBlockOriginal);
+    hookBlockSignatureIfSafe(SignatureId::GameModeStopDestroyBlock,
+        reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal,
+        "GameMode::stopDestroyBlock");
+    hookBlockSignatureIfSafe(SignatureId::GameModeStartBuildBlock,
+        reinterpret_cast<void*>(gameModeStartBuildBlockDetour), &gameModeStartBuildBlockOriginal,
+        "GameMode::startBuildBlock");
+    hookBlockSignatureIfSafe(SignatureId::SurvivalModeStartBuildBlock,
+        reinterpret_cast<void*>(survivalModeStartBuildBlockDetour), &survivalModeStartBuildBlockOriginal,
+        "SurvivalMode::startBuildBlock");
     const bool gameModeUseItemHooked = hookSignature(
         SignatureId::GameModeUseItem, reinterpret_cast<void*>(gameModeUseItemDetour), &gameModeUseItemOriginal);
     const bool survivalModeUseItemHooked = hookSignature(
@@ -1944,13 +2010,12 @@ bool useItem(void* player, const void* itemStack) {
 
 bool inputAttackCallbackAvailable(void* client, void* expectedLocalPlayer) {
     if (!client || !expectedLocalPlayer) return false;
-    auto* current = bedrocktools::sdk::ClientInstance::current();
-    if (!current || reinterpret_cast<void*>(current) != client) return false;
 
-    // Resolve the local player from this exact current ClientInstance. Never call
-    // the input callback with a stale or foreign receiver from a previous world.
-    void* livePlayer = localPlayer();
-    if (!livePlayer || livePlayer != expectedLocalPlayer) return false;
+    // Both pointers have provenance from live detours: the client is accepted only
+    // by clientUpdateDetour and the player only after the tick-vtable/owner checks.
+    // Avoid invoking the version-sensitive getLocalPlayer getter again on 26.51.
+    if (currentClientInstance.load(std::memory_order_acquire) != client) return false;
+    if (currentLocalPlayer.load(std::memory_order_acquire) != expectedLocalPlayer) return false;
     return resolveClientInputAttackCallback() != nullptr;
 }
 

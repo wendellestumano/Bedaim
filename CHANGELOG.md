@@ -1,3 +1,11 @@
+## 2026-10-21 — Block-hook safety and AutoHit pipeline rebuild (experimental)
+
+- Added a guarded local-player fallback: the tick receiver is accepted only when its vtable matches the resolved NormalTick entry and the exact actor pointer is owned by the current ClientInstance or validated MinecraftGame object. Vtable decisions are cached and the ownership probe is rate-limited.
+- Once the local player is captured, GameHooks stops repeatedly retrying the version-sensitive ClientInstance getter every 250 ms.
+- Every destroy/build block hook now refuses to install when its resolved entry collides with a public, survival, or internal attack signature. The Bedrock 26.51-specific start-destroy signature remains in use.
+- Rebuilt AutoHit's core decision path around weapon eligibility, a fresh target snapshot, crosshair/reach/CPS gates, and the exact normal engine input callback first. The validated native GameMode route remains a throttled fallback; AutoTotem stays unregistered.
+- Host regression tests, Android ARM64 packaging, and in-game verification on Bedrock 26.51 are still required. Build success alone does not prove an attack registers or that the reported crash is eliminated.
+
 ## 2026-10-21 — AutoHit normal input-callback experiment
 
 - Added an exact-export resolver for supported ClientInputCallbacks attack-button handlers (newer handleBuildOrAttackOrBlockSelectButtonPress and older destroy/attack variants). No hard-coded address or guessed vtable slot is used.
