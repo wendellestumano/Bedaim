@@ -1259,35 +1259,125 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
         }
     }
 
-    // The supported ClientInstance interface places getLocalPlayer immediately
-    // after getRegion. Validate the object/vtable storage before reading slot 32.
+    // First look for the version-specific getter signature only if that exact
+    // implementation is also present in this ClientInstance's own vtable near
+    // the documented getRegion/getLocalPlayer range. This rejects a signature
+    // false-positive in an unrelated JNI/helper function without calling it.
     void** vtable = nullptr;
     std::memcpy(&vtable, clientInstance, sizeof(vtable));
     constexpr std::size_t localPlayerSlot =
         bedrocktools::sdk::offsets::VTable::ClientInstance_getLocalPlayer;
-    void* nativeGetter = nullptr;
-    if (vtable && isReadableMemory(vtable, sizeof(void*) * (localPlayerSlot + 1))) {
-        std::memcpy(&nativeGetter, vtable + localPlayerSlot, sizeof(nativeGetter));
+    constexpr std::size_t getterSearchRadius = 6;
+    const std::size_t firstGetterSlot =
+        localPlayerSlot > getterSearchRadius ? localPlayerSlot - getterSearchRadius : 0;
+    const std::size_t lastGetterSlot = localPlayerSlot + getterSearchRadius;
+    const auto getterSignature =
+        bedrocktools::memory::resolve(SignatureId::ClientInstanceGetLocalPlayer);
+    std::uintptr_t matchedGetter = 0;
+    std::size_t matchedGetterSlot = std::numeric_limits<std::size_t>::max();
+    std::size_t getterMatches = 0;
+    const bool vtableReadable = vtable &&
+        isReadableMemory(vtable, sizeof(void*) * (lastGetterSlot + 1));
+    if (vtableReadable && getterSignature &&
+        isMinecraftFunction(reinterpret_cast<const void*>(getterSignature))) {
+        const auto canonicalSignature = canonicalArm64Entry(getterSignature);
+        for (std::size_t slot = firstGetterSlot; slot <= lastGetterSlot; ++slot) {
+            std::uintptr_t entry = 0;
+            std::memcpy(&entry, vtable + slot, sizeof(entry));
+            if (!entry || !isMinecraftFunction(reinterpret_cast<const void*>(entry)))
+                continue;
+            const bool sameImplementation =
+                entry == getterSignature ||
+                canonicalArm64Entry(entry) == canonicalSignature ||
+                boundedArm64BranchReaches(entry, getterSignature);
+            if (!sameImplementation) continue;
+            ++getterMatches;
+            matchedGetter = entry;
+            matchedGetterSlot = slot;
+        }
     }
 
-    bool vtableGetterCallable = nativeGetter && isMinecraftFunction(nativeGetter);
-    if (!vtableGetterCallable && nativeGetter) {
-        const auto canonical = canonicalArm64Entry(reinterpret_cast<std::uintptr_t>(nativeGetter));
-        vtableGetterCallable = canonical && canonical != reinterpret_cast<std::uintptr_t>(nativeGetter) &&
-            isMinecraftFunction(reinterpret_cast<const void*>(canonical));
-        if (vtableGetterCallable) nativeGetter = reinterpret_cast<void*>(canonical);
-    }
-
-    if (vtableGetterCallable) {
-        void* candidate = reinterpret_cast<GetLocalPlayerFn>(nativeGetter)(clientInstance);
-        if (acceptCandidate(candidate, "clientinstance_vtable_getter")) return candidate;
+    if (getterMatches == 1 && matchedGetter) {
+        const bool slotMatchesDocumented =
+            matchedGetterSlot == localPlayerSlot;
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "GameHooks",
+            "verified_local_player", "getter_signature_confirmed_in_vtable",
+            std::string("slot=") + std::to_string(matchedGetterSlot) +
+                "; documented_slot=" + std::to_string(localPlayerSlot) +
+                "; slot_shift=" +
+                std::to_string(static_cast<long long>(matchedGetterSlot) -
+                               static_cast<long long>(localPlayerSlot)));
+        void* candidate = reinterpret_cast<GetLocalPlayerFn>(
+            reinterpret_cast<void*>(matchedGetter))(clientInstance);
+        if (acceptCandidate(candidate, "clientinstance_signature_vtable_getter"))
+            return candidate;
         if (!candidate) {
             bedrocktools::diagnostics::probe(
                 bedrocktools::diagnostics::Level::Debug, "GameHooks",
-                "verified_local_player", "vtable_getter_returned_null",
-                std::string("slot=") + std::to_string(localPlayerSlot) +
-                    "; client_instance=" +
-                    std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)));
+                "verified_local_player", "signature_vtable_getter_returned_null",
+                std::string("slot=") + std::to_string(matchedGetterSlot) +
+                    "; documented_slot_match=" +
+                    (slotMatchesDocumented ? "yes" : "no"));
+        }
+    } else if (getterSignature) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "verified_local_player", "getter_signature_not_uniquely_matched",
+            std::string("pattern_target=") +
+                std::to_string(getterSignature) +
+                "; matches_near_documented_slot=" +
+                std::to_string(getterMatches) +
+                "; search_range=" + std::to_string(firstGetterSlot) +
+                "-" + std::to_string(lastGetterSlot));
+    } else {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "verified_local_player", "getter_signature_unavailable",
+            "ClientInstanceGetLocalPlayer signature did not resolve; relying on the documented virtual slot and validated actor ownership fallback.");
+    }
+
+    // Last resort: the documented slot 32 is used only on the ClientInstance
+    // receiver whose vtable was independently matched against update(bool).
+    // Preserve the existing guarded read, but never promote a candidate unless
+    // Actor::isPlayer succeeds.
+    void* nativeGetter = nullptr;
+    if (vtableReadable) {
+        std::memcpy(&nativeGetter, vtable + localPlayerSlot, sizeof(nativeGetter));
+    }
+
+    bool vtableGetterCallable = nativeGetter &&
+        isMinecraftFunction(nativeGetter);
+    if (!vtableGetterCallable && nativeGetter) {
+        const auto canonical = canonicalArm64Entry(
+            reinterpret_cast<std::uintptr_t>(nativeGetter));
+        vtableGetterCallable = canonical &&
+            canonical != reinterpret_cast<std::uintptr_t>(nativeGetter) &&
+            isMinecraftFunction(reinterpret_cast<const void*>(canonical));
+        if (vtableGetterCallable)
+            nativeGetter = reinterpret_cast<void*>(canonical);
+    }
+
+    if (vtableGetterCallable) {
+        // Avoid dispatching the same function twice when the signature route
+        // already tried this exact slot.
+        const bool sameAsSignatureRoute =
+            getterMatches == 1 && matchedGetterSlot == localPlayerSlot &&
+            (reinterpret_cast<std::uintptr_t>(nativeGetter) == matchedGetter ||
+             canonicalArm64Entry(reinterpret_cast<std::uintptr_t>(nativeGetter)) ==
+                canonicalArm64Entry(matchedGetter));
+        if (!sameAsSignatureRoute) {
+            void* candidate = reinterpret_cast<GetLocalPlayerFn>(nativeGetter)(clientInstance);
+            if (acceptCandidate(candidate, "clientinstance_vtable_getter"))
+                return candidate;
+            if (!candidate) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Debug, "GameHooks",
+                    "verified_local_player", "vtable_getter_returned_null",
+                    std::string("slot=") + std::to_string(localPlayerSlot) +
+                        "; client_instance=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)));
+            }
         }
     } else {
         bedrocktools::diagnostics::probe(
