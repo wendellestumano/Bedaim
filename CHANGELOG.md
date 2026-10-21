@@ -1,3 +1,10 @@
+## 2026-10-21 — AutoHit normal input-callback experiment
+
+- Added an exact-export resolver for supported ClientInputCallbacks attack-button handlers (newer handleBuildOrAttackOrBlockSelectButtonPress and older destroy/attack variants). No hard-coded address or guessed vtable slot is used.
+- The callback path is eligible only when the symbol resolves inside the active Minecraft image, the receiver equals the current ClientInstance, and its resolved local player matches AutoHit's expected player.
+- AutoHit prefers this normal engine input path when all checks pass, retaining the existing guarded GameMode route only when the callback is unavailable.
+- Callback invocation is logged separately from native-route acceptance; it does not prove that an attack or server damage occurred. Requires Android ARM64 build and in-game verification. This branch remains experimental and main is untouched.
+
 ## 2026-10-21 — AutoHit-only revival branch (experimental)
 
 - Restored **AutoHit** to the module registry on a branch based on the latest no-AutoHit/no-AutoTotem release candidate.
