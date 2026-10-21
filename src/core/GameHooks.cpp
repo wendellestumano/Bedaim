@@ -1360,33 +1360,35 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
             nativeGetter = reinterpret_cast<void*>(canonical);
     }
 
-    if (vtableGetterCallable) {
-        // Avoid dispatching the same function twice when the signature route
-        // already tried this exact slot.
-        const bool sameAsSignatureRoute =
-            getterMatches == 1 && matchedGetterSlot == localPlayerSlot &&
-            (reinterpret_cast<std::uintptr_t>(nativeGetter) == matchedGetter ||
-             canonicalArm64Entry(reinterpret_cast<std::uintptr_t>(nativeGetter)) ==
-                canonicalArm64Entry(matchedGetter));
-        if (!sameAsSignatureRoute) {
-            void* candidate = reinterpret_cast<GetLocalPlayerFn>(nativeGetter)(clientInstance);
-            if (acceptCandidate(candidate, "clientinstance_vtable_getter"))
-                return candidate;
-            if (!candidate) {
-                bedrocktools::diagnostics::probe(
-                    bedrocktools::diagnostics::Level::Debug, "GameHooks",
-                    "verified_local_player", "vtable_getter_returned_null",
-                    std::string("slot=") + std::to_string(localPlayerSlot) +
-                        "; client_instance=" +
-                        std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)));
-            }
-        }
-    } else {
+    if (!vtableGetterCallable) {
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Warning, "GameHooks",
             "verified_local_player", "clientinstance_vtable_getter_unavailable",
             std::string("slot=") + std::to_string(localPlayerSlot) +
                 "; getter=" + std::to_string(reinterpret_cast<std::uintptr_t>(nativeGetter)));
+    } else if (getterMatches == 1 && matchedGetter) {
+        // A unique signature-to-vtable match is stronger evidence than the
+        // historical slot index. If it matched a shifted slot and returned
+        // null/rejected its value, never call slot 32 as a second, different
+        // method through the getter ABI.
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "GameHooks",
+            "verified_local_player", "documented_slot_fallback_skipped",
+            std::string("signature_matched_slot=") +
+                std::to_string(matchedGetterSlot) +
+                "; documented_slot=" + std::to_string(localPlayerSlot));
+    } else {
+        void* candidate = reinterpret_cast<GetLocalPlayerFn>(nativeGetter)(clientInstance);
+        if (acceptCandidate(candidate, "clientinstance_vtable_getter"))
+            return candidate;
+        if (!candidate) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "GameHooks",
+                "verified_local_player", "vtable_getter_returned_null",
+                std::string("slot=") + std::to_string(localPlayerSlot) +
+                    "; client_instance=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)));
+        }
     }
 
     // Keep only a player captured by one of the independently validated routes.
