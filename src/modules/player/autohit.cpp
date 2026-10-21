@@ -62,7 +62,7 @@ Vec3 eyePosition(Player* player) {
 
 AutoHitModule::AutoHitModule()
     : Module("Auto Hit",
-             "Automatically attacks eligible in-range targets using the engine input callback when available.") {
+             "Uses the validated native GameMode attack route first, with a queued engine input callback fallback.") {
     keybind = 0;
 }
 
@@ -81,10 +81,11 @@ void AutoHitModule::onInit() {
                 m_chatOpen.store(opened, std::memory_order_release);
         });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "AutoHit", "lifecycle", "initialized", "callback-first attack pipeline initialized");
+        "AutoHit", "lifecycle", "initialized", "validated-native-first attack pipeline initialized");
 }
 
 void AutoHitModule::onEnable() {
+    bedrocktools::core::gamehooks::cancelQueuedAttackInput();
     bedrocktools::core::InventoryAccess::get().initialize();
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_nextAttack = {};
@@ -96,6 +97,7 @@ void AutoHitModule::onEnable() {
 }
 
 void AutoHitModule::onDisable() {
+    bedrocktools::core::gamehooks::cancelQueuedAttackInput();
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_nextAttack = {};
     m_nextNativeRouteProbe = {};
@@ -169,35 +171,40 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    // Prefer the normal engine attack-button callback. It does not depend on a
-    // guessed GameMode slot or the unavailable public three-argument attack ABI.
+    // Prefer the exact validated GameMode::attack vtable route. This is the
+    // direct native operation, not a fake LMB telemetry event. If the public
+    // attack ABI cannot be validated on this build, queue the normal engine input
+    // callback for the next LocalPlayer tick instead.
     void* client = core::gamehooks::clientInstance();
-    const bool inputRoute = client && core::gamehooks::inputAttackCallbackAvailable(client, player);
     void* gameMode = nullptr;
-    if (!inputRoute) {
-        bool backoffActive = false;
-        {
-            std::lock_guard<std::mutex> lock(m_stateMutex);
-            backoffActive = m_nextNativeRouteProbe.time_since_epoch().count() != 0 &&
-                now < m_nextNativeRouteProbe;
-        }
-        if (backoffActive) {
-            reportGate(11, "attack_route_retry_backoff", "native route retry is throttled");
-            return;
-        }
+    bool nativeRoute = false;
+    bool inputRoute = false;
+    bool nativeProbeBackoff = false;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        nativeProbeBackoff = m_nextNativeRouteProbe.time_since_epoch().count() != 0 &&
+            now < m_nextNativeRouteProbe;
+    }
+
+    if (!nativeProbeBackoff) {
         gameMode = core::gamehooks::gameModeForPlayer(player);
-        if (!gameMode || !core::gamehooks::attackAvailable(gameMode)) {
-            {
-                std::lock_guard<std::mutex> lock(m_stateMutex);
-                m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            }
-            reportGate(11, "attack_route_unavailable",
-                std::string("input_callback=unavailable; game_mode=") +
-                (gameMode ? "present" : "missing") + "; retry_in_ms=5000");
-            return;
+        nativeRoute = gameMode && core::gamehooks::attackAvailable(gameMode);
+        if (!nativeRoute) {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         }
     }
-    {
+    if (!nativeRoute)
+        inputRoute = client && core::gamehooks::inputAttackCallbackAvailable(client, player);
+
+    if (!nativeRoute && !inputRoute) {
+        reportGate(11, nativeProbeBackoff ? "attack_route_retry_backoff" : "attack_route_unavailable",
+            std::string("native_route=") + (nativeProbeBackoff ? "backoff" : "unavailable") +
+            "; input_callback=" + (client ? "unavailable_or_unverified" : "client_missing") +
+            "; retry_in_ms=5000");
+        return;
+    }
+    if (nativeRoute) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_nextNativeRouteProbe = {};
     }
@@ -277,7 +284,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     bool nativeResult = false;
     bool nativeResultUsed = false;
     const bool invoked = inputRoute
-        ? core::gamehooks::invokeAttackInputCallback(client, player)
+        ? core::gamehooks::queueAttackInputCallback(client, player, target)
         : core::gamehooks::attack(gameMode, target, true, &hitPoint, &nativeResult, &nativeResultUsed);
 
     if (!invoked) {
@@ -286,13 +293,13 @@ void AutoHitModule::processPlayerTick(Player* player) {
             m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(5);
         }
         reportGate(14, "attack_dispatch_rejected",
-            std::string("route=") + (inputRoute ? "ClientInputCallbacks" : "validated_GameMode") +
+            std::string("route=") + (nativeRoute ? "validated_GameMode" : "queued_ClientInputCallbacks") +
             "; native_result=" + (nativeResultUsed ? (nativeResult ? "true" : "false") : "not_applicable"));
         return;
     }
 
-    reportGate(201, inputRoute ? "input_callback_invoked_not_hit_confirmed"
-                               : "native_attack_accepted_not_damage_confirmed",
+    reportGate(201, nativeRoute ? "native_attack_accepted_not_damage_confirmed"
+                                : "input_callback_queued_not_hit_confirmed",
         std::string("weapon=") + bedaim::autohit::weapon::name(weapon) +
         "; cps=" + std::to_string(profile.cps) + "; range=" + std::to_string(maxRange));
 }
