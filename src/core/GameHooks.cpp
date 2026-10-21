@@ -1,4 +1,5 @@
 #include "GameHooks.hpp"
+#include "LocalPlayerCachePolicy.hpp"
 #include "VerifiedLocalPlayerTickEvent.hpp"
 #include "Diagnostics.hpp"
 #include "NativeAttackResultPolicy.hpp"
@@ -1391,9 +1392,29 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
         }
     }
 
-    // Keep only a player captured by one of the independently validated routes.
+    // A cached pointer is not authoritative by itself: after respawn or a
+    // LocalPlayer replacement, the old Actor can remain readable. Retain it
+    // only when this ClientInstance still owns the exact player pointer.
     void* cachedPlayer = currentLocalPlayer.load(std::memory_order_acquire);
-    if (cachedPlayer && isReadableMemory(cachedPlayer, sizeof(void*))) return cachedPlayer;
+    if (cachedPlayer && isReadableMemory(cachedPlayer, sizeof(void*))) {
+        const bool cachedIsPlayer = actorClassifierReady &&
+            reinterpret_cast<ActorIsPlayerFn>(actorIsPlayerAddress)(cachedPlayer);
+        std::size_t cachedOwnedOffset = 0;
+        const bool cachedOwned = cachedIsPlayer &&
+            clientInstanceDirectlyOwnsPlayer(
+                clientInstance, cachedPlayer, &cachedOwnedOffset);
+        if (cachedOwned) return cachedPlayer;
+
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "GameHooks",
+            "verified_local_player", "cached_player_no_longer_owned",
+            std::string("client_instance=") +
+                std::to_string(reinterpret_cast<std::uintptr_t>(clientInstance)) +
+                "; cached_player=" +
+                std::to_string(reinterpret_cast<std::uintptr_t>(cachedPlayer)) +
+                "; actor_is_player=" + (cachedIsPlayer ? "yes" : "no") +
+                "; ownership_match=no");
+    }
 
     bedrocktools::diagnostics::probe(
         bedrocktools::diagnostics::Level::Warning, "GameHooks",
@@ -1725,10 +1746,24 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
     void* acceptedClient = currentClientInstance.load(std::memory_order_acquire);
     if (receiverValid && acceptedClient == clientInstance &&
         shouldResolveLocalPlayer(acceptedClient)) {
+        // Snapshot the cache before probing. If all authoritative routes fail,
+        // clear only that exact cached value; a concurrent fresh capture wins.
+        void* cachedBeforeResolution =
+            currentLocalPlayer.load(std::memory_order_acquire);
         void* resolvedPlayer = resolveLocalPlayerFromClientInstance(acceptedClient);
         if (resolvedPlayer) {
             void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
             if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
+        } else if (bedaim::core::clearCachedPointerIfUnchanged(
+                       currentLocalPlayer, cachedBeforeResolution)) {
+            currentGameMode.store(nullptr, std::memory_order_release);
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                "verified_local_player", "cached_player_invalidated_after_resolution_miss",
+                std::string("client_instance=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(acceptedClient)) +
+                    "; stale_player=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(cachedBeforeResolution)));
         }
     }
 
