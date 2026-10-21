@@ -17,6 +17,7 @@
 #include "player/maceswapper.hpp"
 #include "player/elytramacing.hpp"
 #include "player/swordswapper.hpp"
+#include "player/autohit.hpp"
 #include "hud/reachcounter.hpp"
 #include "hud/breakindicator.hpp"
 #include "hud/playercoords.hpp"
@@ -131,6 +132,7 @@ void registerAllModules() {
     registry.emplace<MaceSwapperModule>();
     registry.emplace<ElytraMacingModule>();
     registry.emplace<SwordSwapperModule>();
+    registry.emplace<AutoHitModule>();
     registry.emplace<WeatherChangerModule>();
     registry.emplace<NickModule>();
     registry.emplace<NoDisconnectModule>();

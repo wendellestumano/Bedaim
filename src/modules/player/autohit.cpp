@@ -231,9 +231,13 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // Resolve the native route before asking the shared target provider to scan
     // entities. If this Minecraft build cannot validate attack(), repeated 80-block
     // target scans are wasted work and were a major source of the observed lag.
+    void* client = core::gamehooks::clientInstance();
+    const bool inputCallbackAvailable =
+        client && core::gamehooks::inputAttackCallbackAvailable(client, player);
     void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    const bool routeAvailable = gameMode && core::gamehooks::attackAvailable(gameMode);
-    if (!gameMode || !routeAvailable) {
+    const bool nativeRouteAvailable = gameMode && core::gamehooks::attackAvailable(gameMode);
+    const bool routeAvailable = inputCallbackAvailable || nativeRouteAvailable;
+    if (!routeAvailable) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             m_nextNativeRouteProbe = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -357,7 +361,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     const bedaim::autohit::Inputs gateInputs{
         true, player != nullptr, target != nullptr, validBounds(targetBounds), targetFresh,
-        gameMode != nullptr, routeAvailable, hitPointFinite, cooldownReady,
+        gameMode != nullptr || inputCallbackAvailable, routeAvailable, hitPointFinite, cooldownReady,
         std::sqrt(std::max(distanceSq, 0.0f)), maxRange
     };
     const Decision decision = bedaim::autohit::evaluate(gateInputs);
@@ -427,8 +431,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         g_autoHitAttemptSequence.fetch_add(1, std::memory_order_relaxed) + 1;
     const std::string attemptContext =
         "attempt_id=" + std::to_string(attemptId) +
-        "; dispatch_path=GameMode_vtable" +
-        "; explicit_input_callback=not_called_in_this_path" +
+        "; dispatch_path=" + std::string(inputCallbackAvailable ? "ClientInputCallbacks" : "GameMode_vtable") +
+        "; explicit_input_callback=" + std::string(inputCallbackAvailable ? "resolved_and_receiver_verified" : "not_available_or_not_verified") +
         "; player=0x" + pointerHex(player) +
         "; game_mode=0x" + pointerHex(gameMode) +
         "; target=0x" + pointerHex(target) +
@@ -446,9 +450,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
         reinterpret_cast<bedrocktools::sdk::Actor*>(target)->hurtTime();
     bool nativeAttackResult = false;
     bool nativeAttackResultUsed = false;
+    bool inputCallbackInvoked = false;
     const auto nativeCallStart = std::chrono::steady_clock::now();
-    const bool accepted = core::gamehooks::attack(
-        gameMode, target, true, &hitPoint, &nativeAttackResult, &nativeAttackResultUsed);
+    const bool accepted = inputCallbackAvailable
+        ? (inputCallbackInvoked = core::gamehooks::invokeAttackInputCallback(client, player))
+        : core::gamehooks::attack(
+            gameMode, target, true, &hitPoint, &nativeAttackResult, &nativeAttackResultUsed);
     const auto nativeCallDurationUs = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now() - nativeCallStart).count();
     // Hurt time is only an immediate local observation: server-authoritative
@@ -459,7 +466,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         targetQuarantinedNow = m_noHitFeedbackGuard.observe(
-            target, accepted, targetHurtTimeBefore, targetHurtTimeAfter);
+            target, accepted && !inputCallbackAvailable, targetHurtTimeBefore, targetHurtTimeAfter);
     }
     if (targetQuarantinedNow && accepted) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit",
@@ -484,7 +491,9 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     const std::string attemptResult =
         attemptContext +
-        "; wrapper_result=" + (accepted ? "accepted_by_internal_observer" : "not_accepted_by_internal_observer") +
+        "; dispatch_result=" + (inputCallbackAvailable
+            ? (inputCallbackInvoked ? "input_callback_invoked_not_hit_confirmed" : "input_callback_not_invoked")
+            : (accepted ? "accepted_by_internal_observer" : "not_accepted_by_internal_observer")) +
         "; native_out_result=" + (nativeAttackResultUsed ? (nativeAttackResult ? "true" : "false") : "not_applicable") +
         "; hurt_time_before=" + std::to_string(targetHurtTimeBefore) +
         "; hurt_time_after=" + std::to_string(targetHurtTimeAfter) +
@@ -494,7 +503,9 @@ void AutoHitModule::processPlayerTick(Player* player) {
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
         "AutoHit", std::string("attack_attempt_result; ") + attemptResult);
     reportGate(accepted ? 201 : 202,
-        accepted ? "native_attack_accepted" : "native_attack_rejected",
+        inputCallbackAvailable
+            ? (inputCallbackInvoked ? "input_callback_invoked_not_hit_confirmed" : "input_callback_invocation_failed")
+            : (accepted ? "native_attack_accepted" : "native_attack_rejected"),
         std::string("target=0x") + pointerHex(target) +
         "; player=0x" + pointerHex(player) +
         "; distance=" + std::to_string(gateInputs.distance) +

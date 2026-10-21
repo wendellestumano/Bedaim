@@ -13,6 +13,10 @@ void* gameMode();
 void* gameModeForPlayer(void* player);
 // Checks the live GameMode and the exact public attack vtable/signature route without dispatching an attack.
 bool attackAvailable(void* gameMode);
+// Uses only an exact exported ClientInputCallbacks symbol and validates that the receiver is the current ClientInstance owning expectedLocalPlayer.
+bool inputAttackCallbackAvailable(void* clientInstance, void* expectedLocalPlayer);
+// Invokes the normal engine attack-button callback; true means invoked, not that an attack or damage was confirmed.
+bool invokeAttackInputCallback(void* clientInstance, void* expectedLocalPlayer);
 // The public three-argument route consumes hitPosition; the guarded four-argument route consumes nativeResultOut.
 // The four-argument C++ overload preserves existing module call sites; the extended overload exposes the native output flag.
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition);
