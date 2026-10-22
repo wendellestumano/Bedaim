@@ -36,5 +36,10 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
 // then progressively larger with distance. This does not modify native collision.
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
                           float strength, bool enabled) noexcept;
+// Downward aim-point displacement while Elytra-gliding: starts only beyond the
+// close-range dead zone, scales by configured strength, and is capped by the caller
+// to the target's real lower hitbox bound.
+float elytraDistanceDislocation(float targetDistance, float strength,
+                                float startDistance = 4.0f) noexcept;
 
 } // namespace bedaim::aimmath
