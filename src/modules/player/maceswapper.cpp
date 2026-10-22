@@ -21,9 +21,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <dlfcn.h>
 #include <limits>
 #include <optional>
+#include <vector>
 
 namespace {
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
@@ -95,9 +98,132 @@ float distanceToTargetBounds(bedrocktools::sdk::Player* player,
         : std::numeric_limits<float>::infinity();
 }
 
+using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
+using ActorIsPlayerFn = bool (*)(void*);
 using BlockSourceIsSolidBlockingBlockFn =
     bool (*)(void*, const bedrocktools::sdk::BlockPos*);
 using PlayerStopGlidingFn = void (*)(void*);
+
+// Unglide resolves its own nearby-player snapshot; it does not depend on the
+// Aim Assist module toggle or the camera-tracking module's cached target.
+struct NearbyPlayerSearch {
+    bool queryReady = false;
+    bool found = false;
+    float distance = std::numeric_limits<float>::infinity();
+};
+
+NearbyPlayerSearch nearestNearbyPlayerDistance(
+    bedrocktools::sdk::Player* player, float maximumDistance) {
+    using namespace bedrocktools::sdk;
+    NearbyPlayerSearch result{};
+    if (!player) return result;
+
+    static GetRuntimeActorListFn actorList = nullptr;
+    static ActorIsPlayerFn actorIsPlayer = nullptr;
+    if (!actorList) actorList = reinterpret_cast<GetRuntimeActorListFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
+    if (!actorIsPlayer) actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    if (!actorList || !actorIsPlayer) return result;
+
+    auto* localActor = reinterpret_cast<Actor*>(player);
+    auto* level = localActor->level();
+    void* manager = level ? level->actorManager() : nullptr;
+    if (!manager) return result;
+
+    std::vector<void*> actors;
+    try {
+        actors = actorList(manager);
+    } catch (...) {
+        return result;
+    }
+    if (actors.size() > 4096) return result;
+    result.queryReady = true;
+
+    const Vec3 eye = eyePositionFor(player);
+    if (!finiteVec(eye)) {
+        result.queryReady = false;
+        return result;
+    }
+    const float range = std::clamp(
+        std::isfinite(maximumDistance) ? maximumDistance : 8.0f, 1.0f, 32.0f);
+
+    for (void* candidate : actors) {
+        if (!candidate || candidate == player ||
+            reinterpret_cast<std::uintptr_t>(candidate) <= 0x1000) continue;
+
+        bool isPlayer = false;
+        try {
+            isPlayer = actorIsPlayer(candidate);
+        } catch (...) {
+            continue;
+        }
+        if (!isPlayer) continue;
+
+        auto* target = reinterpret_cast<Actor*>(candidate);
+        if (target->level() != level) continue;
+        const AABB bounds = target->bounds();
+        if (!validBounds(bounds)) continue;
+
+        const Vec3 nearest{
+            std::clamp(eye.x, bounds.min.x, bounds.max.x),
+            std::clamp(eye.y, bounds.min.y, bounds.max.y),
+            std::clamp(eye.z, bounds.min.z, bounds.max.z)
+        };
+        const float distanceSq = distanceSquared(eye, nearest);
+        if (!std::isfinite(distanceSq) || distanceSq > range * range) continue;
+        const float distance = std::sqrt(std::max(0.0f, distanceSq));
+        if (!result.found || distance < result.distance) {
+            result.found = true;
+            result.distance = distance;
+        }
+    }
+    return result;
+}
+
+bool actorIsGliding(void* actor) {
+    using namespace bedrocktools::sdk;
+    if (!actor) return false;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
+            offsets::Actor::mEntityData - sizeof(void*)) return false;
+
+    const auto wrapperAddress = actorAddress + offsets::Actor::mEntityData;
+    void* component = nullptr;
+    std::memcpy(&component, reinterpret_cast<const void*>(wrapperAddress), sizeof(component));
+    if (reinterpret_cast<std::uintptr_t>(component) <= 0x1000) return false;
+
+    const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
+    auto** begin = *reinterpret_cast<void***>(componentAddress);
+    auto** end = *reinterpret_cast<void***>(componentAddress + sizeof(void*));
+    if (!begin || !end) return false;
+
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
+    if (endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(void*) != 0 ||
+        (endAddress - beginAddress) / sizeof(void*) > 192) return false;
+
+    const auto count = (endAddress - beginAddress) / sizeof(void*);
+    for (std::size_t index = 0; index < count; ++index) {
+        void* item = begin[index];
+        if (reinterpret_cast<std::uintptr_t>(item) <= 0x1000) continue;
+        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
+        std::uint8_t type = 0;
+        std::uint16_t id = 0;
+        std::memcpy(&type, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mType), sizeof(type));
+        std::memcpy(&id, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mId), sizeof(id));
+        if (type != 7 || id != 0) continue;
+
+        std::uint64_t flags = 0;
+        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue), sizeof(flags));
+        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
+        return (flags & kGlidingFlag) != 0;
+    }
+    return false;
+}
 
 bool isTrustedMinecraftMethod(void* address) {
     if (!address) return false;
@@ -107,25 +233,28 @@ bool isTrustedMinecraftMethod(void* address) {
 }
 
 PlayerStopGlidingFn resolvePlayerStopGliding() {
-    // Resolve the exported Player::stopGliding method at runtime. Do not use a
-    // hard-coded address/offset: if this symbol isn't available for this build,
-    // the feature safely remains inactive and reports the missing dependency.
+    // Try common Player and LocalPlayer symbol forms, but accept a result only
+    // after verifying it belongs to the live Minecraft library.
     static void* minecraftHandle = nullptr;
     static PlayerStopGlidingFn function = nullptr;
     if (function) return function;
-    function = reinterpret_cast<PlayerStopGlidingFn>(
-        dlsym(RTLD_DEFAULT, "_ZN6Player11stopGlidingEv"));
-    if (!isTrustedMinecraftMethod(reinterpret_cast<void*>(function))) function = nullptr;
-    if (!function) {
-        if (!minecraftHandle)
-            minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-        if (minecraftHandle) {
-            function = reinterpret_cast<PlayerStopGlidingFn>(
-                dlsym(minecraftHandle, "_ZN6Player11stopGlidingEv"));
-            if (!isTrustedMinecraftMethod(reinterpret_cast<void*>(function))) function = nullptr;
-        }
+    if (!minecraftHandle)
+        minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+    constexpr const char* symbols[] = {
+        "_ZN6Player11stopGlidingEv",
+        "_ZN11LocalPlayer11stopGlidingEv",
+        "_ZNK6Player11stopGlidingEv",
+        "_ZNK11LocalPlayer11stopGlidingEv"
+    };
+    for (const char* symbol : symbols) {
+        void* address = dlsym(RTLD_DEFAULT, symbol);
+        if (!isTrustedMinecraftMethod(address) && minecraftHandle)
+            address = dlsym(minecraftHandle, symbol);
+        if (!isTrustedMinecraftMethod(address)) continue;
+        function = reinterpret_cast<PlayerStopGlidingFn>(address);
+        return function;
     }
-    return function;
+    return nullptr;
 }
 
 std::optional<float> groundClearance(
@@ -192,6 +321,7 @@ void MaceSwapperModule::onEnable() {
     m_hasPeakY = false;
     m_nextAttack = {};
     m_nextUnglideAttempt = {};
+    m_nextUnglideDiagnostic = {};
 
     // A rapid disable/re-enable can happen before the next player tick. Preserve
     // pending slot ownership so that tick can restore the old slot; never drop
@@ -219,6 +349,7 @@ void MaceSwapperModule::onDisable() {
     m_hasPeakY = false;
     m_nextAttack = {};
     m_nextUnglideAttempt = {};
+    m_nextUnglideDiagnostic = {};
 }
 
 void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
@@ -370,37 +501,47 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Unglide is deliberately independent from the fall/attack gate and the
-    // separate mace-swap/attack toggle: it exits
-    // glide only when the Aim Assist has a fresh nearby target and a solid floor
-    // has been found inside the configured clearance. The actual native Player
-    // method is resolved dynamically, and this path never writes entity flags.
+    // Unglide is independent from Aim Assist's enabled state and cached target.
+    // It enumerates the current level's own actors and gates only on gliding,
+    // player distance, and a verified solid-floor clearance.
     if (m_unglideEnabled) {
         const auto now = std::chrono::steady_clock::now();
-        auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-        auto* aim = (aimModuleBase && aimModuleBase->enabled)
-            ? static_cast<AimAssistModule*>(aimModuleBase) : nullptr;
-        if (aim && now >= m_nextUnglideAttempt && aim->localPlayerIsGliding()) {
-            void* target = nullptr;
-            AABB targetBounds{};
-            float aimRange = 0.0f;
-            if (aim->currentTargetSnapshot(target, targetBounds, aimRange) &&
-                aim->currentTargetIsPlayerSnapshot(target)) {
-                const float targetDistance = distanceToTargetBounds(player, targetBounds);
-                if (std::isfinite(targetDistance) &&
-                    targetDistance <= std::clamp(m_unglideTargetDistance, 1.0f, 32.0f)) {
+        auto reportUnglideGate = [&](const char* state, const std::string& details) {
+            if (now < m_nextUnglideDiagnostic) return;
+            m_nextUnglideDiagnostic = now + std::chrono::seconds(1);
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "MaceSwapper", "unglide_gate", state, details);
+        };
+
+        if (now >= m_nextUnglideAttempt) {
+            if (!actorIsGliding(player)) {
+                m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                reportUnglideGate("not_gliding", "Local player's synchronized entity flags do not report gliding.");
+            } else {
+                const auto target = nearestNearbyPlayerDistance(player, m_unglideTargetDistance);
+                if (!target.queryReady) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(1000);
+                    reportUnglideGate("target_lookup_unavailable",
+                        "ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable.");
+                } else if (!target.found) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                    reportUnglideGate("no_nearby_player",
+                        std::string("No other player inside ") + std::to_string(m_unglideTargetDistance) + " blocks.");
+                } else {
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(200);
                     const auto clearance = groundClearance(player, m_unglideHeight);
                     if (!clearance) {
-                        bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Debug,
-                            "MaceSwapper", "unglide_ground", "solid_floor_not_found",
-                            "No solid floor found in the bounded clearance scan.");
+                        reportUnglideGate("solid_floor_not_found",
+                            "No solid floor found in the configured bounded ground-clearance scan.");
+                    } else if (*clearance > std::clamp(m_unglideHeight, 1.0f, 24.0f)) {
+                        reportUnglideGate("ground_clearance_exceeded",
+                            std::string("ground_clearance=") + std::to_string(*clearance));
                     }
+
                     const float clearanceValue = clearance.value_or(
                         std::numeric_limits<float>::infinity());
                     if (bedaim::macefall::shouldUnglide(
-                            m_unglideEnabled, true, targetDistance, m_unglideTargetDistance,
+                            m_unglideEnabled, true, target.distance, m_unglideTargetDistance,
                             clearanceValue, m_unglideHeight)) {
                         const auto stopGliding = resolvePlayerStopGliding();
                         if (stopGliding) {
@@ -409,16 +550,14 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                             bedrocktools::diagnostics::probe(
                                 bedrocktools::diagnostics::Level::Info,
                                 "MaceSwapper", "unglide", "stop_gliding_requested",
-                                std::string("target_distance_limit=") +
-                                    std::to_string(m_unglideTargetDistance) +
+                                std::string("target_distance=") + std::to_string(target.distance) +
+                                    ", target_distance_limit=" + std::to_string(m_unglideTargetDistance) +
                                     ", ground_clearance=" + std::to_string(*clearance));
                             return;
                         }
                         m_nextUnglideAttempt = now + std::chrono::milliseconds(1500);
-                        bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Warning,
-                            "MaceSwapper", "unglide", "native_stop_gliding_unavailable",
-                            "Player::stopGliding was not exported by this runtime; action skipped safely.");
+                        reportUnglideGate("native_stop_gliding_unavailable",
+                            "Neither supported Player/LocalPlayer::stopGliding symbol resolved from libminecraftpe.so.");
                     }
                 }
             }
