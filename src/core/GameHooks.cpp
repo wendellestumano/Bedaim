@@ -111,10 +111,12 @@ bool hookSignature(SignatureId id, void* detour, Function** original) {
     if (!handle) {
         const auto backend = bedrocktools::hooks::backendName();
         const int shadowHookError = bedrocktools::hooks::lastShadowHookError();
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "GameHooks",
-            std::string("hook install failed; backend=") + backend +
-            "; signature=" + std::to_string(static_cast<unsigned int>(id)) +
-            (std::string("; shadowhook_errno=") + std::to_string(shadowHookError)));
+        std::string message = std::string("hook install failed; backend=") + backend +
+            "; signature=" + std::to_string(static_cast<unsigned int>(id));
+        if (std::string_view(backend) == "ShadowHook") {
+            message += "; shadowhook_errno=" + std::to_string(shadowHookError);
+        }
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "GameHooks", message);
         return false;
     }
     if (handleCount < handles.size()) handles[handleCount++] = handle;
