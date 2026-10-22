@@ -4,6 +4,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
 #include "core/GameHooks.hpp"
 
 #include <algorithm>
@@ -17,25 +18,36 @@
 namespace {
 using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
 using ActorIsPlayerFn = bool (*)(void*);
-using ActorGetNameTagFn = std::string (*)(void*);
+using ActorGetNameTagFn = const std::string& (*)(void*);
+using ActorIsInvisibleFn = bool (*)(void*);
 
 GetRuntimeActorListFn g_getRuntimeActorList = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
+ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 GamemodeCheckerModule* g_checker = nullptr;
 
 std::string safeName(void* actor) {
-    if (!actor || !g_actorGetNameTag) return {};
+    if (!actor) return {};
+    std::string name;
+    // Use the SDK's field-backed Player name even when the optional native
+    // Actor::getNameTag symbol cannot be resolved from the current binary.
     try {
-        std::string name = g_actorGetNameTag(actor);
-        if (name.size() > 96) name.resize(96);
-        name.erase(std::remove_if(name.begin(), name.end(), [](unsigned char c) {
-            return c < 0x20 || c == 0x7f;
-        }), name.end());
-        return name;
+        name = reinterpret_cast<const bedrocktools::sdk::Player*>(actor)->name();
     } catch (...) {
-        return {};
+        name.clear();
     }
+    if (name.empty() && g_actorGetNameTag) {
+        try { name = g_actorGetNameTag(actor); } catch (...) { name.clear(); }
+    }
+    if (name.size() > 96) name.resize(96);
+    name.erase(std::remove_if(name.begin(), name.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f;
+    }), name.end());
+    const auto first = name.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = name.find_last_not_of(" \t\r\n");
+    return name.substr(first, last - first + 1);
 }
 
 const char* modeName(std::int32_t mode) {
@@ -61,6 +73,8 @@ void GamemodeCheckerModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
+    g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
@@ -98,11 +112,16 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
             bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
     }
+    if (!g_actorIsInvisible) {
+        g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
+    }
 
     GamemodeCheckerDiagnostics diag{};
     diag.actorListReady = g_getRuntimeActorList != nullptr;
     diag.playerClassifierReady = g_actorIsPlayer != nullptr;
-    diag.nameGetterReady = g_actorGetNameTag != nullptr;
+    // SDK's field-backed name is the primary route; the native getter is fallback only.
+    diag.nameGetterReady = true;
 
     auto publishDiagnosticsOnly = [&]() {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -174,7 +193,6 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         }
         if (!isPlayer) continue;
         ++diag.playerCount;
-        if (!g_actorGetNameTag) continue;
 
         std::int32_t gameType = -1;
         const bool hasGameType =
@@ -185,15 +203,29 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(actor, attackable);
 
         std::string mode;
+        bool inferred = false;
         if (hasExactGameType) {
             mode = modeName(gameType);
-        } else if (hasAttackability && !attackable) {
-            mode = "Creative/Spectator*";
+        } else if (hasAttackability) {
+            inferred = true;
+            if (attackable) {
+                // This predicate cannot separate Survival from Adventure.
+                mode = "Survival/Adventure*";
+            } else {
+                // A non-attackable mode plus native invisibility suggests Spectator.
+                // The '*' is explicit: invisibility effects can also occur elsewhere.
+                bool invisible = false;
+                if (g_actorIsInvisible) {
+                    try { invisible = g_actorIsInvisible(actor); } catch (...) { invisible = false; }
+                }
+                mode = invisible ? "Spectator*" : "Creative*";
+            }
         } else {
             mode = "Unknown";
         }
 
-        if (mode != "Unknown" && mode != "Creative/Spectator*") ++diag.exactModeCount;
+        if (hasExactGameType) ++diag.exactModeCount;
+        else if (inferred) ++diag.inferredModeCount;
         else ++diag.unresolvedModeCount;
 
         std::string name = safeName(actor);
@@ -252,7 +284,8 @@ void GamemodeCheckerModule::onFrame() {
     const char* enumerator = !m_diagnostics.actorListReady ? "actors:OFF" :
         !m_diagnostics.levelReady ? "level:OFF" :
         !m_diagnostics.actorManagerReady ? "manager:OFF" : "actors:OK";
-    const char* modeApi = (m_diagnostics.exactModeCount > 0) ? "mode:OK" :
+    const char* modeApi = (m_diagnostics.exactModeCount > 0) ? "mode:EXACT" :
+        (m_diagnostics.inferredModeCount > 0) ? "mode:INFERRED" :
         (m_diagnostics.playerCount > 0 ? "mode:UNKNOWN" : "mode:N/A");
     status.text = std::string(enumerator) + " [" +
         std::to_string(m_diagnostics.actorCount) + " entities, " +
@@ -268,9 +301,8 @@ void GamemodeCheckerModule::onFrame() {
         line.w = 0.0f;
         line.h = 16.0f;
         line.size = 16.0f;
-        if (entry.mode == "Spectator") line.color = 0xFFB68CFF;
-        else if (entry.mode == "Creative") line.color = 0xFFFF4545;
-        else if (entry.mode == "Creative/Spectator*") line.color = 0xFFFFC266;
+        if (entry.mode == "Spectator" || entry.mode == "Spectator*") line.color = 0xFFB68CFF;
+        else if (entry.mode == "Creative" || entry.mode == "Creative*") line.color = 0xFFFF4545;
         else if (entry.mode == "Unknown") line.color = 0xFFBBBBBB;
         else if (entry.mode == "Adventure") line.color = 0xFF8CC4FF;
         else line.color = 0xFFFFFFFF;
