@@ -773,7 +773,9 @@ void registerModulesWithLauncher() {
 
         if (mod->moduleId == "bedrocktools.Mace Swapper") {
             const std::vector<std::string> priority = {
-                "m_enableMaceSwapper", "m_minimumFallDistance", "m_attackRange", "m_attackIntervalMs", "m_restoreSlot"
+                "m_enableMaceSwapper", "m_minimumFallDistance", "m_attackRange",
+                "m_attackIntervalMs", "m_restoreSlot", "m_unglideEnabled",
+                "m_unglideHeight", "m_unglideTargetDistance"
             };
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
@@ -807,7 +809,7 @@ void registerModulesWithLauncher() {
                 "m_targetRetentionRadius", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
-                "m_weaponOtherMelee", "m_elytraMode"
+                "m_weaponOtherMelee", "m_elytraMode", "m_elytraDistanceDislocateStrength"
             };
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
