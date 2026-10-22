@@ -198,14 +198,19 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         const bool hasGameType =
             bedrocktools::core::gamehooks::tryGetPlayerGameType(actor, gameType);
         const bool hasExactGameType = hasGameType && gameType >= 0 && gameType <= 3;
+        std::int32_t predicateMode = -1;
+        const bool hasPredicateMode = !hasExactGameType &&
+            bedrocktools::core::gamehooks::tryGetPlayerCreativeSpectator(actor, predicateMode);
         bool attackable = true;
-        const bool hasAttackability = !hasExactGameType &&
+        const bool hasAttackability = !hasExactGameType && !hasPredicateMode &&
             bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(actor, attackable);
 
         std::string mode;
         bool inferred = false;
         if (hasExactGameType) {
             mode = modeName(gameType);
+        } else if (hasPredicateMode && (predicateMode == 1 || predicateMode == 3)) {
+            mode = modeName(predicateMode);
         } else if (hasAttackability) {
             inferred = true;
             if (attackable) {
