@@ -8,37 +8,161 @@
 #include "core/GameHooks.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <dlfcn.h>
 #include <limits>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 namespace {
 using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
 using ActorIsPlayerFn = bool (*)(void*);
-using ActorGetNameTagFn = const std::string& (*)(void*);
-using ActorIsInvisibleFn = bool (*)(void*);
+using ActorGetNameTagFn = const std::string& (*)(const void*);
+using ActorGetStatusFlagFn = bool (*)(const void*, int);
+using ActorIsFlyingFn = bool (*)(const void*);
+using BlockSourceIsSolidBlockingBlockFn =
+    bool (*)(void*, const bedrocktools::sdk::BlockPos*);
 
 GetRuntimeActorListFn g_getRuntimeActorList = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
-ActorIsInvisibleFn g_actorIsInvisible = nullptr;
+ActorGetStatusFlagFn g_actorGetStatusFlag = nullptr;
+ActorIsFlyingFn g_actorIsFlying = nullptr;
+BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 GamemodeCheckerModule* g_checker = nullptr;
+
+struct SpectatorProbe {
+    bedrocktools::sdk::Vec3 lastPosition{};
+    unsigned consecutiveNoclipSamples = 0;
+    bool hasLastPosition = false;
+    std::chrono::steady_clock::time_point lastSeen{};
+};
+std::unordered_map<void*, SpectatorProbe> g_spectatorProbes;
+
+bool trustedGameSymbol(void* address) {
+    if (!address) return false;
+    Dl_info info{};
+    if (!dladdr(address, &info) || !info.dli_fname) return false;
+    const std::string_view path(info.dli_fname);
+    return path.find("libminecraftpe.so") != std::string_view::npos ||
+        path.find("liblevilamina.so") != std::string_view::npos ||
+        path.find("libLeviLamina.so") != std::string_view::npos;
+}
+
+void* resolveGameSymbol(const char* symbol) {
+    if (!symbol) return nullptr;
+    static void* minecraftHandle = nullptr;
+    static void* leviLaminaHandle = nullptr;
+    static void* leviLaminaAltHandle = nullptr;
+    if (!minecraftHandle)
+        minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaHandle)
+        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaAltHandle)
+        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
+
+    void* address = dlsym(RTLD_DEFAULT, symbol);
+    if (trustedGameSymbol(address)) return address;
+    if (minecraftHandle) {
+        address = dlsym(minecraftHandle, symbol);
+        if (trustedGameSymbol(address)) return address;
+    }
+    if (leviLaminaHandle) {
+        address = dlsym(leviLaminaHandle, symbol);
+        if (trustedGameSymbol(address)) return address;
+    }
+    if (leviLaminaAltHandle) {
+        address = dlsym(leviLaminaAltHandle, symbol);
+        if (trustedGameSymbol(address)) return address;
+    }
+    return nullptr;
+}
+
+bool hasSolidBlockInsideBody(void* actor) {
+    if (!actor || !g_isSolidBlockingBlock) return false;
+    const auto* nativeActor = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor);
+    const auto bounds = nativeActor->bounds();
+    const float height = bounds.max.y - bounds.min.y;
+    if (!std::isfinite(bounds.min.x) || !std::isfinite(bounds.min.y) ||
+        !std::isfinite(bounds.min.z) || !std::isfinite(bounds.max.x) ||
+        !std::isfinite(bounds.max.y) || !std::isfinite(bounds.max.z) ||
+        height < 1.0f || height > 4.0f) return false;
+
+    auto* dimension = nativeActor->dimension();
+    void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
+    if (!blockSource) return false;
+
+    const float x = (bounds.min.x + bounds.max.x) * 0.5f;
+    const float z = (bounds.min.z + bounds.max.z) * 0.5f;
+    const float samples[] = {
+        bounds.min.y + 0.25f,
+        (bounds.min.y + bounds.max.y) * 0.5f,
+        bounds.max.y - 0.25f
+    };
+    for (const float y : samples) {
+        if (y <= bounds.min.y || y >= bounds.max.y) continue;
+        const bedrocktools::sdk::BlockPos pos{
+            static_cast<int>(std::floor(x)),
+            static_cast<int>(std::floor(y)),
+            static_cast<int>(std::floor(z))
+        };
+        if (g_isSolidBlockingBlock(blockSource, &pos)) return true;
+    }
+    return false;
+}
+
+bool hasSpectatorNoclipEvidence(void* actor) {
+    if (!actor || !g_actorGetStatusFlag || !g_actorIsFlying) return false;
+    const auto* nativeActor = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor);
+    bool invisible = false;
+    bool hasCollision = true;
+    bool flying = false;
+    try {
+        invisible = g_actorGetStatusFlag(actor, 5);     // ActorFlags::Invisible
+        hasCollision = g_actorGetStatusFlag(actor, 48); // ActorFlags::HasCollision
+        flying = g_actorIsFlying(actor);
+    } catch (...) {
+        return false;
+    }
+
+    const auto position = nativeActor->position();
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+        !std::isfinite(position.z)) return false;
+    auto& probe = g_spectatorProbes[actor];
+    const bool moving = probe.hasLastPosition &&
+        (std::abs(position.x - probe.lastPosition.x) > 0.12f ||
+         std::abs(position.y - probe.lastPosition.y) > 0.12f ||
+         std::abs(position.z - probe.lastPosition.z) > 0.12f);
+    const bool bodyOverlapsSolidBlock = hasSolidBlockInsideBody(actor);
+    probe.lastPosition = position;
+    probe.hasLastPosition = true;
+    probe.lastSeen = std::chrono::steady_clock::now();
+
+    // Require repeated evidence; invisibility alone is not enough to mark Spectator.
+    if (invisible && !hasCollision && flying && moving && bodyOverlapsSolidBlock) {
+        probe.consecutiveNoclipSamples = std::min(probe.consecutiveNoclipSamples + 1u, 5u);
+    } else {
+        probe.consecutiveNoclipSamples = 0;
+    }
+    return probe.consecutiveNoclipSamples >= 2;
+}
 
 std::string safeName(void* actor) {
     if (!actor) return {};
     std::string name;
-    // Use the SDK's field-backed Player name even when the optional native
-    // Actor::getNameTag symbol cannot be resolved from the current binary.
-    try {
-        name = reinterpret_cast<const bedrocktools::sdk::Player*>(actor)->name();
-    } catch (...) {
-        name.clear();
-    }
-    if (name.empty() && g_actorGetNameTag) {
+    // Prefer the exported native Actor::getNameTag API; keep the SDK field as fallback.
+    if (g_actorGetNameTag) {
         try { name = g_actorGetNameTag(actor); } catch (...) { name.clear(); }
+    }
+    if (name.empty()) {
+        try { name = reinterpret_cast<const bedrocktools::sdk::Player*>(actor)->name(); }
+        catch (...) { name.clear(); }
     }
     if (name.size() > 96) name.resize(96);
     name.erase(std::remove_if(name.begin(), name.end(), [](unsigned char c) {
@@ -49,7 +173,6 @@ std::string safeName(void* actor) {
     const auto last = name.find_last_not_of(" \t\r\n");
     return name.substr(first, last - first + 1);
 }
-
 const char* modeName(std::int32_t mode) {
     switch (mode) {
         case 0: return "Survival";
@@ -73,8 +196,16 @@ void GamemodeCheckerModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
-    g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
-        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
+    if (!g_actorGetNameTag) {
+        g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
+            resolveGameSymbol("_ZNK5Actor10getNameTagEv"));
+    }
+    g_actorGetStatusFlag = reinterpret_cast<ActorGetStatusFlagFn>(
+        resolveGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
+    g_actorIsFlying = reinterpret_cast<ActorIsFlyingFn>(
+        resolveGameSymbol("_ZNK6Player8isFlyingEv"));
+    g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [](auto& event) {
@@ -112,9 +243,28 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
             bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
     }
-    if (!g_actorIsInvisible) {
-        g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
-            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
+    if (!g_actorGetNameTag) {
+        g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
+            resolveGameSymbol("_ZNK5Actor10getNameTagEv"));
+    }
+    if (!g_actorGetStatusFlag) {
+        g_actorGetStatusFlag = reinterpret_cast<ActorGetStatusFlagFn>(
+            resolveGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
+    }
+    if (!g_actorIsFlying) {
+        g_actorIsFlying = reinterpret_cast<ActorIsFlyingFn>(
+            resolveGameSymbol("_ZNK6Player8isFlyingEv"));
+    }
+    if (!g_isSolidBlockingBlock) {
+        g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
+    }
+    const auto probeNow = std::chrono::steady_clock::now();
+    for (auto it = g_spectatorProbes.begin(); it != g_spectatorProbes.end();) {
+        if (probeNow - it->second.lastSeen > std::chrono::seconds(12))
+            it = g_spectatorProbes.erase(it);
+        else
+            ++it;
     }
 
     GamemodeCheckerDiagnostics diag{};
@@ -201,9 +351,14 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         std::int32_t predicateMode = -1;
         const bool hasPredicateMode = !hasExactGameType &&
             bedrocktools::core::gamehooks::tryGetPlayerCreativeSpectator(actor, predicateMode);
+        const bool hasCombatCreativeHint = !hasExactGameType && !hasPredicateMode &&
+            bedrocktools::core::gamehooks::tryGetPlayerNoDamageCreativeHint(actor);
         bool attackable = true;
         const bool hasAttackability = !hasExactGameType && !hasPredicateMode &&
+            !hasCombatCreativeHint &&
             bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(actor, attackable);
+        const bool inferredSpectator = !hasExactGameType && !hasPredicateMode &&
+            !hasCombatCreativeHint && hasSpectatorNoclipEvidence(actor);
 
         std::string mode;
         bool inferred = false;
@@ -211,25 +366,19 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             mode = modeName(gameType);
         } else if (hasPredicateMode && (predicateMode == 1 || predicateMode == 3)) {
             mode = modeName(predicateMode);
+        } else if (hasCombatCreativeHint) {
+            mode = "Creative*";
+            inferred = true;
+        } else if (inferredSpectator) {
+            mode = "Spectator*";
+            inferred = true;
         } else if (hasAttackability) {
             inferred = true;
-            if (attackable) {
-                // This predicate cannot separate Survival from Adventure.
-                mode = "Survival/Adventure*";
-            } else {
-                // A non-attackable mode plus native invisibility suggests Spectator.
-                // The '*' is explicit: invisibility effects can also occur elsewhere.
-                bool invisible = false;
-                if (g_actorIsInvisible) {
-                    try { invisible = g_actorIsInvisible(actor); } catch (...) { invisible = false; }
-                }
-                mode = invisible ? "Spectator*" : "Creative*";
-            }
+            if (attackable) mode = "Survival/Adventure*";
+            else mode = "Creative/Spectator*";
         } else {
             mode = "Unknown";
-        }
-
-        if (hasExactGameType) ++diag.exactModeCount;
+        }       if (hasExactGameType) ++diag.exactModeCount;
         else if (inferred) ++diag.inferredModeCount;
         else ++diag.unresolvedModeCount;
 
@@ -308,6 +457,7 @@ void GamemodeCheckerModule::onFrame() {
         line.size = 16.0f;
         if (entry.mode == "Spectator" || entry.mode == "Spectator*") line.color = 0xFFB68CFF;
         else if (entry.mode == "Creative" || entry.mode == "Creative*") line.color = 0xFFFF4545;
+        else if (entry.mode == "Creative/Spectator*") line.color = 0xFFFFC266;
         else if (entry.mode == "Unknown") line.color = 0xFFBBBBBB;
         else if (entry.mode == "Adventure") line.color = 0xFF8CC4FF;
         else line.color = 0xFFFFFFFF;
