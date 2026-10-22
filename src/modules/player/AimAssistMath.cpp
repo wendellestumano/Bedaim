@@ -106,6 +106,18 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
     return bestIndex;
 }
 
+float elytraDistanceDislocation(float targetDistance, float strength,
+                                float startDistance) noexcept {
+    if (!std::isfinite(targetDistance) || !std::isfinite(strength) ||
+        !std::isfinite(startDistance)) {
+        return 0.0f;
+    }
+    const float safeDistance = std::clamp(targetDistance, 0.0f, 256.0f);
+    const float safeStrength = std::clamp(strength, 0.0f, 1.0f);
+    const float safeStartDistance = std::clamp(startDistance, 0.0f, 256.0f);
+    return std::max(0.0f, safeDistance - safeStartDistance) * safeStrength;
+}
+
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
                           float strength, bool enabled) noexcept {
     const float safeBase = std::clamp(
