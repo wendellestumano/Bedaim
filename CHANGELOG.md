@@ -1,7 +1,7 @@
-## 2026-10-22 — Android Spacebar Unglide via Moon/Key Mapper
-- Unglide now sends an explicit Android broadcast to the exported Moon/Key Mapper receiver, triggering an imported Key Map whose only action is KEYCODE_SPACE (62). The native Mob::jumpFromGround/Player::stopGliding calls were removed from the active Unglide path.
-- Added throttled diagnostics for JavaVM/context/Intent failures and for successful broadcast dispatch. A dispatched broadcast does not by itself confirm the app's Key Map or privileged injection bridge is configured.
-- Added an importable Key Mapper backup named "Bedaim Unglide - Spacebar"; it uses UID `8cfe3591-a1e8-44f0-9a9a-5ea6f745d24a`, which matches the native broadcast request. Moon/Key Mapper must have the map imported and enabled, plus its supported System Bridge/IME input path configured.
+## 2026-10-22 — Android Spacebar Unglide via MacroDroid
+- Unglide now sends a package-scoped Android broadcast with action `com.wendellestumano.bedaim.UNGLIDE_SPACEBAR`. MacroDroid's exported Intent Received capability can respond with its native Input Key Event action set to Space (KEYCODE_SPACE = 62). The active Unglide path no longer calls `Mob::jumpFromGround` or `Player::stopGliding`.
+- Added guarded JNI access to the process JavaVM and application context, with throttled diagnostics for VM/context/Intent/broadcast failures. Successful `sendBroadcast` only confirms dispatch, not that a MacroDroid macro or privileged input route is enabled.
+- One-time MacroDroid setup: create an enabled macro with an `Intent Received` trigger using the action above, and an `Input Key Event` action for Space. Configure MacroDroid's supported input path (Shizuku/ADB/root as available) so the event reaches Minecraft.
 - Creative and Spectator classification remains evidence-based: exact GameType/native predicates take precedence; repeated no-damage hits and repeated invisibility/no-collision/flying/block-overlap signals are labelled as heuristics.
 - ShadowHook experiment PR was closed; current builds remain on the Preloader hook backend.
 
