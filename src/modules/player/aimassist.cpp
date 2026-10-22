@@ -805,18 +805,30 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (isPlayer) {
             if (!m_targetPlayers) continue;
             if (m_ignoreCreativeSpectator) {
+                std::int32_t gameType = -1;
+                const bool hasExactGameType =
+                    bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType);
+                if (hasExactGameType && (gameType == 1 || gameType == 3)) continue;
+
+                std::int32_t predicateMode = -1;
+                const bool hasExactModePredicate = !hasExactGameType &&
+                    bedrocktools::core::gamehooks::tryGetPlayerCreativeSpectator(candidate, predicateMode);
+                if (hasExactModePredicate && (predicateMode == 1 || predicateMode == 3)) continue;
+
+                if (!hasExactGameType && !hasExactModePredicate &&
+                    bedrocktools::core::gamehooks::tryGetPlayerNoDamageCreativeHint(candidate)) {
+                    // Repeated accepted hit attempts with no observed damage are only a Creative candidate.
+                    continue;
+                }
+
                 bool isAttackable = true;
                 if (bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(
                         candidate, isAttackable)) {
                     if (!isAttackable) continue;
-                } else {
-                    std::int32_t gameType = -1;
-                    if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
-                        if (gameType == 1 || gameType == 3) continue;
-                    } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                        aimAssistLogger().warn(
-                            "Creative/Spectator filter unavailable: native attackability and GameType lookup both unresolved; those players may still be eligible.");
-                    }
+                } else if (!hasExactGameType && !hasExactModePredicate &&
+                           !g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
+                    aimAssistLogger().warn(
+                        "Creative/Spectator filter has no exact native signal; no-damage attacks are tracked heuristically.");
                 }
             }
         } else {
