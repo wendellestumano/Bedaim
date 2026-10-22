@@ -44,7 +44,7 @@ struct InteractionResultValue {
 };
 
 using VersionStringFn = std::string(*)(void*);
-using NormalTickFn = void(*)(void*);
+using NormalTickFn = void*(*)(void*);
 using StartDestroyBlockFn = bool(*)(void*, const void*, std::uint8_t, bool*);
 using StopDestroyBlockFn = void(*)(void*, const void*);
 using StartBuildBlockFn = void(*)(void*, const void*, std::uint8_t);
@@ -85,6 +85,10 @@ ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
 std::atomic<void*> currentLocalPlayer = nullptr;
+// Non-null only when the installed LocalPlayer::normalTick hook has directly
+// identified its `this` pointer. A failed ClientInstance getter must not erase
+// a fresher identity captured by the tick hook.
+std::atomic<void*> g_tickCapturedLocalPlayer{nullptr};
 std::atomic<void*> currentGameMode = nullptr;
 std::atomic<void*> g_localPlayerResolveClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
@@ -1149,9 +1153,8 @@ bool clientInstanceDirectlyOwnsPlayer(void* clientInstance, void* actor, std::si
     if (scanObjectForExactPlayerPointer(clientInstance, 0x400, matchedOffset)) return true;
 
     // Some Bedrock layouts expose the local player through MinecraftGame rather
-    // than storing the pointer directly on ClientInstance. This is an existing,
-    // version-profiled virtual accessor (slot 83 in Core.hpp), not a guessed
-    // LocalPlayer getter. Validate the returned object before comparing its fields.
+    // than storing the pointer directly on ClientInstance. This is an existing
+    // SDK accessor; validate the returned object before comparing its fields.
     auto* sdkClient = reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
     void* minecraftGame = sdkClient->minecraftGame();
     if (minecraftGame && minecraftGame != clientInstance &&
@@ -1427,9 +1430,42 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
     return nullptr;
 }
 
-void tickDetour(void* actor) {
+void* tickDetour(void* actor) {
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
+
+    // Key recovery path informed by Apollon's LocalPlayer::normalTick hook:
+    // when this detour is installed on the exact NormalTick implementation,
+    // its receiver pointer is the LocalPlayer for that tick. Do not make this
+    // identity depend on ClientInstance::getLocalPlayer(), which has repeatedly
+    // returned null in the user's runtime. Still require the independent
+    // Actor::isPlayer classifier before promoting the receiver.
+    static const auto normalTickActorClassifier =
+        bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+    const bool normalTickActorClassifierReady = normalTickActorClassifier &&
+        isMinecraftFunction(reinterpret_cast<const void*>(normalTickActorClassifier));
+    const bool normalTickReceiverIsPlayer = actor &&
+        isReadableMemory(actor, sizeof(void*)) &&
+        normalTickActorClassifierReady &&
+        reinterpret_cast<bool (*)(void*)>(normalTickActorClassifier)(actor);
+
+    if (normalTickReceiverIsPlayer) {
+        // Publish the provenance first. If ClientInstance::update is running on
+        // another thread, its failing getter must not invalidate this capture.
+        g_tickCapturedLocalPlayer.store(actor, std::memory_order_release);
+        void* previousLocal = currentLocalPlayer.exchange(actor, std::memory_order_acq_rel);
+        local = actor;
+        if (previousLocal != actor) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Info, "GameHooks",
+                "verified_local_player", "captured_from_normal_tick_receiver",
+                std::string("player=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                    "; previous_player=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(previousLocal)) +
+                    "; source=NormalTick_this; actor_classifier=confirmed; client_instance_required=no");
+        }
+    }
 
     // Only the receiver accepted by the verified ClientInstance::update hook
     // can seed local-player recovery. ClientInstance::current() is deliberately
@@ -1458,6 +1494,7 @@ void tickDetour(void* actor) {
                 if (isPlayer) {
                     std::size_t matchedOffset = 0;
                     if (clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset)) {
+                        g_tickCapturedLocalPlayer.store(actor, std::memory_order_release);
                         currentLocalPlayer.store(actor, std::memory_order_release);
                         local = actor;
                         char buffer[32]{};
@@ -1495,7 +1532,10 @@ void tickDetour(void* actor) {
         bus().publish(verifiedPre);
     }
 
-    if (tickOriginal) tickOriginal(actor);
+    // Apollon's reference declares LocalPlayer::normalTick as returning
+    // void*. Preserve that ABI and forward the exact native return value; a
+    // void detour would silently discard the return register on ARM64.
+    void* nativeTickResult = tickOriginal ? tickOriginal(actor) : nullptr;
 
     if (verified) {
         bedaim::events::VerifiedLocalPlayerTickEvent postTick{
@@ -1521,6 +1561,7 @@ void tickDetour(void* actor) {
                     currentLocalPlayer.load(std::memory_order_acquire))) +
                 "; original=" + (tickOriginal ? "ready" : "missing"));
     }
+    return nativeTickResult;
 }
 
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
@@ -1706,6 +1747,7 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
             clientInstance, std::memory_order_acq_rel);
         if (previous != clientInstance) {
             currentLocalPlayer.store(nullptr, std::memory_order_release);
+            g_tickCapturedLocalPlayer.store(nullptr, std::memory_order_release);
             g_localPlayerResolveClient.store(nullptr, std::memory_order_release);
             g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
             g_localPlayerTickProbeClient.store(nullptr, std::memory_order_release);
@@ -1744,26 +1786,48 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
         ? clientUpdateOriginal(clientInstance, value) : false;
 
     void* acceptedClient = currentClientInstance.load(std::memory_order_acquire);
+    // Keep a 250 ms cadence for GameMode discovery, but stop asking the
+    // known-null ClientInstance getter after LocalPlayer::normalTick has supplied
+    // an authoritative Player* receiver. This preserves attack-observer setup
+    // without allowing a failed getter to erase the direct tick identity.
     if (receiverValid && acceptedClient == clientInstance &&
         shouldResolveLocalPlayer(acceptedClient)) {
-        // Snapshot the cache before probing. If all authoritative routes fail,
-        // clear only that exact cached value; a concurrent fresh capture wins.
-        void* cachedBeforeResolution =
-            currentLocalPlayer.load(std::memory_order_acquire);
-        void* resolvedPlayer = resolveLocalPlayerFromClientInstance(acceptedClient);
-        if (resolvedPlayer) {
-            void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
+        void* tickIdentity =
+            g_tickCapturedLocalPlayer.load(std::memory_order_acquire);
+        if (tickIdentity) {
+            // Prefer the actual LocalPlayer::normalTick receiver over any result
+            // from a getter invocation that started before the tick capture.
+            currentLocalPlayer.store(tickIdentity, std::memory_order_release);
+            void* resolvedGameMode = gameModeForPlayer(tickIdentity);
             if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
-        } else if (bedaim::core::clearCachedPointerIfUnchanged(
-                       currentLocalPlayer, cachedBeforeResolution)) {
-            currentGameMode.store(nullptr, std::memory_order_release);
-            bedrocktools::diagnostics::probe(
-                bedrocktools::diagnostics::Level::Warning, "GameHooks",
-                "verified_local_player", "cached_player_invalidated_after_resolution_miss",
-                std::string("client_instance=") +
-                    std::to_string(reinterpret_cast<std::uintptr_t>(acceptedClient)) +
-                    "; stale_player=" +
-                    std::to_string(reinterpret_cast<std::uintptr_t>(cachedBeforeResolution)));
+        } else {
+            // Snapshot the cache before probing. If all authoritative routes fail,
+            // clear only that exact cached value; a concurrent fresh capture wins.
+            void* cachedBeforeResolution =
+                currentLocalPlayer.load(std::memory_order_acquire);
+            void* resolvedPlayer = resolveLocalPlayerFromClientInstance(acceptedClient);
+            // The NormalTick source may have appeared while the resolver ran. It
+            // wins over both a null result and any stale cached pointer.
+            void* capturedDuringResolution =
+                g_tickCapturedLocalPlayer.load(std::memory_order_acquire);
+            if (capturedDuringResolution) {
+                currentLocalPlayer.store(capturedDuringResolution, std::memory_order_release);
+                void* resolvedGameMode = gameModeForPlayer(capturedDuringResolution);
+                if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
+            } else if (resolvedPlayer) {
+                void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
+                if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
+            } else if (bedaim::core::clearCachedPointerIfUnchanged(
+                           currentLocalPlayer, cachedBeforeResolution)) {
+                currentGameMode.store(nullptr, std::memory_order_release);
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                    "verified_local_player", "cached_player_invalidated_after_resolution_miss",
+                    std::string("client_instance=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(acceptedClient)) +
+                        "; stale_player=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(cachedBeforeResolution)));
+            }
         }
     }
 
@@ -1975,6 +2039,7 @@ void uninstall() {
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentLocalPlayer.store(nullptr, std::memory_order_release);
+    g_tickCapturedLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     g_clientUpdateIdentity.store(0, std::memory_order_release);
     g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);

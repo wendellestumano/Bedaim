@@ -22,6 +22,20 @@ void check(bool condition, std::string_view name) {
 int main() {
     using bedaim::core::clearCachedPointerIfUnchanged;
 
+    using bedaim::core::shouldAcceptCameraActorCandidate;
+    check(shouldAcceptCameraActorCandidate(true, true, true),
+          "stable player owned by ClientInstance is accepted");
+    check(!shouldAcceptCameraActorCandidate(false, true, true),
+          "unstable camera actor is rejected");
+    check(!shouldAcceptCameraActorCandidate(true, false, true),
+          "non-player camera actor is rejected");
+    check(!shouldAcceptCameraActorCandidate(true, true, false),
+          "player not owned by ClientInstance is rejected");
+    check(!shouldAcceptCameraActorCandidate(false, false, true),
+          "unstable non-player candidate is rejected");
+    check(!shouldAcceptCameraActorCandidate(true, false, false),
+          "unowned non-player candidate is rejected");
+
     void* stale = reinterpret_cast<void*>(std::uintptr_t{0x1000});
     void* fresh = reinterpret_cast<void*>(std::uintptr_t{0x2000});
     std::atomic<void*> cache{stale};

@@ -1,3 +1,11 @@
+## 2026-10-22 — Follow Apollon NormalTick identity and preserve native ABI
+
+- Compared the uploaded Apollon source directly: its `NormalTick(LocalPlayer *thiz)` wrapper has a `void*` return type and assigns `localPlayer = thiz` from the exact LocalPlayer tick hook. BedAim now uses a pointer-returning hook signature and returns the original game's value unchanged.
+- BedAim now records the validated NormalTick receiver as the strong LocalPlayer source. The ClientInstance getter is skipped after this route succeeds, so a known-null getter cannot erase the fresher `this` pointer. GameMode discovery and attack-observer setup remain on a 250 ms cadence using that direct player.
+- A concurrent getter failure is also prevented from clearing a pointer that the NormalTick hook has captured. Both instance transitions and hook uninstall clear the provenance marker.
+- The uploaded Apollon README identifies its codebase as Minecraft 1.21.50; no version-specific absolute offsets were copied. Only the normalTick identity/ABI pattern was used.
+- Host and Android ARM64 CI are required; the latest build has not yet been tested in-game.
+
 ## 2026-10-21 — Validate GameHooks receiver and LocalPlayer getter identity
 
 - Removed circular `ClientInstance::current()` calls from GameHooks recovery and callback validation. In this project, `sdk::ClientInstance::current()` calls `Api.cpp`, whose provider returns `GameHooks::clientInstance()`; that merely reads the same cache being diagnosed.
