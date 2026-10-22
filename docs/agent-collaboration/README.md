@@ -11,7 +11,7 @@ This directory is the durable coordination layer for GitHub Copilot, OpenAI Code
 ## What it does not do by itself
 Repository files cannot force two separate chat sessions or the ChatGPT mobile app to message each other continuously. The GitHub connection inside ChatGPT is for reading/searching repository content, not directly editing a Codespace filesystem. The VS Code agent workflow can hand off between compatible agents in the same supported session; availability depends on the VS Code client, selected harness, and account.
 
-For actual automatic cross-session orchestration, a separate runner must watch GitHub issues/labels or workflow events, call each provider through an authorized API, store outputs, and open/update PRs. This requires deliberate credential setup, cost controls, and least-privilege permissions. Do not store API keys in this repository. Do not give an automation permission to merge into `main`.
+The repository now includes a GitHub Actions runner for a bounded Copilot CLI loop and a separate read-only AI reviewer workflow. These are configured on the collaboration branch in PR #66; they are not active on `main` until the PR is reviewed and merged. This is a sequential Copilot-based workflow, not an always-on bridge that makes Copilot, Codex, and ChatGPT chat with one another. Never store tokens in repository files or prompts, and never give an AI workflow merge permission.
 
 ## Suggested roles
 1. **Coordinator** — read-only reconnaissance, task decomposition, conflict detection, and handoff.
@@ -51,3 +51,33 @@ Replace the path with the actual NDK location. Check current CI and project scri
 - Have Implementer make a documentation-only change on a test branch.
 - Have Reviewer inspect that diff without editing.
 - Verify both handoff reports include branch/commit, changed files, checks, evidence, and remaining risks.
+
+## Automated GitHub Actions agent loop
+
+The collaboration branch adds two workflows:
+
+- `.github/workflows/bedaim-ai-agent.yml` — manually triggered **BedAim AI Agent Runner**. The Coordinator creates an evidence-based plan. In `implement` mode, the Implementer may make a scoped change in a fresh Actions checkout on a new `agent/copilot-<run-id>` branch. A draft PR is opened only if the Implementer step succeeds. The existing `Build` workflow is then dispatched against that branch.
+- `.github/workflows/bedaim-ai-review.yml` — after a completed `Build` run, finds only an open same-repository PR from an `agent/copilot-` branch that matches the exact built SHA, runs Copilot with read/search tools only, and posts or updates an advisory comment. It does not approve, request changes through GitHub, merge, or run fork PR code.
+
+### One-time authentication setup
+
+The Copilot CLI workflow requires an Actions repository secret named `COPILOT_GITHUB_TOKEN`. Create a fine-grained personal access token with the **Copilot Requests** permission and save it at **Settings → Secrets and variables → Actions → New repository secret**. Never paste that token into chat or commit it to the repository. See the [official Copilot CLI Actions guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/automate-copilot-cli/automate-with-actions).
+
+Because this is a public personal repository, the workflow uses the PAT-based authentication route. These workflows are not active on `main` until PR #66 is merged. Adding the secret is a maintainer action; this repository integration cannot create or read secret values.
+
+### Run the agent loop
+
+After PR #66 is merged and the secret is configured:
+
+1. Open **Actions → BedAim AI Agent Runner → Run workflow**.
+2. Choose `plan-only` to inspect a task first, or `implement` to permit the scoped Implementer to edit files in its isolated runner.
+3. Enter one concrete task with success criteria and a valid base branch (normally `main`).
+4. Inspect the run summary. In `implement` mode, review the draft PR and the matching Build result; the automatic AI review is an advisory comment on that PR.
+
+The workflow only accepts manual runs triggered by the repository owner. AI output remains untrusted until reviewed. No agent can merge. CI can prove tests/compilation only for the exact SHA; an in-game Minecraft test on the target device is still needed for runtime claims. Failed/partial implementation runs are not automatically packaged into a PR.
+
+### Scope limitations
+
+- This automates the Copilot CLI Coordinator → Implementer sequence and a follow-up read-only Reviewer; it does **not** automatically invoke the separate Codex service or the mobile ChatGPT app.
+- The reviewer workflow becomes event-active only after it is on the default branch. Until then, its YAML is merely part of PR #66.
+- Configure and verify server-side protection on `main` separately. Files in a PR do not enforce branch rules by themselves.
