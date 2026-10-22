@@ -29,6 +29,7 @@ int main() {
     using bedaim::aimmath::aimPointAtHeight;
     using bedaim::aimmath::fourAimAnchors;
     using bedaim::aimmath::nearestAnchorToRay;
+    using bedaim::aimmath::elytraDistanceDislocation;
 
     const float wrapAcrossBoundary = wrapDegrees(-179.0f - 179.0f);
     check(std::abs(wrapAcrossBoundary - 2.0f) < 1.0e-4f,
@@ -85,6 +86,17 @@ int main() {
           "non-finite angular error produces no camera delta");
     check(boundedTurnStep(90.0f, nan, 1.0f / 60.0f) == 0.0f,
           "non-finite turn rate produces no camera delta");
+
+    check(std::abs(elytraDistanceDislocation(4.0f, 0.25f)) < 1.0e-4f,
+          "Elytra dislocation has no effect inside the close-distance dead zone");
+    check(std::abs(elytraDistanceDislocation(10.0f, 0.25f) - 1.5f) < 1.0e-4f,
+          "Elytra dislocation increases proportionally to target distance and strength");
+    check(std::abs(elytraDistanceDislocation(10.0f, 0.0f)) < 1.0e-4f,
+          "zero Elytra strength disables downward dislocation");
+    check(std::abs(elytraDistanceDislocation(10.0f, 2.0f) - 6.0f) < 1.0e-4f,
+          "Elytra strength is clamped to the supported 0–1 range");
+    check(elytraDistanceDislocation(std::numeric_limits<float>::infinity(), 0.5f) == 0.0f,
+          "non-finite Elytra distances fail closed");
 
     const float nearScale = bedaim::aimmath::distanceHitboxScale(1.0f, 0.5f, 30.0f, 5.0f, true);
     const float mediumScale = bedaim::aimmath::distanceHitboxScale(1.0f, 10.0f, 30.0f, 5.0f, true);
