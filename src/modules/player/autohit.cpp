@@ -4,7 +4,6 @@
 #include "AutoHitGuards.hpp"
 #include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
-#include "core/GameHooks.hpp"
 #include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
 
@@ -16,12 +15,128 @@
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
+#include <dlfcn.h>
+#include <jni.h>
 #include <cmath>
 #include <cctype>
 #include <string>
 #include <utility>
 
 namespace {
+constexpr const char* kMacroDroidPackage = "com.arlosoft.macrodroid";
+constexpr const char* kAutoHitKeyZeroAction =
+    "com.wendellestumano.bedaim.AUTOHIT_KEY0";
+
+using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
+JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
+    static void* artHandle = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
+    static auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    if (!getVms && artHandle)
+        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+            dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+    return getVms;
+}
+
+class AutoHitJniEnvironment {
+public:
+    AutoHitJniEnvironment() {
+        const auto getVms = resolveJniGetCreatedJavaVMs();
+        if (!getVms) return;
+        JavaVM* vm = nullptr;
+        jsize count = 0;
+        if (getVms(&vm, 1, &count) != JNI_OK || count < 1 || !vm) return;
+        mVm = vm;
+        const jint status = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
+        if (status == JNI_OK) return;
+        if (status != JNI_EDETACHED) { mEnv = nullptr; return; }
+        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) mAttached = true;
+        else mEnv = nullptr;
+    }
+    ~AutoHitJniEnvironment() { if (mAttached && mVm) mVm->DetachCurrentThread(); }
+    JNIEnv* get() const noexcept { return mEnv; }
+private:
+    JavaVM* mVm = nullptr;
+    JNIEnv* mEnv = nullptr;
+    bool mAttached = false;
+};
+
+bool clearAutoHitJniException(JNIEnv* env) {
+    if (!env || !env->ExceptionCheck()) return false;
+    env->ExceptionClear();
+    return true;
+}
+
+enum class KeyZeroDispatchResult { Sent, VmUnavailable, ContextUnavailable, IntentUnavailable, BroadcastFailed };
+
+KeyZeroDispatchResult dispatchMacroDroidKeyZero() {
+    AutoHitJniEnvironment jni;
+    JNIEnv* env = jni.get();
+    if (!env) return KeyZeroDispatchResult::VmUnavailable;
+    if (env->PushLocalFrame(32) != JNI_OK) {
+        clearAutoHitJniException(env);
+        return KeyZeroDispatchResult::IntentUnavailable;
+    }
+    struct LocalFrameGuard { JNIEnv* env; ~LocalFrameGuard() { env->PopLocalFrame(nullptr); } } frame{env};
+
+    jobject app = nullptr;
+    jclass threadClass = env->FindClass("android/app/ActivityThread");
+    if (threadClass && !clearAutoHitJniException(env)) {
+        jmethodID currentApp = env->GetStaticMethodID(threadClass, "currentApplication", "()Landroid/app/Application;");
+        if (currentApp && !clearAutoHitJniException(env)) {
+            app = env->CallStaticObjectMethod(threadClass, currentApp);
+            if (clearAutoHitJniException(env)) app = nullptr;
+        } else clearAutoHitJniException(env);
+    } else clearAutoHitJniException(env);
+    if (!app) {
+        jclass globals = env->FindClass("android/app/AppGlobals");
+        if (globals && !clearAutoHitJniException(env)) {
+            jmethodID initialApp = env->GetStaticMethodID(globals, "getInitialApplication", "()Landroid/app/Application;");
+            if (initialApp && !clearAutoHitJniException(env)) {
+                app = env->CallStaticObjectMethod(globals, initialApp);
+                if (clearAutoHitJniException(env)) app = nullptr;
+            } else clearAutoHitJniException(env);
+        } else clearAutoHitJniException(env);
+    }
+    if (!app) return KeyZeroDispatchResult::ContextUnavailable;
+
+    jclass intentClass = env->FindClass("android/content/Intent");
+    if (!intentClass || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jmethodID ctor = env->GetMethodID(intentClass, "<init>", "()V");
+    jmethodID setAction = env->GetMethodID(intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
+    jmethodID setPackage = env->GetMethodID(intentClass, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearAutoHitJniException(env) || !ctor || !setAction || !setPackage)
+        return KeyZeroDispatchResult::IntentUnavailable;
+    jobject intent = env->NewObject(intentClass, ctor);
+    if (!intent || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jstring action = env->NewStringUTF(kAutoHitKeyZeroAction);
+    jstring packageName = env->NewStringUTF(kMacroDroidPackage);
+    if (!action || !packageName || clearAutoHitJniException(env))
+        return KeyZeroDispatchResult::IntentUnavailable;
+    env->CallObjectMethod(intent, setAction, action);
+    if (clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    env->CallObjectMethod(intent, setPackage, packageName);
+    if (clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jclass contextClass = env->FindClass("android/content/Context");
+    if (!contextClass || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jmethodID sendBroadcast = env->GetMethodID(contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
+    if (!sendBroadcast || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    env->CallVoidMethod(app, sendBroadcast, intent);
+    if (clearAutoHitJniException(env)) return KeyZeroDispatchResult::BroadcastFailed;
+    return KeyZeroDispatchResult::Sent;
+}
+
+const char* keyZeroDispatchResultName(KeyZeroDispatchResult result) {
+    switch (result) {
+        case KeyZeroDispatchResult::Sent: return "macrodroid_key0_broadcast_sent";
+        case KeyZeroDispatchResult::VmUnavailable: return "android_java_vm_unavailable";
+        case KeyZeroDispatchResult::ContextUnavailable: return "android_context_unavailable";
+        case KeyZeroDispatchResult::IntentUnavailable: return "android_intent_api_unavailable";
+        case KeyZeroDispatchResult::BroadcastFailed: return "macrodroid_key0_broadcast_failed";
+    }
+    return "macrodroid_key0_broadcast_unknown";
+}
+
 thread_local bool g_autoHitSyntheticAttack = false;
 
 using bedrocktools::sdk::AABB;
@@ -246,21 +361,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
         return;
     }
-    // Check native dispatch availability before waiting for input. Otherwise an
-    // unsupported runtime looks like a broken input button forever, hiding the
-    // actual blocker from diagnostics. This check never performs an attack.
-    void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
-        return;
-    }
-    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
-    if (!attackRouteAvailable) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable",
-            "public GameMode attack vtable/signature route failed runtime validation");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
+    // AutoHit now asks MacroDroid to emit a physical KEYCODE_0 event.
+    // The external input route does not require a native GameMode attack function.
 
     if (!attackHeld) {
         const std::string inputState = std::string("waiting_for_attack_input_button_") +
@@ -351,8 +453,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         target != nullptr,
         validBounds(targetBounds),
         true, // currentTargetSnapshot rejects stale target data
-        gameMode != nullptr,
-        attackRouteAvailable,
+        true, // external MacroDroid input route does not use GameMode
+        true, // external MacroDroid input route does not use the native attack wrapper
         finiteVec(hitPoint),
         true, // cooldown was checked immediately before resolving GameMode
         std::sqrt(distanceSq),
@@ -365,22 +467,18 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    struct SyntheticAttackGuard {
-        bool previous;
-        SyntheticAttackGuard() : previous(g_autoHitSyntheticAttack) { g_autoHitSyntheticAttack = true; }
-        ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
-    } syntheticAttackGuard;
-    const bool attacked = core::gamehooks::attack(gameMode, target, true, &hitPoint);
+    const auto dispatchResult = dispatchMacroDroidKeyZero();
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        // CPS is an attempt-rate cap, not only a success-rate cap. Failed native
-        // dispatches must not bypass the selected weapon profile and retry at 10 Hz.
-        m_nextAttack = now + std::chrono::milliseconds(
-            std::clamp(intervalMs, 50, 1000));
+        // Rate-limit key-event requests according to the selected weapon profile.
+        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
     }
-    diagnostics::probe(attacked ? diagnostics::Level::Info : diagnostics::Level::Warning,
-        "AutoHit", "attack_result", attacked ? "accepted" : "rejected",
-        attacked ? "native attack wrapper returned success" : "native attack wrapper returned false");
+    const bool dispatched = dispatchResult == KeyZeroDispatchResult::Sent;
+    diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Warning,
+        "AutoHit", "key0_dispatch", keyZeroDispatchResultName(dispatchResult),
+        dispatched
+            ? "Android accepted the package-scoped MacroDroid trigger; configure its Intent Received action to emit keyboard key 0 (KEYCODE_0=7). This does not prove the key event reached Minecraft."
+            : "MacroDroid trigger dispatch failed before key delivery; inspect Android VM/context/Intent diagnostics");
 }
 
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
