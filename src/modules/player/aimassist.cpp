@@ -302,6 +302,9 @@ HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
     const std::string identifier =
         bedrocktools::core::InventoryAccess::get().selectedHotbarIdentifier(player);
     if (identifier.empty()) return HeldWeapon::None;
+    // Check longer/specific identifiers before generic substrings. Some custom item
+    // identifiers include "axe" as part of another weapon name; treating every such
+    // identifier as an axe defeats the intended custom-melee fallback below.
     if (identifier.find("pickaxe") != std::string::npos ||
         identifier.find("shovel") != std::string::npos ||
         identifier.find("hoe") != std::string::npos) return HeldWeapon::Tool;
@@ -310,8 +313,7 @@ HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
     if (identifier.find("mace") != std::string::npos) return HeldWeapon::Mace;
     if (identifier.find("spear") != std::string::npos) return HeldWeapon::Spear;
     if (identifier.find("sword") != std::string::npos) return HeldWeapon::Sword;
-    if (identifier.find("pickaxe") == std::string::npos &&
-        identifier.find("axe") != std::string::npos) return HeldWeapon::Axe;
+    if (identifier.find("axe") != std::string::npos) return HeldWeapon::Axe;
     if (identifier.find("bow") != std::string::npos) return HeldWeapon::Bow;
 
     constexpr std::string_view otherWeapons[] = {
