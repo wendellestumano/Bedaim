@@ -15,18 +15,14 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
            fallDistance >= normalizeMinimumFallDistance(minimumFallDistance);
 }
 
-inline bool shouldUnglide(bool enabled, bool isGliding,
-                          float targetDistance, float maximumTargetDistance,
-                          float groundClearance, float maximumGroundClearance) noexcept {
+inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
+                                    float targetDistance, float maximumTargetDistance) noexcept {
     if (!enabled || !isGliding ||
         !std::isfinite(targetDistance) || !std::isfinite(maximumTargetDistance) ||
-        !std::isfinite(groundClearance) || !std::isfinite(maximumGroundClearance) ||
-        targetDistance < 0.0f || groundClearance < 0.0f) {
+        targetDistance < 0.0f) {
         return false;
     }
     const float safeTargetDistance = std::clamp(maximumTargetDistance, 1.0f, 32.0f);
-    const float safeGroundClearance = std::clamp(maximumGroundClearance, 1.0f, 24.0f);
-    return targetDistance <= safeTargetDistance &&
-           groundClearance <= safeGroundClearance;
+    return targetDistance <= safeTargetDistance;
 }
 } // namespace bedaim::macefall

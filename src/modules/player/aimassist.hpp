@@ -36,9 +36,6 @@ public:
     bool m_cantSeeThroughBlocks = true;
     std::string m_aimMode = "Classic";
     std::string m_trackingMode = "Smooth";
-    bool m_elytraMode = false;
-    // Downward target-point shift per block beyond the close-range dead zone while gliding.
-    float m_elytraDistanceDislocateStrength = 0.20f;
     bool m_naturalization = true;
     std::string m_naturalizationWeapon = "All";
     bool m_weaponOnly = false;

@@ -14,6 +14,7 @@
 #include "hud/potcounter.hpp"
 #include "player/quickloot.hpp"
 #include "player/aimassist.hpp"
+#include "player/autohit.hpp"
 #include "player/maceswapper.hpp"
 #include "player/swordswapper.hpp"
 #include "hud/reachcounter.hpp"
@@ -37,6 +38,7 @@
 #include "hud/keystrokes.hpp"
 #include "visual/thirdpersonnametag.hpp"
 #include "hud/tablist.hpp"
+#include "hud/gamemodechecker.hpp"
 #include "hud/combocounter.hpp"
 #include "hud/ultrakillhud.hpp"
 #include "visual/chunkborder.hpp"
@@ -126,6 +128,7 @@ void registerAllModules() {
     registry.emplace<QuickLootModule>();
     registry.emplace<AutoSprintModule>();
     registry.emplace<AimAssistModule>();
+    registry.emplace<AutoHitModule>();
     registry.emplace<HitboxExpanderModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<SwordSwapperModule>();
@@ -142,6 +145,7 @@ void registerAllModules() {
     registry.emplace<KeystrokesModule>();
     registry.emplace<ThirdPersonNametagModule>();
     registry.emplace<TablistModule>();
+    registry.emplace<GamemodeCheckerModule>();
     registry.emplace<ChunkBorderModule>();
     registry.emplace<HitboxModule>();
     registry.emplace<ZoomModule>();

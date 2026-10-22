@@ -11,11 +11,14 @@
 #include <bedrocktools/sdk/offsets/UI.hpp>
 #include <bedrocktools/sdk/offsets/World.hpp>
 #include <bedrocktools/sdk/client/ClientInstance.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
 #include <dlfcn.h>
 #include <EGL/egl.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstring>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -92,9 +95,14 @@ thread_local bool syntheticAttackNativeResult = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
 using ActorIsAttackableGamemodeFn = bool (*)(void*);
+using ActorModePredicateFn = bool (*)(const void*);
 std::atomic<PlayerGetGameTypeFn> playerGetGameTypeOriginal{nullptr};
 std::atomic<ActorIsAttackableGamemodeFn> actorIsAttackableGamemodeOriginal{nullptr};
 std::chrono::steady_clock::time_point actorAttackabilityNextResolve{};
+std::atomic<ActorModePredicateFn> actorIsCreativeOriginal{nullptr};
+std::atomic<ActorModePredicateFn> actorIsSpectatorOriginal{nullptr};
+std::mutex actorModePredicateResolveMutex;
+std::chrono::steady_clock::time_point actorModePredicateNextResolve{};
 PlayerSetGameTypeFn playerSetGameTypeOriginal = nullptr;
 std::chrono::steady_clock::time_point playerGameTypeNextResolve{};
 std::chrono::steady_clock::time_point playerSetGameTypeNextResolve{};
@@ -102,6 +110,74 @@ std::atomic_bool playerSetGameTypeHookInstalled{false};
 std::atomic_bool playerSetGameTypeSeen{false};
 std::mutex playerGameTypeCacheMutex;
 std::unordered_map<const void*, std::int32_t> playerGameTypeCache;
+
+struct NoDamageAttackEvidence {
+    std::chrono::steady_clock::time_point pendingSince{};
+    std::chrono::steady_clock::time_point lastAttemptAt{};
+    std::chrono::steady_clock::time_point lastSeen{};
+    std::chrono::steady_clock::time_point creativeCandidateUntil{};
+    unsigned noDamageAttempts = 0;
+    bool pending = false;
+};
+std::mutex noDamageEvidenceMutex;
+std::unordered_map<const void*, NoDamageAttackEvidence> noDamageEvidence;
+
+bool attackPointTouchesTarget(void* target, const void* hitPosition) {
+    if (!target || !hitPosition) return false;
+    const auto bounds = reinterpret_cast<const bedrocktools::sdk::Actor*>(target)->bounds();
+    bedrocktools::sdk::Vec3 point{};
+    std::memcpy(&point, hitPosition, sizeof(point));
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z) ||
+        !std::isfinite(bounds.min.x) || !std::isfinite(bounds.min.y) ||
+        !std::isfinite(bounds.min.z) || !std::isfinite(bounds.max.x) ||
+        !std::isfinite(bounds.max.y) || !std::isfinite(bounds.max.z)) return false;
+    constexpr float tolerance = 0.65f;
+    return point.x >= bounds.min.x - tolerance && point.x <= bounds.max.x + tolerance &&
+           point.y >= bounds.min.y - tolerance && point.y <= bounds.max.y + tolerance &&
+           point.z >= bounds.min.z - tolerance && point.z <= bounds.max.z + tolerance;
+}
+
+void recordNoDamageAttackAttempt(void* target, const void* hitPosition) {
+    if (!target || !attackPointTouchesTarget(target, hitPosition)) return;
+    const auto now = std::chrono::steady_clock::now();
+    auto* actor = reinterpret_cast<const bedrocktools::sdk::Actor*>(target);
+    const int hurtTime = actor->hurtTime();
+
+    std::lock_guard<std::mutex> lock(noDamageEvidenceMutex);
+    for (auto it = noDamageEvidence.begin(); it != noDamageEvidence.end();) {
+        if (now - it->second.lastSeen > std::chrono::seconds(20))
+            it = noDamageEvidence.erase(it);
+        else
+            ++it;
+    }
+
+    auto& evidence = noDamageEvidence[target];
+    evidence.lastSeen = now;
+    if (hurtTime > 0) {
+        evidence.noDamageAttempts = 0;
+        evidence.pending = false;
+        evidence.creativeCandidateUntil = {};
+        return;
+    }
+
+    // Wait for each trial to settle. Rapid repeats don't count as independent hits.
+    if (evidence.pending ||
+        (evidence.lastAttemptAt.time_since_epoch().count() != 0 &&
+         now - evidence.lastAttemptAt < std::chrono::milliseconds(450))) return;
+    evidence.pendingSince = now;
+    evidence.lastAttemptAt = now;
+    evidence.pending = true;
+
+    if (noDamageEvidence.size() > 512) {
+        auto oldest = noDamageEvidence.end();
+        for (auto it = noDamageEvidence.begin(); it != noDamageEvidence.end(); ++it) {
+            if (it->first == target) continue;
+            if (oldest == noDamageEvidence.end() ||
+                it->second.lastSeen < oldest->second.lastSeen) oldest = it;
+        }
+        if (oldest != noDamageEvidence.end()) noDamageEvidence.erase(oldest);
+    }
+}
 
 template <class Function>
 bool hookSignature(SignatureId id, void* detour, Function** original) {
@@ -281,20 +357,37 @@ void* resolveMinecraftFunction(const char* name) {
 
 void* resolveLoadedClientSupportFunction(const char* name) {
     if (!name || !*name) return nullptr;
-    void* address = dlsym(RTLD_DEFAULT, name);
-    if (!address) return nullptr;
 
-    Dl_info info{};
-    if (!dladdr(address, &info) || !info.dli_fname) return nullptr;
-    const std::string_view libraryPath(info.dli_fname);
-    // closeContainerScreen is a client-SDK helper on some distributions, not
-    // necessarily a symbol in libminecraftpe.so. Accept it only from a known
-    // loaded Bedrock/LeviLamina runtime image, never from an arbitrary module.
-    const bool trustedImage =
-        libraryPath.find("libminecraftpe.so") != std::string_view::npos ||
-        libraryPath.find("liblevilamina.so") != std::string_view::npos ||
-        libraryPath.find("libLeviLamina.so") != std::string_view::npos;
-    return trustedImage ? address : nullptr;
+    auto trustedImage = [](void* candidate) {
+        if (!candidate) return false;
+        Dl_info info{};
+        if (!dladdr(candidate, &info) || !info.dli_fname) return false;
+        const std::string_view path(info.dli_fname);
+        return path.find("libminecraftpe.so") != std::string_view::npos ||
+            path.find("liblevilamina.so") != std::string_view::npos ||
+            path.find("libLeviLamina.so") != std::string_view::npos;
+    };
+
+    void* address = dlsym(RTLD_DEFAULT, name);
+    if (trustedImage(address)) return address;
+
+    // RTLD_DEFAULT can omit symbols from a loaded support library when its
+    // linker visibility is local. Search only already-loaded trusted handles.
+    static void* leviLaminaHandle = nullptr;
+    static void* leviLaminaAltHandle = nullptr;
+    if (!leviLaminaHandle)
+        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaAltHandle)
+        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
+    if (leviLaminaHandle) {
+        address = dlsym(leviLaminaHandle, name);
+        if (trustedImage(address)) return address;
+    }
+    if (leviLaminaAltHandle) {
+        address = dlsym(leviLaminaAltHandle, name);
+        if (trustedImage(address)) return address;
+    }
+    return nullptr;
 }
 
 void playerSetGameTypeDetour(void* player, std::int32_t nativeValue) {
@@ -346,11 +439,16 @@ void resolvePlayerGameTypeApi() {
     if (!playerGetGameTypeOriginal.load(std::memory_order_relaxed) &&
         resolveNow >= playerGameTypeNextResolve) {
         playerGameTypeNextResolve = resolveNow + std::chrono::seconds(1);
-        auto getter = reinterpret_cast<PlayerGetGameTypeFn>(
-            resolveMinecraftFunction("_ZNK6Player17getPlayerGameTypeEv"));
-        if (!getter) {
-            getter = reinterpret_cast<PlayerGetGameTypeFn>(
-                resolveMinecraftFunction("_ZNK11LocalPlayer17getPlayerGameTypeEv"));
+        const char* getterSymbols[] = {
+            "_ZNK6Player17getPlayerGameTypeEv",
+            "_ZN6Player17getPlayerGameTypeEv",
+            "_ZNK11LocalPlayer17getPlayerGameTypeEv",
+            "_ZN11LocalPlayer17getPlayerGameTypeEv"
+        };
+        PlayerGetGameTypeFn getter = nullptr;
+        for (const char* symbol : getterSymbols) {
+            getter = reinterpret_cast<PlayerGetGameTypeFn>(resolveMinecraftFunction(symbol));
+            if (getter) break;
         }
         playerGetGameTypeOriginal.store(getter, std::memory_order_release);
     }
@@ -602,6 +700,7 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     const bool result = gameModeAttackOriginal
         ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition)
         : false;
+    recordNoDamageAttackAttempt(target, hitPosition);
     if (syntheticAttackDispatchActive) {
         syntheticAttackResultObserved = true;
         syntheticAttackNativeResult = result;
@@ -752,6 +851,8 @@ void uninstall() {
     playerGetGameTypeOriginal.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     actorIsAttackableGamemodeOriginal.store(nullptr, std::memory_order_release);
+    actorIsCreativeOriginal.store(nullptr, std::memory_order_release);
+    actorIsSpectatorOriginal.store(nullptr, std::memory_order_release);
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
     {
@@ -760,6 +861,14 @@ void uninstall() {
         playerGameTypeNextResolve = {};
         playerSetGameTypeNextResolve = {};
         playerGameTypeCache.clear();
+    }
+    {
+        std::lock_guard evidenceLock(noDamageEvidenceMutex);
+        noDamageEvidence.clear();
+    }
+    {
+        std::lock_guard predicateLock(actorModePredicateResolveMutex);
+        actorModePredicateNextResolve = {};
     }
 }
 
@@ -981,6 +1090,128 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
             playerSetGameTypeHookInstalled.load(std::memory_order_acquire),
             playerSetGameTypeSeen.load(std::memory_order_acquire));
     }
+    return false;
+}
+
+bool tryGetPlayerNoDamageCreativeHint(void* player) {
+    if (!player) return false;
+    const auto now = std::chrono::steady_clock::now();
+    const int hurtTime = reinterpret_cast<const bedrocktools::sdk::Actor*>(player)->hurtTime();
+
+    std::lock_guard<std::mutex> lock(noDamageEvidenceMutex);
+    auto it = noDamageEvidence.find(player);
+    if (it == noDamageEvidence.end()) return false;
+    auto& evidence = it->second;
+    evidence.lastSeen = now;
+
+    if (hurtTime > 0) {
+        evidence.noDamageAttempts = 0;
+        evidence.pending = false;
+        evidence.creativeCandidateUntil = {};
+        return false;
+    }
+
+    // An attack needs a grace period for remote hurt time to update. Three
+    // distinct trials may suggest Creative but are not authoritative.
+    if (evidence.pending && now - evidence.pendingSince >= std::chrono::milliseconds(800)) {
+        evidence.pending = false;
+        evidence.noDamageAttempts = std::min(evidence.noDamageAttempts + 1u, 10u);
+        if (evidence.noDamageAttempts >= 3)
+            evidence.creativeCandidateUntil = now + std::chrono::seconds(10);
+    }
+
+    if (evidence.creativeCandidateUntil.time_since_epoch().count() != 0 &&
+        now >= evidence.creativeCandidateUntil) {
+        evidence.noDamageAttempts = 0;
+        evidence.creativeCandidateUntil = {};
+    }
+    return evidence.noDamageAttempts >= 3 &&
+        evidence.creativeCandidateUntil.time_since_epoch().count() != 0 &&
+        now < evidence.creativeCandidateUntil;
+}
+
+bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType) {
+    if (!player) return false;
+
+    auto isCreative = actorIsCreativeOriginal.load(std::memory_order_acquire);
+    auto isSpectator = actorIsSpectatorOriginal.load(std::memory_order_acquire);
+    if (!isCreative || !isSpectator) {
+        std::lock_guard<std::mutex> resolveLock(actorModePredicateResolveMutex);
+        isCreative = actorIsCreativeOriginal.load(std::memory_order_acquire);
+        isSpectator = actorIsSpectatorOriginal.load(std::memory_order_acquire);
+        const auto now = std::chrono::steady_clock::now();
+        if ((!isCreative || !isSpectator) && now >= actorModePredicateNextResolve) {
+            actorModePredicateNextResolve = now + std::chrono::seconds(1);
+            // Resolve per-actor predicates dynamically. Do not import client-specific
+            // RVAs: exact game modes remain Unknown if the target runtime exposes no API.
+            const char* creativeSymbols[] = {
+                "_ZNK5Actor10isCreativeEv", "_ZN5Actor10isCreativeEv",
+                "_ZNK6Player10isCreativeEv", "_ZN6Player10isCreativeEv",
+                "_ZNK11LocalPlayer10isCreativeEv", "_ZN11LocalPlayer10isCreativeEv"
+            };
+            const char* spectatorSymbols[] = {
+                "_ZNK5Actor11isSpectatorEv", "_ZN5Actor11isSpectatorEv",
+                "_ZNK6Player11isSpectatorEv", "_ZN6Player11isSpectatorEv",
+                "_ZNK11LocalPlayer11isSpectatorEv", "_ZN11LocalPlayer11isSpectatorEv"
+            };
+            if (!isCreative) {
+                for (const char* symbol : creativeSymbols) {
+                    void* address = resolveMinecraftFunction(symbol);
+                    if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                    if (!address) continue;
+                    isCreative = reinterpret_cast<ActorModePredicateFn>(address);
+                    actorIsCreativeOriginal.store(isCreative, std::memory_order_release);
+                    break;
+                }
+            }
+            if (!isSpectator) {
+                for (const char* symbol : spectatorSymbols) {
+                    void* address = resolveMinecraftFunction(symbol);
+                    if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                    if (!address) continue;
+                    isSpectator = reinterpret_cast<ActorModePredicateFn>(address);
+                    actorIsSpectatorOriginal.store(isSpectator, std::memory_order_release);
+                    break;
+                }
+            }
+            if (isCreative || isSpectator) {
+                gameHooksLogger().info(
+                    "Resolved per-actor Creative/Spectator predicate(s) (creative={}, spectator={}).",
+                    isCreative != nullptr, isSpectator != nullptr);
+            }
+        }
+    }
+
+    if (!isCreative && !isSpectator) return false;
+    if (!isReadableMemory(player, sizeof(void*))) return false;
+
+    bool creative = false;
+    bool spectator = false;
+    try {
+        if (isCreative) creative = isCreative(player);
+        if (isSpectator) spectator = isSpectator(player);
+    } catch (...) {
+        return false;
+    }
+
+    if (creative && spectator) {
+        static std::atomic_bool loggedConflictingPredicates{false};
+        if (!loggedConflictingPredicates.exchange(true, std::memory_order_acq_rel)) {
+            gameHooksLogger().warn(
+                "Actor mode predicates reported Creative and Spectator for one player; exact mode remains Unknown.");
+        }
+        return false;
+    }
+    if (creative) {
+        outGameType = 1;
+        return true;
+    }
+    if (spectator) {
+        outGameType = 3;
+        return true;
+    }
+
+    // Both predicates being false cannot distinguish Survival from Adventure.
     return false;
 }
 

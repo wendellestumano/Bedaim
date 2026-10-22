@@ -1,478 +1,349 @@
 #include "autohit.hpp"
 
-#include "aimassist.hpp"
-#include "AutoHitGuards.hpp"
-#include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
-#include "core/GameHooks.hpp"
-#include "core/InventoryAccess.hpp"
-#include "modules/ModuleRegistry.hpp"
+#include "../../core/JavaVm.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
-#include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/events/ScreenStateEvent.hpp>
-#include <bedrocktools/sdk/world/Actor.hpp>
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
-#include <cmath>
+#include <atomic>
 #include <cctype>
+#include <cmath>
+#include <dlfcn.h>
+#include <jni.h>
 #include <string>
 #include <utility>
 
 namespace {
-thread_local bool g_autoHitSyntheticAttack = false;
+constexpr const char* kMacroDroidPackage = "com.arlosoft.macrodroid";
+constexpr const char* kAutoHitKeyZeroAction =
+    "com.wendellestumano.bedaim.AUTOHIT_KEY0";
 
-using bedrocktools::sdk::AABB;
-using bedrocktools::sdk::Player;
-using bedrocktools::sdk::Vec3;
+using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
 
-bool finiteVec(const Vec3& value) {
-    return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-}
+// Preferred source when the loader invokes JNI_OnLoad. Native injection loaders
+// may skip it, so the ART symbol resolver remains a fallback.
+std::atomic<JavaVM*> g_cachedJavaVm{nullptr};
 
-bool validBounds(const AABB& bounds) {
-    if (!finiteVec(bounds.min) || !finiteVec(bounds.max)) return false;
-    const float width = bounds.max.x - bounds.min.x;
-    const float height = bounds.max.y - bounds.min.y;
-    const float depth = bounds.max.z - bounds.min.z;
-    return width > 0.0f && width <= 5.0f && height >= 0.25f && height <= 8.0f &&
-           depth > 0.0f && depth <= 5.0f;
-}
+JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
+    // RTLD_NOLOAD can fail in Android linker namespaces even when ART is
+    // present. Try the public soname and common APEX/system paths explicitly.
+    static void* artHandles[] = {
+        dlopen("libart.so", RTLD_NOW),
+        dlopen("/apex/com.android.art/lib64/libart.so", RTLD_NOW),
+        dlopen("/apex/com.android.art/lib/libart.so", RTLD_NOW),
+        dlopen("/system/lib64/libart.so", RTLD_NOW),
+        dlopen("/system/lib/libart.so", RTLD_NOW)
+    };
 
-float distanceSquared(const Vec3& a, const Vec3& b) {
-    const float dx = a.x - b.x;
-    const float dy = a.y - b.y;
-    const float dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
-}
+    auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    if (getVms) return getVms;
 
-Vec3 eyePosition(Player* player) {
-    const Vec3 position = player->position();
-    const AABB bounds = player->bounds();
-    if (validBounds(bounds)) {
-        return {(bounds.min.x + bounds.max.x) * 0.5f,
-                bounds.min.y + (bounds.max.y - bounds.min.y) * 0.85f,
-                (bounds.min.z + bounds.max.z) * 0.5f};
+    for (void* handle : artHandles) {
+        if (!handle) continue;
+        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+            dlsym(handle, "JNI_GetCreatedJavaVMs"));
+        if (getVms) return getVms;
     }
-    Vec3 eye = position;
-    eye.y += 1.5f;
-    return eye;
+    return nullptr;
 }
 
+class AutoHitJniEnvironment {
+public:
+    AutoHitJniEnvironment() {
+        // The official Preloader VM passed during ModContext::load() is the
+        // primary source. JNI_OnLoad and ART symbol lookup are fallback paths.
+        JavaVM* vm = bedrocktools::core::javaVm();
+        if (!vm) vm = g_cachedJavaVm.load(std::memory_order_acquire);
+        if (!vm) {
+            const auto getVms = resolveJniGetCreatedJavaVMs();
+            if (!getVms) return;
+
+            jsize count = 0;
+            if (getVms(&vm, 1, &count) != JNI_OK || count < 1 || !vm) return;
+        }
+
+        m_vm = vm;
+        const jint status = m_vm->GetEnv(
+            reinterpret_cast<void**>(&m_env), JNI_VERSION_1_6);
+        if (status == JNI_OK) return;
+        if (status != JNI_EDETACHED) {
+            m_env = nullptr;
+            return;
+        }
+
+        if (m_vm->AttachCurrentThread(&m_env, nullptr) == JNI_OK) {
+            m_attached = true;
+        } else {
+            m_env = nullptr;
+        }
+    }
+
+    ~AutoHitJniEnvironment() {
+        if (m_attached && m_vm) m_vm->DetachCurrentThread();
+    }
+
+    JNIEnv* get() const noexcept { return m_env; }
+
+private:
+    JavaVM* m_vm = nullptr;
+    JNIEnv* m_env = nullptr;
+    bool m_attached = false;
+};
+
+bool clearJniException(JNIEnv* env) {
+    if (!env || !env->ExceptionCheck()) return false;
+    env->ExceptionClear();
+    return true;
 }
+
+enum class DispatchResult {
+    Sent,
+    VmUnavailable,
+    ContextUnavailable,
+    IntentUnavailable,
+    BroadcastFailed
+};
+
+DispatchResult sendKeyZeroIntentToMacroDroid() {
+    AutoHitJniEnvironment jni;
+    JNIEnv* env = jni.get();
+    if (!env) return DispatchResult::VmUnavailable;
+
+    if (env->PushLocalFrame(32) != JNI_OK) {
+        clearJniException(env);
+        return DispatchResult::IntentUnavailable;
+    }
+    struct LocalFrameGuard {
+        JNIEnv* env;
+        ~LocalFrameGuard() { env->PopLocalFrame(nullptr); }
+    } frame{env};
+
+    jobject app = nullptr;
+    jclass activityThread = env->FindClass("android/app/ActivityThread");
+    if (activityThread && !clearJniException(env)) {
+        const jmethodID currentApplication = env->GetStaticMethodID(
+            activityThread, "currentApplication", "()Landroid/app/Application;");
+        if (currentApplication && !clearJniException(env)) {
+            app = env->CallStaticObjectMethod(activityThread, currentApplication);
+            if (clearJniException(env)) app = nullptr;
+        } else {
+            clearJniException(env);
+        }
+    } else {
+        clearJniException(env);
+    }
+
+    if (!app) {
+        jclass appGlobals = env->FindClass("android/app/AppGlobals");
+        if (appGlobals && !clearJniException(env)) {
+            const jmethodID initialApplication = env->GetStaticMethodID(
+                appGlobals, "getInitialApplication", "()Landroid/app/Application;");
+            if (initialApplication && !clearJniException(env)) {
+                app = env->CallStaticObjectMethod(appGlobals, initialApplication);
+                if (clearJniException(env)) app = nullptr;
+            } else {
+                clearJniException(env);
+            }
+        } else {
+            clearJniException(env);
+        }
+    }
+    if (!app) return DispatchResult::ContextUnavailable;
+
+    jclass intentClass = env->FindClass("android/content/Intent");
+    if (!intentClass || clearJniException(env)) return DispatchResult::IntentUnavailable;
+
+    const jmethodID constructor = env->GetMethodID(intentClass, "<init>", "()V");
+    const jmethodID setAction = env->GetMethodID(
+        intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
+    const jmethodID setPackage = env->GetMethodID(
+        intentClass, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearJniException(env) || !constructor || !setAction || !setPackage) {
+        return DispatchResult::IntentUnavailable;
+    }
+
+    jobject intent = env->NewObject(intentClass, constructor);
+    if (!intent || clearJniException(env)) return DispatchResult::IntentUnavailable;
+
+    jstring action = env->NewStringUTF(kAutoHitKeyZeroAction);
+    jstring packageName = env->NewStringUTF(kMacroDroidPackage);
+    if (!action || !packageName || clearJniException(env)) {
+        return DispatchResult::IntentUnavailable;
+    }
+
+    env->CallObjectMethod(intent, setAction, action);
+    if (clearJniException(env)) return DispatchResult::IntentUnavailable;
+    env->CallObjectMethod(intent, setPackage, packageName);
+    if (clearJniException(env)) return DispatchResult::IntentUnavailable;
+
+    jclass contextClass = env->FindClass("android/content/Context");
+    if (!contextClass || clearJniException(env)) return DispatchResult::IntentUnavailable;
+
+    const jmethodID sendBroadcast = env->GetMethodID(
+        contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
+    if (!sendBroadcast || clearJniException(env)) return DispatchResult::IntentUnavailable;
+
+    env->CallVoidMethod(app, sendBroadcast, intent);
+    if (clearJniException(env)) return DispatchResult::BroadcastFailed;
+    return DispatchResult::Sent;
+}
+
+const char* dispatchResultName(DispatchResult result) {
+    switch (result) {
+        case DispatchResult::Sent: return "macrodroid_key0_broadcast_sent";
+        case DispatchResult::VmUnavailable: return "android_java_vm_unavailable";
+        case DispatchResult::ContextUnavailable: return "android_context_unavailable";
+        case DispatchResult::IntentUnavailable: return "android_intent_api_unavailable";
+        case DispatchResult::BroadcastFailed: return "macrodroid_key0_broadcast_failed";
+    }
+    return "macrodroid_key0_broadcast_unknown";
+}
+} // namespace
+
+// If Bedaim is loaded through the Java VM, keep the VM pointer supplied by ART
+// rather than trying to discover a potentially hidden symbol in libart.so.
+// Preloader/dlopen loading may not call this entry point; that path still uses
+// resolveJniGetCreatedJavaVMs() and reports a precise diagnostic on failure.
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+    if (!vm) return JNI_ERR;
+    bedrocktools::core::setJavaVm(vm);
+    g_cachedJavaVm.store(vm, std::memory_order_release);
+    return JNI_VERSION_1_6;
+}
+
+using bedrocktools::sdk::Player;
 
 AutoHitModule::AutoHitModule()
     : Module("Auto Hit",
-             "Experimental held-attack helper; requires BedrockAim to provide a fresh target.") {
+             "Sends the configured MacroDroid key-0 trigger at a limited rate.") {
     keybind = 0;
 }
 
 void AutoHitModule::onInit() {
-    bedrocktools::core::InventoryAccess::get().initialize();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { processPlayerTick(event.player); });
+
     bedrocktools::events::bus().subscribe<bedrocktools::events::ScreenStateEvent>(
         [this](auto& event) {
+            const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
             if (event.screen == bedrocktools::events::ScreenKind::Container) {
-                const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
                 m_containerOpen.store(opened, std::memory_order_release);
-                if (opened) {
-                    std::lock_guard<std::mutex> lock(m_stateMutex);
-                    m_attackHeld = false;
-                    m_heldButton = -1;
-                    m_touchRepeatUntil = {};
-                }
             } else if (event.screen == bedrocktools::events::ScreenKind::Chat) {
-                const bool opened = event.phase == bedrocktools::events::ScreenPhase::Opened;
                 m_chatOpen.store(opened, std::memory_order_release);
-                if (opened) {
-                    std::lock_guard<std::mutex> lock(m_stateMutex);
-                    m_attackHeld = false;
-                    m_heldButton = -1;
-                    m_touchRepeatUntil = {};
-                }
             }
         });
-    // The launcher mouse callback may not receive Bedrock's native touchscreen
-    // attack button. Observe ordinary engine attack actions as a mobile-compatible
-    // activation signal, then permit a bounded repeat window. Synthetic attacks
-    // are explicitly ignored so AutoHit cannot re-arm itself.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
-        [this](auto& event) {
-            const bool nativeAttack = event.action == bedrocktools::events::GameModeAction::Attack;
-            const bool itemAsAttack = event.action == bedrocktools::events::GameModeAction::UseItemAsAttack;
-            if (!nativeAttack && !itemAsAttack) return;
 
-            const char* actionName = nativeAttack ? "Attack" : "UseItemAsAttack";
-            if (!enabled) return;
-            if (g_autoHitSyntheticAttack) {
-                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
-                    "AutoHit", "touch_activation", "synthetic_action_ignored", actionName);
-                return;
-            }
-            if (m_containerOpen.load(std::memory_order_acquire) ||
-                m_chatOpen.load(std::memory_order_acquire)) {
-                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-                    "AutoHit", "touch_activation", "blocked_by_screen", actionName);
-                return;
-            }
-
-            std::lock_guard<std::mutex> lock(m_stateMutex);
-            if (!m_touchRepeatEnabled) {
-                bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                    "AutoHit", "touch_activation",
-                    nativeAttack ? "attack_seen_repeat_disabled" : "item_as_attack_seen_repeat_disabled",
-                    "native action was observed, but touchscreen repeat is disabled");
-                return;
-            }
-            const auto window = std::chrono::milliseconds(std::clamp(m_touchRepeatWindowMs, 100, 1000));
-            m_touchRepeatUntil = std::chrono::steady_clock::now() + window;
-            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-                "AutoHit", "touch_input",
-                nativeAttack ? "attack_repeat_window_armed" : "item_as_attack_repeat_window_armed",
-                std::string("source=") + actionName + "; window_ms=" + std::to_string(window.count()));
-        });
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "AutoHit", "lifecycle", "initialized",
-        "mouse-held input plus optional bounded native-attack repeat for touchscreen input");
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "AutoHit", "lifecycle", "initialized",
+        "simple MacroDroid key-0 dispatcher; no native attack or Aim Assist dependency");
 }
 
 void AutoHitModule::onEnable() {
-    std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackHeld = false;
-    m_heldButton = -1;
-    m_touchRepeatUntil = {};
-    m_nextAttack = {};
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "AutoHit", "lifecycle", "enabled");
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "AutoHit", "activation_mode", m_requireAttackInput ? "input_required" : "automatic_when_enabled");
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_nextDispatch = {};
+        m_loggedFirstDispatch = false;
+    }
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "AutoHit", "lifecycle", "enabled",
+        "will send Intent com.wendellestumano.bedaim.AUTOHIT_KEY0 to MacroDroid");
 }
 
 void AutoHitModule::onDisable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackHeld = false;
-    m_heldButton = -1;
-    m_nextAttack = {};
-    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-        "AutoHit", "lifecycle", "disabled");
+    m_nextDispatch = {};
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "AutoHit", "lifecycle", "disabled");
 }
 
-bool AutoHitModule::onMouseEvent(int button, bool isDown) {
-    std::lock_guard<std::mutex> lock(m_stateMutex);
-    const bool screenBlocked = m_containerOpen.load(std::memory_order_acquire) ||
-        m_chatOpen.load(std::memory_order_acquire);
-    if (screenBlocked) {
-        m_attackHeld = false;
-        m_heldButton = -1;
-        return false;
-    }
-    if (enabled) {
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Trace,
-            "AutoHit", "raw_mouse_input",
-            std::string("button_") + std::to_string(button) + (isDown ? "_down" : "_up"),
-            "raw button index observed by the launcher input bridge");
-    }
-    if (!enabled) {
-        if (!isDown && button == m_heldButton) {
-            m_attackHeld = false;
-            m_heldButton = -1;
-        }
-        return false; // Never consume or cancel the user's normal mouse input.
-    }
-
-    if (isDown && button == m_attackButton) {
-        m_attackHeld = true;
-        m_heldButton = button;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "AutoHit", "input", "attack_button_held");
-    } else if (!isDown && button == m_heldButton) {
-        m_attackHeld = false;
-        m_heldButton = -1;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "AutoHit", "input", "attack_button_released");
-    }
-    return false;
+bool AutoHitModule::onMouseEvent(int, bool) {
+    return false; // Never consume or alter normal mouse/touch input.
 }
 
 void AutoHitModule::processPlayerTick(Player* player) {
     using namespace bedrocktools;
-    bool attackHeld = false;
-    bool requireAttackInput = false;
-    int attackButton = 0;
-    int heldButton = -1;
-    bool touchRepeatEnabled = false;
-    int touchWindowRemainingMs = 0;
-    float configuredRange = 3.2f;
-    bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
-    float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        const auto tickNow = std::chrono::steady_clock::now();
-        requireAttackInput = m_requireAttackInput;
-        attackHeld = !requireAttackInput || m_attackHeld ||
-            (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
-             tickNow < m_touchRepeatUntil);
-        attackButton = m_attackButton;
-        heldButton = m_heldButton;
-        touchRepeatEnabled = m_touchRepeatEnabled;
-        if (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil) {
-            touchWindowRemainingMs = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                m_touchRepeatUntil - tickNow).count());
-        }
-        configuredRange = m_attackRange;
-        swordEnabled = m_swordEnabled;
-        swordCps = m_swordCps;
-        axeEnabled = m_axeEnabled;
-        axeCps = m_axeCps;
-        maceEnabled = m_maceEnabled;
-        maceCps = m_maceCps;
-        tridentEnabled = m_tridentEnabled;
-        tridentCps = m_tridentCps;
-    }
 
-    if (!enabled) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "disabled");
-        return;
-    }
+    if (!enabled) return;
     if (!player) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dispatch_gate", "missing_player");
+        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "missing_player");
         return;
     }
     if (m_containerOpen.load(std::memory_order_acquire) ||
         m_chatOpen.load(std::memory_order_acquire)) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
         return;
     }
-    // Check native dispatch availability before waiting for input. Otherwise an
-    // unsupported runtime looks like a broken input button forever, hiding the
-    // actual blocker from diagnostics. This check never performs an attack.
-    void* gameMode = core::gamehooks::gameModeForPlayer(player);
-    if (!gameMode) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "gamemode", "unavailable");
-        return;
-    }
-    const bool attackRouteAvailable = core::gamehooks::attackAvailable(gameMode);
-    if (!attackRouteAvailable) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "attack_route", "unavailable",
-            "public GameMode attack vtable/signature route failed runtime validation");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "attack_route", "ready");
-
-    if (!attackHeld) {
-        const std::string inputState = std::string("waiting_for_attack_input_button_") +
-            std::to_string(attackButton) + (touchRepeatEnabled ? "_touch_repeat_on" : "_touch_repeat_off");
-        const std::string inputDetail = std::string("configured_button=") + std::to_string(attackButton) +
-            "; held_button=" + std::to_string(heldButton) +
-            "; touch_repeat=" + (touchRepeatEnabled ? "enabled" : "disabled") +
-            "; repeat_window_remaining_ms=" + std::to_string(touchWindowRemainingMs);
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", inputState, inputDetail);
-        return;
-    }
-
-    auto& inventory = core::InventoryAccess::get();
-    const std::string heldItem = inventory.selectedHotbarIdentifier(player);
-    const auto weapon = bedaim::autohit::weapon::classify(heldItem);
-    const auto profile = bedaim::autohit::weapon::resolve(
-        weapon, swordEnabled, swordCps, axeEnabled, axeCps,
-        maceEnabled, maceCps, tridentEnabled, tridentCps);
-    if (!profile.enabled) {
-        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile", "blocked",
-            std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; item=" +
-                (heldItem.empty() ? "empty_or_unreadable" : heldItem));
-        return;
-    }
-    const float configuredCps = profile.cps;
-    const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(configuredCps);
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
-        std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; cps=" + std::to_string(configuredCps));
-
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase || !aimBase->enabled) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dependency", "bedrockaim_disabled",
-            "enable BedrockAim to provide target tracking");
-        return;
-    }
-
-    auto* aim = static_cast<AimAssistModule*>(aimBase);
-    void* target = nullptr;
-    AABB targetBounds{};
-    float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "target", "missing_or_stale");
-        return;
-    }
-    if (!validBounds(targetBounds)) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "target", "invalid_bounds");
-        return;
-    }
-    if (!aim->currentTargetInCrosshair(player, target)) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair", "target_not_centered");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair", "confirmed");
-
-    const Vec3 eye = eyePosition(player);
-    if (!finiteVec(eye)) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "hit_point", "invalid_player_eye");
-        return;
-    }
-    const Vec3 hitPoint{
-        std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
-        std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
-        std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
-    };
-    const float distanceSq = distanceSquared(eye, hitPoint);
-    const float maxRange = std::clamp(std::min(configuredRange, aimRange), 2.0f, 6.0f);
-    if (!finiteVec(hitPoint) || !std::isfinite(distanceSq) || distanceSq > maxRange * maxRange) {
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "out_of_range");
-        return;
-    }
-    diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "in_range");
 
     const auto now = std::chrono::steady_clock::now();
+    std::chrono::milliseconds interval{125};
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) {
-            diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "cooldown", "waiting");
+        const float cps = std::clamp(m_cps, 1.0f, 20.0f);
+        interval = std::chrono::milliseconds(
+            static_cast<int>(std::lround(1000.0f / cps)));
+        if (m_nextDispatch.time_since_epoch().count() != 0 && now < m_nextDispatch) {
             return;
         }
+        // Set the next time before JNI dispatch so a slow/erroring call cannot
+        // trigger a burst of retries on subsequent game ticks.
+        m_nextDispatch = now + interval;
     }
 
-    // Final native-free gate is shared with host tests. The earlier checks are
-    // intentionally retained for precise per-stage diagnostics; this last gate
-    // ensures no dispatch occurs if any prerequisite becomes invalid.
-    const bedaim::autohit::Inputs dispatchFacts{
-        enabled,
-        player != nullptr,
-        target != nullptr,
-        validBounds(targetBounds),
-        true, // currentTargetSnapshot rejects stale target data
-        gameMode != nullptr,
-        attackRouteAvailable,
-        finiteVec(hitPoint),
-        true, // cooldown was checked immediately before resolving GameMode
-        std::sqrt(distanceSq),
-        maxRange
-    };
-    const auto dispatchDecision = bedaim::autohit::evaluate(dispatchFacts);
-    if (dispatchDecision != bedaim::autohit::Decision::Ready) {
-        diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "final_guard",
-            "blocked", "native dispatch prerequisites changed or failed validation");
-        return;
-    }
+    diagnostics::probe(
+        diagnostics::Level::Debug, "AutoHit", "key0_dispatch", "attempt",
+        "sending package-scoped Intent to com.arlosoft.macrodroid; action=" +
+            std::string(kAutoHitKeyZeroAction));
 
-    struct SyntheticAttackGuard {
-        bool previous;
-        SyntheticAttackGuard() : previous(g_autoHitSyntheticAttack) { g_autoHitSyntheticAttack = true; }
-        ~SyntheticAttackGuard() { g_autoHitSyntheticAttack = previous; }
-    } syntheticAttackGuard;
-    const bool attacked = core::gamehooks::attack(gameMode, target, true, &hitPoint);
-    {
+    const DispatchResult result = sendKeyZeroIntentToMacroDroid();
+    const bool sent = result == DispatchResult::Sent;
+    bool firstSuccessfulDispatch = false;
+    if (sent) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        // CPS is an attempt-rate cap, not only a success-rate cap. Failed native
-        // dispatches must not bypass the selected weapon profile and retry at 10 Hz.
-        m_nextAttack = now + std::chrono::milliseconds(
-            std::clamp(intervalMs, 50, 1000));
+        firstSuccessfulDispatch = !m_loggedFirstDispatch;
+        m_loggedFirstDispatch = true;
     }
-    diagnostics::probe(attacked ? diagnostics::Level::Info : diagnostics::Level::Warning,
-        "AutoHit", "attack_result", attacked ? "accepted" : "rejected",
-        attacked ? "native attack wrapper returned success" : "native attack wrapper returned false");
+    diagnostics::probe(
+        !sent ? diagnostics::Level::Warning :
+            (firstSuccessfulDispatch ? diagnostics::Level::Info : diagnostics::Level::Debug),
+        "AutoHit", "key0_dispatch", dispatchResultName(result),
+        sent
+            ? "Android accepted the broadcast. This does not confirm MacroDroid ran or Minecraft received key 0."
+            : "The broadcast failed before key delivery; inspect the Android VM/context/Intent result.");
 }
 
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    m_attackButton = std::clamp(json.value("m_attackButton", m_attackButton), 0, 16);
-    m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
-    m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
-    m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
-    m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
-    const float legacyInterval = std::clamp(json.value("m_attackIntervalMs", 180.0f), 80.0f, 1000.0f);
-    const float legacySwordCps = std::clamp(1000.0f / legacyInterval, 1.0f, 20.0f);
-    m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
-    m_swordCps = std::clamp(json.value("m_swordCps", legacySwordCps), 1.0f, 20.0f);
-    m_axeEnabled = json.value("m_axeEnabled", m_axeEnabled);
-    m_axeCps = std::clamp(json.value("m_axeCps", m_axeCps), 1.0f, 20.0f);
-    m_maceEnabled = json.value("m_maceEnabled", m_maceEnabled);
-    m_maceCps = std::clamp(json.value("m_maceCps", m_maceCps), 1.0f, 20.0f);
-    m_tridentEnabled = json.value("m_tridentEnabled", m_tridentEnabled);
-    m_tridentCps = std::clamp(json.value("m_tridentCps", m_tridentCps), 1.0f, 20.0f);
+    m_cps = std::clamp(json.value("m_cps", m_cps), 1.0f, 20.0f);
 }
 
 void AutoHitModule::saveConfig(nlohmann::json& json) {
     Module::saveConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
-    json["m_attackButton"] = m_attackButton;
-    json["m_requireAttackInput"] = m_requireAttackInput;
-    json["m_attackRange"] = m_attackRange;
-    json["m_touchRepeatEnabled"] = m_touchRepeatEnabled;
-    json["m_touchRepeatWindowMs"] = m_touchRepeatWindowMs;
-    json["m_attackIntervalMs"] = 1000.0f / m_swordCps; // legacy config compatibility
-    json["m_swordEnabled"] = m_swordEnabled;
-    json["m_swordCps"] = m_swordCps;
-    json["m_axeEnabled"] = m_axeEnabled;
-    json["m_axeCps"] = m_axeCps;
-    json["m_maceEnabled"] = m_maceEnabled;
-    json["m_maceCps"] = m_maceCps;
-    json["m_tridentEnabled"] = m_tridentEnabled;
-    json["m_tridentCps"] = m_tridentCps;
+    json["m_cps"] = m_cps;
 }
 
 void AutoHitModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
     schema.defaultCategory("combat")
-        .category("combat", "Combat", "Experimental held-input attack and per-weapon CPS profiles")
-        .category("weapon_profiles", "Weapon Profiles", "Choose which held weapons may activate AutoHit and their CPS cap");
+        .category("combat", "Combat", "MacroDroid keyboard trigger");
 
-    auto slider = [&](const char* key, const char* title, const char* category,
-                      const char* minimum, const char* maximum,
-                      const char* step, const char* unit) {
-        ConfigNodeV2 node;
-        node.id = key;
-        node.key = key;
-        node.title = title;
-        node.category = category;
-        node.type = ConfigControlTypeV2::SliderFloat;
-        node.minValue = minimum;
-        node.maxValue = maximum;
-        node.step = step;
-        node.unit = unit;
-        schema.node(std::move(node));
-    };
-    auto toggle = [&](const char* key, const char* title) {
-        ConfigNodeV2 node;
-        node.id = key;
-        node.key = key;
-        node.title = title;
-        node.category = "weapon_profiles";
-        node.type = ConfigControlTypeV2::Toggle;
-        schema.node(std::move(node));
-    };
-
-    slider("m_attackButton", "Mouse button index", "combat", "0", "16", "1", "");
-    ConfigNodeV2 activationNode;
-    activationNode.id = "m_requireAttackInput";
-    activationNode.key = "m_requireAttackInput";
-    activationNode.title = "Require attack input (desktop)";
-    activationNode.category = "combat";
-    activationNode.type = ConfigControlTypeV2::Toggle;
-    schema.node(std::move(activationNode));
-    slider("m_attackRange", "Attack range", "combat", "2", "6", "0.1", " blocks");
-    toggle("m_touchRepeatEnabled", "Enable touchscreen attack repeat");
-    slider("m_touchRepeatWindowMs", "Touch repeat window", "combat", "100", "1000", "50", " ms");
-    toggle("m_swordEnabled", "Enable sword profile");
-    slider("m_swordCps", "Sword CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
-    toggle("m_axeEnabled", "Enable axe profile");
-    slider("m_axeCps", "Axe CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
-    toggle("m_maceEnabled", "Enable mace profile");
-    slider("m_maceCps", "Mace CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
-    toggle("m_tridentEnabled", "Enable trident profile");
-    slider("m_tridentCps", "Trident CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    ConfigNodeV2 cpsNode;
+    cpsNode.id = "m_cps";
+    cpsNode.key = "m_cps";
+    cpsNode.title = "MacroDroid trigger rate";
+    cpsNode.category = "combat";
+    cpsNode.type = ConfigControlTypeV2::SliderFloat;
+    cpsNode.minValue = "1";
+    cpsNode.maxValue = "20";
+    cpsNode.step = "1";
+    cpsNode.unit = " CPS";
+    schema.node(std::move(cpsNode));
 
     ConfigNodeV2 keybindNode;
     keybindNode.id = "keybind";
@@ -481,66 +352,29 @@ void AutoHitModule::onMenuRegistered() {
     keybindNode.category = "combat";
     keybindNode.type = ConfigControlTypeV2::Keybind;
     schema.node(std::move(keybindNode));
+
     setConfigSchemaJson(moduleId, schema.toJson());
 }
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
-    if (key == "m_requireAttackInput") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_requireAttackInput = on;
-        if (!on) {
-            m_attackHeld = false;
-            m_heldButton = -1;
-            m_touchRepeatUntil = {};
-        }
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "activation_mode", on ? "input_required" : "automatic_when_enabled");
-        return true;
-    }
-    if (key == "m_touchRepeatEnabled") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_touchRepeatEnabled = on;
-        if (!on) m_touchRepeatUntil = {};
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "touch_input", on ? "enabled" : "disabled");
-        return true;
-    }
-    if (key == "m_swordEnabled" || key == "m_axeEnabled" ||
-        key == "m_maceEnabled" || key == "m_tridentEnabled") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (key == "m_swordEnabled") m_swordEnabled = on;
-        else if (key == "m_axeEnabled") m_axeEnabled = on;
-        else if (key == "m_maceEnabled") m_maceEnabled = on;
-        else m_tridentEnabled = on;
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "weapon_profile", std::string(key) + (on ? "_enabled" : "_disabled"));
-        return true;
-    }
+    if (key != "m_cps") return false;
+
     try {
         const std::string raw(value);
         std::size_t parsed = 0;
         const float number = std::stof(raw, &parsed);
-        while (parsed < raw.size() && std::isspace(static_cast<unsigned char>(raw[parsed]))) ++parsed;
+        while (parsed < raw.size() &&
+               std::isspace(static_cast<unsigned char>(raw[parsed]))) {
+            ++parsed;
+        }
         if (parsed != raw.size() || !std::isfinite(number)) return false;
+
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (key == "m_attackButton") m_attackButton = std::clamp(static_cast<int>(std::lround(number)), 0, 16);
-        else if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
-        else if (key == "m_touchRepeatWindowMs") m_touchRepeatWindowMs = std::clamp(static_cast<int>(std::lround(number)), 100, 1000);
-        else if (key == "m_swordCps") m_swordCps = std::clamp(number, 1.0f, 20.0f);
-        else if (key == "m_axeCps") m_axeCps = std::clamp(number, 1.0f, 20.0f);
-        else if (key == "m_maceCps") m_maceCps = std::clamp(number, 1.0f, 20.0f);
-        else if (key == "m_tridentCps") m_tridentCps = std::clamp(number, 1.0f, 20.0f);
-        else return false;
+        m_cps = std::clamp(number, 1.0f, 20.0f);
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "AutoHit", "config", "cps_updated",
+            "MacroDroid trigger rate=" + std::to_string(m_cps));
         return true;
     } catch (...) {
         return false;

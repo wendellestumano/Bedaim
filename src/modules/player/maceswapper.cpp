@@ -21,9 +21,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <dlfcn.h>
+#include <jni.h>
 #include <limits>
-#include <optional>
+#include <vector>
 
 namespace {
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
@@ -95,80 +98,368 @@ float distanceToTargetBounds(bedrocktools::sdk::Player* player,
         : std::numeric_limits<float>::infinity();
 }
 
-using BlockSourceIsSolidBlockingBlockFn =
-    bool (*)(void*, const bedrocktools::sdk::BlockPos*);
-using PlayerStopGlidingFn = void (*)(void*);
+using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
+using ActorIsPlayerFn = bool (*)(void*);
+using ActorGetStatusFlagFn = bool (*)(const void*, int);
 
-bool isTrustedMinecraftMethod(void* address) {
-    if (!address) return false;
-    Dl_info info{};
-    return dladdr(address, &info) != 0 && info.dli_fname &&
-        std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
-}
+// Unglide resolves its own nearby-player snapshot; it does not depend on the
+// Aim Assist module toggle or the camera-tracking module's cached target.
+struct NearbyPlayerSearch {
+    bool queryReady = false;
+    bool found = false;
+    float distance = std::numeric_limits<float>::infinity();
+};
 
-PlayerStopGlidingFn resolvePlayerStopGliding() {
-    // Resolve the exported Player::stopGliding method at runtime. Do not use a
-    // hard-coded address/offset: if this symbol isn't available for this build,
-    // the feature safely remains inactive and reports the missing dependency.
-    static void* minecraftHandle = nullptr;
-    static PlayerStopGlidingFn function = nullptr;
-    if (function) return function;
-    function = reinterpret_cast<PlayerStopGlidingFn>(
-        dlsym(RTLD_DEFAULT, "_ZN6Player11stopGlidingEv"));
-    if (!isTrustedMinecraftMethod(reinterpret_cast<void*>(function))) function = nullptr;
-    if (!function) {
-        if (!minecraftHandle)
-            minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-        if (minecraftHandle) {
-            function = reinterpret_cast<PlayerStopGlidingFn>(
-                dlsym(minecraftHandle, "_ZN6Player11stopGlidingEv"));
-            if (!isTrustedMinecraftMethod(reinterpret_cast<void*>(function))) function = nullptr;
+NearbyPlayerSearch nearestNearbyPlayerDistance(
+    bedrocktools::sdk::Player* player, float maximumDistance) {
+    using namespace bedrocktools::sdk;
+    NearbyPlayerSearch result{};
+    if (!player) return result;
+
+    static GetRuntimeActorListFn actorList = nullptr;
+    static ActorIsPlayerFn actorIsPlayer = nullptr;
+    if (!actorList) actorList = reinterpret_cast<GetRuntimeActorListFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
+    if (!actorIsPlayer) actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    if (!actorList || !actorIsPlayer) return result;
+
+    auto* localActor = reinterpret_cast<Actor*>(player);
+    auto* level = localActor->level();
+    void* manager = level ? level->actorManager() : nullptr;
+    if (!manager) return result;
+
+    std::vector<void*> actors;
+    try {
+        actors = actorList(manager);
+    } catch (...) {
+        return result;
+    }
+    if (actors.size() > 4096) return result;
+    result.queryReady = true;
+
+    const Vec3 eye = eyePositionFor(player);
+    if (!finiteVec(eye)) {
+        result.queryReady = false;
+        return result;
+    }
+    const float range = std::clamp(
+        std::isfinite(maximumDistance) ? maximumDistance : 8.0f, 1.0f, 32.0f);
+
+    for (void* candidate : actors) {
+        if (!candidate || candidate == player ||
+            reinterpret_cast<std::uintptr_t>(candidate) <= 0x1000) continue;
+
+        bool isPlayer = false;
+        try {
+            isPlayer = actorIsPlayer(candidate);
+        } catch (...) {
+            continue;
+        }
+        if (!isPlayer) continue;
+
+        auto* target = reinterpret_cast<Actor*>(candidate);
+        if (target->level() != level) continue;
+        const AABB bounds = target->bounds();
+        if (!validBounds(bounds)) continue;
+
+        const Vec3 nearest{
+            std::clamp(eye.x, bounds.min.x, bounds.max.x),
+            std::clamp(eye.y, bounds.min.y, bounds.max.y),
+            std::clamp(eye.z, bounds.min.z, bounds.max.z)
+        };
+        const float distanceSq = distanceSquared(eye, nearest);
+        if (!std::isfinite(distanceSq) || distanceSq > range * range) continue;
+        const float distance = std::sqrt(std::max(0.0f, distanceSq));
+        if (!result.found || distance < result.distance) {
+            result.found = true;
+            result.distance = distance;
         }
     }
+    return result;
+}
+
+bool actorIsGliding(void* actor) {
+    using namespace bedrocktools::sdk;
+    if (!actor) return false;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
+            offsets::Actor::mEntityData - sizeof(void*)) return false;
+
+    const auto wrapperAddress = actorAddress + offsets::Actor::mEntityData;
+    void* component = nullptr;
+    std::memcpy(&component, reinterpret_cast<const void*>(wrapperAddress), sizeof(component));
+    if (reinterpret_cast<std::uintptr_t>(component) <= 0x1000) return false;
+
+    const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
+    auto** begin = *reinterpret_cast<void***>(componentAddress);
+    auto** end = *reinterpret_cast<void***>(componentAddress + sizeof(void*));
+    if (!begin || !end) return false;
+
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
+    if (endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(void*) != 0 ||
+        (endAddress - beginAddress) / sizeof(void*) > 192) return false;
+
+    const auto count = (endAddress - beginAddress) / sizeof(void*);
+    for (std::size_t index = 0; index < count; ++index) {
+        void* item = begin[index];
+        if (reinterpret_cast<std::uintptr_t>(item) <= 0x1000) continue;
+        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
+        std::uint8_t type = 0;
+        std::uint16_t id = 0;
+        std::memcpy(&type, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mType), sizeof(type));
+        std::memcpy(&id, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mId), sizeof(id));
+        if (type != 7 || id != 0) continue;
+
+        std::uint64_t flags = 0;
+        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue), sizeof(flags));
+        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
+        return (flags & kGlidingFlag) != 0;
+    }
+    return false;
+}
+
+bool isTrustedGameProvider(void* address) {
+    if (!address) return false;
+    Dl_info info{};
+    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
+    const std::string_view path(info.dli_fname);
+    return path.find("libminecraftpe.so") != std::string_view::npos ||
+        path.find("liblevilamina.so") != std::string_view::npos ||
+        path.find("libLeviLamina.so") != std::string_view::npos;
+}
+
+void* resolveTrustedGameSymbol(const char* symbol) {
+    if (!symbol) return nullptr;
+    static void* minecraftHandle = nullptr;
+    static void* leviLaminaHandle = nullptr;
+    static void* leviLaminaAltHandle = nullptr;
+    if (!minecraftHandle)
+        minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaHandle)
+        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaAltHandle)
+        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
+
+    void* address = dlsym(RTLD_DEFAULT, symbol);
+    if (isTrustedGameProvider(address)) return address;
+    if (minecraftHandle) {
+        address = dlsym(minecraftHandle, symbol);
+        if (isTrustedGameProvider(address)) return address;
+    }
+    if (leviLaminaHandle) {
+        address = dlsym(leviLaminaHandle, symbol);
+        if (isTrustedGameProvider(address)) return address;
+    }
+    if (leviLaminaAltHandle) {
+        address = dlsym(leviLaminaAltHandle, symbol);
+        if (isTrustedGameProvider(address)) return address;
+    }
+    return nullptr;
+}
+
+// MacroDroid exposes an "Intent Received" trigger for custom broadcasts.
+// Configure it with this action and a single "Input Key Event: Space" action.
+// MacroDroid then uses its supported input/Accessibility/Shizuku path; Bedaim
+// only emits the trigger intent and does not inject input or install additional hooks.
+constexpr const char* kMacroDroidPackage = "com.arlosoft.macrodroid";
+constexpr const char* kBedaimSpacebarIntentAction =
+    "com.wendellestumano.bedaim.UNGLIDE_SPACEBAR";
+
+using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
+
+JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
+    static void* artHandle = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
+    static auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    if (!getVms && artHandle) {
+        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+            dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+    }
+    return getVms;
+}
+
+class ScopedJniEnvironment {
+public:
+    ScopedJniEnvironment() {
+        const auto getVms = resolveJniGetCreatedJavaVMs();
+        if (!getVms) return;
+
+        JavaVM* vm = nullptr;
+        jsize vmCount = 0;
+        if (getVms(&vm, 1, &vmCount) != JNI_OK || vmCount < 1 || !vm) return;
+        mVm = vm;
+
+        const jint status = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
+        if (status == JNI_OK) return;
+        if (status != JNI_EDETACHED) {
+            mEnv = nullptr;
+            return;
+        }
+
+        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) {
+            mAttached = true;
+        } else {
+            mEnv = nullptr;
+        }
+    }
+
+    ~ScopedJniEnvironment() {
+        if (mAttached && mVm) mVm->DetachCurrentThread();
+    }
+
+    JNIEnv* get() const noexcept { return mEnv; }
+
+private:
+    JavaVM* mVm = nullptr;
+    JNIEnv* mEnv = nullptr;
+    bool mAttached = false;
+};
+
+class ScopedJniLocalFrame {
+public:
+    explicit ScopedJniLocalFrame(JNIEnv* env) : mEnv(env) {
+        mReady = mEnv && mEnv->PushLocalFrame(32) == JNI_OK;
+        if (!mReady && mEnv && mEnv->ExceptionCheck()) mEnv->ExceptionClear();
+    }
+    ~ScopedJniLocalFrame() {
+        if (mReady) mEnv->PopLocalFrame(nullptr);
+    }
+    bool ready() const noexcept { return mReady; }
+private:
+    JNIEnv* mEnv = nullptr;
+    bool mReady = false;
+};
+
+enum class AutomationBroadcastResult {
+    Sent,
+    JavaVmUnavailable,
+    ApplicationContextUnavailable,
+    IntentApiUnavailable,
+    BroadcastFailed,
+};
+
+bool clearJniException(JNIEnv* env) {
+    if (!env || !env->ExceptionCheck()) return false;
+    env->ExceptionClear();
+    return true;
+}
+
+AutomationBroadcastResult dispatchMacroDroidSpacebarMacro() {
+    ScopedJniEnvironment jni;
+    JNIEnv* env = jni.get();
+    if (!env) return AutomationBroadcastResult::JavaVmUnavailable;
+    ScopedJniLocalFrame localFrame(env);
+    if (!localFrame.ready()) return AutomationBroadcastResult::IntentApiUnavailable;
+
+    jobject application = nullptr;
+    jclass activityThread = env->FindClass("android/app/ActivityThread");
+    if (activityThread && !clearJniException(env)) {
+        jmethodID currentApplication = env->GetStaticMethodID(
+            activityThread, "currentApplication", "()Landroid/app/Application;");
+        if (currentApplication && !clearJniException(env)) {
+            application = env->CallStaticObjectMethod(activityThread, currentApplication);
+            if (clearJniException(env)) application = nullptr;
+        } else {
+            clearJniException(env);
+        }
+    } else {
+        clearJniException(env);
+    }
+
+    // Some Android builds expose this equivalent accessor more reliably.
+    if (!application) {
+        jclass appGlobals = env->FindClass("android/app/AppGlobals");
+        if (appGlobals && !clearJniException(env)) {
+            jmethodID initialApplication = env->GetStaticMethodID(
+                appGlobals, "getInitialApplication", "()Landroid/app/Application;");
+            if (initialApplication && !clearJniException(env)) {
+                application = env->CallStaticObjectMethod(appGlobals, initialApplication);
+                if (clearJniException(env)) application = nullptr;
+            } else {
+                clearJniException(env);
+            }
+        } else {
+            clearJniException(env);
+        }
+    }
+    if (!application) return AutomationBroadcastResult::ApplicationContextUnavailable;
+
+    jclass intentClass = env->FindClass("android/content/Intent");
+    if (!intentClass || clearJniException(env))
+        return AutomationBroadcastResult::IntentApiUnavailable;
+
+    jmethodID intentConstructor = env->GetMethodID(intentClass, "<init>", "()V");
+    jmethodID setAction = env->GetMethodID(
+        intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
+    jmethodID setPackage = env->GetMethodID(
+        intentClass, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearJniException(env) || !intentConstructor || !setAction || !setPackage)
+        return AutomationBroadcastResult::IntentApiUnavailable;
+
+    jobject intent = env->NewObject(intentClass, intentConstructor);
+    if (!intent || clearJniException(env))
+        return AutomationBroadcastResult::IntentApiUnavailable;
+
+    jstring action = env->NewStringUTF(kBedaimSpacebarIntentAction);
+    jstring packageName = env->NewStringUTF(kMacroDroidPackage);
+    if (!action || !packageName || clearJniException(env))
+        return AutomationBroadcastResult::IntentApiUnavailable;
+
+    env->CallObjectMethod(intent, setAction, action);
+    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
+    env->CallObjectMethod(intent, setPackage, packageName);
+    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
+
+    jclass contextClass = env->FindClass("android/content/Context");
+    if (!contextClass || clearJniException(env))
+        return AutomationBroadcastResult::IntentApiUnavailable;
+    jmethodID sendBroadcast = env->GetMethodID(
+        contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
+    if (!sendBroadcast || clearJniException(env))
+        return AutomationBroadcastResult::IntentApiUnavailable;
+
+    env->CallVoidMethod(application, sendBroadcast, intent);
+    if (clearJniException(env)) return AutomationBroadcastResult::BroadcastFailed;
+    return AutomationBroadcastResult::Sent;
+}
+
+const char* automationBroadcastResultName(AutomationBroadcastResult result) {
+    switch (result) {
+        case AutomationBroadcastResult::Sent: return "macrodroid_broadcast_sent";
+        case AutomationBroadcastResult::JavaVmUnavailable: return "android_java_vm_unavailable";
+        case AutomationBroadcastResult::ApplicationContextUnavailable: return "android_context_unavailable";
+        case AutomationBroadcastResult::IntentApiUnavailable: return "android_intent_api_unavailable";
+        case AutomationBroadcastResult::BroadcastFailed: return "macrodroid_broadcast_failed";
+    }
+    return "macrodroid_broadcast_unknown";
+}
+
+ActorGetStatusFlagFn resolveActorGetStatusFlag() {
+    static ActorGetStatusFlagFn function = nullptr;
+    if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
+        resolveTrustedGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
     return function;
 }
 
-std::optional<float> groundClearance(
-    bedrocktools::sdk::Player* player, float scanDistance) {
-    using namespace bedrocktools::sdk;
-    if (!player || !std::isfinite(scanDistance)) return std::nullopt;
-    auto* dimension = player->dimension();
-    auto* source = dimension ? dimension->blockSource() : nullptr;
-    auto isSolid = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
-        bedrocktools::memory::resolve(
-            bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
-    if (!source || !isSolid) return std::nullopt;
-
-    const Vec3 position = player->position();
-    const AABB bounds = player->bounds();
-    if (!finiteVec(position)) return std::nullopt;
-    const bool haveBounds = validBounds(bounds);
-    const float feetY = haveBounds ? bounds.min.y : position.y;
-    const float centerX = haveBounds
-        ? (bounds.min.x + bounds.max.x) * 0.5f : position.x;
-    const float centerZ = haveBounds
-        ? (bounds.min.z + bounds.max.z) * 0.5f : position.z;
-    if (!std::isfinite(feetY) || !std::isfinite(centerX) || !std::isfinite(centerZ))
-        return std::nullopt;
-
-    const int blockX = static_cast<int>(std::floor(centerX));
-    const int blockZ = static_cast<int>(std::floor(centerZ));
-    // Start in the voxel immediately beneath the feet; this handles exact integer
-    // Y coordinates without accidentally testing the block containing the player.
-    const int firstY = static_cast<int>(std::floor(feetY - 0.001f));
-    const float safeDistance = std::clamp(scanDistance, 1.0f, 24.0f);
-    const int maxSteps = static_cast<int>(std::ceil(safeDistance)) + 2;
-    for (int step = 0; step <= maxSteps; ++step) {
-        const BlockPos cell{blockX, firstY - step, blockZ};
-        if (!isSolid(source, &cell)) continue;
-        const float clearance = feetY - static_cast<float>(cell.y + 1);
-        if (!std::isfinite(clearance) || clearance < -0.15f) return std::nullopt;
-        return std::max(0.0f, clearance);
+bool playerIsGlidingForUnglide(void* player) {
+    if (!player) return false;
+    const auto getStatusFlag = resolveActorGetStatusFlag();
+    if (getStatusFlag) {
+        try {
+            // ActorFlags::Gliding is 32 in the public Bedrock/LeviLamina enum.
+            return getStatusFlag(player, 32);
+        } catch (...) {
+            // Fall through to the existing synchronized-data reader.
+        }
     }
-    // No solid floor in the bounded scan (for example, over the void or above a
-    // drop greater than the configured threshold): never trigger Unglide blindly.
-    return std::nullopt;
+    return actorIsGliding(player);
 }
+
 }
 
 MaceSwapperModule::MaceSwapperModule()
@@ -192,6 +483,7 @@ void MaceSwapperModule::onEnable() {
     m_hasPeakY = false;
     m_nextAttack = {};
     m_nextUnglideAttempt = {};
+    m_nextUnglideDiagnostic = {};
 
     // A rapid disable/re-enable can happen before the next player tick. Preserve
     // pending slot ownership so that tick can restore the old slot; never drop
@@ -219,6 +511,7 @@ void MaceSwapperModule::onDisable() {
     m_hasPeakY = false;
     m_nextAttack = {};
     m_nextUnglideAttempt = {};
+    m_nextUnglideDiagnostic = {};
 }
 
 void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
@@ -370,56 +663,50 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Unglide is deliberately independent from the fall/attack gate and the
-    // separate mace-swap/attack toggle: it exits
-    // glide only when the Aim Assist has a fresh nearby target and a solid floor
-    // has been found inside the configured clearance. The actual native Player
-    // method is resolved dynamically, and this path never writes entity flags.
+    // Unglide asks MacroDroid to perform the Android Space key event through its
+    // supported Input Key Event action. MacroDroid must have the Intent Received
+    // trigger and privileged input route configured by the user.
     if (m_unglideEnabled) {
         const auto now = std::chrono::steady_clock::now();
-        auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-        auto* aim = (aimModuleBase && aimModuleBase->enabled)
-            ? static_cast<AimAssistModule*>(aimModuleBase) : nullptr;
-        if (aim && now >= m_nextUnglideAttempt && aim->localPlayerIsGliding()) {
-            void* target = nullptr;
-            AABB targetBounds{};
-            float aimRange = 0.0f;
-            if (aim->currentTargetSnapshot(target, targetBounds, aimRange) &&
-                aim->currentTargetIsPlayerSnapshot(target)) {
-                const float targetDistance = distanceToTargetBounds(player, targetBounds);
-                if (std::isfinite(targetDistance) &&
-                    targetDistance <= std::clamp(m_unglideTargetDistance, 1.0f, 32.0f)) {
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(200);
-                    const auto clearance = groundClearance(player, m_unglideHeight);
-                    if (!clearance) {
-                        bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Debug,
-                            "MaceSwapper", "unglide_ground", "solid_floor_not_found",
-                            "No solid floor found in the bounded clearance scan.");
-                    }
-                    const float clearanceValue = clearance.value_or(
-                        std::numeric_limits<float>::infinity());
-                    if (bedaim::macefall::shouldUnglide(
-                            m_unglideEnabled, true, targetDistance, m_unglideTargetDistance,
-                            clearanceValue, m_unglideHeight)) {
-                        const auto stopGliding = resolvePlayerStopGliding();
-                        if (stopGliding) {
-                            stopGliding(player);
-                            m_nextUnglideAttempt = now + std::chrono::milliseconds(500);
-                            bedrocktools::diagnostics::probe(
-                                bedrocktools::diagnostics::Level::Info,
-                                "MaceSwapper", "unglide", "stop_gliding_requested",
-                                std::string("target_distance_limit=") +
-                                    std::to_string(m_unglideTargetDistance) +
-                                    ", ground_clearance=" + std::to_string(*clearance));
-                            return;
-                        }
-                        m_nextUnglideAttempt = now + std::chrono::milliseconds(1500);
-                        bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Warning,
-                            "MaceSwapper", "unglide", "native_stop_gliding_unavailable",
-                            "Player::stopGliding was not exported by this runtime; action skipped safely.");
-                    }
+        auto reportUnglideGate = [&](const char* state, const std::string& details) {
+            if (now < m_nextUnglideDiagnostic) return;
+            m_nextUnglideDiagnostic = now + std::chrono::seconds(1);
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Debug, "MaceSwapper", "unglide_gate", state, details);
+        };
+
+        if (now >= m_nextUnglideAttempt) {
+            if (!playerIsGlidingForUnglide(player)) {
+                m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                reportUnglideGate("not_gliding", "The native gliding flag is not set.");
+            } else {
+                const auto target = nearestNearbyPlayerDistance(player, m_unglideTargetDistance);
+                if (!target.queryReady) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(1000);
+                    reportUnglideGate("target_lookup_unavailable",
+                        "ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable.");
+                } else if (!target.found) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                    reportUnglideGate("no_nearby_player",
+                        std::string("No other player inside ") +
+                            std::to_string(m_unglideTargetDistance) + " blocks.");
+                } else if (!bedaim::macefall::shouldPulseUnglideJump(
+                               m_unglideEnabled, true, target.distance, m_unglideTargetDistance)) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                    reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
+                } else {
+                    const auto result = dispatchMacroDroidSpacebarMacro();
+                    // A successful sendBroadcast confirms Android accepted the
+                    // request, not that a MacroDroid macro/input route was active.
+                    reportUnglideGate(
+                        automationBroadcastResultName(result),
+                        std::string("target_distance=") + std::to_string(target.distance) +
+                            ", action=" + kBedaimSpacebarIntentAction +
+                            ", configure MacroDroid Intent Received + Input Key Event Space, and enable its supported Shizuku/root input route.");
+                    // Keep repeats at >=1s because Android may throttle background broadcasts.
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(
+                        result == AutomationBroadcastResult::Sent ? 1000 : 1500);
+                    return;
                 }
             }
         }
@@ -517,7 +804,6 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     m_attackIntervalMs = std::clamp(j.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
     m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
-    m_unglideHeight = std::clamp(j.value("m_unglideHeight", m_unglideHeight), 1.0f, 24.0f);
     m_unglideTargetDistance = std::clamp(
         j.value("m_unglideTargetDistance", m_unglideTargetDistance), 1.0f, 32.0f);
 }
@@ -531,7 +817,6 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_attackIntervalMs"] = m_attackIntervalMs;
     j["m_restoreSlot"] = m_restoreSlot;
     j["m_unglideEnabled"] = m_unglideEnabled;
-    j["m_unglideHeight"] = m_unglideHeight;
     j["m_unglideTargetDistance"] = m_unglideTargetDistance;
 }
 
@@ -599,7 +884,6 @@ void MaceSwapperModule::onMenuRegistered() {
     unglideEnabledNode.hasCurrentValue = true;
     schema.node(std::move(unglideEnabledNode));
 
-    slider("m_unglideHeight", "Unglide ground clearance", "1", "24", "0.5", " blocks", "special", "4.0");
     slider("m_unglideTargetDistance", "Unglide target distance", "1", "32", "0.5", " blocks", "special", "8.0");
 
     ConfigNodeV2 restoreNode;
@@ -645,7 +929,6 @@ bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_vi
         else if (key == "m_minimumFallDistance")
             m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(number);
         else if (key == "m_attackIntervalMs") m_attackIntervalMs = std::clamp(number, 80.0f, 1000.0f);
-        else if (key == "m_unglideHeight") m_unglideHeight = std::clamp(number, 1.0f, 24.0f);
         else if (key == "m_unglideTargetDistance")
             m_unglideTargetDistance = std::clamp(number, 1.0f, 32.0f);
         else return false;

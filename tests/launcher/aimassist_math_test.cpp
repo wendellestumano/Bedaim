@@ -30,8 +30,6 @@ int main() {
     using bedaim::aimmath::aimPointAtHeight;
     using bedaim::aimmath::fourAimAnchors;
     using bedaim::aimmath::nearestAnchorToRay;
-    using bedaim::aimmath::elytraDistanceDislocation;
-    using bedaim::aimmath::shouldApplyElytraDistanceDislocation;
     using bedaim::aimpolicy::HeldWeapon;
     using bedaim::aimpolicy::isRangedPredictionWeapon;
 
@@ -122,27 +120,6 @@ int main() {
           "spear identifier maps to the spear category");
     check(classifyHeldWeaponIdentifier("") == HeldWeapon::None,
           "empty item identifier fails closed");
-    // Weapon classification uses ordered substring matching against runtime item IDs;
-    // policy tests above ensure its result can be passed to the ranged predicate safely.
-    check(shouldApplyElytraDistanceDislocation(true, true, true),
-          "Elytra dislocation is allowed only when enabled, actively gliding, and Sticky");
-    check(!shouldApplyElytraDistanceDislocation(false, true, true),
-          "Elytra dislocation stays off when Elytra mode is disabled");
-    check(!shouldApplyElytraDistanceDislocation(true, false, true),
-          "Elytra dislocation stays off when the player is not currently gliding");
-    check(!shouldApplyElytraDistanceDislocation(true, true, false),
-          "Elytra dislocation stays off in Smooth and Adaptive tracking modes");
-    check(std::abs(elytraDistanceDislocation(4.0f, 0.25f)) < 1.0e-4f,
-          "Elytra dislocation has no effect inside the close-distance dead zone");
-    check(std::abs(elytraDistanceDislocation(10.0f, 0.25f) - 1.5f) < 1.0e-4f,
-          "Elytra dislocation increases proportionally to target distance and strength");
-    check(std::abs(elytraDistanceDislocation(10.0f, 0.0f)) < 1.0e-4f,
-          "zero Elytra strength disables downward dislocation");
-    check(std::abs(elytraDistanceDislocation(10.0f, 2.0f) - 6.0f) < 1.0e-4f,
-          "Elytra strength is clamped to the supported 0–1 range");
-    check(elytraDistanceDislocation(std::numeric_limits<float>::infinity(), 0.5f) == 0.0f,
-          "non-finite Elytra distances fail closed");
-
     const float nearScale = bedaim::aimmath::distanceHitboxScale(1.0f, 0.5f, 30.0f, 5.0f, true);
     const float mediumScale = bedaim::aimmath::distanceHitboxScale(1.0f, 10.0f, 30.0f, 5.0f, true);
     const float farScale = bedaim::aimmath::distanceHitboxScale(1.0f, 30.0f, 30.0f, 5.0f, true);

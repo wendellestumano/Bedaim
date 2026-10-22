@@ -1,3 +1,36 @@
+## 2026-10-22 — AutoHit JNI lookup follow-up
+- The uploaded diagnostic export from the prior installed build recorded `android_java_vm_unavailable` at AutoHit dispatch, confirming that this attempt failed before broadcasting to MacroDroid.
+- Reworked AutoHit's ART symbol lookup to try `RTLD_DEFAULT`, the normal `libart.so` soname, and common APEX/system library paths instead of relying on `RTLD_NOLOAD` alone.
+- This is a targeted lookup fix, not proof of success: the latest build and device runtime still need validation. If the symbol is hidden/unavailable in the launcher's linker namespace, the next step is to obtain JavaVM from an existing JNI lifecycle/bridge rather than repeatedly probing ART.
+
+## 2026-10-22 — Rebuild AutoHit as a minimal MacroDroid dispatcher
+- Replaced the prior target/weapon/Aim Assist/GameMode-dependent AutoHit implementation with a small dispatcher that sends the package-scoped Intent action `com.wendellestumano.bedaim.AUTOHIT_KEY0` to `com.arlosoft.macrodroid` at a configurable 1–20 CPS (default 8).
+- The module now requires only that it is enabled, a local player exists, and chat/container screens are closed; it does not call the native attack wrapper or require Aim Assist, target snapshots, weapon classification, or mouse/touch activation.
+- Diagnostics distinguish dispatch attempts from Android accepting the broadcast. A successful broadcast is not proof that MacroDroid emitted a key event or that Minecraft treated key 0 as an attack. Validate the rebuilt native target and test on-device.
+- AutoTotem remains retired; no changes to `main`.
+
+## 2026-10-22 — Route AutoHit through MacroDroid keyboard key 0
+- AutoHit now sends the package-scoped broadcast action `com.wendellestumano.bedaim.AUTOHIT_KEY0` to MacroDroid after its existing target, range, weapon-profile, input and cooldown gates pass. It no longer calls the native GameMode attack wrapper in this path.
+- Configure MacroDroid with an enabled `Intent Received` trigger matching that action and an `Input Key Event` action for keyboard digit `0` (Android `KEYCODE_0 = 7`). MacroDroid's supported input path must send the key event to the foreground Minecraft/Levi Launcher game.
+- A successful broadcast only confirms Android accepted the trigger; it does not confirm MacroDroid executed the action or Minecraft received key 0. Runtime testing and diagnostics remain required. This is rate-limited by the existing per-weapon CPS profile, not an unbounded key spam loop.
+
+## 2026-10-22 — Restore experimental AutoHit only
+- Re-registered AutoHit and included its implementation in the native build so it can be tested again; AutoTotem remains retired and excluded.
+- This is a reactivation of the existing experimental code, not a claim that native attacks or input injection work at runtime. Validate the Android build and collect AutoHit diagnostics in-game before changing the attack route.
+- No changes to `main`; work remains on `feature/elytra-aim-gamemode-checker-20261022`.
+
+## 2026-10-22 — Fix MacroDroid Spacebar dispatcher build
+- Fixed stale Key Mapper result-enum/function names left behind during the switch to the package-scoped MacroDroid broadcast; the JNI dispatcher and diagnostics now consistently use `AutomationBroadcastResult` and MacroDroid-specific result labels.
+- Android build #1108 failed at compile time on those four unresolved identifiers. Host regression tests passed before the Android compile stage; rerun CI on this fix.
+- MacroDroid delivery and actual Android Spacebar injection remain unverified until tested on the target device.
+
+## 2026-10-22 — Android Spacebar Unglide via MacroDroid
+- Unglide now sends a package-scoped Android broadcast with action `com.wendellestumano.bedaim.UNGLIDE_SPACEBAR`. MacroDroid's exported Intent Received capability can respond with its native Input Key Event action set to Space (KEYCODE_SPACE = 62). The active Unglide path no longer calls `Mob::jumpFromGround` or `Player::stopGliding`.
+- Added guarded JNI access to the process JavaVM and application context, with throttled diagnostics for VM/context/Intent/broadcast failures. Successful `sendBroadcast` only confirms dispatch, not that a MacroDroid macro or privileged input route is enabled.
+- One-time MacroDroid setup: create an enabled macro with an `Intent Received` trigger using the action above, and an `Input Key Event` action for Space. Configure MacroDroid's supported input path (Shizuku/ADB/root as available) so the event reaches Minecraft.
+- Creative and Spectator classification remains evidence-based: exact GameType/native predicates take precedence; repeated no-damage hits and repeated invisibility/no-collision/flying/block-overlap signals are labelled as heuristics.
+- ShadowHook experiment PR was closed; current builds remain on the Preloader hook backend.
+
 # Changelog
 
 ## 2026-10-22 — Testable Aim Assist held-weapon classification
@@ -138,3 +171,12 @@
 - Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
 - Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
 - Added `docs/MODULE_DIAGNOSTICS.md` with export instructions, log interpretation, and runtime-validation limits.
+
+### AutoHit JNI bridge follow-up
+- AutoHit now caches the `JavaVM*` passed to an exported `JNI_OnLoad` entry point when the loader provides one, avoiding reliance on `JNI_GetCreatedJavaVMs` in that load path. The ART symbol/path lookup remains as a fallback for native Preloader loading, which may not invoke `JNI_OnLoad`.
+- This is a targeted compatibility improvement, not yet device-verified. If the runtime uses only native injection and the ART symbol remains unavailable, the next step is to obtain the VM from a launcher-provided JNI bridge or hook an existing Java-to-native lifecycle callback.
+
+### AutoHit JavaVM source correction
+- Added a shared JavaVM cache populated from the official Preloader `ModContext::javaVm()` during Bedaim's load lifecycle, then used that cached VM as AutoHit's primary JNI source.
+- Kept `JNI_OnLoad` caching and ART symbol resolution only as fallback paths.
+- This directly addresses the observed `android_java_vm_unavailable` state at the source-selection layer; successful broadcast delivery and actual MacroDroid/key behavior still require a device test.
