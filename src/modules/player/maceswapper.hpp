@@ -25,7 +25,6 @@ public:
     float m_attackIntervalMs = 180.0f;
     bool m_restoreSlot = true;
     bool m_unglideEnabled = false;
-    float m_unglideHeight = 4.0f;
     float m_unglideTargetDistance = 8.0f;
 
 private:
