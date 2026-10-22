@@ -342,13 +342,14 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    if (!enabled || !m_enableMaceSwapper) {
+    if (!enabled) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "MaceSwapper", "action_gate", "disabled");
+            "MaceSwapper", "action_gate", "module_disabled");
         return;
     }
 
-    // Unglide is deliberately independent from the fall/attack gate: it exits
+    // Unglide is deliberately independent from the fall/attack gate and the
+    // separate mace-swap/attack toggle: it exits
     // glide only when the Aim Assist has a fresh nearby target and a solid floor
     // has been found inside the configured clearance. The actual native Player
     // method is resolved dynamically, and this path never writes entity flags.
@@ -399,6 +400,12 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 }
             }
         }
+    }
+
+    if (!m_enableMaceSwapper) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "attack_gate", "mace_swapper_disabled");
+        return;
     }
 
     if (!bedaim::macefall::shouldBeginMaceAction(verticalDelta, fallDistance, m_minimumFallDistance)) {
