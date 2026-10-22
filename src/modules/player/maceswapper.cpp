@@ -16,9 +16,12 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
+#include <bedrocktools/memory/Signatures.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <dlfcn.h>
+#include <optional>
 
 namespace {
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
@@ -72,6 +75,87 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
     // Overlap with the player's eye still counts as in range.
     return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
 }
+
+bool targetWithinDistance(bedrocktools::sdk::Player* player,
+                          const bedrocktools::sdk::AABB& targetBounds,
+                          float range) {
+    if (!player || !validBounds(targetBounds) || !std::isfinite(range)) return false;
+    const auto eye = eyePositionFor(player);
+    if (!finiteVec(eye)) return false;
+    const bedrocktools::sdk::Vec3 nearest{
+        std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
+        std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
+        std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
+    };
+    const float distanceSq = distanceSquared(eye, nearest);
+    const float safeRange = std::clamp(range, 1.0f, 32.0f);
+    return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
+}
+
+using BlockSourceIsSolidBlockingBlockFn =
+    bool (*)(void*, const bedrocktools::sdk::BlockPos*);
+using PlayerStopGlidingFn = void (*)(void*);
+
+PlayerStopGlidingFn resolvePlayerStopGliding() {
+    // Resolve the exported Player::stopGliding method at runtime. Do not use a
+    // hard-coded address/offset: if this symbol isn't available for this build,
+    // the feature safely remains inactive and reports the missing dependency.
+    static void* minecraftHandle = nullptr;
+    static PlayerStopGlidingFn function = nullptr;
+    if (function) return function;
+    function = reinterpret_cast<PlayerStopGlidingFn>(
+        dlsym(RTLD_DEFAULT, "_ZN6Player11stopGlidingEv"));
+    if (!function) {
+        if (!minecraftHandle) minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW);
+        if (minecraftHandle) {
+            function = reinterpret_cast<PlayerStopGlidingFn>(
+                dlsym(minecraftHandle, "_ZN6Player11stopGlidingEv"));
+        }
+    }
+    return function;
+}
+
+std::optional<float> groundClearance(
+    bedrocktools::sdk::Player* player, float scanDistance) {
+    using namespace bedrocktools::sdk;
+    if (!player || !std::isfinite(scanDistance)) return std::nullopt;
+    auto* dimension = player->dimension();
+    auto* source = dimension ? dimension->blockSource() : nullptr;
+    auto isSolid = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
+        bedrocktools::memory::resolve(
+            bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
+    if (!source || !isSolid) return std::nullopt;
+
+    const Vec3 position = player->position();
+    const AABB bounds = player->bounds();
+    if (!finiteVec(position)) return std::nullopt;
+    const bool haveBounds = validBounds(bounds);
+    const float feetY = haveBounds ? bounds.min.y : position.y;
+    const float centerX = haveBounds
+        ? (bounds.min.x + bounds.max.x) * 0.5f : position.x;
+    const float centerZ = haveBounds
+        ? (bounds.min.z + bounds.max.z) * 0.5f : position.z;
+    if (!std::isfinite(feetY) || !std::isfinite(centerX) || !std::isfinite(centerZ))
+        return std::nullopt;
+
+    const int blockX = static_cast<int>(std::floor(centerX));
+    const int blockZ = static_cast<int>(std::floor(centerZ));
+    // Start in the voxel immediately beneath the feet; this handles exact integer
+    // Y coordinates without accidentally testing the block containing the player.
+    const int firstY = static_cast<int>(std::floor(feetY - 0.001f));
+    const float safeDistance = std::clamp(scanDistance, 1.0f, 24.0f);
+    const int maxSteps = static_cast<int>(std::ceil(safeDistance)) + 2;
+    for (int step = 0; step <= maxSteps; ++step) {
+        const BlockPos cell{blockX, firstY - step, blockZ};
+        if (!isSolid(source, &cell)) continue;
+        const float clearance = feetY - static_cast<float>(cell.y + 1);
+        if (!std::isfinite(clearance) || clearance < -0.15f) return std::nullopt;
+        return std::max(0.0f, clearance);
+    }
+    // No solid floor in the bounded scan (for example, over the void or above a
+    // drop greater than the configured threshold): never trigger Unglide blindly.
+    return std::nullopt;
+}
 }
 
 MaceSwapperModule::MaceSwapperModule()
@@ -94,6 +178,7 @@ void MaceSwapperModule::onEnable() {
     m_peakY = 0.0f;
     m_hasPeakY = false;
     m_nextAttack = {};
+    m_nextUnglideAttempt = {};
 
     // A rapid disable/re-enable can happen before the next player tick. Preserve
     // pending slot ownership so that tick can restore the old slot; never drop
@@ -120,6 +205,7 @@ void MaceSwapperModule::onDisable() {
     m_peakY = 0.0f;
     m_hasPeakY = false;
     m_nextAttack = {};
+    m_nextUnglideAttempt = {};
 }
 
 void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
@@ -249,6 +335,47 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             "MaceSwapper", "action_gate", "disabled");
         return;
     }
+
+    // Unglide is deliberately independent from the fall/attack gate: it exits
+    // glide only when the Aim Assist has a fresh nearby target and a solid floor
+    // has been found inside the configured clearance. The actual native Player
+    // method is resolved dynamically, and this path never writes entity flags.
+    if (m_unglideEnabled) {
+        const auto now = std::chrono::steady_clock::now();
+        auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+        auto* aim = (aimModuleBase && aimModuleBase->enabled)
+            ? static_cast<AimAssistModule*>(aimModuleBase) : nullptr;
+        if (aim && now >= m_nextUnglideAttempt && aim->localPlayerIsGliding()) {
+            void* target = nullptr;
+            AABB targetBounds{};
+            float aimRange = 0.0f;
+            if (aim->currentTargetSnapshot(target, targetBounds, aimRange) &&
+                targetWithinDistance(player, targetBounds, m_unglideTargetDistance)) {
+                m_nextUnglideAttempt = now + std::chrono::milliseconds(200);
+                const auto clearance = groundClearance(player, m_unglideHeight);
+                if (clearance && *clearance <= std::clamp(m_unglideHeight, 1.0f, 24.0f)) {
+                    const auto stopGliding = resolvePlayerStopGliding();
+                    if (stopGliding) {
+                        stopGliding(player);
+                        m_nextUnglideAttempt = now + std::chrono::milliseconds(500);
+                        bedrocktools::diagnostics::probe(
+                            bedrocktools::diagnostics::Level::Info,
+                            "MaceSwapper", "unglide", "stop_gliding_requested",
+                            std::string("target_distance_limit=") +
+                                std::to_string(m_unglideTargetDistance) +
+                            ", ground_clearance=" + std::to_string(*clearance));
+                        return;
+                    }
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(1500);
+                    bedrocktools::diagnostics::probe(
+                        bedrocktools::diagnostics::Level::Warning,
+                        "MaceSwapper", "unglide", "native_stop_gliding_unavailable",
+                        "Player::stopGliding was not exported by this runtime; action skipped safely.");
+                }
+            }
+        }
+    }
+
     if (!bedaim::macefall::shouldBeginMaceAction(verticalDelta, fallDistance, m_minimumFallDistance)) {
         const char* fallState = verticalDelta >= -0.025f ? "not_descending" : "fall_below_minimum";
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
@@ -334,6 +461,10 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(j.value("m_minimumFallDistance", m_minimumFallDistance));
     m_attackIntervalMs = std::clamp(j.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
+    m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
+    m_unglideHeight = std::clamp(j.value("m_unglideHeight", m_unglideHeight), 1.0f, 24.0f);
+    m_unglideTargetDistance = std::clamp(
+        j.value("m_unglideTargetDistance", m_unglideTargetDistance), 1.0f, 32.0f);
 }
 
 void MaceSwapperModule::saveConfig(nlohmann::json& j) {
@@ -344,6 +475,9 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_minimumFallDistance"] = bedaim::macefall::normalizeMinimumFallDistance(m_minimumFallDistance);
     j["m_attackIntervalMs"] = m_attackIntervalMs;
     j["m_restoreSlot"] = m_restoreSlot;
+    j["m_unglideEnabled"] = m_unglideEnabled;
+    j["m_unglideHeight"] = m_unglideHeight;
+    j["m_unglideTargetDistance"] = m_unglideTargetDistance;
 }
 
 void MaceSwapperModule::onMenuRegistered() {
