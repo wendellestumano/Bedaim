@@ -1,7 +1,7 @@
 ## 2026-10-22 — Unglide and Gamemode Checker repair
 - Removed the Elytra Mode/lookdown option and its distance-based aim-point displacement code.
-- Made Unglide acquire nearby player targets without requiring Aim Assist to be enabled, while preserving target-distance and safe-ground checks.
-- Gamemode Checker now reads names from the SDK player field first, retries native dependencies, and marks inferred modes separately from exact GameType results.
+- Made Unglide acquire nearby player targets from the active level without requiring Aim Assist to be enabled, added throttled gate diagnostics, and tries both Player/LocalPlayer exported stop-gliding symbols.
+- Gamemode Checker reads names from the SDK player field, retries native dependencies, uses a const-reference name-tag ABI for fallback, and marks heuristic mode labels with '*' rather than presenting them as exact GameType results.
 - Added additional const/non-const native GameType getter resolution attempts without introducing version-specific offsets.
 
 # Changelog
