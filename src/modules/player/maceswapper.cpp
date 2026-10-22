@@ -362,23 +362,23 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     if (bedaim::macefall::shouldUnglide(
                             m_unglideEnabled, true, targetDistance, m_unglideTargetDistance,
                             clearanceValue, m_unglideHeight)) {
-                    const auto stopGliding = resolvePlayerStopGliding();
-                    if (stopGliding) {
-                        stopGliding(player);
-                        m_nextUnglideAttempt = now + std::chrono::milliseconds(500);
+                        const auto stopGliding = resolvePlayerStopGliding();
+                        if (stopGliding) {
+                            stopGliding(player);
+                            m_nextUnglideAttempt = now + std::chrono::milliseconds(500);
+                            bedrocktools::diagnostics::probe(
+                                bedrocktools::diagnostics::Level::Info,
+                                "MaceSwapper", "unglide", "stop_gliding_requested",
+                                std::string("target_distance_limit=") +
+                                    std::to_string(m_unglideTargetDistance) +
+                                    ", ground_clearance=" + std::to_string(*clearance));
+                            return;
+                        }
+                        m_nextUnglideAttempt = now + std::chrono::milliseconds(1500);
                         bedrocktools::diagnostics::probe(
-                            bedrocktools::diagnostics::Level::Info,
-                            "MaceSwapper", "unglide", "stop_gliding_requested",
-                            std::string("target_distance_limit=") +
-                                std::to_string(m_unglideTargetDistance) +
-                            ", ground_clearance=" + std::to_string(*clearance));
-                        return;
-                    }
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(1500);
-                    bedrocktools::diagnostics::probe(
-                        bedrocktools::diagnostics::Level::Warning,
-                        "MaceSwapper", "unglide", "native_stop_gliding_unavailable",
-                        "Player::stopGliding was not exported by this runtime; action skipped safely.");
+                            bedrocktools::diagnostics::Level::Warning,
+                            "MaceSwapper", "unglide", "native_stop_gliding_unavailable",
+                            "Player::stopGliding was not exported by this runtime; action skipped safely.");
                     }
                 }
             }
