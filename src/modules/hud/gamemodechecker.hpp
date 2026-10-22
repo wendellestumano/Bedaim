@@ -31,6 +31,7 @@ public:
     void onEnable() override;
     void onDisable() override;
     void onFrame() override;
+    static bool isSpectatorCandidate(void* actor);
 
 private:
     void refresh(void* localPlayer);
