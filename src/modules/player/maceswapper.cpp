@@ -514,7 +514,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // Detect a nearby player, then request the actual native jump action (the
     // equivalent movement operation to pressing Space). StopGliding is a fallback.
     if (m_unglideEnabled) {
-        const now = std::chrono::steady_clock::now();
+        const auto now = std::chrono::steady_clock::now();
         auto reportUnglideGate = [&](const char* state, const std::string& details) {
             if (now < m_nextUnglideDiagnostic) return;
             m_nextUnglideDiagnostic = now + std::chrono::seconds(1);
