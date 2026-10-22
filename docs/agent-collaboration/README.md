@@ -11,7 +11,7 @@ This directory is the durable coordination layer for GitHub Copilot, OpenAI Code
 ## What it does not do by itself
 Repository files cannot force two separate chat sessions or the ChatGPT mobile app to message each other continuously. The GitHub connection inside ChatGPT is for reading/searching repository content, not directly editing a Codespace filesystem. The VS Code agent workflow can hand off between compatible agents in the same supported session; availability depends on the VS Code client, selected harness, and account.
 
-The repository now includes a GitHub Actions runner for a bounded Copilot CLI loop and a separate read-only AI reviewer workflow. These are configured on the collaboration branch in PR #66; they are not active on `main` until the PR is reviewed and merged. This is a sequential Copilot-based workflow, not an always-on bridge that makes Copilot, Codex, and ChatGPT chat with one another. Never store tokens in repository files or prompts, and never give an AI workflow merge permission.
+The repository now includes a GitHub Actions runner that invokes the actual `bedaim-coordinator` and `bedaim-implementer` custom agents via Copilot CLI, plus a separate read-only `bedaim-reviewer` run after Build. The workflows are configured on the collaboration branch in PR #66; they are not active on `main` until the PR is reviewed and merged. This is a sequential Copilot-based workflow, not an always-on bridge that makes Copilot, Codex, and ChatGPT chat with one another. The runner adapts the project agents' tool names in an ephemeral CLI home and constrains tools per role. Never store tokens in repository files or prompts, and never give an AI workflow merge permission.
 
 ## Suggested roles
 1. **Coordinator** — read-only reconnaissance, task decomposition, conflict detection, and handoff.
@@ -56,8 +56,8 @@ Replace the path with the actual NDK location. Check current CI and project scri
 
 The collaboration branch adds two workflows:
 
-- `.github/workflows/bedaim-ai-agent.yml` — manually triggered **BedAim AI Agent Runner**. The Coordinator creates an evidence-based plan. In `implement` mode, the Implementer may make a scoped change in a fresh Actions checkout on a new `agent/copilot-<run-id>` branch. A draft PR is opened only if the Implementer step succeeds. The existing `Build` workflow is then dispatched against that branch.
-- `.github/workflows/bedaim-ai-review.yml` — after a completed `Build` run, finds only an open same-repository PR from an `agent/copilot-` branch that matches the exact built SHA, runs Copilot with read/search tools only, and posts or updates an advisory comment. It does not approve, request changes through GitHub, merge, or run fork PR code.
+- `.github/workflows/bedaim-ai-agent.yml` — manually triggered **BedAim AI Agent Runner**. It invokes the repository's actual Coordinator custom agent for an evidence-based plan. In `implement` mode, it invokes the custom Implementer agent in a fresh Actions checkout on a new `agent/copilot-<run-id>` branch. A draft PR is opened only if the Implementer step succeeds. The existing `Build` workflow is then dispatched against that branch.
+- `.github/workflows/bedaim-ai-review.yml` — after a completed `Build` run, finds only an open same-repository PR from an `agent/copilot-` branch that matches the exact built SHA, invokes the Reviewer custom agent from trusted `main` with read/search tools only, and posts or updates an advisory comment. It does not approve, request changes through GitHub, merge, or run fork PR code.
 
 ### One-time authentication setup
 
