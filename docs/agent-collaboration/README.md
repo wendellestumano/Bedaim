@@ -81,3 +81,15 @@ The workflow only accepts manual runs triggered by the repository owner. AI outp
 - This automates the Copilot CLI Coordinator → Implementer sequence and a follow-up read-only Reviewer; it does **not** automatically invoke the separate Codex service or the mobile ChatGPT app.
 - The reviewer workflow becomes event-active only after it is on the default branch. Until then, its YAML is merely part of PR #66.
 - Configure and verify server-side protection on `main` separately. Files in a PR do not enforce branch rules by themselves.
+
+## Bounded autonomous continuation (new)
+
+`.github/workflows/bedaim-ai-continuation.yml` adds a manual, bounded analysis loop. It collects recent commit history, open PR metadata, recent Actions run summaries, and tracked diagnostic/test/log filenames; then runs up to three sequential, read-only Copilot analysis passes. A short delay separates passes, and the later pass receives the previous report to reduce duplicated work. It exports `evidence.md`, `analysis.md`, and `NEXT_SESSION.md` as a downloadable Actions artifact.
+
+To try it after the workflow is available on the default branch:
+1. Configure the repository Actions secret `COPILOT_GITHUB_TOKEN` with the required Copilot Requests permission. Never paste the token into ChatGPT or commit it.
+2. Open **Actions → BedAim Autonomous Continuation → Run workflow**.
+3. Choose `analyze` first, set a clear focus, and choose 1–3 passes.
+4. Inspect the uploaded artifact and use `NEXT_SESSION.md` as the next run's context. Compare the branch/commit and current CI state before resuming.
+
+Safety boundaries: only the repository owner can start it; each run is capped at 45 minutes and three passes; it is read-only, does not recursively dispatch itself, does not edit code or merge PRs, and has no automatic schedule. `analyze-and-propose` asks for a scoped patch plan but still does not apply the patch. This is a repository-hosted Copilot agent loop, not a mechanism that makes the ChatGPT mobile app send messages to itself. GitHub Actions workflows generally must be present on the repository's default branch before manual dispatch is available, so the new workflow remains inactive until PR #66 is reviewed and merged.
