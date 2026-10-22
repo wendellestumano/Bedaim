@@ -360,39 +360,6 @@ void resolvePlayerGameTypeApi() {
 
 }
 
-bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
-    if (!actor) return false;
-    auto function = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
-    if (!function && std::chrono::steady_clock::now() >= actorAttackabilityNextResolve) {
-        std::lock_guard<std::mutex> cacheLock(playerGameTypeCacheMutex);
-        const auto now = std::chrono::steady_clock::now();
-        function = actorIsAttackableGamemodeOriginal.load(std::memory_order_relaxed);
-        if (!function && now >= actorAttackabilityNextResolve) {
-            actorAttackabilityNextResolve = now + std::chrono::seconds(1);
-            // Apollon calls Actor::isAttackableGamemode() directly. Prefer the
-            // matching exported native method over inferring attackability from
-            // GameType IDs. Both const/non-const manglings have the same ABI here;
-            // resolveMinecraftFunction validates that the address belongs to the
-            // loaded Minecraft library. Do not fall back to unverified offsets.
-            const char* symbols[] = {
-                "_ZN5Actor20isAttackableGamemodeEv",
-                "_ZNK5Actor20isAttackableGamemodeEv"
-            };
-            for (const char* symbol : symbols) {
-                auto* address = resolveMinecraftFunction(symbol);
-                if (!address) continue;
-                function = reinterpret_cast<ActorIsAttackableGamemodeFn>(address);
-                actorIsAttackableGamemodeOriginal.store(function, std::memory_order_release);
-                gameHooksLogger().info(
-                    "Resolved trusted Actor::isAttackableGamemode; Aim Assist can apply the native attackability filter.");
-                break;
-            }
-        }
-    }
-    if (!function) return false;
-    outIsAttackable = function(actor);
-    return true;
-}
 
 bool plausibleGameMode(void* gameMode) {
     if (!gameMode) return false;
@@ -1010,6 +977,43 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
             playerSetGameTypeSeen.load(std::memory_order_acquire));
     }
     return false;
+}
+
+bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
+    if (!actor) return false;
+
+    auto function = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
+    if (!function) {
+        // Keep the retry timestamp and resolver guarded by the same mutex;
+        // tick/render paths may call this method concurrently.
+        std::lock_guard<std::mutex> cacheLock(playerGameTypeCacheMutex);
+        function = actorIsAttackableGamemodeOriginal.load(std::memory_order_relaxed);
+        const auto now = std::chrono::steady_clock::now();
+        if (!function && now >= actorAttackabilityNextResolve) {
+            actorAttackabilityNextResolve = now + std::chrono::seconds(1);
+            // Apollon calls Actor::isAttackableGamemode() directly. Prefer the
+            // exported native method over inferring attackability from GameType IDs.
+            // resolveMinecraftFunction accepts only addresses owned by libminecraftpe.so.
+            // Never fall back to unverified version-specific offsets.
+            const char* symbols[] = {
+                "_ZN5Actor20isAttackableGamemodeEv",
+                "_ZNK5Actor20isAttackableGamemodeEv"
+            };
+            for (const char* symbol : symbols) {
+                auto* address = resolveMinecraftFunction(symbol);
+                if (!address) continue;
+                function = reinterpret_cast<ActorIsAttackableGamemodeFn>(address);
+                actorIsAttackableGamemodeOriginal.store(function, std::memory_order_release);
+                gameHooksLogger().info(
+                    "Resolved trusted Actor::isAttackableGamemode; Aim Assist can apply the native attackability filter.");
+                break;
+            }
+        }
+    }
+
+    if (!function) return false;
+    outIsAttackable = function(actor);
+    return true;
 }
 
 
