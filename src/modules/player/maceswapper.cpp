@@ -262,19 +262,13 @@ void* resolveTrustedGameSymbol(const char* symbol) {
     return nullptr;
 }
 
-// Moon/Key Mapper exposes a public broadcast API for triggering a configured
-// Key Map by UID. That map contains a KEY_EVENT action for Android KEYCODE_SPACE
-// (62); Key Mapper then uses its supported System Bridge/IME path to dispatch
-// ACTION_DOWN + ACTION_UP. This avoids private Binder access and any new hooks.
-constexpr const char* kMoonPackage = "io.github.sds100.keymapper";
-constexpr const char* kMoonTriggerReceiver =
-    "io.github.sds100.keymapper.api.TriggerKeyMapsBroadcastReceiver";
-constexpr const char* kMoonTriggerAction =
-    "io.github.sds100.keymapper.ACTION_TRIGGER_KEYMAP_BY_UID";
-constexpr const char* kMoonTriggerUidExtra =
-    "io.github.sds100.keymapper.EXTRA_KEYMAP_UID";
-constexpr const char* kBedaimSpacebarKeyMapUid =
-    "8cfe3591-a1e8-44f0-9a9a-5ea6f745d24a";
+// MacroDroid exposes an "Intent Received" trigger for custom broadcasts.
+// Configure it with this action and a single "Input Key Event: Space" action.
+// MacroDroid then uses its supported input/Accessibility/Shizuku path; Bedaim
+// only emits the trigger intent and does not inject input or install additional hooks.
+constexpr const char* kMacroDroidPackage = "com.arlosoft.macrodroid";
+constexpr const char* kBedaimSpacebarIntentAction =
+    "com.wendellestumano.bedaim.UNGLIDE_SPACEBAR";
 
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
 
@@ -341,7 +335,7 @@ private:
     bool mReady = false;
 };
 
-enum class MoonBroadcastResult {
+enum class AutomationBroadcastResult {
     Sent,
     JavaVmUnavailable,
     ApplicationContextUnavailable,
@@ -355,12 +349,12 @@ bool clearJniException(JNIEnv* env) {
     return true;
 }
 
-MoonBroadcastResult dispatchMoonSpacebarKeyMap() {
+AutomationBroadcastResult dispatchMacroDroidSpacebarMacro() {
     ScopedJniEnvironment jni;
     JNIEnv* env = jni.get();
-    if (!env) return MoonBroadcastResult::JavaVmUnavailable;
+    if (!env) return AutomationBroadcastResult::JavaVmUnavailable;
     ScopedJniLocalFrame localFrame(env);
-    if (!localFrame.ready()) return MoonBroadcastResult::IntentApiUnavailable;
+    if (!localFrame.ready()) return AutomationBroadcastResult::IntentApiUnavailable;
 
     jobject application = nullptr;
     jclass activityThread = env->FindClass("android/app/ActivityThread");
@@ -393,65 +387,54 @@ MoonBroadcastResult dispatchMoonSpacebarKeyMap() {
             clearJniException(env);
         }
     }
-    if (!application) return MoonBroadcastResult::ApplicationContextUnavailable;
+    if (!application) return AutomationBroadcastResult::ApplicationContextUnavailable;
 
     jclass intentClass = env->FindClass("android/content/Intent");
     if (!intentClass || clearJniException(env))
-        return MoonBroadcastResult::IntentApiUnavailable;
+        return AutomationBroadcastResult::IntentApiUnavailable;
 
     jmethodID intentConstructor = env->GetMethodID(intentClass, "<init>", "()V");
     jmethodID setAction = env->GetMethodID(
         intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
-    jmethodID setClassName = env->GetMethodID(
-        intentClass, "setClassName",
-        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
-    jmethodID putExtra = env->GetMethodID(
-        intentClass, "putExtra",
-        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
-    if (clearJniException(env) || !intentConstructor || !setAction || !setClassName || !putExtra)
-        return MoonBroadcastResult::IntentApiUnavailable;
+    jmethodID setPackage = env->GetMethodID(
+        intentClass, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearJniException(env) || !intentConstructor || !setAction || !setPackage)
+        return AutomationBroadcastResult::IntentApiUnavailable;
 
     jobject intent = env->NewObject(intentClass, intentConstructor);
     if (!intent || clearJniException(env))
-        return MoonBroadcastResult::IntentApiUnavailable;
+        return AutomationBroadcastResult::IntentApiUnavailable;
 
-    jstring action = env->NewStringUTF(kMoonTriggerAction);
-    jstring packageName = env->NewStringUTF(kMoonPackage);
-    jstring receiverName = env->NewStringUTF(kMoonTriggerReceiver);
-    jstring extraName = env->NewStringUTF(kMoonTriggerUidExtra);
-    jstring keyMapUid = env->NewStringUTF(kBedaimSpacebarKeyMapUid);
-    if (!action || !packageName || !receiverName || !extraName || !keyMapUid ||
-        clearJniException(env)) {
-        return MoonBroadcastResult::IntentApiUnavailable;
-    }
+    jstring action = env->NewStringUTF(kBedaimSpacebarIntentAction);
+    jstring packageName = env->NewStringUTF(kMacroDroidPackage);
+    if (!action || !packageName || clearJniException(env))
+        return AutomationBroadcastResult::IntentApiUnavailable;
 
     env->CallObjectMethod(intent, setAction, action);
-    if (clearJniException(env)) return MoonBroadcastResult::IntentApiUnavailable;
-    env->CallObjectMethod(intent, setClassName, packageName, receiverName);
-    if (clearJniException(env)) return MoonBroadcastResult::IntentApiUnavailable;
-    env->CallObjectMethod(intent, putExtra, extraName, keyMapUid);
-    if (clearJniException(env)) return MoonBroadcastResult::IntentApiUnavailable;
+    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
+    env->CallObjectMethod(intent, setPackage, packageName);
+    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
 
     jclass contextClass = env->FindClass("android/content/Context");
     if (!contextClass || clearJniException(env))
-        return MoonBroadcastResult::IntentApiUnavailable;
+        return AutomationBroadcastResult::IntentApiUnavailable;
     jmethodID sendBroadcast = env->GetMethodID(
         contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
     if (!sendBroadcast || clearJniException(env))
-        return MoonBroadcastResult::IntentApiUnavailable;
+        return AutomationBroadcastResult::IntentApiUnavailable;
 
     env->CallVoidMethod(application, sendBroadcast, intent);
-    if (clearJniException(env)) return MoonBroadcastResult::BroadcastFailed;
+    if (clearJniException(env)) return AutomationBroadcastResult::BroadcastFailed;
     return MoonBroadcastResult::Sent;
 }
 
 const char* moonBroadcastResultName(MoonBroadcastResult result) {
     switch (result) {
         case MoonBroadcastResult::Sent: return "keymapper_broadcast_sent";
-        case MoonBroadcastResult::JavaVmUnavailable: return "android_java_vm_unavailable";
-        case MoonBroadcastResult::ApplicationContextUnavailable: return "android_context_unavailable";
-        case MoonBroadcastResult::IntentApiUnavailable: return "android_intent_api_unavailable";
-        case MoonBroadcastResult::BroadcastFailed: return "keymapper_broadcast_failed";
+        case AutomationBroadcastResult::JavaVmUnavailable: return "android_java_vm_unavailable";
+        case AutomationBroadcastResult::ApplicationContextUnavailable: return "android_context_unavailable";
+        case AutomationBroadcastResult::IntentApiUnavailable: return "android_intent_api_unavailable";
+        case AutomationBroadcastResult::BroadcastFailed: return "keymapper_broadcast_failed";
     }
     return "keymapper_broadcast_unknown";
 }
@@ -680,9 +663,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Unglide uses an Android KEYCODE_SPACE Key Map in Moon/Key Mapper.
-    // This sends the public ACTION_TRIGGER_KEYMAP_BY_UID broadcast; Key Mapper
-    // performs the actual ACTION_DOWN/ACTION_UP through its supported input path.
+    // Unglide asks MacroDroid to perform the Android Space key event through its
+    // supported Input Key Event action. MacroDroid must have the Intent Received
+    // trigger and privileged input route configured by the user.
     if (m_unglideEnabled) {
         const auto now = std::chrono::steady_clock::now();
         auto reportUnglideGate = [&](const char* state, const std::string& details) {
@@ -712,16 +695,17 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
                     reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
                 } else {
-                    const auto result = dispatchMoonSpacebarKeyMap();
+                    const auto result = dispatchMacroDroidSpacebarMacro();
                     // A successful sendBroadcast confirms Android accepted the
-                    // request, not that the map/injection path was enabled.
+                    // request, not that a MacroDroid macro/input route was active.
                     reportUnglideGate(
-                        moonBroadcastResultName(result),
+                        automationBroadcastResultName(result),
                         std::string("target_distance=") + std::to_string(target.distance) +
-                            ", keymap_uid=" + kBedaimSpacebarKeyMapUid +
-                            ", ensure the Bedaim Spacebar Key Map is imported/enabled and Moon's System Bridge is active.");
+                            ", action=" + kBedaimSpacebarIntentAction +
+                            ", configure MacroDroid Intent Received + Input Key Event Space, and enable its supported Shizuku/root input route.");
+                    // Keep repeats at >=1s because Android may throttle background broadcasts.
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(
-                        result == MoonBroadcastResult::Sent ? 650 : 1500);
+                        result == AutomationBroadcastResult::Sent ? 1000 : 1500);
                     return;
                 }
             }
