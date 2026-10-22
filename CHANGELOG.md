@@ -1,3 +1,9 @@
+## 2026-10-22 — Fail-closed AimAssist player gamemode filter
+
+- Changed the player-target gate so AimAssist only selects a player after a native GameType, Creative/Spectator predicate, or native attackability lookup positively confirms the target is attackable.
+- Creative, Spectator, and unresolved/unknown player modes are skipped when **Ignore Creative/Spectator** is enabled; unavailable gamemode APIs are no longer silently treated as permission to aim at a player.
+- Mob targeting and unrelated modules are unchanged. This prevents targeting protected players conservatively, but player AimAssist will also skip Survival/Adventure players until at least one lookup works on the runtime. Build and in-game verification are still required.
+
 ## 2026-10-22 — Improve Gamemode Checker runtime diagnostics
 
 - Runtime testing showed that the first checker build compiled but did not identify Creative/Spectator players. The exported-symbol-only approach was not sufficient for the stripped Bedrock library.

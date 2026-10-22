@@ -806,27 +806,45 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (isPlayer) {
             if (!m_targetPlayers) continue;
             if (m_ignoreCreativeSpectator) {
+                // Fail closed: never steer toward a player unless Bedrock confirms
+                // that the player is attackable. Unknown mode is not permission to target.
+                bool confirmedAttackable = false;
+
                 std::int32_t gameType = -1;
                 const bool hasExactGameType =
                     bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType);
-                if (hasExactGameType && (gameType == 1 || gameType == 3)) continue;
+                if (hasExactGameType) {
+                    if (gameType == 1 || gameType == 3) continue;
+                    confirmedAttackable = (gameType == 0 || gameType == 2);
+                }
 
-                // Prefer per-actor predicates (also used by modern Bedrock SDKs)
-                // if the native GameType getter/cache did not classify C/S.
-                std::int32_t predicateMode = -1;
-                const bool hasPredicateState =
-                    bedrocktools::core::gamehooks::tryGetPlayerCreativeSpectator(candidate, predicateMode);
-                if (hasPredicateState && (predicateMode == 1 || predicateMode == 3)) continue;
+                if (!confirmedAttackable) {
+                    std::int32_t predicateMode = -1;
+                    const bool hasPredicateState =
+                        bedrocktools::core::gamehooks::tryGetPlayerCreativeSpectator(candidate, predicateMode);
+                    if (hasPredicateState) {
+                        if (predicateMode == 1 || predicateMode == 3) continue;
+                        confirmedAttackable = (predicateMode == 0 || predicateMode == 2);
+                    }
+                }
 
-                // Last resort, inspired by Apollon's isAttackableGamemode() call.
-                bool attackable = true;
-                const bool hasAttackability = !hasPredicateState &&
-                    bedrocktools::core::gamehooks::tryGetPlayerAttackableGamemode(candidate, attackable);
-                if (hasAttackability && !attackable) continue;
+                // The native attackability predicate is the final fallback.
+                // If no API can confirm the mode, do not guess that the player is attackable.
+                if (!confirmedAttackable) {
+                    bool attackable = false;
+                    const bool hasAttackability =
+                        bedrocktools::core::gamehooks::tryGetPlayerAttackableGamemode(candidate, attackable);
+                    if (hasAttackability) {
+                        if (!attackable) continue;
+                        confirmedAttackable = true;
+                    }
+                }
 
-                if (!hasExactGameType && !hasPredicateState && !hasAttackability &&
-                    !g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                    aimAssistLogger().warn("Creative/Spectator filter unavailable: exact GameType, per-actor mode predicates, and attackability lookups are unavailable; this candidate may still be eligible.");
+                if (!confirmedAttackable) {
+                    if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
+                        aimAssistLogger().warn("Player target skipped: Bedrock could not confirm an attackable gamemode; Creative/Spectator filtering is fail-closed.");
+                    }
+                    continue;
                 }
             }
         } else {
