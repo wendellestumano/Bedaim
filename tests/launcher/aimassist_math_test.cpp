@@ -106,6 +106,8 @@ int main() {
           "melee weapon classes do not use ranged-only prediction");
     check(!isRangedPredictionWeapon(HeldWeapon::Tool),
           "tool category stays distinct and does not inherit other-melee prediction");
+    // Weapon classification uses ordered substring matching against runtime item IDs;
+    // policy tests above ensure its result can be passed to the ranged predicate safely.
     check(shouldApplyElytraDistanceDislocation(true, true, true),
           "Elytra dislocation is allowed only when enabled, actively gliding, and Sticky");
     check(!shouldApplyElytraDistanceDislocation(false, true, true),
