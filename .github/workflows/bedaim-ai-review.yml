@@ -158,6 +158,7 @@ jobs:
           npm install --global @github/copilot
           copilot --agent=bedaim-reviewer -p "$(cat "$RUNNER_TEMP/bedaim-ai-review-prompt.md")" \
             --available-tools='view,grep,glob' \
+            --allow-tool=read \
             --deny-tool=write \
             --no-ask-user | tee "$RUNNER_TEMP/bedaim-ai-review.md"
 
