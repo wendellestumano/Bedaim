@@ -44,7 +44,7 @@ struct InteractionResultValue {
 };
 
 using VersionStringFn = std::string(*)(void*);
-using NormalTickFn = void(*)(void*);
+using NormalTickFn = void*(*)(void*);
 using StartDestroyBlockFn = bool(*)(void*, const void*, std::uint8_t, bool*);
 using StopDestroyBlockFn = void(*)(void*, const void*);
 using StartBuildBlockFn = void(*)(void*, const void*, std::uint8_t);
@@ -1502,7 +1502,7 @@ void* resolveLocalPlayerFromClientInstance(void* clientInstance) {
     return nullptr;
 }
 
-void tickDetour(void* actor) {
+void* tickDetour(void* actor) {
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
 
@@ -1600,7 +1600,10 @@ void tickDetour(void* actor) {
         bus().publish(verifiedPre);
     }
 
-    if (tickOriginal) tickOriginal(actor);
+    // Apollon's reference declares LocalPlayer::normalTick as returning
+    // void*. Preserve that ABI and forward the exact native return value; a
+    // void detour would silently discard the return register on ARM64.
+    void* nativeTickResult = tickOriginal ? tickOriginal(actor) : nullptr;
 
     if (verified) {
         bedaim::events::VerifiedLocalPlayerTickEvent postTick{
@@ -1626,6 +1629,7 @@ void tickDetour(void* actor) {
                     currentLocalPlayer.load(std::memory_order_acquire))) +
                 "; original=" + (tickOriginal ? "ready" : "missing"));
     }
+    return nativeTickResult;
 }
 
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
