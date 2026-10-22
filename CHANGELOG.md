@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-21 — Experimental GitHub Actions AI agent loop
+
+- Added a manually triggered Copilot CLI runner that invokes the repository's Coordinator and Implementer custom agents in sequence, with a read-only planning mode and an implementation mode isolated to a fresh `agent/copilot-<run-id>` branch.
+- Added automatic draft-PR creation after a successful implementation step, followed by an explicit dispatch of the existing Build workflow for the generated branch.
+- Added a read-only Reviewer workflow that waits for a completed Build run, matches the exact commit SHA to an open same-repository agent PR, and posts or updates an advisory review comment. It does not approve or merge.
+- Added workflow YAML syntax validation to CI before the host regression tests and Android ARM64 build/package steps.
+- The automation remains experimental until CI passes on the final PR head, the repository owner adds the `COPILOT_GITHUB_TOKEN` Actions secret with Copilot Requests permission, and an end-to-end run is verified. No in-game runtime behavior or main-branch protection is claimed.
+
 ## 2026-10-17 — Downloads export and periodic diagnostics
 
 - Changed manual log export to create timestamped `.txt` or structured `.json` files in `/sdcard/Download/Bedaim/`.
