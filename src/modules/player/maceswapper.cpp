@@ -98,6 +98,13 @@ using BlockSourceIsSolidBlockingBlockFn =
     bool (*)(void*, const bedrocktools::sdk::BlockPos*);
 using PlayerStopGlidingFn = void (*)(void*);
 
+bool isTrustedMinecraftMethod(void* address) {
+    if (!address) return false;
+    Dl_info info{};
+    return dladdr(address, &info) != 0 && info.dli_fname &&
+        std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
+}
+
 PlayerStopGlidingFn resolvePlayerStopGliding() {
     // Resolve the exported Player::stopGliding method at runtime. Do not use a
     // hard-coded address/offset: if this symbol isn't available for this build,
@@ -107,11 +114,14 @@ PlayerStopGlidingFn resolvePlayerStopGliding() {
     if (function) return function;
     function = reinterpret_cast<PlayerStopGlidingFn>(
         dlsym(RTLD_DEFAULT, "_ZN6Player11stopGlidingEv"));
+    if (!isTrustedMinecraftMethod(reinterpret_cast<void*>(function))) function = nullptr;
     if (!function) {
-        if (!minecraftHandle) minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW);
+        if (!minecraftHandle)
+            minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
         if (minecraftHandle) {
             function = reinterpret_cast<PlayerStopGlidingFn>(
                 dlsym(minecraftHandle, "_ZN6Player11stopGlidingEv"));
+            if (!isTrustedMinecraftMethod(reinterpret_cast<void*>(function))) function = nullptr;
         }
     }
     return function;
@@ -357,6 +367,12 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     targetDistance <= std::clamp(m_unglideTargetDistance, 1.0f, 32.0f)) {
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(200);
                     const auto clearance = groundClearance(player, m_unglideHeight);
+                    if (!clearance) {
+                        bedrocktools::diagnostics::probe(
+                            bedrocktools::diagnostics::Level::Debug,
+                            "MaceSwapper", "unglide_ground", "solid_floor_not_found",
+                            "No solid floor found in the bounded clearance scan.");
+                    }
                     const float clearanceValue = clearance.value_or(
                         std::numeric_limits<float>::infinity());
                     if (bedaim::macefall::shouldUnglide(
