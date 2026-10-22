@@ -225,21 +225,32 @@ bool actorIsGliding(void* actor) {
     return false;
 }
 
-bool isTrustedMinecraftMethod(void* address) {
+bool isTrustedStopGlidingProvider(void* address) {
     if (!address) return false;
     Dl_info info{};
-    return dladdr(address, &info) != 0 && info.dli_fname &&
-        std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
+    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
+    const std::string_view path(info.dli_fname);
+    return path.find("libminecraftpe.so") != std::string_view::npos ||
+        path.find("liblevilamina.so") != std::string_view::npos ||
+        path.find("libLeviLamina.so") != std::string_view::npos;
 }
 
 PlayerStopGlidingFn resolvePlayerStopGliding() {
-    // Try common Player and LocalPlayer symbol forms, but accept a result only
-    // after verifying it belongs to the live Minecraft library.
+    // LeviLamina declares Player::stopGliding in its C++ API, but Android builds
+    // may export the callable symbol from either the game or loader support library.
+    // Try already-loaded handles only, and validate the library before calling.
     static void* minecraftHandle = nullptr;
+    static void* leviLaminaHandle = nullptr;
+    static void* leviLaminaAltHandle = nullptr;
     static PlayerStopGlidingFn function = nullptr;
     if (function) return function;
     if (!minecraftHandle)
         minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaHandle)
+        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaAltHandle)
+        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
+
     constexpr const char* symbols[] = {
         "_ZN6Player11stopGlidingEv",
         "_ZN11LocalPlayer11stopGlidingEv",
@@ -248,9 +259,13 @@ PlayerStopGlidingFn resolvePlayerStopGliding() {
     };
     for (const char* symbol : symbols) {
         void* address = dlsym(RTLD_DEFAULT, symbol);
-        if (!isTrustedMinecraftMethod(address) && minecraftHandle)
+        if (!isTrustedStopGlidingProvider(address) && minecraftHandle)
             address = dlsym(minecraftHandle, symbol);
-        if (!isTrustedMinecraftMethod(address)) continue;
+        if (!isTrustedStopGlidingProvider(address) && leviLaminaHandle)
+            address = dlsym(leviLaminaHandle, symbol);
+        if (!isTrustedStopGlidingProvider(address) && leviLaminaAltHandle)
+            address = dlsym(leviLaminaAltHandle, symbol);
+        if (!isTrustedStopGlidingProvider(address)) continue;
         function = reinterpret_cast<PlayerStopGlidingFn>(address);
         return function;
     }
