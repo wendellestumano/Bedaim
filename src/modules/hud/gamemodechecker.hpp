@@ -10,6 +10,19 @@ struct PlayerModeEntry {
     std::string mode;
 };
 
+struct GamemodeCheckerDiagnostics {
+    std::size_t actorCount = 0;
+    std::size_t playerCount = 0;
+    std::size_t namedPlayerCount = 0;
+    std::size_t exactModeCount = 0;
+    std::size_t unresolvedModeCount = 0;
+    bool actorListReady = false;
+    bool playerClassifierReady = false;
+    bool nameGetterReady = false;
+    bool levelReady = false;
+    bool actorManagerReady = false;
+};
+
 class GamemodeCheckerModule final : public Module {
 public:
     GamemodeCheckerModule();
@@ -22,5 +35,6 @@ private:
     void refresh(void* localPlayer);
     std::mutex m_mutex;
     std::vector<PlayerModeEntry> m_players;
+    GamemodeCheckerDiagnostics m_diagnostics;
     unsigned m_ticks = 0;
 };

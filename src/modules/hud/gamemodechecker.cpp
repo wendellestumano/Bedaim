@@ -8,6 +8,8 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -78,29 +80,54 @@ void GamemodeCheckerModule::onDisable() {
 }
 
 void GamemodeCheckerModule::refresh(void* localPlayer) {
-    // Limit native actor-list and GameType lookups to 5 Hz on mobile.
+    // Keep native enumeration capped at 5 Hz on mobile.
     if (++m_ticks < 4) return;
     m_ticks = 0;
-    if (!localPlayer || !g_getRuntimeActorList || !g_actorIsPlayer) {
+
+    GamemodeCheckerDiagnostics diag{};
+    diag.actorListReady = g_getRuntimeActorList != nullptr;
+    diag.playerClassifierReady = g_actorIsPlayer != nullptr;
+    diag.nameGetterReady = g_actorGetNameTag != nullptr;
+
+    auto publishDiagnosticsOnly = [&]() {
         std::lock_guard<std::mutex> lock(m_mutex);
+        m_diagnostics = diag;
         m_players.clear();
+    };
+
+    if (!localPlayer || !diag.actorListReady || !diag.playerClassifierReady) {
+        publishDiagnosticsOnly();
         return;
     }
 
     const auto base = reinterpret_cast<std::uintptr_t>(localPlayer);
-    void* level = *reinterpret_cast<void**>(
-        base + bedrocktools::sdk::offsets::Actor::mLevel);
-    if (!level) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_players.clear();
+    if (base > std::numeric_limits<std::uintptr_t>::max() -
+                   bedrocktools::sdk::offsets::Actor::mLevel - sizeof(void*)) {
+        publishDiagnosticsOnly();
         return;
     }
-    void* actorManager = *reinterpret_cast<void**>(
-        reinterpret_cast<std::uintptr_t>(level) +
-        bedrocktools::sdk::offsets::Level::mActorManager);
+
+    void* level = nullptr;
+    std::memcpy(&level, reinterpret_cast<const void*>(
+        base + bedrocktools::sdk::offsets::Actor::mLevel), sizeof(level));
+    diag.levelReady = level != nullptr;
+    if (!level) {
+        publishDiagnosticsOnly();
+        return;
+    }
+
+    const auto levelAddress = reinterpret_cast<std::uintptr_t>(level);
+    if (levelAddress > std::numeric_limits<std::uintptr_t>::max() -
+                           bedrocktools::sdk::offsets::Level::mActorManager - sizeof(void*)) {
+        publishDiagnosticsOnly();
+        return;
+    }
+    void* actorManager = nullptr;
+    std::memcpy(&actorManager, reinterpret_cast<const void*>(
+        levelAddress + bedrocktools::sdk::offsets::Level::mActorManager), sizeof(actorManager));
+    diag.actorManagerReady = actorManager != nullptr;
     if (!actorManager) {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_players.clear();
+        publishDiagnosticsOnly();
         return;
     }
 
@@ -108,16 +135,31 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     try {
         actors = g_getRuntimeActorList(actorManager);
     } catch (...) {
+        publishDiagnosticsOnly();
         return;
     }
-    if (actors.size() > 4096) return;
+    if (actors.size() > 4096) {
+        diag.actorCount = actors.size();
+        publishDiagnosticsOnly();
+        return;
+    }
+    diag.actorCount = actors.size();
 
     std::vector<PlayerModeEntry> next;
     std::unordered_set<void*> seen;
     seen.reserve(actors.size());
     for (void* actor : actors) {
         if (!actor || actor == localPlayer || !seen.emplace(actor).second) continue;
-        if (!g_actorIsPlayer(actor) || !g_actorGetNameTag) continue;
+
+        bool isPlayer = false;
+        try {
+            isPlayer = g_actorIsPlayer(actor);
+        } catch (...) {
+            continue;
+        }
+        if (!isPlayer) continue;
+        ++diag.playerCount;
+        if (!g_actorGetNameTag) continue;
 
         std::int32_t gameType = -1;
         const bool hasExactGameType =
@@ -132,27 +174,28 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         std::string mode;
         if (hasPredicateState && (predicateMode == 1 || predicateMode == 3)) {
             mode = modeName(predicateMode);
-        } else if (hasExactGameType && (gameType == 1 || gameType == 3)) {
-            mode = modeName(gameType);
         } else if (hasExactGameType) {
             mode = modeName(gameType);
-        } else if (hasPredicateState && predicateMode == 0) {
-            mode = "Other (not C/S)";
         } else if (hasAttackability && !attackable) {
-            // Coarse native check doesn't distinguish Creative from Spectator.
             mode = "Creative/Spectator*";
         } else {
             mode = "Unknown";
         }
 
+        if (mode != "Unknown" && mode != "Creative/Spectator*") ++diag.exactModeCount;
+        else ++diag.unresolvedModeCount;
+
         std::string name = safeName(actor);
         if (name.empty()) continue;
+        ++diag.namedPlayerCount;
         next.push_back({std::move(name), std::move(mode)});
     }
+
     std::sort(next.begin(), next.end(), [](const auto& a, const auto& b) {
         return a.name < b.name;
     });
     std::lock_guard<std::mutex> lock(m_mutex);
+    m_diagnostics = diag;
     m_players.swap(next);
 }
 
@@ -164,34 +207,53 @@ void GamemodeCheckerModule::onFrame() {
     constexpr float y = 140.0f;
     constexpr float rowHeight = 24.0f;
     constexpr float width = 250.0f;
-    const std::size_t count = std::min<std::size_t>(m_players.size(), 16);
+    const std::size_t count = std::min<std::size_t>(m_players.size(), 14);
+    constexpr float statusHeight = 38.0f;
 
     PLModMenu_DrawCommand background{};
     background.type = PL_DRAW_RECT_FILLED;
     background.x = x;
     background.y = y;
     background.w = width;
-    background.h = rowHeight * static_cast<float>(count + 1);
+    background.h = statusHeight + rowHeight * static_cast<float>(count + 1);
     background.color = 0xB0000000;
     commands.push_back(background);
 
     PLModMenu_DrawCommand title{};
     title.type = PL_DRAW_TEXT;
     title.x = x + 8.0f;
-    title.y = y + 5.0f;
+    title.y = y + 3.0f;
     title.w = 0.0f;
     title.h = 18.0f;
     title.size = 18.0f;
     title.color = 0xFFFFFFFF;
-    title.text = "Player Gamemodes";
+    title.text = "Gamemode Checker";
     commands.push_back(title);
+
+    PLModMenu_DrawCommand status{};
+    status.type = PL_DRAW_TEXT;
+    status.x = x + 8.0f;
+    status.y = y + 22.0f;
+    status.w = 0.0f;
+    status.h = 13.0f;
+    status.size = 12.0f;
+    status.color = 0xFFE0E0E0;
+    const char* enumerator = !m_diagnostics.actorListReady ? "actors:OFF" :
+        !m_diagnostics.levelReady ? "level:OFF" :
+        !m_diagnostics.actorManagerReady ? "manager:OFF" : "actors:OK";
+    const char* modeApi = (m_diagnostics.exactModeCount > 0) ? "mode:OK" :
+        (m_diagnostics.playerCount > 0 ? "mode:UNKNOWN" : "mode:N/A");
+    status.text = std::string(enumerator) + " [" +
+        std::to_string(m_diagnostics.actorCount) + " entities, " +
+        std::to_string(m_diagnostics.playerCount) + " players] " + modeApi;
+    commands.push_back(status);
 
     for (std::size_t i = 0; i < count; ++i) {
         const auto& entry = m_players[i];
         PLModMenu_DrawCommand line{};
         line.type = PL_DRAW_TEXT;
         line.x = x + 8.0f;
-        line.y = y + rowHeight * static_cast<float>(i + 1) + 3.0f;
+        line.y = y + statusHeight + rowHeight * static_cast<float>(i + 1) + 3.0f;
         line.w = 0.0f;
         line.h = 16.0f;
         line.size = 16.0f;
@@ -209,12 +271,16 @@ void GamemodeCheckerModule::onFrame() {
         PLModMenu_DrawCommand empty{};
         empty.type = PL_DRAW_TEXT;
         empty.x = x + 8.0f;
-        empty.y = y + rowHeight + 3.0f;
+        empty.y = y + statusHeight + rowHeight + 3.0f;
         empty.w = 0.0f;
         empty.h = 16.0f;
         empty.size = 16.0f;
         empty.color = 0xFFBBBBBB;
-        empty.text = "No remote players detected";
+        empty.text = (m_diagnostics.playerCount > 0)
+            ? "Players found, names unavailable"
+            : (!m_diagnostics.actorListReady || !m_diagnostics.playerClassifierReady ||
+               !m_diagnostics.levelReady || !m_diagnostics.actorManagerReady)
+                ? "Enumeration path unavailable" : "No remote players found";
         commands.push_back(empty);
     }
     ::submitDrawCommands(moduleId, commands);

@@ -1,9 +1,10 @@
-## 2026-10-22 — Add Gamemode Checker HUD on stable baseline
+## 2026-10-22 — Improve Gamemode Checker runtime diagnostics
 
-- Adds an optional Gamemode Checker HUD listing remote players and showing exact game modes where the available native APIs can confirm them; unresolved modes stay visible.
-- Prefers the modern `Actor::isCreative()` / `Actor::isSpectator()` predicates; keeps an Apollon-inspired `Actor::isAttackableGamemode` fallback, marked `Creative/Spectator*` because that coarse method cannot distinguish the two modes.
-- AimAssist uses exact GameType, then the exact per-actor predicates, then the coarse attackability check. No fixed offset from an unrelated Bedrock version is copied into this branch.
-- Refreshes at 5 Hz and caps displayed rows to 16. This feature branch starts from stable commit `afd088f04ebdc24dee974496a329411591ea202f`; experimental AutoHit/AutoTotem changes are not included. Android build and in-game validation are tracked separately.
+- Runtime testing showed that the first checker build compiled but did not identify Creative/Spectator players. The exported-symbol-only approach was not sufficient for the stripped Bedrock library.
+- The HUD now displays actor-list/player counts, whether the level/actor-manager path resolved, and whether any game-mode lookups succeeded. This separates enumeration failures from game-mode API failures rather than reporting only an empty list.
+- No Apollon offsets are hardcoded into this change. The per-version `isAttackableGamemode` native entry and active-player iterator still require validated signatures for the target runtime.
+- This branch remains based on stable commit `afd088f04ebdc24dee974496a329411591ea202f`; no AutoHit or AutoTotem changes are included. CI and in-game validation are required.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
