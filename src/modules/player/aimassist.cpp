@@ -452,6 +452,8 @@ void AimAssistModule::onMenuRegistered() {
             .config("hitboxScale", "Hitbox Area (exact)", ConfigType::Text, "1.00")
             .config("hitboxDistanceGrowth", "Hitbox Growth (exact)", ConfigType::Text, "5.00")
             .config("predictionLeadMs", "Prediction Lead ms (exact)", ConfigType::Text, "120.00")
+            .config("m_elytraMode", "Elytra Mode (true/false)", ConfigType::Text, "false")
+            .config("m_elytraDistanceDislocateStrength", "Elytra Distance Dislocate Strength (0-1)", ConfigType::Text, "0.20")
             .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
                 onMenuConfigChanged(key, value);
             });
@@ -460,6 +462,14 @@ void AimAssistModule::onMenuRegistered() {
 }
 
 bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    if (key == "m_elytraMode" || key == "elytraMode") {
+        bool enabledValue = false;
+        if (value == "true" || value == "1" || value == "on") enabledValue = true;
+        else if (value != "false" && value != "0" && value != "off") return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_elytraMode = enabledValue;
+        return true;
+    }
     auto parseNumber = [&]() -> std::optional<float> {
         try {
             const std::string text(value);
