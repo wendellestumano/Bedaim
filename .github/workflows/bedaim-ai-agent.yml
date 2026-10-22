@@ -134,6 +134,7 @@ jobs:
           } > "$RUNNER_TEMP/bedaim-coordinator-prompt.md"
           copilot --agent=bedaim-coordinator -p "$(cat "$RUNNER_TEMP/bedaim-coordinator-prompt.md")" \
             --available-tools='view,grep,glob' \
+            --allow-tool=read \
             --deny-tool=write \
             --no-ask-user | tee "$RUNNER_TEMP/bedaim-coordinator-plan.md"
 
@@ -175,7 +176,7 @@ jobs:
           } > "$RUNNER_TEMP/bedaim-implementer-prompt.md"
           copilot --agent=bedaim-implementer -p "$(cat "$RUNNER_TEMP/bedaim-implementer-prompt.md")" \
             --available-tools='edit,view,grep,glob' \
-            --allow-tool=write \
+            --allow-tool='read,write' \
             --deny-tool='write(.github/workflows)' \
             --deny-tool='write(.github/agents)' \
             --deny-tool='write(.github/copilot-instructions.md)' \
