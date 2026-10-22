@@ -114,7 +114,9 @@ bool Runtime::install() {
     bedrocktools::config::ConfigManager::get().load();
     registerModulesWithLauncher();
     installed.store(true, std::memory_order_release);
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "runtime installed and launcher modules registered");
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime",
+        std::string("runtime installed and launcher modules registered; hook_backend=") +
+        bedrocktools::hooks::backendName());
     return true;
 }
 
