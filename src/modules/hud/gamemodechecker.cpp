@@ -44,6 +44,7 @@ struct SpectatorProbe {
     std::chrono::steady_clock::time_point lastSeen{};
 };
 std::unordered_map<void*, SpectatorProbe> g_spectatorProbes;
+std::mutex g_spectatorProbeMutex;
 
 bool trustedGameSymbol(void* address) {
     if (!address) return false;
@@ -132,6 +133,14 @@ bool hasSolidBlockInsideBody(void* actor) {
 }
 bool hasSpectatorNoclipEvidence(void* actor) {
     if (!actor || !g_actorGetStatusFlag || !g_actorIsFlying) return false;
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> probeLock(g_spectatorProbeMutex);
+    auto& probe = g_spectatorProbes[actor];
+
+    // Aim Assist calls this per tick; sample each actor at most about 6.7 Hz.
+    if (probe.hasLastPosition && now - probe.lastSeen < std::chrono::milliseconds(150))
+        return probe.consecutiveNoclipSamples >= 2;
+
     const auto* nativeActor = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor);
     bool invisible = false;
     bool hasCollision = true;
@@ -141,22 +150,25 @@ bool hasSpectatorNoclipEvidence(void* actor) {
         hasCollision = g_actorGetStatusFlag(actor, 48); // ActorFlags::HasCollision
         flying = g_actorIsFlying(actor);
     } catch (...) {
+        probe.lastSeen = now;
         return false;
     }
 
     const auto position = nativeActor->position();
     if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
-        !std::isfinite(position.z)) return false;
-    auto& probe = g_spectatorProbes[actor];
+        !std::isfinite(position.z)) {
+        probe.lastSeen = now;
+        return false;
+    }
     const bool moving = probe.hasLastPosition &&
         (std::abs(position.x - probe.lastPosition.x) > 0.12f ||
          std::abs(position.y - probe.lastPosition.y) > 0.12f ||
          std::abs(position.z - probe.lastPosition.z) > 0.12f);
     probe.lastPosition = position;
     probe.hasLastPosition = true;
-    probe.lastSeen = std::chrono::steady_clock::now();
+    probe.lastSeen = now;
 
-    // Only pay for block probes when the cheap flags already resemble Spectator.
+    // Avoid block scans unless the cheap state flags already resemble Spectator.
     if (!invisible || hasCollision || !flying || !moving) {
         probe.consecutiveNoclipSamples = 0;
         return false;
@@ -241,6 +253,10 @@ void GamemodeCheckerModule::onDisable() {
     m_players.clear();
 }
 
+bool GamemodeCheckerModule::isSpectatorCandidate(void* actor) {
+    return hasSpectatorNoclipEvidence(actor);
+}
+
 void GamemodeCheckerModule::refresh(void* localPlayer) {
     // Keep native enumeration capped at 5 Hz on mobile.
     if (++m_ticks < 4) return;
@@ -277,11 +293,14 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     }
     const auto probeNow = std::chrono::steady_clock::now();
-    for (auto it = g_spectatorProbes.begin(); it != g_spectatorProbes.end();) {
-        if (probeNow - it->second.lastSeen > std::chrono::seconds(12))
-            it = g_spectatorProbes.erase(it);
-        else
-            ++it;
+    {
+        std::lock_guard<std::mutex> probeLock(g_spectatorProbeMutex);
+        for (auto it = g_spectatorProbes.begin(); it != g_spectatorProbes.end();) {
+            if (probeNow - it->second.lastSeen > std::chrono::seconds(12))
+                it = g_spectatorProbes.erase(it);
+            else
+                ++it;
+        }
     }
 
     GamemodeCheckerDiagnostics diag{};
