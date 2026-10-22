@@ -749,12 +749,13 @@ void uninstall() {
     currentGameMode.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     actorIsAttackableGamemodeOriginal.store(nullptr, std::memory_order_release);
-    actorAttackabilityNextResolve = {};
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
     playerSetGameTypeNextResolve = {};
     {
         std::lock_guard cacheLock(playerGameTypeCacheMutex);
+        actorAttackabilityNextResolve = {};
+        playerGameTypeNextResolve = {};
         playerGameTypeCache.clear();
     }
 }
