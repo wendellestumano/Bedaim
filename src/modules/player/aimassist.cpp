@@ -115,20 +115,28 @@ bool actorIsGliding(void* actor) {
     if (endAddress < beginAddress ||
         (endAddress - beginAddress) % sizeof(void*) != 0 ||
         (endAddress - beginAddress) / sizeof(void*) > 192) return false;
-    if (begin == end) return false;
 
-    void* item = begin[0];
-    if (!item) return false;
+    // Synchronized data items are not guaranteed to keep the flags item at index 0.
+    // Search the bounded vector for the Flags item (type 7, id 0) instead of treating
+    // an unrelated first item as proof that the player is not gliding.
+    const auto itemCount = (endAddress - beginAddress) / sizeof(void*);
+    for (std::size_t index = 0; index < itemCount; ++index) {
+        void* item = begin[index];
+        if (!item) continue;
 
-    const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
-    const auto type = *reinterpret_cast<const std::uint8_t*>(itemAddress + offsets::DataItem::mType);
-    const auto id = *reinterpret_cast<const std::uint16_t*>(itemAddress + offsets::DataItem::mId);
-    if (type != 7 || id != 0) return false;
+        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
+        if (itemAddress <= 0x1000) continue;
+        const auto type = *reinterpret_cast<const std::uint8_t*>(itemAddress + offsets::DataItem::mType);
+        const auto id = *reinterpret_cast<const std::uint16_t*>(itemAddress + offsets::DataItem::mId);
+        if (type != 7 || id != 0) continue;
 
-    std::uint64_t flags = 0;
-    std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue), sizeof(flags));
-    constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-    return (flags & kGlidingFlag) != 0;
+        std::uint64_t flags = 0;
+        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue),
+                    sizeof(flags));
+        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
+        return (flags & kGlidingFlag) != 0;
+    }
+    return false;
 }
 
 bool validBounds(const bedrocktools::sdk::AABB& bounds) {
@@ -1086,7 +1094,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     if (!enabled || !player) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
-    m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
+    // Preserve actual gliding state for target selection; Elytra mode and Sticky
+    // are separate gates for the special aim-point dislocation below.
+    m_localPlayerGliding = actorIsGliding(player);
     const auto now = std::chrono::steady_clock::now();
 
     auto* rotationComponent = player->rotationComponent();
@@ -1243,8 +1253,10 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // Use the full 3D separation so altitude differences count as well as horizontal
     // distance. Keep the point inside the target's real hitbox; dislocation is only
     // an aim preference, never an expanded hit/attack volume.
+    const bool stickyMode = (m_trackingMode == "Grudado");
     bool elytraDislocationActive = false;
-    if (m_elytraMode && m_localPlayerGliding) {
+    if (bedaim::aimmath::shouldApplyElytraDistanceDislocation(
+            m_elytraMode, m_localPlayerGliding, stickyMode)) {
         const float targetDistanceForDislocation =
             std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
         const float requestedDislocation = bedaim::aimmath::elytraDistanceDislocation(
@@ -1279,7 +1291,6 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         (bounds.max.z - bounds.min.z) * 0.5f * hitboxScale
     };
 
-    const bool stickyMode = (m_trackingMode == "Grudado");
     const bool adaptiveMode = (m_trackingMode == "Adaptativo");
     const AABB scaledAimBounds{
         {boundsCenter.x - halfExtents.x, boundsCenter.y - halfExtents.y,

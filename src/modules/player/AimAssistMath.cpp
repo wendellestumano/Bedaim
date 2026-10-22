@@ -106,6 +106,11 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
     return bestIndex;
 }
 
+bool shouldApplyElytraDistanceDislocation(bool elytraModeEnabled, bool currentlyGliding,
+                                          bool stickyTracking) noexcept {
+    return elytraModeEnabled && currentlyGliding && stickyTracking;
+}
+
 float elytraDistanceDislocation(float targetDistance, float strength,
                                 float startDistance) noexcept {
     if (!std::isfinite(targetDistance) || !std::isfinite(strength) ||

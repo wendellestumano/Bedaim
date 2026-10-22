@@ -30,6 +30,7 @@ int main() {
     using bedaim::aimmath::fourAimAnchors;
     using bedaim::aimmath::nearestAnchorToRay;
     using bedaim::aimmath::elytraDistanceDislocation;
+    using bedaim::aimmath::shouldApplyElytraDistanceDislocation;
 
     const float wrapAcrossBoundary = wrapDegrees(-179.0f - 179.0f);
     check(std::abs(wrapAcrossBoundary - 2.0f) < 1.0e-4f,
@@ -87,6 +88,14 @@ int main() {
     check(boundedTurnStep(90.0f, nan, 1.0f / 60.0f) == 0.0f,
           "non-finite turn rate produces no camera delta");
 
+    check(shouldApplyElytraDistanceDislocation(true, true, true),
+          "Elytra dislocation is allowed only when enabled, actively gliding, and Sticky");
+    check(!shouldApplyElytraDistanceDislocation(false, true, true),
+          "Elytra dislocation stays off when Elytra mode is disabled");
+    check(!shouldApplyElytraDistanceDislocation(true, false, true),
+          "Elytra dislocation stays off when the player is not currently gliding");
+    check(!shouldApplyElytraDistanceDislocation(true, true, false),
+          "Elytra dislocation stays off in Smooth and Adaptive tracking modes");
     check(std::abs(elytraDistanceDislocation(4.0f, 0.25f)) < 1.0e-4f,
           "Elytra dislocation has no effect inside the close-distance dead zone");
     check(std::abs(elytraDistanceDislocation(10.0f, 0.25f) - 1.5f) < 1.0e-4f,

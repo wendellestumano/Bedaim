@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-22 — Retire AutoHit/AutoTotem and gate Elytra displacement
+
+- Removed AutoHit and AutoTotem from module registration and excluded their implementation files from the packaged native library, restoring the prior build without those experimental modules.
+- Elytra distance dislocation now requires Elytra Mode enabled, the local player actually gliding, and Sticky tracking. Actual glide state is no longer erased merely because the special Elytra-mode toggle is off.
+- Fixed gliding detection to search the bounded synchronized entity-data vector for the flags item instead of assuming it is always the first item; added host regression coverage for the Elytra/flight/Sticky gates.
+
 ## 2026-10-22 — Elytra distance dislocation, Mace Unglide, and regression checks
 
 - Added **Elytra Distance Dislocate Strength** to Aim Assist's **Special** category. While Elytra Mode is enabled and the local player is actually gliding, the aim point now shifts downward in proportion to full 3D target distance, with configurable strength and a strict clamp to the target's real bounds. Removed the old hard-coded 7–8 block-only offset.
