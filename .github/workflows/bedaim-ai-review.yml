@@ -116,6 +116,25 @@ jobs:
           printf '\n\n## Exact unified diff (may be truncated; inspect source files as needed)\n' >> "$RUNNER_TEMP/bedaim-ai-review-prompt.md"
           cat "$RUNNER_TEMP/bedaim-review.patch" >> "$RUNNER_TEMP/bedaim-ai-review-prompt.md"
 
+          # Use the reviewer profile from the trusted default branch, not the PR's copy.
+          git fetch --no-tags origin main
+          git show FETCH_HEAD:.github/agents/bedaim-reviewer.agent.md > "$RUNNER_TEMP/bedaim-reviewer.agent.md"
+          cli_home="$RUNNER_TEMP/bedaim-review-home/.copilot/agents"
+          mkdir -p "$cli_home"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          source = Path(os.environ["RUNNER_TEMP"]) / "bedaim-reviewer.agent.md"
+          destination = Path(os.environ["RUNNER_TEMP"]) / "bedaim-review-home" / ".copilot" / "agents" / "bedaim-reviewer.agent.md"
+          text = source.read_text(encoding="utf-8")
+          rewritten, count = re.subn(r"(?m)^tools:\s*\[[^\]]*\]\s*$", "tools: ['view', 'grep', 'glob']", text, count=1)
+          if count != 1:
+              raise SystemExit("Expected exactly one tools declaration in trusted reviewer profile")
+          destination.write_text(rewritten, encoding="utf-8")
+          PY
+
       - name: Set up Node.js
         if: ${{ steps.locate.outputs.found == 'true' }}
         uses: actions/setup-node@v4
@@ -129,6 +148,7 @@ jobs:
         shell: bash
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          HOME: ${{ runner.temp }}/bedaim-review-home
         run: |
           set -euo pipefail
           if [[ -z "$COPILOT_GITHUB_TOKEN" ]]; then
@@ -136,7 +156,7 @@ jobs:
             exit 1
           fi
           npm install --global @github/copilot
-          copilot -p "$(cat "$RUNNER_TEMP/bedaim-ai-review-prompt.md")" \
+          copilot --agent=bedaim-reviewer -p "$(cat "$RUNNER_TEMP/bedaim-ai-review-prompt.md")" \
             --available-tools='view,grep,glob' \
             --deny-tool=write \
             --no-ask-user | tee "$RUNNER_TEMP/bedaim-ai-review.md"
