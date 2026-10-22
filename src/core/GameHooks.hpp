@@ -6,6 +6,8 @@ namespace bedrocktools::core::gamehooks {
 bool install();
 void uninstall();
 void* clientInstance();
+// Coherent ClientInstance identity snapshot. Generation changes on each observed pointer transition.
+bool clientInstanceSnapshot(void*& outInstance, std::uint64_t& outGeneration);
 void* gameMode();
 // Resolve the local player's owned GameMode instance without waiting for a manual action.
 void* gameModeForPlayer(void* player);
