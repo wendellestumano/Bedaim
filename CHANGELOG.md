@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-22 — Sample-driven Aim Assist weapon policy
+
+- Used the supplied Bedrock Samples v1.26.50.4 item definitions to correct Aim Assist: the "Ranged" prediction profile no longer leads Spears as if they were projectiles. The shipped wooden, copper, golden, stone, iron, diamond, and netherite spear definitions use piercing/kinetic weapon components and minecraft:is_spear tags.
+- Moved held-weapon prediction policy into a pure header and added host regression checks for bow, crossbow, trident, spear, melee, and tool categories.
+- Fixed the cached weapon enum upper bound so Tool remains Tool instead of being clamped into OtherMelee, which could apply the wrong per-weapon aim point and speed profile.
+
 ## 2026-10-22 — Retire AutoHit/AutoTotem and gate Elytra displacement
 
 - Removed AutoHit and AutoTotem from module registration and excluded their implementation files from the packaged native library, restoring the prior build without those experimental modules.

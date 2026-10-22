@@ -1,4 +1,5 @@
 #include "modules/player/AimAssistMath.hpp"
+#include "modules/player/AimAssistPolicy.hpp"
 
 #include <cmath>
 #include <cstdlib>
@@ -31,6 +32,8 @@ int main() {
     using bedaim::aimmath::nearestAnchorToRay;
     using bedaim::aimmath::elytraDistanceDislocation;
     using bedaim::aimmath::shouldApplyElytraDistanceDislocation;
+    using bedaim::aimpolicy::HeldWeapon;
+    using bedaim::aimpolicy::isRangedPredictionWeapon;
 
     const float wrapAcrossBoundary = wrapDegrees(-179.0f - 179.0f);
     check(std::abs(wrapAcrossBoundary - 2.0f) < 1.0e-4f,
@@ -88,6 +91,21 @@ int main() {
     check(boundedTurnStep(90.0f, nan, 1.0f / 60.0f) == 0.0f,
           "non-finite turn rate produces no camera delta");
 
+    check(isRangedPredictionWeapon(HeldWeapon::Bow),
+          "bow uses ranged target-motion prediction");
+    check(isRangedPredictionWeapon(HeldWeapon::Crossbow),
+          "crossbow uses ranged target-motion prediction");
+    check(isRangedPredictionWeapon(HeldWeapon::Trident),
+          "trident retains ranged/throwable target-motion prediction");
+    check(!isRangedPredictionWeapon(HeldWeapon::Spear),
+          "sample-defined piercing/kinetic spears are not treated as projectile weapons");
+    check(!isRangedPredictionWeapon(HeldWeapon::Sword) &&
+          !isRangedPredictionWeapon(HeldWeapon::Axe) &&
+          !isRangedPredictionWeapon(HeldWeapon::Mace) &&
+          !isRangedPredictionWeapon(HeldWeapon::OtherMelee),
+          "melee weapon classes do not use ranged-only prediction");
+    check(!isRangedPredictionWeapon(HeldWeapon::Tool),
+          "tool category stays distinct and does not inherit other-melee prediction");
     check(shouldApplyElytraDistanceDislocation(true, true, true),
           "Elytra dislocation is allowed only when enabled, actively gliding, and Sticky");
     check(!shouldApplyElytraDistanceDislocation(false, true, true),

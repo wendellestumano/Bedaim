@@ -1,5 +1,6 @@
 #include "aimassist.hpp"
 #include "AimAssistMath.hpp"
+#include "AimAssistPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
@@ -289,9 +290,7 @@ bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist
     return false;
 }
 
-enum class HeldWeapon {
-    None, Sword, Axe, Mace, Bow, Crossbow, Trident, Spear, OtherMelee, Tool
-};
+using HeldWeapon = bedaim::aimpolicy::HeldWeapon;
 
 HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
     if (!player) return HeldWeapon::None;
@@ -1162,11 +1161,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     const AABB nativeBounds = m_lastTargetBounds;
     const HeldWeapon weaponForPrediction = static_cast<HeldWeapon>(std::clamp(
-        m_cachedHeldWeaponCode, 0, static_cast<int>(HeldWeapon::OtherMelee)));
-    const bool rangedWeapon = weaponForPrediction == HeldWeapon::Bow ||
-        weaponForPrediction == HeldWeapon::Crossbow ||
-        weaponForPrediction == HeldWeapon::Trident ||
-        weaponForPrediction == HeldWeapon::Spear;
+        m_cachedHeldWeaponCode, 0, static_cast<int>(HeldWeapon::Tool)));
+    const bool rangedWeapon = bedaim::aimpolicy::isRangedPredictionWeapon(weaponForPrediction);
     const bool usePrediction = m_predictionMode == "All" ||
         (m_predictionMode == "Ranged" && rangedWeapon);
 
