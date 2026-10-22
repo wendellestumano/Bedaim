@@ -175,3 +175,8 @@
 ### AutoHit JNI bridge follow-up
 - AutoHit now caches the `JavaVM*` passed to an exported `JNI_OnLoad` entry point when the loader provides one, avoiding reliance on `JNI_GetCreatedJavaVMs` in that load path. The ART symbol/path lookup remains as a fallback for native Preloader loading, which may not invoke `JNI_OnLoad`.
 - This is a targeted compatibility improvement, not yet device-verified. If the runtime uses only native injection and the ART symbol remains unavailable, the next step is to obtain the VM from a launcher-provided JNI bridge or hook an existing Java-to-native lifecycle callback.
+
+### AutoHit JavaVM source correction
+- Added a shared JavaVM cache populated from the official Preloader `ModContext::javaVm()` during Bedaim's load lifecycle, then used that cached VM as AutoHit's primary JNI source.
+- Kept `JNI_OnLoad` caching and ART symbol resolution only as fallback paths.
+- This directly addresses the observed `android_java_vm_unavailable` state at the source-selection layer; successful broadcast delivery and actual MacroDroid/key behavior still require a device test.
