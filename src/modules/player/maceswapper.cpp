@@ -6,6 +6,7 @@
 #include <pl/ModMenu.hpp>
 #include <cctype>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "aimassist.hpp"
