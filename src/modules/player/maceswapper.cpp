@@ -25,7 +25,6 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <limits>
-#include <optional>
 #include <vector>
 
 namespace {
@@ -100,9 +99,9 @@ float distanceToTargetBounds(bedrocktools::sdk::Player* player,
 
 using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
 using ActorIsPlayerFn = bool (*)(void*);
-using BlockSourceIsSolidBlockingBlockFn =
-    bool (*)(void*, const bedrocktools::sdk::BlockPos*);
+using MobJumpFromGroundFn = void (*)(void*);
 using PlayerStopGlidingFn = void (*)(void*);
+using ActorGetStatusFlagFn = bool (*)(const void*, int);
 
 // Unglide resolves its own nearby-player snapshot; it does not depend on the
 // Aim Assist module toggle or the camera-tracking module's cached target.
@@ -225,7 +224,7 @@ bool actorIsGliding(void* actor) {
     return false;
 }
 
-bool isTrustedStopGlidingProvider(void* address) {
+bool isTrustedGameProvider(void* address) {
     if (!address) return false;
     Dl_info info{};
     if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
@@ -235,15 +234,11 @@ bool isTrustedStopGlidingProvider(void* address) {
         path.find("libLeviLamina.so") != std::string_view::npos;
 }
 
-PlayerStopGlidingFn resolvePlayerStopGliding() {
-    // LeviLamina declares Player::stopGliding in its C++ API, but Android builds
-    // may export the callable symbol from either the game or loader support library.
-    // Try already-loaded handles only, and validate the library before calling.
+void* resolveTrustedGameSymbol(const char* symbol) {
+    if (!symbol) return nullptr;
     static void* minecraftHandle = nullptr;
     static void* leviLaminaHandle = nullptr;
     static void* leviLaminaAltHandle = nullptr;
-    static PlayerStopGlidingFn function = nullptr;
-    if (function) return function;
     if (!minecraftHandle)
         minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
     if (!leviLaminaHandle)
@@ -251,68 +246,67 @@ PlayerStopGlidingFn resolvePlayerStopGliding() {
     if (!leviLaminaAltHandle)
         leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
 
-    constexpr const char* symbols[] = {
-        "_ZN6Player11stopGlidingEv",
-        "_ZN11LocalPlayer11stopGlidingEv",
-        "_ZNK6Player11stopGlidingEv",
-        "_ZNK11LocalPlayer11stopGlidingEv"
-    };
-    for (const char* symbol : symbols) {
-        void* address = dlsym(RTLD_DEFAULT, symbol);
-        if (!isTrustedStopGlidingProvider(address) && minecraftHandle)
-            address = dlsym(minecraftHandle, symbol);
-        if (!isTrustedStopGlidingProvider(address) && leviLaminaHandle)
-            address = dlsym(leviLaminaHandle, symbol);
-        if (!isTrustedStopGlidingProvider(address) && leviLaminaAltHandle)
-            address = dlsym(leviLaminaAltHandle, symbol);
-        if (!isTrustedStopGlidingProvider(address)) continue;
-        function = reinterpret_cast<PlayerStopGlidingFn>(address);
-        return function;
+    void* address = dlsym(RTLD_DEFAULT, symbol);
+    if (isTrustedGameProvider(address)) return address;
+    if (minecraftHandle) {
+        address = dlsym(minecraftHandle, symbol);
+        if (isTrustedGameProvider(address)) return address;
+    }
+    if (leviLaminaHandle) {
+        address = dlsym(leviLaminaHandle, symbol);
+        if (isTrustedGameProvider(address)) return address;
+    }
+    if (leviLaminaAltHandle) {
+        address = dlsym(leviLaminaAltHandle, symbol);
+        if (isTrustedGameProvider(address)) return address;
     }
     return nullptr;
 }
 
-std::optional<float> groundClearance(
-    bedrocktools::sdk::Player* player, float scanDistance) {
-    using namespace bedrocktools::sdk;
-    if (!player || !std::isfinite(scanDistance)) return std::nullopt;
-    auto* dimension = player->dimension();
-    auto* source = dimension ? dimension->blockSource() : nullptr;
-    auto isSolid = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
-        bedrocktools::memory::resolve(
-            bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
-    if (!source || !isSolid) return std::nullopt;
-
-    const Vec3 position = player->position();
-    const AABB bounds = player->bounds();
-    if (!finiteVec(position)) return std::nullopt;
-    const bool haveBounds = validBounds(bounds);
-    const float feetY = haveBounds ? bounds.min.y : position.y;
-    const float centerX = haveBounds
-        ? (bounds.min.x + bounds.max.x) * 0.5f : position.x;
-    const float centerZ = haveBounds
-        ? (bounds.min.z + bounds.max.z) * 0.5f : position.z;
-    if (!std::isfinite(feetY) || !std::isfinite(centerX) || !std::isfinite(centerZ))
-        return std::nullopt;
-
-    const int blockX = static_cast<int>(std::floor(centerX));
-    const int blockZ = static_cast<int>(std::floor(centerZ));
-    // Start in the voxel immediately beneath the feet; this handles exact integer
-    // Y coordinates without accidentally testing the block containing the player.
-    const int firstY = static_cast<int>(std::floor(feetY - 0.001f));
-    const float safeDistance = std::clamp(scanDistance, 1.0f, 24.0f);
-    const int maxSteps = static_cast<int>(std::ceil(safeDistance)) + 2;
-    for (int step = 0; step <= maxSteps; ++step) {
-        const BlockPos cell{blockX, firstY - step, blockZ};
-        if (!isSolid(source, &cell)) continue;
-        const float clearance = feetY - static_cast<float>(cell.y + 1);
-        if (!std::isfinite(clearance) || clearance < -0.15f) return std::nullopt;
-        return std::max(0.0f, clearance);
-    }
-    // No solid floor in the bounded scan (for example, over the void or above a
-    // drop greater than the configured threshold): never trigger Unglide blindly.
-    return std::nullopt;
+ActorGetStatusFlagFn resolveActorGetStatusFlag() {
+    static ActorGetStatusFlagFn function = nullptr;
+    if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
+        resolveTrustedGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
+    return function;
 }
+
+bool playerIsGlidingForUnglide(void* player) {
+    if (!player) return false;
+    const auto getStatusFlag = resolveActorGetStatusFlag();
+    if (getStatusFlag) {
+        try {
+            // ActorFlags::Gliding is 32 in the public Bedrock/LeviLamina enum.
+            return getStatusFlag(player, 32);
+        } catch (...) {
+            // Fall through to the existing synchronized-data reader.
+        }
+    }
+    return actorIsGliding(player);
+}
+
+MobJumpFromGroundFn resolveMobJumpFromGround() {
+    static MobJumpFromGroundFn function = nullptr;
+    if (!function) function = reinterpret_cast<MobJumpFromGroundFn>(
+        resolveTrustedGameSymbol("_ZN3Mob14jumpFromGroundEv"));
+    return function;
+}
+
+PlayerStopGlidingFn resolvePlayerStopGliding() {
+    static PlayerStopGlidingFn function = nullptr;
+    if (!function) {
+        const char* symbols[] = {
+            "_ZN6Player11stopGlidingEv",
+            "_ZN11LocalPlayer11stopGlidingEv"
+        };
+        for (const char* symbol : symbols) {
+            function = reinterpret_cast<PlayerStopGlidingFn>(resolveTrustedGameSymbol(symbol));
+            if (function) break;
+        }
+    }
+    return function;
+}
+
+
 }
 
 MaceSwapperModule::MaceSwapperModule()
@@ -516,11 +510,11 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Unglide is independent from Aim Assist's enabled state and cached target.
-    // It enumerates the current level's own actors and gates only on gliding,
-    // player distance, and a verified solid-floor clearance.
+    // Unglide is independent from Aim Assist and the mace-swap/attack toggle.
+    // Detect a nearby player, then request the actual native jump action (the
+    // equivalent movement operation to pressing Space). StopGliding is a fallback.
     if (m_unglideEnabled) {
-        const auto now = std::chrono::steady_clock::now();
+        const now = std::chrono::steady_clock::now();
         auto reportUnglideGate = [&](const char* state, const std::string& details) {
             if (now < m_nextUnglideDiagnostic) return;
             m_nextUnglideDiagnostic = now + std::chrono::seconds(1);
@@ -529,9 +523,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         };
 
         if (now >= m_nextUnglideAttempt) {
-            if (!actorIsGliding(player)) {
+            if (!playerIsGlidingForUnglide(player)) {
                 m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                reportUnglideGate("not_gliding", "Local player's synchronized entity flags do not report gliding.");
+                reportUnglideGate("not_gliding", "The native gliding flag is not set.");
             } else {
                 const auto target = nearestNearbyPlayerDistance(player, m_unglideTargetDistance);
                 if (!target.queryReady) {
@@ -541,39 +535,35 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 } else if (!target.found) {
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
                     reportUnglideGate("no_nearby_player",
-                        std::string("No other player inside ") + std::to_string(m_unglideTargetDistance) + " blocks.");
+                        std::string("No other player inside ") +
+                            std::to_string(m_unglideTargetDistance) + " blocks.");
+                } else if (!bedaim::macefall::shouldPulseUnglideJump(
+                               m_unglideEnabled, true, target.distance, m_unglideTargetDistance)) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                    reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
                 } else {
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(200);
-                    const auto clearance = groundClearance(player, m_unglideHeight);
-                    if (!clearance) {
-                        reportUnglideGate("solid_floor_not_found",
-                            "No solid floor found in the configured bounded ground-clearance scan.");
-                    } else if (*clearance > std::clamp(m_unglideHeight, 1.0f, 24.0f)) {
-                        reportUnglideGate("ground_clearance_exceeded",
-                            std::string("ground_clearance=") + std::to_string(*clearance));
-                    }
+                    const auto jumpFromGround = resolveMobJumpFromGround();
+                    const auto stopGliding = resolvePlayerStopGliding();
 
-                    const float clearanceValue = clearance.value_or(
-                        std::numeric_limits<float>::infinity());
-                    if (bedaim::macefall::shouldUnglide(
-                            m_unglideEnabled, true, target.distance, m_unglideTargetDistance,
-                            clearanceValue, m_unglideHeight)) {
-                        const auto stopGliding = resolvePlayerStopGliding();
-                        if (stopGliding) {
-                            stopGliding(player);
-                            m_nextUnglideAttempt = now + std::chrono::milliseconds(500);
-                            bedrocktools::diagnostics::probe(
-                                bedrocktools::diagnostics::Level::Info,
-                                "MaceSwapper", "unglide", "stop_gliding_requested",
-                                std::string("target_distance=") + std::to_string(target.distance) +
-                                    ", target_distance_limit=" + std::to_string(m_unglideTargetDistance) +
-                                    ", ground_clearance=" + std::to_string(*clearance));
-                            return;
-                        }
+                    // Attempt both: a few game builds expose one API but not the other.
+                    if (jumpFromGround) jumpFromGround(player);
+                    if (stopGliding) stopGliding(player);
+
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(650);
+                    if (jumpFromGround || stopGliding) {
+                        const char* state = jumpFromGround && stopGliding
+                            ? "jump_and_stop_gliding_requested"
+                            : jumpFromGround ? "jump_from_ground_requested"
+                                             : "stop_gliding_fallback_requested";
+                        reportUnglideGate(state,
+                            std::string("target_distance=") + std::to_string(target.distance) +
+                                ", target_distance_limit=" + std::to_string(m_unglideTargetDistance));
+                    } else {
                         m_nextUnglideAttempt = now + std::chrono::milliseconds(1500);
-                        reportUnglideGate("native_stop_gliding_unavailable",
-                            "Neither supported Player/LocalPlayer::stopGliding symbol resolved from libminecraftpe.so.");
+                        reportUnglideGate("native_jump_unavailable",
+                            "Mob::jumpFromGround and Player::stopGliding are not exported by this runtime.");
                     }
+                    return;
                 }
             }
         }
@@ -671,7 +661,6 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     m_attackIntervalMs = std::clamp(j.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
     m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
-    m_unglideHeight = std::clamp(j.value("m_unglideHeight", m_unglideHeight), 1.0f, 24.0f);
     m_unglideTargetDistance = std::clamp(
         j.value("m_unglideTargetDistance", m_unglideTargetDistance), 1.0f, 32.0f);
 }
@@ -685,7 +674,6 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_attackIntervalMs"] = m_attackIntervalMs;
     j["m_restoreSlot"] = m_restoreSlot;
     j["m_unglideEnabled"] = m_unglideEnabled;
-    j["m_unglideHeight"] = m_unglideHeight;
     j["m_unglideTargetDistance"] = m_unglideTargetDistance;
 }
 
@@ -753,7 +741,6 @@ void MaceSwapperModule::onMenuRegistered() {
     unglideEnabledNode.hasCurrentValue = true;
     schema.node(std::move(unglideEnabledNode));
 
-    slider("m_unglideHeight", "Unglide ground clearance", "1", "24", "0.5", " blocks", "special", "4.0");
     slider("m_unglideTargetDistance", "Unglide target distance", "1", "32", "0.5", " blocks", "special", "8.0");
 
     ConfigNodeV2 restoreNode;
@@ -799,7 +786,6 @@ bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_vi
         else if (key == "m_minimumFallDistance")
             m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(number);
         else if (key == "m_attackIntervalMs") m_attackIntervalMs = std::clamp(number, 80.0f, 1000.0f);
-        else if (key == "m_unglideHeight") m_unglideHeight = std::clamp(number, 1.0f, 24.0f);
         else if (key == "m_unglideTargetDistance")
             m_unglideTargetDistance = std::clamp(number, 1.0f, 32.0f);
         else return false;
