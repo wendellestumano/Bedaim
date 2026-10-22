@@ -212,6 +212,7 @@ void AutoHitModule::onEnable() {
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_nextDispatch = {};
+        m_loggedFirstDispatch = false;
     }
     bedrocktools::diagnostics::probe(
         bedrocktools::diagnostics::Level::Info, "AutoHit", "lifecycle", "enabled",
@@ -264,8 +265,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     const DispatchResult result = sendKeyZeroIntentToMacroDroid();
     const bool sent = result == DispatchResult::Sent;
+    bool firstSuccessfulDispatch = false;
+    if (sent) {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        firstSuccessfulDispatch = !m_loggedFirstDispatch;
+        m_loggedFirstDispatch = true;
+    }
     diagnostics::probe(
-        sent ? diagnostics::Level::Debug : diagnostics::Level::Warning,
+        !sent ? diagnostics::Level::Warning :
+            (firstSuccessfulDispatch ? diagnostics::Level::Info : diagnostics::Level::Debug),
         "AutoHit", "key0_dispatch", dispatchResultName(result),
         sent
             ? "Android accepted the broadcast. This does not confirm MacroDroid ran or Minecraft received key 0."
