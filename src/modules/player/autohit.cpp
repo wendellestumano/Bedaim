@@ -1,6 +1,7 @@
 #include "autohit.hpp"
 
 #include "../../core/Diagnostics.hpp"
+#include "../../core/JavaVm.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
@@ -54,7 +55,10 @@ JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
 class AutoHitJniEnvironment {
 public:
     AutoHitJniEnvironment() {
-        JavaVM* vm = g_cachedJavaVm.load(std::memory_order_acquire);
+        // The official Preloader VM passed during ModContext::load() is the
+        // primary source. JNI_OnLoad and ART symbol lookup are fallback paths.
+        JavaVM* vm = bedrocktools::core::javaVm();
+        if (!vm) vm = g_cachedJavaVm.load(std::memory_order_acquire);
         if (!vm) {
             const auto getVms = resolveJniGetCreatedJavaVMs();
             if (!getVms) return;
@@ -207,6 +211,7 @@ const char* dispatchResultName(DispatchResult result) {
 // resolveJniGetCreatedJavaVMs() and reports a precise diagnostic on failure.
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
     if (!vm) return JNI_ERR;
+    bedrocktools::core::setJavaVm(vm);
     g_cachedJavaVm.store(vm, std::memory_order_release);
     return JNI_VERSION_1_6;
 }
