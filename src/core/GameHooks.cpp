@@ -91,7 +91,10 @@ thread_local bool syntheticAttackResultObserved = false;
 thread_local bool syntheticAttackNativeResult = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
+using ActorIsAttackableGamemodeFn = bool (*)(void*);
 PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
+std::atomic<ActorIsAttackableGamemodeFn> actorIsAttackableGamemodeOriginal{nullptr};
+std::chrono::steady_clock::time_point actorAttackabilityNextResolve{};
 PlayerSetGameTypeFn playerSetGameTypeOriginal = nullptr;
 std::chrono::steady_clock::time_point playerGameTypeNextResolve{};
 std::chrono::steady_clock::time_point playerSetGameTypeNextResolve{};
@@ -355,6 +358,40 @@ void resolvePlayerGameTypeApi() {
         installPlayerSetGameTypeHook();
     }
 
+}
+
+bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
+    if (!actor) return false;
+    auto function = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
+    if (!function && std::chrono::steady_clock::now() >= actorAttackabilityNextResolve) {
+        std::lock_guard<std::mutex> cacheLock(playerGameTypeCacheMutex);
+        const auto now = std::chrono::steady_clock::now();
+        function = actorIsAttackableGamemodeOriginal.load(std::memory_order_relaxed);
+        if (!function && now >= actorAttackabilityNextResolve) {
+            actorAttackabilityNextResolve = now + std::chrono::seconds(1);
+            // Apollon calls Actor::isAttackableGamemode() directly. Prefer the
+            // matching exported native method over inferring attackability from
+            // GameType IDs. Both const/non-const manglings have the same ABI here;
+            // resolveMinecraftFunction validates that the address belongs to the
+            // loaded Minecraft library. Do not fall back to unverified offsets.
+            const char* symbols[] = {
+                "_ZN5Actor20isAttackableGamemodeEv",
+                "_ZNK5Actor20isAttackableGamemodeEv"
+            };
+            for (const char* symbol : symbols) {
+                auto* address = resolveMinecraftFunction(symbol);
+                if (!address) continue;
+                function = reinterpret_cast<ActorIsAttackableGamemodeFn>(address);
+                actorIsAttackableGamemodeOriginal.store(function, std::memory_order_release);
+                gameHooksLogger().info(
+                    "Resolved trusted Actor::isAttackableGamemode; Aim Assist can apply the native attackability filter.");
+                break;
+            }
+        }
+    }
+    if (!function) return false;
+    outIsAttackable = function(actor);
+    return true;
 }
 
 bool plausibleGameMode(void* gameMode) {
@@ -744,6 +781,8 @@ void uninstall() {
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
+    actorIsAttackableGamemodeOriginal.store(nullptr, std::memory_order_release);
+    actorAttackabilityNextResolve = {};
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
     playerSetGameTypeNextResolve = {};
