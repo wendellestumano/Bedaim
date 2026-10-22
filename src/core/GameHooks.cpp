@@ -11,11 +11,14 @@
 #include <bedrocktools/sdk/offsets/UI.hpp>
 #include <bedrocktools/sdk/offsets/World.hpp>
 #include <bedrocktools/sdk/client/ClientInstance.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
 #include <dlfcn.h>
 #include <EGL/egl.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
+#include <cstring>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -107,6 +110,74 @@ std::atomic_bool playerSetGameTypeHookInstalled{false};
 std::atomic_bool playerSetGameTypeSeen{false};
 std::mutex playerGameTypeCacheMutex;
 std::unordered_map<const void*, std::int32_t> playerGameTypeCache;
+
+struct NoDamageAttackEvidence {
+    std::chrono::steady_clock::time_point pendingSince{};
+    std::chrono::steady_clock::time_point lastAttemptAt{};
+    std::chrono::steady_clock::time_point lastSeen{};
+    std::chrono::steady_clock::time_point creativeCandidateUntil{};
+    unsigned noDamageAttempts = 0;
+    bool pending = false;
+};
+std::mutex noDamageEvidenceMutex;
+std::unordered_map<const void*, NoDamageAttackEvidence> noDamageEvidence;
+
+bool attackPointTouchesTarget(void* target, const void* hitPosition) {
+    if (!target || !hitPosition) return false;
+    const auto bounds = reinterpret_cast<const bedrocktools::sdk::Actor*>(target)->bounds();
+    bedrocktools::sdk::Vec3 point{};
+    std::memcpy(&point, hitPosition, sizeof(point));
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z) ||
+        !std::isfinite(bounds.min.x) || !std::isfinite(bounds.min.y) ||
+        !std::isfinite(bounds.min.z) || !std::isfinite(bounds.max.x) ||
+        !std::isfinite(bounds.max.y) || !std::isfinite(bounds.max.z)) return false;
+    constexpr float tolerance = 0.65f;
+    return point.x >= bounds.min.x - tolerance && point.x <= bounds.max.x + tolerance &&
+           point.y >= bounds.min.y - tolerance && point.y <= bounds.max.y + tolerance &&
+           point.z >= bounds.min.z - tolerance && point.z <= bounds.max.z + tolerance;
+}
+
+void recordNoDamageAttackAttempt(void* target, const void* hitPosition) {
+    if (!target || !attackPointTouchesTarget(target, hitPosition)) return;
+    const auto now = std::chrono::steady_clock::now();
+    auto* actor = reinterpret_cast<const bedrocktools::sdk::Actor*>(target);
+    const int hurtTime = actor->hurtTime();
+
+    std::lock_guard<std::mutex> lock(noDamageEvidenceMutex);
+    for (auto it = noDamageEvidence.begin(); it != noDamageEvidence.end();) {
+        if (now - it->second.lastSeen > std::chrono::seconds(20))
+            it = noDamageEvidence.erase(it);
+        else
+            ++it;
+    }
+
+    auto& evidence = noDamageEvidence[target];
+    evidence.lastSeen = now;
+    if (hurtTime > 0) {
+        evidence.noDamageAttempts = 0;
+        evidence.pending = false;
+        evidence.creativeCandidateUntil = {};
+        return;
+    }
+
+    // Wait for each trial to settle. Rapid repeats don't count as independent hits.
+    if (evidence.pending ||
+        (evidence.lastAttemptAt.time_since_epoch().count() != 0 &&
+         now - evidence.lastAttemptAt < std::chrono::milliseconds(450))) return;
+    evidence.pendingSince = now;
+    evidence.lastAttemptAt = now;
+    evidence.pending = true;
+
+    if (noDamageEvidence.size() > 512) {
+        auto oldest = noDamageEvidence.end();
+        for (auto it = noDamageEvidence.begin(); it != noDamageEvidence.end(); ++it) {
+            if (it->first == target) continue;
+            if (oldest == noDamageEvidence.end() ||
+                it->second.lastSeen < oldest->second.lastSeen) oldest = it;
+        }
+        if (oldest != noDamageEvidence.end()) noDamageEvidence.erase(oldest);
+    }
+}
 
 template <class Function>
 bool hookSignature(SignatureId id, void* detour, Function** original) {
@@ -629,6 +700,7 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
     const bool result = gameModeAttackOriginal
         ? gameModeAttackOriginal(gameMode, target, playPredictiveSound, hitPosition)
         : false;
+    recordNoDamageAttackAttempt(target, hitPosition);
     if (syntheticAttackDispatchActive) {
         syntheticAttackResultObserved = true;
         syntheticAttackNativeResult = result;
@@ -789,6 +861,10 @@ void uninstall() {
         playerGameTypeNextResolve = {};
         playerSetGameTypeNextResolve = {};
         playerGameTypeCache.clear();
+    }
+    {
+        std::lock_guard evidenceLock(noDamageEvidenceMutex);
+        noDamageEvidence.clear();
     }
     {
         std::lock_guard predicateLock(actorModePredicateResolveMutex);
@@ -1015,6 +1091,43 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
             playerSetGameTypeSeen.load(std::memory_order_acquire));
     }
     return false;
+}
+
+bool tryGetPlayerNoDamageCreativeHint(void* player) {
+    if (!player) return false;
+    const auto now = std::chrono::steady_clock::now();
+    const int hurtTime = reinterpret_cast<const bedrocktools::sdk::Actor*>(player)->hurtTime();
+
+    std::lock_guard<std::mutex> lock(noDamageEvidenceMutex);
+    auto it = noDamageEvidence.find(player);
+    if (it == noDamageEvidence.end()) return false;
+    auto& evidence = it->second;
+    evidence.lastSeen = now;
+
+    if (hurtTime > 0) {
+        evidence.noDamageAttempts = 0;
+        evidence.pending = false;
+        evidence.creativeCandidateUntil = {};
+        return false;
+    }
+
+    // An attack needs a grace period for remote hurt time to update. Three
+    // distinct trials may suggest Creative but are not authoritative.
+    if (evidence.pending && now - evidence.pendingSince >= std::chrono::milliseconds(800)) {
+        evidence.pending = false;
+        evidence.noDamageAttempts = std::min(evidence.noDamageAttempts + 1u, 10u);
+        if (evidence.noDamageAttempts >= 3)
+            evidence.creativeCandidateUntil = now + std::chrono::seconds(10);
+    }
+
+    if (evidence.creativeCandidateUntil.time_since_epoch().count() != 0 &&
+        now >= evidence.creativeCandidateUntil) {
+        evidence.noDamageAttempts = 0;
+        evidence.creativeCandidateUntil = {};
+    }
+    return evidence.noDamageAttempts >= 3 &&
+        evidence.creativeCandidateUntil.time_since_epoch().count() != 0 &&
+        now < evidence.creativeCandidateUntil;
 }
 
 bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType) {
