@@ -541,6 +541,16 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     return true;
 }
 
+bool AimAssistModule::currentTargetIsPlayerSnapshot(void* desiredTarget) {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    const auto now = std::chrono::steady_clock::now();
+    return enabled && desiredTarget && desiredTarget == m_lastTarget &&
+        m_targetPresent && m_lastTargetIsPlayer && validBounds(m_lastTargetBounds) &&
+        m_lastTargetSeen.time_since_epoch().count() != 0 &&
+        now >= m_lastTargetSeen &&
+        now - m_lastTargetSeen <= std::chrono::milliseconds(250);
+}
+
 bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
                                                    bedrocktools::sdk::AABB& bounds,
                                                    float& range) {
