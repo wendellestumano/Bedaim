@@ -1,3 +1,11 @@
+## 2026-10-22 — Add Gamemode Checker HUD on stable baseline
+
+- New optional HUD module lists nearby players whose game mode is positively identified as Creative or Spectator, with a distinct label for each mode.
+- Uses the existing `tryGetPlayerGameType` API and the existing ActorManager player enumeration path; it does not guess a mode when the getter/cache cannot confirm one.
+- Refreshes at 5 Hz and caps displayed rows to 16 to limit native queries and mobile rendering cost.
+- Aim Assist's existing `m_ignoreCreativeSpectator` filter remains enabled by default and skips candidates when the checker confirms Creative or Spectator. Unknown modes are not falsely labelled by this HUD.
+- This feature branch starts from stable commit `afd088f04ebdc24dee974496a329411591ea202f`; experimental AutoHit/AutoTotem changes are not included. Android build and in-game validation are pending.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics
