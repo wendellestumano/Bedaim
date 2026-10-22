@@ -84,6 +84,21 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     if (++m_ticks < 4) return;
     m_ticks = 0;
 
+    // Runtime signatures can resolve after the module is initialized; retry missing
+    // lookups on this throttled refresh instead of leaving the overlay permanently empty.
+    if (!g_getRuntimeActorList) {
+        g_getRuntimeActorList = reinterpret_cast<GetRuntimeActorListFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
+    }
+    if (!g_actorIsPlayer) {
+        g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    }
+    if (!g_actorGetNameTag) {
+        g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetNameTag));
+    }
+
     GamemodeCheckerDiagnostics diag{};
     diag.actorListReady = g_getRuntimeActorList != nullptr;
     diag.playerClassifierReady = g_actorIsPlayer != nullptr;
@@ -162,20 +177,15 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         if (!g_actorGetNameTag) continue;
 
         std::int32_t gameType = -1;
-        const bool hasExactGameType =
+        const bool hasGameType =
             bedrocktools::core::gamehooks::tryGetPlayerGameType(actor, gameType);
-        std::int32_t predicateMode = -1;
-        const bool hasPredicateState =
-            bedrocktools::core::gamehooks::tryGetPlayerGameType(actor, predicateMode) &&
-            (predicateMode == 1 || predicateMode == 3);
+        const bool hasExactGameType = hasGameType && gameType >= 0 && gameType <= 3;
         bool attackable = true;
-        const bool hasAttackability = !hasPredicateState &&
+        const bool hasAttackability = !hasExactGameType &&
             bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(actor, attackable);
 
         std::string mode;
-        if (hasPredicateState) {
-            mode = modeName(predicateMode);
-        } else if (hasExactGameType) {
+        if (hasExactGameType) {
             mode = modeName(gameType);
         } else if (hasAttackability && !attackable) {
             mode = "Creative/Spectator*";
@@ -259,10 +269,10 @@ void GamemodeCheckerModule::onFrame() {
         line.h = 16.0f;
         line.size = 16.0f;
         if (entry.mode == "Spectator") line.color = 0xFFB68CFF;
-        else if (entry.mode == "Creative") line.color = 0xFF65E6A3;
+        else if (entry.mode == "Creative") line.color = 0xFFFF4545;
         else if (entry.mode == "Creative/Spectator*") line.color = 0xFFFFC266;
         else if (entry.mode == "Unknown") line.color = 0xFFBBBBBB;
-        else if (entry.mode == "Other (not C/S)") line.color = 0xFF8CC4FF;
+        else if (entry.mode == "Adventure") line.color = 0xFF8CC4FF;
         else line.color = 0xFFFFFFFF;
         line.text = entry.name + "  [" + entry.mode + "]";
         commands.push_back(line);
