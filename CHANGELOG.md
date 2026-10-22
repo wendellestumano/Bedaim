@@ -1,10 +1,9 @@
 ## 2026-10-22 — Add Gamemode Checker HUD on stable baseline
 
-- Adds an optional Gamemode Checker HUD listing remote players with exact modes where available, plus a clearly marked `Creative/Spectator*` fallback when the native attackability check says a player is protected but cannot distinguish the two modes.
-- Adds an Apollon-inspired `Actor::isAttackableGamemode` symbol fallback without hard-coded addresses from another Bedrock version. The aimbot now uses this coarse check as a second filter when enabled.
-- Refreshes at 5 Hz and caps displayed rows to 16 to limit rendering cost on mobile. Unknown modes remain visibly marked instead of disappearing from the diagnostic list.
-- This feature branch starts from stable commit `afd088f04ebdc24dee974496a329411591ea202f`; experimental AutoHit/AutoTotem changes are not included. Android build passes; in-game validation is still required.
-
+- Adds an optional Gamemode Checker HUD listing remote players and showing exact game modes where the available native APIs can confirm them; unresolved modes stay visible.
+- Prefers the modern `Actor::isCreative()` / `Actor::isSpectator()` predicates; keeps an Apollon-inspired `Actor::isAttackableGamemode` fallback, marked `Creative/Spectator*` because that coarse method cannot distinguish the two modes.
+- AimAssist uses exact GameType, then the exact per-actor predicates, then the coarse attackability check. No fixed offset from an unrelated Bedrock version is copied into this branch.
+- Refreshes at 5 Hz and caps displayed rows to 16. This feature branch starts from stable commit `afd088f04ebdc24dee974496a329411591ea202f`; experimental AutoHit/AutoTotem changes are not included. Android build and in-game validation are tracked separately.
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics

@@ -811,18 +811,22 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                     bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType);
                 if (hasExactGameType && (gameType == 1 || gameType == 3)) continue;
 
-                // Fallback modeled on Apollon's per-Player isAttackableGamemode()
-                // check. It does not distinguish Creative from Spectator, but it
-                // can still exclude both when the exact GameType getter/cache is
-                // absent or stale.
+                // Prefer per-actor predicates (also used by modern Bedrock SDKs)
+                // if the native GameType getter/cache did not classify C/S.
+                std::int32_t predicateMode = -1;
+                const bool hasPredicateState =
+                    bedrocktools::core::gamehooks::tryGetPlayerCreativeSpectator(candidate, predicateMode);
+                if (hasPredicateState && (predicateMode == 1 || predicateMode == 3)) continue;
+
+                // Last resort, inspired by Apollon's isAttackableGamemode() call.
                 bool attackable = true;
-                const bool hasAttackability =
+                const bool hasAttackability = !hasPredicateState &&
                     bedrocktools::core::gamehooks::tryGetPlayerAttackableGamemode(candidate, attackable);
                 if (hasAttackability && !attackable) continue;
 
-                if (!hasExactGameType && !hasAttackability &&
+                if (!hasExactGameType && !hasPredicateState && !hasAttackability &&
                     !g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                    aimAssistLogger().warn("Creative/Spectator filter unavailable: exact GameType and attackability lookups are unavailable; this candidate may still be eligible.");
+                    aimAssistLogger().warn("Creative/Spectator filter unavailable: exact GameType, per-actor mode predicates, and attackability lookups are unavailable; this candidate may still be eligible.");
                 }
             }
         } else {

@@ -122,19 +122,25 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         std::int32_t gameType = -1;
         const bool hasExactGameType =
             bedrocktools::core::gamehooks::tryGetPlayerGameType(actor, gameType);
+        std::int32_t predicateMode = -1;
+        const bool hasPredicateState =
+            bedrocktools::core::gamehooks::tryGetPlayerCreativeSpectator(actor, predicateMode);
         bool attackable = true;
-        const bool hasAttackability =
+        const bool hasAttackability = !hasPredicateState &&
             bedrocktools::core::gamehooks::tryGetPlayerAttackableGamemode(actor, attackable);
 
         std::string mode;
-        if (hasExactGameType && (gameType == 1 || gameType == 3)) {
+        if (hasPredicateState && (predicateMode == 1 || predicateMode == 3)) {
+            mode = modeName(predicateMode);
+        } else if (hasExactGameType && (gameType == 1 || gameType == 3)) {
             mode = modeName(gameType);
-        } else if (hasAttackability && !attackable) {
-            // Apollon's native check tells us the player is protected in its
-            // current mode, but cannot say whether that is Creative or Spectator.
-            mode = "Creative/Spectator*";
         } else if (hasExactGameType) {
             mode = modeName(gameType);
+        } else if (hasPredicateState && predicateMode == 0) {
+            mode = "Other (not C/S)";
+        } else if (hasAttackability && !attackable) {
+            // Coarse native check doesn't distinguish Creative from Spectator.
+            mode = "Creative/Spectator*";
         } else {
             mode = "Unknown";
         }
@@ -193,6 +199,7 @@ void GamemodeCheckerModule::onFrame() {
         else if (entry.mode == "Creative") line.color = 0xFF65E6A3;
         else if (entry.mode == "Creative/Spectator*") line.color = 0xFFFFC266;
         else if (entry.mode == "Unknown") line.color = 0xFFBBBBBB;
+        else if (entry.mode == "Other (not C/S)") line.color = 0xFF8CC4FF;
         else line.color = 0xFFFFFFFF;
         line.text = entry.name + "  [" + entry.mode + "]";
         commands.push_back(line);
