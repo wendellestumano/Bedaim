@@ -171,3 +171,7 @@
 - Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
 - Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
 - Added `docs/MODULE_DIAGNOSTICS.md` with export instructions, log interpretation, and runtime-validation limits.
+
+### AutoHit JNI bridge follow-up
+- AutoHit now caches the `JavaVM*` passed to an exported `JNI_OnLoad` entry point when the loader provides one, avoiding reliance on `JNI_GetCreatedJavaVMs` in that load path. The ART symbol/path lookup remains as a fallback for native Preloader loading, which may not invoke `JNI_OnLoad`.
+- This is a targeted compatibility improvement, not yet device-verified. If the runtime uses only native injection and the ART symbol remains unavailable, the next step is to obtain the VM from a launcher-provided JNI bridge or hook an existing Java-to-native lifecycle callback.
