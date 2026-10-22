@@ -91,12 +91,26 @@ bool hasSolidBlockInsideBody(void* actor) {
     const float height = bounds.max.y - bounds.min.y;
     if (!std::isfinite(bounds.min.x) || !std::isfinite(bounds.min.y) ||
         !std::isfinite(bounds.min.z) || !std::isfinite(bounds.max.x) ||
-        !std::isfinite(bounds.max.y) || !std::isfinite(bounds.max.z) ||
-        height < 1.0f || height > 4.0f) return false;
+        !std::isfinite(bounds.max.y) || !std::isfinite(bounds.max.z)) return false;
 
     auto* dimension = nativeActor->dimension();
     void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
     if (!blockSource) return false;
+
+    // A spectator-like actor can have no usable body AABB. In that case sample
+    // the actor root inside a solid voxel instead of silently dropping the test.
+    if (height < 1.0f || height > 4.0f ||
+        bounds.max.x - bounds.min.x < 0.1f || bounds.max.z - bounds.min.z < 0.1f) {
+        const auto position = nativeActor->position();
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+            !std::isfinite(position.z)) return false;
+        const bedrocktools::sdk::BlockPos pos{
+            static_cast<int>(std::floor(position.x)),
+            static_cast<int>(std::floor(position.y + 0.7f)),
+            static_cast<int>(std::floor(position.z))
+        };
+        return g_isSolidBlockingBlock(blockSource, &pos);
+    }
 
     const float x = (bounds.min.x + bounds.max.x) * 0.5f;
     const float z = (bounds.min.z + bounds.max.z) * 0.5f;
@@ -116,7 +130,6 @@ bool hasSolidBlockInsideBody(void* actor) {
     }
     return false;
 }
-
 bool hasSpectatorNoclipEvidence(void* actor) {
     if (!actor || !g_actorGetStatusFlag || !g_actorIsFlying) return false;
     const auto* nativeActor = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor);
@@ -139,20 +152,24 @@ bool hasSpectatorNoclipEvidence(void* actor) {
         (std::abs(position.x - probe.lastPosition.x) > 0.12f ||
          std::abs(position.y - probe.lastPosition.y) > 0.12f ||
          std::abs(position.z - probe.lastPosition.z) > 0.12f);
-    const bool bodyOverlapsSolidBlock = hasSolidBlockInsideBody(actor);
     probe.lastPosition = position;
     probe.hasLastPosition = true;
     probe.lastSeen = std::chrono::steady_clock::now();
 
-    // Require repeated evidence; invisibility alone is not enough to mark Spectator.
-    if (invisible && !hasCollision && flying && moving && bodyOverlapsSolidBlock) {
+    // Only pay for block probes when the cheap flags already resemble Spectator.
+    if (!invisible || hasCollision || !flying || !moving) {
+        probe.consecutiveNoclipSamples = 0;
+        return false;
+    }
+
+    const bool bodyOverlapsSolidBlock = hasSolidBlockInsideBody(actor);
+    if (bodyOverlapsSolidBlock) {
         probe.consecutiveNoclipSamples = std::min(probe.consecutiveNoclipSamples + 1u, 5u);
     } else {
         probe.consecutiveNoclipSamples = 0;
     }
     return probe.consecutiveNoclipSamples >= 2;
 }
-
 std::string safeName(void* actor) {
     if (!actor) return {};
     std::string name;
