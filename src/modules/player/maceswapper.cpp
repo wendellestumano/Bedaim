@@ -492,19 +492,32 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
 void MaceSwapperModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
+    nlohmann::json config;
+    saveConfig(config);
+    auto valueString = [&](const char* key, const char* fallback) -> std::string {
+        const auto it = config.find(key);
+        if (it == config.end() || it->is_null()) return fallback;
+        if (it->is_string()) return it->get<std::string>();
+        if (it->is_boolean()) return it->get<bool>() ? "true" : "false";
+        return it->dump();
+    };
     schema.defaultCategory("combat")
         .category("combat", "Combat", "Mace swap and fall requirements")
         .category("special", "Special", "Elytra Unglide conditions");
 
     auto slider = [&](const char* key, const char* title,
                       const char* minimum, const char* maximum,
-                      const char* step, const char* unit, const char* category) {
+                      const char* step, const char* unit, const char* category,
+                      const char* defaultValue) {
         ConfigNodeV2 node;
         node.id = key;
         node.key = key;
         node.title = title;
         node.category = category;
         node.type = ConfigControlTypeV2::SliderFloat;
+        node.defaultValue = defaultValue;
+        node.currentValue = valueString(key, defaultValue);
+        node.hasCurrentValue = true;
         node.minValue = minimum;
         node.maxValue = maximum;
         node.step = step;
@@ -518,11 +531,14 @@ void MaceSwapperModule::onMenuRegistered() {
     enabledNode.title = "Enable Mace Swapper";
     enabledNode.category = "combat";
     enabledNode.type = ConfigControlTypeV2::Toggle;
+    enabledNode.defaultValue = "true";
+    enabledNode.currentValue = valueString("m_enableMaceSwapper", "true");
+    enabledNode.hasCurrentValue = true;
     schema.node(std::move(enabledNode));
 
-    slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks", "combat");
-    slider("m_minimumFallDistance", "Minimum fall distance", "0.30", "10.0", "0.10", " blocks", "combat");
-    slider("m_attackIntervalMs", "Attack interval", "80", "1000", "10", " ms", "combat");
+    slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks", "combat", "3.0");
+    slider("m_minimumFallDistance", "Minimum fall distance", "0.30", "10.0", "0.10", " blocks", "combat", "1.55");
+    slider("m_attackIntervalMs", "Attack interval", "80", "1000", "10", " ms", "combat", "180.0");
 
     ConfigNodeV2 unglideEnabledNode;
     unglideEnabledNode.id = "m_unglideEnabled";
@@ -532,10 +548,13 @@ void MaceSwapperModule::onMenuRegistered() {
         "Stop Elytra gliding only when a target is nearby and a solid floor is within the configured clearance.";
     unglideEnabledNode.category = "special";
     unglideEnabledNode.type = ConfigControlTypeV2::Toggle;
+    unglideEnabledNode.defaultValue = "false";
+    unglideEnabledNode.currentValue = valueString("m_unglideEnabled", "false");
+    unglideEnabledNode.hasCurrentValue = true;
     schema.node(std::move(unglideEnabledNode));
 
-    slider("m_unglideHeight", "Unglide ground clearance", "1", "24", "0.5", " blocks", "special");
-    slider("m_unglideTargetDistance", "Unglide target distance", "1", "32", "0.5", " blocks", "special");
+    slider("m_unglideHeight", "Unglide ground clearance", "1", "24", "0.5", " blocks", "special", "4.0");
+    slider("m_unglideTargetDistance", "Unglide target distance", "1", "32", "0.5", " blocks", "special", "8.0");
 
     ConfigNodeV2 restoreNode;
     restoreNode.id = "m_restoreSlot";
@@ -543,6 +562,9 @@ void MaceSwapperModule::onMenuRegistered() {
     restoreNode.title = "Restore previous hotbar slot";
     restoreNode.category = "combat";
     restoreNode.type = ConfigControlTypeV2::Toggle;
+    restoreNode.defaultValue = "true";
+    restoreNode.currentValue = valueString("m_restoreSlot", "true");
+    restoreNode.hasCurrentValue = true;
     schema.node(std::move(restoreNode));
 
     ConfigNodeV2 keybindNode;
