@@ -35,7 +35,7 @@
 namespace {
 using ActorIsPlayerFn = bool (*)(void*);
 using ActorIsInvisibleFn = bool (*)(void*);
-using ActorGetNameTagFn = std::string (*)(void*);
+using ActorGetNameTagFn = const std::string& (*)(void*);
 using BlockSourceIsSolidBlockingBlockFn = bool (*)(void*, const bedrocktools::sdk::BlockPos*);
 using LocalPlayerApplyTurnDeltaFn = void (*)(void*, bedrocktools::sdk::Vec2*);
 
@@ -452,8 +452,6 @@ void AimAssistModule::onMenuRegistered() {
             .config("hitboxScale", "Hitbox Area (exact)", ConfigType::Text, "1.00")
             .config("hitboxDistanceGrowth", "Hitbox Growth (exact)", ConfigType::Text, "5.00")
             .config("predictionLeadMs", "Prediction Lead ms (exact)", ConfigType::Text, "120.00")
-            .config("m_elytraMode", "Elytra Mode (true/false)", ConfigType::Text, "false")
-            .config("m_elytraDistanceDislocateStrength", "Elytra Distance Dislocate Strength (0-1)", ConfigType::Text, "0.20")
             .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
                 onMenuConfigChanged(key, value);
             });
@@ -462,14 +460,6 @@ void AimAssistModule::onMenuRegistered() {
 }
 
 bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
-    if (key == "m_elytraMode" || key == "elytraMode") {
-        bool enabledValue = false;
-        if (value == "true" || value == "1" || value == "on") enabledValue = true;
-        else if (value != "false" && value != "0" && value != "off") return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_elytraMode = enabledValue;
-        return true;
-    }
     auto parseNumber = [&]() -> std::optional<float> {
         try {
             const std::string text(value);
@@ -490,8 +480,6 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "fov") m_fov = std::clamp(number, 1.0f, 360.0f);
     else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
-    else if (key == "m_elytraDistanceDislocateStrength")
-        m_elytraDistanceDislocateStrength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
     else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
     else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
@@ -1238,22 +1226,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         centerAimPoint = {selectedAnchor.x, selectedAnchor.y, selectedAnchor.z};
     }
 
-    // Use the full 3D separation so altitude differences count as well as horizontal
-    // distance. Keep the point inside the target's real hitbox; dislocation is only
-    // an aim preference, never an expanded hit/attack volume.
+    // Keep the aim point inside the selected native/virtual hitbox. Elytra
+    // lookdown/dislocation was intentionally removed; Unglide lives in Mace Swapper.
     const bool stickyMode = (m_trackingMode == "Grudado");
-    bool elytraDislocationActive = false;
-    if (bedaim::aimmath::shouldApplyElytraDistanceDislocation(
-            m_elytraMode, m_localPlayerGliding, stickyMode)) {
-        const float targetDistanceForDislocation =
-            std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
-        const float requestedDislocation = bedaim::aimmath::elytraDistanceDislocation(
-            targetDistanceForDislocation, m_elytraDistanceDislocateStrength);
-        const float availableDrop = std::max(0.0f, centerAimPoint.y - targetAimBounds.min.y);
-        const float appliedDislocation = std::min(requestedDislocation, availableDrop);
-        centerAimPoint.y -= appliedDislocation;
-        elytraDislocationActive = appliedDislocation > 1.0e-4f;
-    }
 
     const float toCenterX = boundsCenter.x - eyePosition.x;
     const float toCenterY = boundsCenter.y - eyePosition.y;
@@ -1297,7 +1272,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float verticalAimTolerance = std::max(0.05f, nativeTargetHeight * 0.08f);
     const bool viewIsAtSelectedAimHeight =
         std::abs(projectedPoint.y - centerAimPoint.y) <= verticalAimTolerance;
-    if (!stickyMode && !elytraDislocationActive && viewIsAtSelectedAimHeight &&
+    if (!stickyMode && viewIsAtSelectedAimHeight &&
         rayIntersectsAABB(eyePosition, viewDirection, scaledAimBounds)) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = now;
@@ -1458,9 +1433,6 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_cantSeeThroughBlocks = j.value("m_cantSeeThroughBlocks", m_cantSeeThroughBlocks);
     m_aimMode = j.value("m_aimMode", m_aimMode);
     m_trackingMode = j.value("m_trackingMode", m_trackingMode);
-    m_elytraMode = j.value("m_elytraMode", m_elytraMode);
-    m_elytraDistanceDislocateStrength = std::clamp(
-        j.value("m_elytraDistanceDislocateStrength", m_elytraDistanceDislocateStrength), 0.0f, 1.0f);
     m_naturalization = j.value("m_naturalization", m_naturalization);
     m_naturalizationWeapon = j.value("m_naturalizationWeapon", m_naturalizationWeapon);
     m_targetSelectionMode = j.value("m_targetSelectionMode", m_targetSelectionMode);
@@ -1575,8 +1547,6 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_cantSeeThroughBlocks"] = m_cantSeeThroughBlocks;
     j["m_aimMode"] = m_aimMode;
     j["m_trackingMode"] = m_trackingMode;
-    j["m_elytraMode"] = m_elytraMode;
-    j["m_elytraDistanceDislocateStrength"] = m_elytraDistanceDislocateStrength;
     j["m_naturalization"] = m_naturalization;
     j["m_naturalizationWeapon"] = m_naturalizationWeapon;
     j["m_weaponOnly"] = m_weaponOnly;
