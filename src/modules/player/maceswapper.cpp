@@ -230,13 +230,20 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             "MaceSwapper", "player", "missing");
         m_hasLastPlayerY = false;
         m_hasPeakY = false;
-        m_pendingAttack = false;
-        m_cancelPendingAttack = false;
-        m_pendingMaceSlot = -1;
-        m_pendingPreviousSlot = -1;
-        swapperstate::maceFallPriority.store(false, std::memory_order_release);
-        m_pendingTarget = nullptr;
-        m_pendingPlayer = nullptr;
+        // A missing-player tick is not proof that the pending swap can be
+        // discarded: the inventory may still be on the mace. Mark the pending
+        // attack for cancellation but retain its ownership/slot snapshot until
+        // a valid player tick can safely restore it.
+        if (m_pendingAttack) {
+            m_cancelPendingAttack = true;
+        } else {
+            m_cancelPendingAttack = false;
+            m_pendingMaceSlot = -1;
+            m_pendingPreviousSlot = -1;
+            m_pendingTarget = nullptr;
+            m_pendingPlayer = nullptr;
+            swapperstate::maceFallPriority.store(false, std::memory_order_release);
+        }
         return;
     }
 
@@ -288,9 +295,23 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             restoreIfStillSwapped();
             return;
         }
-        if (player != m_pendingPlayer || !stillHoldingMace) {
+        if (player != m_pendingPlayer) {
+            // Never restore the previous player's hotbar index into a different
+            // player's inventory after a respawn/world transition.
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-                "MaceSwapper", "pending_attack", "player_or_slot_changed");
+                "MaceSwapper", "pending_attack", "player_changed_abandon_old_inventory");
+            m_pendingAttack = false;
+            m_cancelPendingAttack = false;
+            swapperstate::maceFallPriority.store(false, std::memory_order_release);
+            m_pendingMaceSlot = -1;
+            m_pendingPreviousSlot = -1;
+            m_pendingTarget = nullptr;
+            m_pendingPlayer = nullptr;
+            return;
+        }
+        if (!stillHoldingMace) {
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+                "MaceSwapper", "pending_attack", "selected_slot_changed");
             restoreIfStillSwapped();
             return;
         }
