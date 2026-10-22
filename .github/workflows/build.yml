@@ -16,6 +16,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Validate workflow YAML syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/yaml-validator"
+          "$RUNNER_TEMP/yaml-validator/bin/python" -m pip install --disable-pip-version-check --quiet PyYAML
+          "$RUNNER_TEMP/yaml-validator/bin/python" - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          files = sorted(Path(".github/workflows").glob("*.yml"))
+          if not files:
+              raise SystemExit("No workflow YAML files found")
+          for path in files:
+              with path.open(encoding="utf-8") as stream:
+                  yaml.safe_load(stream)
+              print(f"YAML syntax OK: {path}")
+          PY
+
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
 
