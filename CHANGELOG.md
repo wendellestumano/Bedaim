@@ -1,7 +1,7 @@
 ## 2026-10-22 — Unglide jump and mode-evidence repairs
 - Removed Elytra Mode/lookdown. Unglide no longer gates on a downward block scan; it pulses the native Mob::jumpFromGround action for a nearby-player trigger, with Player::stopGliding as an additional fallback and throttled diagnostics for the exact action attempted.
 - Gamemode Checker tries the native Actor::getNameTag API before the SDK field fallback. Exact GameType/predicate results take priority; three hit attempts into the target bounds without a hurt timer mark only a Creative? candidate.
-- Spectator inference requires multiple signals together: invisibility, no collision, flight, movement and repeated solid-block overlap. If only attackability is known, the HUD labels Creative/Spectator* as ambiguous instead of guessing.
+- Spectator inference requires invisibility, no collision, flight, movement, and repeated solid-block overlap (with a root-position fallback if normal body bounds are absent). The same rate-limited detector is shared with Aim Assist so a confirmed Spectator* candidate is ignored there too.
 - ShadowHook experiment PR was closed; current builds remain on the Preloader hook backend.
 
 # Changelog
