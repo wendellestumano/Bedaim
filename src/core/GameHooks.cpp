@@ -346,11 +346,16 @@ void resolvePlayerGameTypeApi() {
     if (!playerGetGameTypeOriginal.load(std::memory_order_relaxed) &&
         resolveNow >= playerGameTypeNextResolve) {
         playerGameTypeNextResolve = resolveNow + std::chrono::seconds(1);
-        auto getter = reinterpret_cast<PlayerGetGameTypeFn>(
-            resolveMinecraftFunction("_ZNK6Player17getPlayerGameTypeEv"));
-        if (!getter) {
-            getter = reinterpret_cast<PlayerGetGameTypeFn>(
-                resolveMinecraftFunction("_ZNK11LocalPlayer17getPlayerGameTypeEv"));
+        const char* getterSymbols[] = {
+            "_ZNK6Player17getPlayerGameTypeEv",
+            "_ZN6Player17getPlayerGameTypeEv",
+            "_ZNK11LocalPlayer17getPlayerGameTypeEv",
+            "_ZN11LocalPlayer17getPlayerGameTypeEv"
+        };
+        PlayerGetGameTypeFn getter = nullptr;
+        for (const char* symbol : getterSymbols) {
+            getter = reinterpret_cast<PlayerGetGameTypeFn>(resolveMinecraftFunction(symbol));
+            if (getter) break;
         }
         playerGetGameTypeOriginal.store(getter, std::memory_order_release);
     }
