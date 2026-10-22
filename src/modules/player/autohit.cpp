@@ -8,6 +8,7 @@
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <dlfcn.h>
@@ -21,6 +22,10 @@ constexpr const char* kAutoHitKeyZeroAction =
     "com.wendellestumano.bedaim.AUTOHIT_KEY0";
 
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
+
+// Preferred source when the loader invokes JNI_OnLoad. Native injection loaders
+// may skip it, so the ART symbol resolver remains a fallback.
+std::atomic<JavaVM*> g_cachedJavaVm{nullptr};
 
 JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
     // RTLD_NOLOAD can fail in Android linker namespaces even when ART is
@@ -49,12 +54,14 @@ JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
 class AutoHitJniEnvironment {
 public:
     AutoHitJniEnvironment() {
-        const auto getVms = resolveJniGetCreatedJavaVMs();
-        if (!getVms) return;
+        JavaVM* vm = g_cachedJavaVm.load(std::memory_order_acquire);
+        if (!vm) {
+            const auto getVms = resolveJniGetCreatedJavaVMs();
+            if (!getVms) return;
 
-        JavaVM* vm = nullptr;
-        jsize count = 0;
-        if (getVms(&vm, 1, &count) != JNI_OK || count < 1 || !vm) return;
+            jsize count = 0;
+            if (getVms(&vm, 1, &count) != JNI_OK || count < 1 || !vm) return;
+        }
 
         m_vm = vm;
         const jint status = m_vm->GetEnv(
@@ -193,6 +200,16 @@ const char* dispatchResultName(DispatchResult result) {
     return "macrodroid_key0_broadcast_unknown";
 }
 } // namespace
+
+// If Bedaim is loaded through the Java VM, keep the VM pointer supplied by ART
+// rather than trying to discover a potentially hidden symbol in libart.so.
+// Preloader/dlopen loading may not call this entry point; that path still uses
+// resolveJniGetCreatedJavaVMs() and reports a precise diagnostic on failure.
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+    if (!vm) return JNI_ERR;
+    g_cachedJavaVm.store(vm, std::memory_order_release);
+    return JNI_VERSION_1_6;
+}
 
 using bedrocktools::sdk::Player;
 
