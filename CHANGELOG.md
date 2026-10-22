@@ -1,7 +1,8 @@
-## 2026-10-22 — Unglide jump and mode-evidence repairs
-- Removed Elytra Mode/lookdown. Unglide no longer gates on a downward block scan; it pulses the native Mob::jumpFromGround action for a nearby-player trigger, with Player::stopGliding as an additional fallback and throttled diagnostics for the exact action attempted.
-- Gamemode Checker tries the native Actor::getNameTag API before the SDK field fallback. Exact GameType/predicate results take priority; three hit attempts into the target bounds without a hurt timer mark only a Creative? candidate.
-- Spectator inference requires invisibility, no collision, flight, movement, and repeated solid-block overlap (with a root-position fallback if normal body bounds are absent). The same rate-limited detector is shared with Aim Assist so a confirmed Spectator* candidate is ignored there too.
+## 2026-10-22 — Android Spacebar Unglide via Moon/Key Mapper
+- Unglide now sends an explicit Android broadcast to the exported Moon/Key Mapper receiver, triggering an imported Key Map whose only action is KEYCODE_SPACE (62). The native Mob::jumpFromGround/Player::stopGliding calls were removed from the active Unglide path.
+- Added throttled diagnostics for JavaVM/context/Intent failures and for successful broadcast dispatch. A dispatched broadcast does not by itself confirm the app's Key Map or privileged injection bridge is configured.
+- Added an importable Key Mapper backup named "Bedaim Unglide - Spacebar"; it uses UID `8cfe3591-a1e8-44f0-9a9a-5ea6f745d24a`, which matches the native broadcast request. Moon/Key Mapper must have the map imported and enabled, plus its supported System Bridge/IME input path configured.
+- Creative and Spectator classification remains evidence-based: exact GameType/native predicates take precedence; repeated no-damage hits and repeated invisibility/no-collision/flying/block-overlap signals are labelled as heuristics.
 - ShadowHook experiment PR was closed; current builds remain on the Preloader hook backend.
 
 # Changelog
