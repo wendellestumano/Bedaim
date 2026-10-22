@@ -15,6 +15,9 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
 // GameType values: Survival=0, Creative=1, Adventure=2, Spectator=3.
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType);
+// Heuristic only: three hitbox-overlapping attack attempts without a hurt timer
+// may mark Creative? for targeting, but never overrides an exact native GameType.
+bool tryGetPlayerNoDamageCreativeHint(void* player);
 // Exact per-actor Creative/Spectator predicates; negative results do not imply Survival.
 bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType);
 // Preferred attackability gate matching Actor::isAttackableGamemode used by
