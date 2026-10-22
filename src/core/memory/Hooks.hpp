@@ -30,43 +30,48 @@ namespace detail {
 using ShadowHookInitFn = int (*)(int, bool);
 using ShadowHookHookFn = void* (*)(void*, void*, void**);
 using ShadowHookUnhookFn = int (*)(void*);
+using ShadowHookGetErrnoFn = int (*)();
 
 inline std::once_flag backendInitOnce;
 inline Backend activeBackend = Backend::Uninitialized;
 inline void* shadowhookLibrary = nullptr;
 inline ShadowHookHookFn shadowhookHook = nullptr;
 inline ShadowHookUnhookFn shadowhookUnhook = nullptr;
+inline ShadowHookGetErrnoFn shadowhookGetErrno = nullptr;
 
 inline void initializeBackend() noexcept {
     std::call_once(backendInitOnce, [] {
 #if defined(__ANDROID__)
-        // Prefer an already-loaded copy (e.g. one supplied by the host client),
-        // but allow Android's linker to load a packaged libshadowhook.so too.
+        // Prefer an already-loaded copy, then try Android's normal library lookup.
         void* library = dlopen("libshadowhook.so", RTLD_NOW | RTLD_NOLOAD);
         if (!library) library = dlopen("libshadowhook.so", RTLD_NOW);
-        if (library) {
-            auto init = reinterpret_cast<ShadowHookInitFn>(
-                dlsym(library, "shadowhook_init"));
-            auto hook = reinterpret_cast<ShadowHookHookFn>(
-                dlsym(library, "shadowhook_hook_func_addr"));
-            auto unhook = reinterpret_cast<ShadowHookUnhookFn>(
-                dlsym(library, "shadowhook_unhook"));
 
-            // ShadowHook's native API uses mode 0 for shared mode. Keep the
-            // library loaded for the lifetime of its stubs.
-            if (init && hook && unhook && init(0, false) == 0) {
-                shadowhookLibrary = library;
-                shadowhookHook = hook;
-                shadowhookUnhook = unhook;
-                activeBackend = Backend::ShadowHook;
-                return;
+        // Some host clients export the API from their global symbol scope rather
+        // than exposing a separately named library handle.
+        auto resolveApi = [library](const char* name) -> void* {
+            if (library) {
+                if (void* address = dlsym(library, name)) return address;
             }
-            dlclose(library);
+            return dlsym(RTLD_DEFAULT, name);
+        };
+
+        auto init = reinterpret_cast<ShadowHookInitFn>(resolveApi("shadowhook_init"));
+        auto hook = reinterpret_cast<ShadowHookHookFn>(resolveApi("shadowhook_hook_func_addr"));
+        auto unhook = reinterpret_cast<ShadowHookUnhookFn>(resolveApi("shadowhook_unhook"));
+        auto getErrno = reinterpret_cast<ShadowHookGetErrnoFn>(resolveApi("shadowhook_get_errno"));
+
+        // Shared mode permits multiple hook clients to target the same function.
+        if (init && hook && unhook && init(0, false) == 0) {
+            shadowhookLibrary = library; // Keep an explicit handle alive for hook stubs.
+            shadowhookHook = hook;
+            shadowhookUnhook = unhook;
+            shadowhookGetErrno = getErrno;
+            activeBackend = Backend::ShadowHook;
+            return;
         }
+        if (library) dlclose(library);
 #endif
-        // Compatibility path for launchers that do not provide ShadowHook.
-        // Backend selection is process-wide for this module: do not mix
-        // backends per hook after one has been selected.
+        // Preserve compatibility when ShadowHook is not supplied by the host.
         activeBackend = Backend::Preloader;
     });
 }
@@ -98,6 +103,11 @@ inline const char* backendName() noexcept {
         case Backend::Preloader: return "Preloader";
         case Backend::Uninitialized: default: return "uninitialized";
     }
+}
+
+inline int lastShadowHookError() noexcept {
+    detail::initializeBackend();
+    return detail::shadowhookGetErrno ? detail::shadowhookGetErrno() : 0;
 }
 
 inline Handle install(void* target, void* detour, void** original) {
