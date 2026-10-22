@@ -484,16 +484,17 @@ void MaceSwapperModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
     schema.defaultCategory("combat")
-        .category("combat", "Combat", "Mace swap and fall requirements");
+        .category("combat", "Combat", "Mace swap and fall requirements")
+        .category("special", "Special", "Elytra Unglide conditions");
 
     auto slider = [&](const char* key, const char* title,
                       const char* minimum, const char* maximum,
-                      const char* step, const char* unit) {
+                      const char* step, const char* unit, const char* category) {
         ConfigNodeV2 node;
         node.id = key;
         node.key = key;
         node.title = title;
-        node.category = "combat";
+        node.category = category;
         node.type = ConfigControlTypeV2::SliderFloat;
         node.minValue = minimum;
         node.maxValue = maximum;
@@ -510,9 +511,22 @@ void MaceSwapperModule::onMenuRegistered() {
     enabledNode.type = ConfigControlTypeV2::Toggle;
     schema.node(std::move(enabledNode));
 
-    slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks");
-    slider("m_minimumFallDistance", "Minimum fall distance", "0.30", "10.0", "0.10", " blocks");
-    slider("m_attackIntervalMs", "Attack interval", "80", "1000", "10", " ms");
+    slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks", "combat");
+    slider("m_minimumFallDistance", "Minimum fall distance", "0.30", "10.0", "0.10", " blocks", "combat");
+    slider("m_attackIntervalMs", "Attack interval", "80", "1000", "10", " ms", "combat");
+
+    ConfigNodeV2 unglideEnabledNode;
+    unglideEnabledNode.id = "m_unglideEnabled";
+    unglideEnabledNode.key = "m_unglideEnabled";
+    unglideEnabledNode.title = "Enable Unglide";
+    unglideEnabledNode.description =
+        "Stop Elytra gliding only when a target is nearby and a solid floor is within the configured clearance.";
+    unglideEnabledNode.category = "special";
+    unglideEnabledNode.type = ConfigControlTypeV2::Toggle;
+    schema.node(std::move(unglideEnabledNode));
+
+    slider("m_unglideHeight", "Unglide ground clearance", "1", "24", "0.5", " blocks", "special");
+    slider("m_unglideTargetDistance", "Unglide target distance", "1", "32", "0.5", " blocks", "special");
 
     ConfigNodeV2 restoreNode;
     restoreNode.id = "m_restoreSlot";
@@ -533,11 +547,13 @@ void MaceSwapperModule::onMenuRegistered() {
 }
 
 bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
-    if (key == "m_enableMaceSwapper" || key == "m_restoreSlot") {
+    if (key == "m_enableMaceSwapper" || key == "m_restoreSlot" ||
+        key == "m_unglideEnabled") {
         const bool flag = value == "true" || value == "1" || value == "on";
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (key == "m_enableMaceSwapper") m_enableMaceSwapper = flag;
-        else m_restoreSlot = flag;
+        else if (key == "m_restoreSlot") m_restoreSlot = flag;
+        else m_unglideEnabled = flag;
         return true;
     }
     try {
@@ -552,6 +568,9 @@ bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_vi
         else if (key == "m_minimumFallDistance")
             m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(number);
         else if (key == "m_attackIntervalMs") m_attackIntervalMs = std::clamp(number, 80.0f, 1000.0f);
+        else if (key == "m_unglideHeight") m_unglideHeight = std::clamp(number, 1.0f, 24.0f);
+        else if (key == "m_unglideTargetDistance")
+            m_unglideTargetDistance = std::clamp(number, 1.0f, 32.0f);
         else return false;
         return true;
     } catch (...) {
