@@ -1,3 +1,8 @@
+## 2026-10-22 — Fix MacroDroid Spacebar dispatcher build
+- Fixed stale Key Mapper result-enum/function names left behind during the switch to the package-scoped MacroDroid broadcast; the JNI dispatcher and diagnostics now consistently use `AutomationBroadcastResult` and MacroDroid-specific result labels.
+- Android build #1108 failed at compile time on those four unresolved identifiers. Host regression tests passed before the Android compile stage; rerun CI on this fix.
+- MacroDroid delivery and actual Android Spacebar injection remain unverified until tested on the target device.
+
 ## 2026-10-22 — Android Spacebar Unglide via MacroDroid
 - Unglide now sends a package-scoped Android broadcast with action `com.wendellestumano.bedaim.UNGLIDE_SPACEBAR`. MacroDroid's exported Intent Received capability can respond with its native Input Key Event action set to Space (KEYCODE_SPACE = 62). The active Unglide path no longer calls `Mob::jumpFromGround` or `Player::stopGliding`.
 - Added guarded JNI access to the process JavaVM and application context, with throttled diagnostics for VM/context/Intent/broadcast failures. Successful `sendBroadcast` only confirms dispatch, not that a MacroDroid macro or privileged input route is enabled.
