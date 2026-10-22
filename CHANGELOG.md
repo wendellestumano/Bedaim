@@ -1,3 +1,8 @@
+## 2026-10-22 — AutoHit JNI lookup follow-up
+- The uploaded diagnostic export from the prior installed build recorded `android_java_vm_unavailable` at AutoHit dispatch, confirming that this attempt failed before broadcasting to MacroDroid.
+- Reworked AutoHit's ART symbol lookup to try `RTLD_DEFAULT`, the normal `libart.so` soname, and common APEX/system library paths instead of relying on `RTLD_NOLOAD` alone.
+- This is a targeted lookup fix, not proof of success: the latest build and device runtime still need validation. If the symbol is hidden/unavailable in the launcher's linker namespace, the next step is to obtain JavaVM from an existing JNI lifecycle/bridge rather than repeatedly probing ART.
+
 ## 2026-10-22 — Rebuild AutoHit as a minimal MacroDroid dispatcher
 - Replaced the prior target/weapon/Aim Assist/GameMode-dependent AutoHit implementation with a small dispatcher that sends the package-scoped Intent action `com.wendellestumano.bedaim.AUTOHIT_KEY0` to `com.arlosoft.macrodroid` at a configurable 1–20 CPS (default 8).
 - The module now requires only that it is enabled, a local player exists, and chat/container screens are closed; it does not call the native attack wrapper or require Aim Assist, target snapshots, weapon classification, or mouse/touch activation.
