@@ -85,6 +85,10 @@ ScreenFn chatCloseOriginal = nullptr;
 EglSwapBuffersFn swapBuffersOriginal = nullptr;
 std::atomic<void*> currentClientInstance = nullptr;
 std::atomic<void*> currentLocalPlayer = nullptr;
+// Non-null only when the installed LocalPlayer::normalTick hook has directly
+// identified its `this` pointer. A failed ClientInstance getter must not erase
+// a fresher identity captured by the tick hook.
+std::atomic<void*> g_tickCapturedLocalPlayer{nullptr};
 std::atomic<void*> currentGameMode = nullptr;
 std::atomic<void*> g_localPlayerResolveClient{nullptr};
 std::atomic<std::int64_t> g_nextLocalPlayerResolveNs{0};
@@ -1522,6 +1526,9 @@ void* tickDetour(void* actor) {
         reinterpret_cast<bool (*)(void*)>(normalTickActorClassifier)(actor);
 
     if (normalTickReceiverIsPlayer) {
+        // Publish the provenance first. If ClientInstance::update is running on
+        // another thread, its failing getter must not invalidate this capture.
+        g_tickCapturedLocalPlayer.store(actor, std::memory_order_release);
         void* previousLocal = currentLocalPlayer.exchange(actor, std::memory_order_acq_rel);
         local = actor;
         if (previousLocal != actor) {
@@ -1563,6 +1570,7 @@ void* tickDetour(void* actor) {
                 if (isPlayer) {
                     std::size_t matchedOffset = 0;
                     if (clientInstanceDirectlyOwnsPlayer(client, actor, &matchedOffset)) {
+                        g_tickCapturedLocalPlayer.store(actor, std::memory_order_release);
                         currentLocalPlayer.store(actor, std::memory_order_release);
                         local = actor;
                         char buffer[32]{};
@@ -1815,6 +1823,7 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
             clientInstance, std::memory_order_acq_rel);
         if (previous != clientInstance) {
             currentLocalPlayer.store(nullptr, std::memory_order_release);
+            g_tickCapturedLocalPlayer.store(nullptr, std::memory_order_release);
             g_localPlayerResolveClient.store(nullptr, std::memory_order_release);
             g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
             g_localPlayerTickProbeClient.store(nullptr, std::memory_order_release);
@@ -1853,7 +1862,12 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
         ? clientUpdateOriginal(clientInstance, value) : false;
 
     void* acceptedClient = currentClientInstance.load(std::memory_order_acquire);
-    if (receiverValid && acceptedClient == clientInstance &&
+    // Once LocalPlayer::normalTick has supplied its own Player* receiver,
+    // don't repeatedly call a getter known to return null for this runtime.
+    // That independent capture is refreshed by every subsequent LocalPlayer tick.
+    const bool hasTickIdentity =
+        g_tickCapturedLocalPlayer.load(std::memory_order_acquire) != nullptr;
+    if (receiverValid && acceptedClient == clientInstance && !hasTickIdentity &&
         shouldResolveLocalPlayer(acceptedClient)) {
         // Snapshot the cache before probing. If all authoritative routes fail,
         // clear only that exact cached value; a concurrent fresh capture wins.
@@ -1863,7 +1877,9 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
         if (resolvedPlayer) {
             void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
             if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
-        } else if (bedaim::core::clearCachedPointerIfUnchanged(
+        } else if (g_tickCapturedLocalPlayer.load(std::memory_order_acquire) !=
+                       currentLocalPlayer.load(std::memory_order_acquire) &&
+                   bedaim::core::clearCachedPointerIfUnchanged(
                        currentLocalPlayer, cachedBeforeResolution)) {
             currentGameMode.store(nullptr, std::memory_order_release);
             bedrocktools::diagnostics::probe(
@@ -2084,6 +2100,7 @@ void uninstall() {
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentLocalPlayer.store(nullptr, std::memory_order_release);
+    g_tickCapturedLocalPlayer.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
     g_clientUpdateIdentity.store(0, std::memory_order_release);
     g_nextLocalPlayerResolveNs.store(0, std::memory_order_release);
