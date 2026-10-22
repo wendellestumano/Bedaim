@@ -14,6 +14,7 @@
 #include "hud/potcounter.hpp"
 #include "player/quickloot.hpp"
 #include "player/aimassist.hpp"
+#include "player/autohit.hpp"
 #include "player/maceswapper.hpp"
 #include "player/swordswapper.hpp"
 #include "hud/reachcounter.hpp"
@@ -127,6 +128,7 @@ void registerAllModules() {
     registry.emplace<QuickLootModule>();
     registry.emplace<AutoSprintModule>();
     registry.emplace<AimAssistModule>();
+    registry.emplace<AutoHitModule>();
     registry.emplace<HitboxExpanderModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<SwordSwapperModule>();
