@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstring>
 #include <dlfcn.h>
+#include <jni.h>
 #include <limits>
 #include <vector>
 
@@ -99,8 +100,6 @@ float distanceToTargetBounds(bedrocktools::sdk::Player* player,
 
 using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
 using ActorIsPlayerFn = bool (*)(void*);
-using MobJumpFromGroundFn = void (*)(void*);
-using PlayerStopGlidingFn = void (*)(void*);
 using ActorGetStatusFlagFn = bool (*)(const void*, int);
 
 // Unglide resolves its own nearby-player snapshot; it does not depend on the
@@ -263,6 +262,200 @@ void* resolveTrustedGameSymbol(const char* symbol) {
     return nullptr;
 }
 
+// Moon/Key Mapper exposes a public broadcast API for triggering a configured
+// Key Map by UID. That map contains a KEY_EVENT action for Android KEYCODE_SPACE
+// (62); Key Mapper then uses its supported System Bridge/IME path to dispatch
+// ACTION_DOWN + ACTION_UP. This avoids private Binder access and any new hooks.
+constexpr const char* kMoonPackage = "io.github.sds100.keymapper";
+constexpr const char* kMoonTriggerReceiver =
+    "io.github.sds100.keymapper.api.TriggerKeyMapsBroadcastReceiver";
+constexpr const char* kMoonTriggerAction =
+    "io.github.sds100.keymapper.ACTION_TRIGGER_KEYMAP_BY_UID";
+constexpr const char* kMoonTriggerUidExtra =
+    "io.github.sds100.keymapper.EXTRA_KEYMAP_UID";
+constexpr const char* kBedaimSpacebarKeyMapUid =
+    "8cfe3591-a1e8-44f0-9a9a-5ea6f745d24a";
+
+using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
+
+JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
+    static void* artHandle = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
+    static auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    if (!getVms && artHandle) {
+        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+            dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+    }
+    return getVms;
+}
+
+class ScopedJniEnvironment {
+public:
+    ScopedJniEnvironment() {
+        const auto getVms = resolveJniGetCreatedJavaVMs();
+        if (!getVms) return;
+
+        JavaVM* vm = nullptr;
+        jsize vmCount = 0;
+        if (getVms(&vm, 1, &vmCount) != JNI_OK || vmCount < 1 || !vm) return;
+        mVm = vm;
+
+        const jint status = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
+        if (status == JNI_OK) return;
+        if (status != JNI_EDETACHED) {
+            mEnv = nullptr;
+            return;
+        }
+
+        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) {
+            mAttached = true;
+        } else {
+            mEnv = nullptr;
+        }
+    }
+
+    ~ScopedJniEnvironment() {
+        if (mAttached && mVm) mVm->DetachCurrentThread();
+    }
+
+    JNIEnv* get() const noexcept { return mEnv; }
+
+private:
+    JavaVM* mVm = nullptr;
+    JNIEnv* mEnv = nullptr;
+    bool mAttached = false;
+};
+
+class ScopedJniLocalFrame {
+public:
+    explicit ScopedJniLocalFrame(JNIEnv* env) : mEnv(env) {
+        mReady = mEnv && mEnv->PushLocalFrame(32) == JNI_OK;
+        if (!mReady && mEnv && mEnv->ExceptionCheck()) mEnv->ExceptionClear();
+    }
+    ~ScopedJniLocalFrame() {
+        if (mReady) mEnv->PopLocalFrame(nullptr);
+    }
+    bool ready() const noexcept { return mReady; }
+private:
+    JNIEnv* mEnv = nullptr;
+    bool mReady = false;
+};
+
+enum class MoonBroadcastResult {
+    Sent,
+    JavaVmUnavailable,
+    ApplicationContextUnavailable,
+    IntentApiUnavailable,
+    BroadcastFailed,
+};
+
+bool clearJniException(JNIEnv* env) {
+    if (!env || !env->ExceptionCheck()) return false;
+    env->ExceptionClear();
+    return true;
+}
+
+MoonBroadcastResult dispatchMoonSpacebarKeyMap() {
+    ScopedJniEnvironment jni;
+    JNIEnv* env = jni.get();
+    if (!env) return MoonBroadcastResult::JavaVmUnavailable;
+    ScopedJniLocalFrame localFrame(env);
+    if (!localFrame.ready()) return MoonBroadcastResult::IntentApiUnavailable;
+
+    jobject application = nullptr;
+    jclass activityThread = env->FindClass("android/app/ActivityThread");
+    if (activityThread && !clearJniException(env)) {
+        jmethodID currentApplication = env->GetStaticMethodID(
+            activityThread, "currentApplication", "()Landroid/app/Application;");
+        if (currentApplication && !clearJniException(env)) {
+            application = env->CallStaticObjectMethod(activityThread, currentApplication);
+            if (clearJniException(env)) application = nullptr;
+        } else {
+            clearJniException(env);
+        }
+    } else {
+        clearJniException(env);
+    }
+
+    // Some Android builds expose this equivalent accessor more reliably.
+    if (!application) {
+        jclass appGlobals = env->FindClass("android/app/AppGlobals");
+        if (appGlobals && !clearJniException(env)) {
+            jmethodID initialApplication = env->GetStaticMethodID(
+                appGlobals, "getInitialApplication", "()Landroid/app/Application;");
+            if (initialApplication && !clearJniException(env)) {
+                application = env->CallStaticObjectMethod(appGlobals, initialApplication);
+                if (clearJniException(env)) application = nullptr;
+            } else {
+                clearJniException(env);
+            }
+        } else {
+            clearJniException(env);
+        }
+    }
+    if (!application) return MoonBroadcastResult::ApplicationContextUnavailable;
+
+    jclass intentClass = env->FindClass("android/content/Intent");
+    if (!intentClass || clearJniException(env))
+        return MoonBroadcastResult::IntentApiUnavailable;
+
+    jmethodID intentConstructor = env->GetMethodID(intentClass, "<init>", "()V");
+    jmethodID setAction = env->GetMethodID(
+        intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
+    jmethodID setClassName = env->GetMethodID(
+        intentClass, "setClassName",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
+    jmethodID putExtra = env->GetMethodID(
+        intentClass, "putExtra",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearJniException(env) || !intentConstructor || !setAction || !setClassName || !putExtra)
+        return MoonBroadcastResult::IntentApiUnavailable;
+
+    jobject intent = env->NewObject(intentClass, intentConstructor);
+    if (!intent || clearJniException(env))
+        return MoonBroadcastResult::IntentApiUnavailable;
+
+    jstring action = env->NewStringUTF(kMoonTriggerAction);
+    jstring packageName = env->NewStringUTF(kMoonPackage);
+    jstring receiverName = env->NewStringUTF(kMoonTriggerReceiver);
+    jstring extraName = env->NewStringUTF(kMoonTriggerUidExtra);
+    jstring keyMapUid = env->NewStringUTF(kBedaimSpacebarKeyMapUid);
+    if (!action || !packageName || !receiverName || !extraName || !keyMapUid ||
+        clearJniException(env)) {
+        return MoonBroadcastResult::IntentApiUnavailable;
+    }
+
+    env->CallObjectMethod(intent, setAction, action);
+    if (clearJniException(env)) return MoonBroadcastResult::IntentApiUnavailable;
+    env->CallObjectMethod(intent, setClassName, packageName, receiverName);
+    if (clearJniException(env)) return MoonBroadcastResult::IntentApiUnavailable;
+    env->CallObjectMethod(intent, putExtra, extraName, keyMapUid);
+    if (clearJniException(env)) return MoonBroadcastResult::IntentApiUnavailable;
+
+    jclass contextClass = env->FindClass("android/content/Context");
+    if (!contextClass || clearJniException(env))
+        return MoonBroadcastResult::IntentApiUnavailable;
+    jmethodID sendBroadcast = env->GetMethodID(
+        contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
+    if (!sendBroadcast || clearJniException(env))
+        return MoonBroadcastResult::IntentApiUnavailable;
+
+    env->CallVoidMethod(application, sendBroadcast, intent);
+    if (clearJniException(env)) return MoonBroadcastResult::BroadcastFailed;
+    return MoonBroadcastResult::Sent;
+}
+
+const char* moonBroadcastResultName(MoonBroadcastResult result) {
+    switch (result) {
+        case MoonBroadcastResult::Sent: return "keymapper_broadcast_sent";
+        case MoonBroadcastResult::JavaVmUnavailable: return "android_java_vm_unavailable";
+        case MoonBroadcastResult::ApplicationContextUnavailable: return "android_context_unavailable";
+        case MoonBroadcastResult::IntentApiUnavailable: return "android_intent_api_unavailable";
+        case MoonBroadcastResult::BroadcastFailed: return "keymapper_broadcast_failed";
+    }
+    return "keymapper_broadcast_unknown";
+}
+
 ActorGetStatusFlagFn resolveActorGetStatusFlag() {
     static ActorGetStatusFlagFn function = nullptr;
     if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
@@ -283,29 +476,6 @@ bool playerIsGlidingForUnglide(void* player) {
     }
     return actorIsGliding(player);
 }
-
-MobJumpFromGroundFn resolveMobJumpFromGround() {
-    static MobJumpFromGroundFn function = nullptr;
-    if (!function) function = reinterpret_cast<MobJumpFromGroundFn>(
-        resolveTrustedGameSymbol("_ZN3Mob14jumpFromGroundEv"));
-    return function;
-}
-
-PlayerStopGlidingFn resolvePlayerStopGliding() {
-    static PlayerStopGlidingFn function = nullptr;
-    if (!function) {
-        const char* symbols[] = {
-            "_ZN6Player11stopGlidingEv",
-            "_ZN11LocalPlayer11stopGlidingEv"
-        };
-        for (const char* symbol : symbols) {
-            function = reinterpret_cast<PlayerStopGlidingFn>(resolveTrustedGameSymbol(symbol));
-            if (function) break;
-        }
-    }
-    return function;
-}
-
 
 }
 
@@ -510,9 +680,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Unglide is independent from Aim Assist and the mace-swap/attack toggle.
-    // Detect a nearby player, then request the actual native jump action (the
-    // equivalent movement operation to pressing Space). StopGliding is a fallback.
+    // Unglide uses an Android KEYCODE_SPACE Key Map in Moon/Key Mapper.
+    // This sends the public ACTION_TRIGGER_KEYMAP_BY_UID broadcast; Key Mapper
+    // performs the actual ACTION_DOWN/ACTION_UP through its supported input path.
     if (m_unglideEnabled) {
         const auto now = std::chrono::steady_clock::now();
         auto reportUnglideGate = [&](const char* state, const std::string& details) {
@@ -542,27 +712,16 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
                     reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
                 } else {
-                    const auto jumpFromGround = resolveMobJumpFromGround();
-                    const auto stopGliding = resolvePlayerStopGliding();
-
-                    // Attempt both: a few game builds expose one API but not the other.
-                    if (jumpFromGround) jumpFromGround(player);
-                    if (stopGliding) stopGliding(player);
-
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(650);
-                    if (jumpFromGround || stopGliding) {
-                        const char* state = jumpFromGround && stopGliding
-                            ? "jump_and_stop_gliding_requested"
-                            : jumpFromGround ? "jump_from_ground_requested"
-                                             : "stop_gliding_fallback_requested";
-                        reportUnglideGate(state,
-                            std::string("target_distance=") + std::to_string(target.distance) +
-                                ", target_distance_limit=" + std::to_string(m_unglideTargetDistance));
-                    } else {
-                        m_nextUnglideAttempt = now + std::chrono::milliseconds(1500);
-                        reportUnglideGate("native_jump_unavailable",
-                            "Mob::jumpFromGround and Player::stopGliding are not exported by this runtime.");
-                    }
+                    const auto result = dispatchMoonSpacebarKeyMap();
+                    // A successful sendBroadcast confirms Android accepted the
+                    // request, not that the map/injection path was enabled.
+                    reportUnglideGate(
+                        moonBroadcastResultName(result),
+                        std::string("target_distance=") + std::to_string(target.distance) +
+                            ", keymap_uid=" + kBedaimSpacebarKeyMapUid +
+                            ", ensure the Bedaim Spacebar Key Map is imported/enabled and Moon's System Bridge is active.");
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(
+                        result == MoonBroadcastResult::Sent ? 650 : 1500);
                     return;
                 }
             }
