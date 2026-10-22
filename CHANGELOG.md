@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-10-22 — Namespace-safe Aim Assist weapon classification
+
+- Classify the item path after the namespace separator, not the namespace itself.
+- Match complete weapon tokens so unrelated identifiers such as `bowcraft:staff`, `axe_pack:apple`, and `rainbow_staff` fail closed.
+- Added host regression cases for namespace collisions, substring false positives, hyphen-delimited names, and normal vanilla weapon identifiers. Runtime item-ID coverage remains necessary.
+
 ## 2026-10-22 — Testable Aim Assist held-weapon classification
 
 - Extracted item-identifier matching into a pure policy helper so weapon classification order can be verified with host tests without touching game memory.
