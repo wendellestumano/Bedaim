@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-22 — Sample-driven Aim Assist weapon policy
+
+- Used the supplied Bedrock Samples v1.26.50.4 item definitions to correct Aim Assist: the "Ranged" prediction profile no longer leads Spears as if they were projectiles. The shipped wooden, copper, golden, stone, iron, diamond, and netherite spear definitions use piercing/kinetic weapon components and minecraft:is_spear tags.
+- Moved held-weapon prediction policy into a pure header and added host regression checks for bow, crossbow, trident, spear, melee, and tool categories.
+- Fixed the cached weapon enum upper bound so Tool remains Tool instead of being clamped into OtherMelee, which could apply the wrong per-weapon aim point and speed profile.
+
+## 2026-10-22 — Retire AutoHit/AutoTotem and gate Elytra displacement
+
+- Removed AutoHit and AutoTotem from module registration and excluded their implementation files from the packaged native library, restoring the prior build without those experimental modules.
+- Elytra distance dislocation now requires Elytra Mode enabled, the local player actually gliding, and Sticky tracking. Actual glide state is no longer erased merely because the special Elytra-mode toggle is off.
+- Fixed gliding detection to search the bounded synchronized entity-data vector for the flags item instead of assuming it is always the first item; added host regression coverage for the Elytra/flight/Sticky gates.
+
+## 2026-10-22 — Elytra distance dislocation, Mace Unglide, and regression checks
+
+- Added **Elytra Distance Dislocate Strength** to Aim Assist's **Special** category. While Elytra Mode is enabled and the local player is actually gliding, the aim point now shifts downward in proportion to full 3D target distance, with configurable strength and a strict clamp to the target's real bounds. Removed the old hard-coded 7–8 block-only offset.
+- Kept Aim Assist active while gliding instead of returning before it can apply the Elytra-specific aim point.
+- Added Mace Swapper **Enable Unglide**, **Unglide ground clearance**, and **Unglide target distance** controls in **Special**. Unglide requires a fresh Aim Assist target, actual local-player gliding, a target within range, and a detected solid floor within the configured clearance. Player::stopGliding is resolved dynamically; if the runtime does not export it, the action is skipped and diagnosed rather than writing guessed flags or offsets.
+- Persisted and clamped the new settings, added a retry throttle and diagnostic reasons, and added host regression tests for Elytra dislocation math, Unglide gating, and native GameType normalization.
+- Aim Assist now tries the trusted exported `Actor::isAttackableGamemode()` method first, matching the attackability check used by Apollon; if it is unavailable, the existing GameType getter/setter-cache path remains the fallback. No Apollon version-specific offsets were copied. Both native lookup paths still require confirmation against the device's current Minecraft binary.
+- Fixed an Aim Assist configuration inconsistency: duplicate reads after the legacy m_hitboxDistanceGrowth migration overwrote the migrated value. The effective range now consistently supports 0.1–500, and the legacy slider bounds for hitbox growth and rotation speed match the supported 500/1000 maxima.
+- **Validation pending:** run host regression targets, Android ARM64 package build, CI, and in-game tests. The pure GameType test verifies enum normalization only; it does not prove that the current game's getter or setter observer resolves at runtime. The Unglide native symbol also needs confirmation in the target runtime.
+
+
 ## 2026-10-17 — Restore known-good player tick dispatch
 
 - Compared the supplied BedrockTools 1.5.7 `.levipack` with the current source. The working implementation publishes `LocalPlayerPreTickEvent` and `LocalPlayerTickEvent` directly from the `NormalTick` hook.

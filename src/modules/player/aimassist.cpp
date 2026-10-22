@@ -1,5 +1,6 @@
 #include "aimassist.hpp"
 #include "AimAssistMath.hpp"
+#include "AimAssistPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
@@ -115,20 +116,28 @@ bool actorIsGliding(void* actor) {
     if (endAddress < beginAddress ||
         (endAddress - beginAddress) % sizeof(void*) != 0 ||
         (endAddress - beginAddress) / sizeof(void*) > 192) return false;
-    if (begin == end) return false;
 
-    void* item = begin[0];
-    if (!item) return false;
+    // Synchronized data items are not guaranteed to keep the flags item at index 0.
+    // Search the bounded vector for the Flags item (type 7, id 0) instead of treating
+    // an unrelated first item as proof that the player is not gliding.
+    const auto itemCount = (endAddress - beginAddress) / sizeof(void*);
+    for (std::size_t index = 0; index < itemCount; ++index) {
+        void* item = begin[index];
+        if (!item) continue;
 
-    const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
-    const auto type = *reinterpret_cast<const std::uint8_t*>(itemAddress + offsets::DataItem::mType);
-    const auto id = *reinterpret_cast<const std::uint16_t*>(itemAddress + offsets::DataItem::mId);
-    if (type != 7 || id != 0) return false;
+        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
+        if (itemAddress <= 0x1000) continue;
+        const auto type = *reinterpret_cast<const std::uint8_t*>(itemAddress + offsets::DataItem::mType);
+        const auto id = *reinterpret_cast<const std::uint16_t*>(itemAddress + offsets::DataItem::mId);
+        if (type != 7 || id != 0) continue;
 
-    std::uint64_t flags = 0;
-    std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue), sizeof(flags));
-    constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-    return (flags & kGlidingFlag) != 0;
+        std::uint64_t flags = 0;
+        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue),
+                    sizeof(flags));
+        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
+        return (flags & kGlidingFlag) != 0;
+    }
+    return false;
 }
 
 bool validBounds(const bedrocktools::sdk::AABB& bounds) {
@@ -281,9 +290,7 @@ bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist
     return false;
 }
 
-enum class HeldWeapon {
-    None, Sword, Axe, Mace, Bow, Crossbow, Trident, Spear, OtherMelee, Tool
-};
+using HeldWeapon = bedaim::aimpolicy::HeldWeapon;
 
 HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
     if (!player) return HeldWeapon::None;
@@ -491,6 +498,8 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "fov") m_fov = std::clamp(number, 1.0f, 360.0f);
     else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
+    else if (key == "m_elytraDistanceDislocateStrength")
+        m_elytraDistanceDislocateStrength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
     else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
     else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
@@ -537,6 +546,16 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
         "BedrockAim", "target_snapshot", "fresh");
     bounds = m_lastTargetBounds;
     return true;
+}
+
+bool AimAssistModule::currentTargetIsPlayerSnapshot(void* desiredTarget) {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    const auto now = std::chrono::steady_clock::now();
+    return enabled && desiredTarget && desiredTarget == m_lastTarget &&
+        m_targetPresent && m_lastTargetIsPlayer && validBounds(m_lastTargetBounds) &&
+        m_lastTargetSeen.time_since_epoch().count() != 0 &&
+        now >= m_lastTargetSeen &&
+        now - m_lastTargetSeen <= std::chrono::milliseconds(250);
 }
 
 bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
@@ -806,11 +825,18 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (isPlayer) {
             if (!m_targetPlayers) continue;
             if (m_ignoreCreativeSpectator) {
-                std::int32_t gameType = -1;
-                if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
-                    if (gameType == 1 || gameType == 3) continue;
-                } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                    aimAssistLogger().warn("Creative/Spectator filter unavailable: no verified GameType export; those players may still be eligible.");
+                bool isAttackable = true;
+                if (bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(
+                        candidate, isAttackable)) {
+                    if (!isAttackable) continue;
+                } else {
+                    std::int32_t gameType = -1;
+                    if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
+                        if (gameType == 1 || gameType == 3) continue;
+                    } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
+                        aimAssistLogger().warn(
+                            "Creative/Spectator filter unavailable: native attackability and GameType lookup both unresolved; those players may still be eligible.");
+                    }
                 }
             }
         } else {
@@ -1037,6 +1063,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 }
 
 
+bool AimAssistModule::localPlayerIsGliding() {
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    return m_lastPlayer && actorIsGliding(m_lastPlayer);
+}
+
 void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     auto* player = m_lastPlayer;
@@ -1062,14 +1093,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     if (!enabled || !player) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
-    m_localPlayerGliding = m_elytraMode && actorIsGliding(player);
-    // Yield camera control completely to the player while Elytra mode is gliding.
-    if (m_elytraMode && m_localPlayerGliding) {
-        m_hasAimPoint = false;
-        m_lastAssistYawDelta = 0.0f;
-        m_lastAssistPitchDelta = 0.0f;
-        return;
-    }
+    // Preserve actual gliding state for target selection; Elytra mode and Sticky
+    // are separate gates for the special aim-point dislocation below.
+    m_localPlayerGliding = actorIsGliding(player);
     const auto now = std::chrono::steady_clock::now();
 
     auto* rotationComponent = player->rotationComponent();
@@ -1135,11 +1161,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     const AABB nativeBounds = m_lastTargetBounds;
     const HeldWeapon weaponForPrediction = static_cast<HeldWeapon>(std::clamp(
-        m_cachedHeldWeaponCode, 0, static_cast<int>(HeldWeapon::OtherMelee)));
-    const bool rangedWeapon = weaponForPrediction == HeldWeapon::Bow ||
-        weaponForPrediction == HeldWeapon::Crossbow ||
-        weaponForPrediction == HeldWeapon::Trident ||
-        weaponForPrediction == HeldWeapon::Spear;
+        m_cachedHeldWeaponCode, 0, static_cast<int>(HeldWeapon::Tool)));
+    const bool rangedWeapon = bedaim::aimpolicy::isRangedPredictionWeapon(weaponForPrediction);
     const bool usePrediction = m_predictionMode == "All" ||
         (m_predictionMode == "Ranged" && rangedWeapon);
 
@@ -1223,6 +1246,23 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         centerAimPoint = {selectedAnchor.x, selectedAnchor.y, selectedAnchor.z};
     }
 
+    // Use the full 3D separation so altitude differences count as well as horizontal
+    // distance. Keep the point inside the target's real hitbox; dislocation is only
+    // an aim preference, never an expanded hit/attack volume.
+    const bool stickyMode = (m_trackingMode == "Grudado");
+    bool elytraDislocationActive = false;
+    if (bedaim::aimmath::shouldApplyElytraDistanceDislocation(
+            m_elytraMode, m_localPlayerGliding, stickyMode)) {
+        const float targetDistanceForDislocation =
+            std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
+        const float requestedDislocation = bedaim::aimmath::elytraDistanceDislocation(
+            targetDistanceForDislocation, m_elytraDistanceDislocateStrength);
+        const float availableDrop = std::max(0.0f, centerAimPoint.y - targetAimBounds.min.y);
+        const float appliedDislocation = std::min(requestedDislocation, availableDrop);
+        centerAimPoint.y -= appliedDislocation;
+        elytraDislocationActive = appliedDislocation > 1.0e-4f;
+    }
+
     const float toCenterX = boundsCenter.x - eyePosition.x;
     const float toCenterY = boundsCenter.y - eyePosition.y;
     const float toCenterZ = boundsCenter.z - eyePosition.z;
@@ -1247,7 +1287,6 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         (bounds.max.z - bounds.min.z) * 0.5f * hitboxScale
     };
 
-    const bool stickyMode = (m_trackingMode == "Grudado");
     const bool adaptiveMode = (m_trackingMode == "Adaptativo");
     const AABB scaledAimBounds{
         {boundsCenter.x - halfExtents.x, boundsCenter.y - halfExtents.y,
@@ -1266,7 +1305,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float verticalAimTolerance = std::max(0.05f, nativeTargetHeight * 0.08f);
     const bool viewIsAtSelectedAimHeight =
         std::abs(projectedPoint.y - centerAimPoint.y) <= verticalAimTolerance;
-    if (!stickyMode && viewIsAtSelectedAimHeight &&
+    if (!stickyMode && !elytraDislocationActive && viewIsAtSelectedAimHeight &&
         rayIntersectsAABB(eyePosition, viewDirection, scaledAimBounds)) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = now;
@@ -1288,12 +1327,6 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         centerAimPoint.z + (clampedSlidePoint.z - centerAimPoint.z) * kHitboxSlideBlend
     };
 
-    const float targetDistance = std::sqrt(distanceSquared(eyePosition, centerAimPoint));
-    if (m_elytraMode && m_localPlayerGliding && std::isfinite(targetDistance) &&
-        targetDistance >= 7.0f && targetDistance <= 8.0f) {
-        const float targetHeight = targetAimBounds.max.y - targetAimBounds.min.y;
-        slidePoint.y -= std::clamp(targetHeight * 0.15f, 0.12f, 0.28f);
-    }
     // The scaled AABB controls the soft-lock/sliding region, but the actual aim
     // point must remain inside Bedrock's real bounds or a hit can miss entirely.
     slidePoint.x = std::clamp(slidePoint.x, targetAimBounds.min.x, targetAimBounds.max.x);
@@ -1434,6 +1467,8 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_aimMode = j.value("m_aimMode", m_aimMode);
     m_trackingMode = j.value("m_trackingMode", m_trackingMode);
     m_elytraMode = j.value("m_elytraMode", m_elytraMode);
+    m_elytraDistanceDislocateStrength = std::clamp(
+        j.value("m_elytraDistanceDislocateStrength", m_elytraDistanceDislocateStrength), 0.0f, 1.0f);
     m_naturalization = j.value("m_naturalization", m_naturalization);
     m_naturalizationWeapon = j.value("m_naturalizationWeapon", m_naturalizationWeapon);
     m_targetSelectionMode = j.value("m_targetSelectionMode", m_targetSelectionMode);
@@ -1505,7 +1540,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
             migratedHitboxGrowth = 5.0f;
     }
-    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 200.0f);
+    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 500.0f);
     m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
@@ -1517,9 +1552,6 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     if (m_predictionMode != "Off" && m_predictionMode != "Ranged" && m_predictionMode != "All")
         m_predictionMode = "Ranged";
     m_predictionLeadMs = std::clamp(j.value("m_predictionLeadMs", m_predictionLeadMs), 0.0f, 300.0f);
-    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.30f, 50.0f);
-    m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
-    m_hitboxDistanceGrowth = std::clamp(j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth), 0.1f, 500.0f);
     m_fourPointAiming = j.value("m_fourPointAiming", m_fourPointAiming);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
@@ -1552,6 +1584,7 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_aimMode"] = m_aimMode;
     j["m_trackingMode"] = m_trackingMode;
     j["m_elytraMode"] = m_elytraMode;
+    j["m_elytraDistanceDislocateStrength"] = m_elytraDistanceDislocateStrength;
     j["m_naturalization"] = m_naturalization;
     j["m_naturalizationWeapon"] = m_naturalizationWeapon;
     j["m_weaponOnly"] = m_weaponOnly;

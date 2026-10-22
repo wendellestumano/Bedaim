@@ -264,7 +264,10 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
             {"Spear","Spear"},{"Other melee","Other melee"},{"Tools","Tools"}},
            ConfigChoiceStyleV2::Dropdown);
     toggle("m_elytraMode", "Elytra mode", "special",
-           "Enable small aim-point corrections while gliding.");
+           "Keep Aim Assist active during Elytra gliding and apply the configured downward distance dislocation.");
+    slider("m_elytraDistanceDislocateStrength", "Elytra Distance Dislocate Strength", "special",
+           "0", "1", "0.01", "blocks/block",
+           "Increase downward aim-point displacement with full 3D target distance while gliding; 0 disables it.");
 
     if (!setConfigSchemaJson(moduleId, schema.toJson())) {
         // Legacy controls remain registered as a fallback when a loader version
@@ -426,6 +429,9 @@ private:
                     registerAimAssistConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Hitbox Expander") {
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
+                } else if (entry.first == "bedrocktools.Mace Swapper") {
+                    if (auto* module = ModuleRegistry::get().find(entry.first))
+                        module->onMenuRegistered();
                 } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
                     registerUltrakillHudConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Module Diagnostics") {
@@ -448,6 +454,7 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                                                const nlohmann::json& snapshot) {
     if (!mod || (mod->moduleId != "bedrocktools.Aim Assist" &&
                  mod->moduleId != "bedrocktools.Hitbox Expander" &&
+                 mod->moduleId != "bedrocktools.Mace Swapper" &&
                  mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
                  mod->moduleId != "bedrocktools.Module Diagnostics")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
@@ -527,6 +534,9 @@ void registerModulesWithLauncher() {
                 else if (k == "m_minimumFallDistance") displayName = "MACEFALL > Minimum fall distance (blocks)";
                 else if (k == "m_attackIntervalMs") displayName = "MACEFALL > Attack interval (ms)";
                 else if (k == "m_restoreSlot") displayName = "MACEFALL > Restore previous slot";
+                else if (k == "m_unglideEnabled") displayName = "MACEFALL > Enable Unglide";
+                else if (k == "m_unglideHeight") displayName = "MACEFALL > Unglide ground clearance (blocks)";
+                else if (k == "m_unglideTargetDistance") displayName = "MACEFALL > Unglide target distance (blocks)";
             }
             if (mod->moduleId == "bedrocktools.Sword Swapper") {
                 if (k == "m_attackRange") displayName = "SHIFTBLADE > Attack range";
@@ -547,6 +557,8 @@ void registerModulesWithLauncher() {
                 else if (k == "m_trackingMode") displayName = "BEDROCK AIM > Tracking mode";
                 else if (k == "m_naturalization") displayName = "BEDROCK AIM > Naturalization during jumps";
                 else if (k == "m_naturalizationWeapon") displayName = "BEDROCK AIM > Naturalization weapon";
+                else if (k == "m_elytraDistanceDislocateStrength")
+                    displayName = "SPECIAL > Elytra Distance Dislocate Strength";
                 else if (k == "m_fov") displayName = "BEHAVIOR > FOV";
                 else if (k == "m_targetSwitchHysteresis") displayName = "TARGETING > Crosshair switch stability";
                 else if (k == "m_targetSwitchDistanceMargin") displayName = "TARGETING > Distance switch margin";
@@ -638,6 +650,15 @@ void registerModulesWithLauncher() {
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackintervalms") {
                     minVal = 80.0f;
                     maxVal = 1000.0f;
+                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_unglideheight") {
+                    minVal = 1.0f;
+                    maxVal = 24.0f;
+                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_unglidetargetdistance") {
+                    minVal = 1.0f;
+                    maxVal = 32.0f;
+                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_elytradistancedislocatestrength") {
+                    minVal = 0.0f;
+                    maxVal = 1.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") {
                     minVal = 0.0f;
                     maxVal = 1.0f;
@@ -649,10 +670,10 @@ void registerModulesWithLauncher() {
                     maxVal = 50.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxdistancegrowth") {
                     minVal = 0.1f;
-                    maxVal = 200.0f;
+                    maxVal = 500.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_rotationspeed") {
                     minVal = 0.1f;
-                    maxVal = 200.0f;
+                    maxVal = 1000.0f;
                 } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchhysteresis") {
                     minVal = 0.0f;
                     maxVal = 12.0f;
@@ -752,7 +773,9 @@ void registerModulesWithLauncher() {
 
         if (mod->moduleId == "bedrocktools.Mace Swapper") {
             const std::vector<std::string> priority = {
-                "m_enableMaceSwapper", "m_minimumFallDistance", "m_attackRange", "m_attackIntervalMs", "m_restoreSlot"
+                "m_enableMaceSwapper", "m_minimumFallDistance", "m_attackRange",
+                "m_attackIntervalMs", "m_restoreSlot", "m_unglideEnabled",
+                "m_unglideHeight", "m_unglideTargetDistance"
             };
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
@@ -786,7 +809,7 @@ void registerModulesWithLauncher() {
                 "m_targetRetentionRadius", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",
                 "m_weaponBow", "m_weaponCrossbow", "m_weaponTrident", "m_weaponSpear",
-                "m_weaponOtherMelee", "m_elytraMode"
+                "m_weaponOtherMelee", "m_elytraMode", "m_elytraDistanceDislocateStrength"
             };
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);

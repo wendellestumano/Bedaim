@@ -49,3 +49,15 @@ target("autototem_policy_test")
     add_includedirs("../src")
 target_end()
 
+target("mace_unglide_policy_test")
+    set_kind("binary")
+    add_files("launcher/mace_unglide_policy_test.cpp")
+    add_includedirs("../src")
+target_end()
+
+target("player_game_type_test")
+    set_kind("binary")
+    add_files("launcher/player_game_type_test.cpp")
+    add_includedirs("../src")
+target_end()
+
