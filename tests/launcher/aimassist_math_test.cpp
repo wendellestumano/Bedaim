@@ -106,6 +106,24 @@ int main() {
           "melee weapon classes do not use ranged-only prediction");
     check(!isRangedPredictionWeapon(HeldWeapon::Tool),
           "tool category stays distinct and does not inherit other-melee prediction");
+
+    using bedaim::aimpolicy::classifyHeldWeaponIdentifier;
+    check(classifyHeldWeaponIdentifier("minecraft:diamond_sword") == HeldWeapon::Sword,
+          "vanilla sword item identifier selects Sword");
+    check(classifyHeldWeaponIdentifier("minecraft:crossbow") == HeldWeapon::Crossbow,
+          "Crossbow is classified before the generic Bow substring");
+    check(classifyHeldWeaponIdentifier("minecraft:diamond_pickaxe") == HeldWeapon::Tool,
+          "Pickaxe is classified as a tool before generic Axe matching");
+    check(classifyHeldWeaponIdentifier("addon:war_axe") == HeldWeapon::Axe,
+          "custom axe item identifier maps to Axe");
+    check(classifyHeldWeaponIdentifier("addon:katana") == HeldWeapon::OtherMelee,
+          "known custom melee identifiers retain OtherMelee classification");
+    check(classifyHeldWeaponIdentifier("addon:war_spear") == HeldWeapon::Spear,
+          "spear identifier maps to the spear category");
+    check(classifyHeldWeaponIdentifier("") == HeldWeapon::None,
+          "empty item identifier fails closed");
+    // Weapon classification uses ordered substring matching against runtime item IDs;
+    // policy tests above ensure its result can be passed to the ranged predicate safely.
     check(shouldApplyElytraDistanceDislocation(true, true, true),
           "Elytra dislocation is allowed only when enabled, actively gliding, and Sticky");
     check(!shouldApplyElytraDistanceDislocation(false, true, true),

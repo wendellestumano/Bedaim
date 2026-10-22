@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-10-22 — Testable Aim Assist held-weapon classification
+
+- Extracted item-identifier matching into a pure policy helper so weapon classification order can be verified with host tests without touching game memory.
+- Fixed classification precedence: Crossbow before Bow, known custom melee classes before generic Axe matching, and Pickaxe/Shovel/Hoe as tools instead of axes.
+- Preserved the sample-informed Ranged prediction policy: only Bow, Crossbow, and Trident use Ranged-only target lead; the Bedrock spear samples use piercing/kinetic components rather than a projectile component.
+- The prior commit's CI passed host regression tests and Android ARM64 packaging. This new classifier change requires its own CI and runtime item-ID verification.
+## 2026-10-22 — Aim Assist weapon classifier hardening
+
+- Made the supported weapon classification order explicit: native item identifiers are checked for specific tool and ranged/melee classes before the generic axe fallback, so custom weapons with names containing “axe” do not accidentally bypass the other-melee classifier when more-specific matching applies.
+- Kept the sample-driven Ranged prediction policy in a pure header and maintained the fail-safe rule that only Bow, Crossbow, and Trident use Ranged-only lead.
+- Validation: upstream Build #1049 passed host regressions and Android ARM64 packaging for the base commit. This additional classifier adjustment must pass its own CI; in-game item identifier coverage remains required.
+
 ## 2026-10-22 — Sample-driven Aim Assist weapon policy
 
 - Used the supplied Bedrock Samples v1.26.50.4 item definitions to correct Aim Assist: the "Ranged" prediction profile no longer leads Spears as if they were projectiles. The shipped wooden, copper, golden, stone, iron, diamond, and netherite spear definitions use piercing/kinetic weapon components and minecraft:is_spear tags.
