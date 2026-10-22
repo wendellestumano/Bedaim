@@ -1,3 +1,8 @@
+## 2026-10-22 — Elytra Aim and Gamemode Checker
+- Exposed Aim Assist's existing Elytra Mode and distance-based downward aim displacement controls in the settings UI; the mode toggle accepts true/false and persists through the existing config.
+- Added Gamemode Checker player overlay with bounded actor enumeration, explicit Unknown handling when native mode information is unavailable, and colors: Spectator purple, Creative red, Survival white, Adventure blue.
+- Gamemode detection uses the existing GameHooks GameType and attackability APIs; no speculative offsets were introduced.
+
 # Changelog
 
 ## 2026-10-22 — Testable Aim Assist held-weapon classification
