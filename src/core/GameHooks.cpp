@@ -286,20 +286,37 @@ void* resolveMinecraftFunction(const char* name) {
 
 void* resolveLoadedClientSupportFunction(const char* name) {
     if (!name || !*name) return nullptr;
-    void* address = dlsym(RTLD_DEFAULT, name);
-    if (!address) return nullptr;
 
-    Dl_info info{};
-    if (!dladdr(address, &info) || !info.dli_fname) return nullptr;
-    const std::string_view libraryPath(info.dli_fname);
-    // closeContainerScreen is a client-SDK helper on some distributions, not
-    // necessarily a symbol in libminecraftpe.so. Accept it only from a known
-    // loaded Bedrock/LeviLamina runtime image, never from an arbitrary module.
-    const bool trustedImage =
-        libraryPath.find("libminecraftpe.so") != std::string_view::npos ||
-        libraryPath.find("liblevilamina.so") != std::string_view::npos ||
-        libraryPath.find("libLeviLamina.so") != std::string_view::npos;
-    return trustedImage ? address : nullptr;
+    auto trustedImage = [](void* candidate) {
+        if (!candidate) return false;
+        Dl_info info{};
+        if (!dladdr(candidate, &info) || !info.dli_fname) return false;
+        const std::string_view path(info.dli_fname);
+        return path.find("libminecraftpe.so") != std::string_view::npos ||
+            path.find("liblevilamina.so") != std::string_view::npos ||
+            path.find("libLeviLamina.so") != std::string_view::npos;
+    };
+
+    void* address = dlsym(RTLD_DEFAULT, name);
+    if (trustedImage(address)) return address;
+
+    // RTLD_DEFAULT can omit symbols from a loaded support library when its
+    // linker visibility is local. Search only already-loaded trusted handles.
+    static void* leviLaminaHandle = nullptr;
+    static void* leviLaminaAltHandle = nullptr;
+    if (!leviLaminaHandle)
+        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!leviLaminaAltHandle)
+        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
+    if (leviLaminaHandle) {
+        address = dlsym(leviLaminaHandle, name);
+        if (trustedImage(address)) return address;
+    }
+    if (leviLaminaAltHandle) {
+        address = dlsym(leviLaminaAltHandle, name);
+        if (trustedImage(address)) return address;
+    }
+    return nullptr;
 }
 
 void playerSetGameTypeDetour(void* player, std::int32_t nativeValue) {
