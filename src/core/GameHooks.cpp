@@ -1506,6 +1506,36 @@ void tickDetour(void* actor) {
     auto* actorPlayer = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
     void* local = currentLocalPlayer.load(std::memory_order_acquire);
 
+    // Key recovery path informed by Apollon's LocalPlayer::normalTick hook:
+    // when this detour is installed on the exact NormalTick implementation,
+    // its receiver pointer is the LocalPlayer for that tick. Do not make this
+    // identity depend on ClientInstance::getLocalPlayer(), which has repeatedly
+    // returned null in the user's runtime. Still require the independent
+    // Actor::isPlayer classifier before promoting the receiver.
+    static const auto normalTickActorClassifier =
+        bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+    const bool normalTickActorClassifierReady = normalTickActorClassifier &&
+        isMinecraftFunction(reinterpret_cast<const void*>(normalTickActorClassifier));
+    const bool normalTickReceiverIsPlayer = actor &&
+        isReadableMemory(actor, sizeof(void*)) &&
+        normalTickActorClassifierReady &&
+        reinterpret_cast<bool (*)(void*)>(normalTickActorClassifier)(actor);
+
+    if (normalTickReceiverIsPlayer) {
+        void* previousLocal = currentLocalPlayer.exchange(actor, std::memory_order_acq_rel);
+        local = actor;
+        if (previousLocal != actor) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Info, "GameHooks",
+                "verified_local_player", "captured_from_normal_tick_receiver",
+                std::string("player=") +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(actor)) +
+                    "; previous_player=" +
+                    std::to_string(reinterpret_cast<std::uintptr_t>(previousLocal)) +
+                    "; source=NormalTick_this; actor_classifier=confirmed; client_instance_required=no");
+        }
+    }
+
     // Only the receiver accepted by the verified ClientInstance::update hook
     // can seed local-player recovery. ClientInstance::current() is deliberately
     // not called here: Api.cpp implements it by returning this same cache.
