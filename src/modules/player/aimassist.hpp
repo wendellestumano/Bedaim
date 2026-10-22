@@ -24,6 +24,7 @@ public:
 
     void processPlayerTick(bedrocktools::sdk::Player* player);
     void processPlayerFrame();
+    bool localPlayerIsGliding();
     bool currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range);
     bool targetBoundsSnapshot(void* desiredTarget, bedrocktools::sdk::AABB& bounds, float& range);
     bool currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance = 0.12f);
@@ -35,6 +36,8 @@ public:
     std::string m_aimMode = "Classic";
     std::string m_trackingMode = "Smooth";
     bool m_elytraMode = false;
+    // Downward target-point shift per block beyond the close-range dead zone while gliding.
+    float m_elytraDistanceDislocateStrength = 0.20f;
     bool m_naturalization = true;
     std::string m_naturalizationWeapon = "All";
     bool m_weaponOnly = false;
