@@ -112,15 +112,17 @@ jobs:
             --no-ask-user | tee "$RUNNER_TEMP/bedaim-coordinator-plan.md"
 
       - name: Publish coordinator plan
-        if: ${{ always() && hashFiles('/home/runner/work/_temp/bedaim-coordinator-plan.md') != '' }}
+        if: ${{ always() }}
         shell: bash
         run: |
-          {
-            echo '## BedAim Coordinator plan'
-            echo
-            cat "$RUNNER_TEMP/bedaim-coordinator-plan.md"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f "$RUNNER_TEMP/bedaim-coordinator-plan.md" ]]; then
+            {
+              echo '## BedAim Coordinator plan'
+              echo
+              cat "$RUNNER_TEMP/bedaim-coordinator-plan.md"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Implementer — implement in the isolated branch
         id: implementer
@@ -148,8 +150,8 @@ jobs:
           copilot -p "$(cat "$RUNNER_TEMP/bedaim-implementer-prompt.md")" \
             --available-tools='edit,view,grep,glob' \
             --allow-tool=write \
-            --deny-tool='write(.github/workflows/**)' \
-            --deny-tool='write(.github/agents/**)' \
+            --deny-tool='write(.github/workflows)' \
+            --deny-tool='write(.github/agents)' \
             --deny-tool='write(.github/copilot-instructions.md)' \
             --deny-tool='write(AGENTS.md)' \
             --deny-tool='shell(git commit)' \
@@ -159,23 +161,27 @@ jobs:
             --no-ask-user | tee "$RUNNER_TEMP/bedaim-implementation-report.md"
 
       - name: Publish implementation report
-        if: ${{ inputs.mode == 'implement' && always() && hashFiles('/home/runner/work/_temp/bedaim-implementation-report.md') != '' }}
+        if: ${{ inputs.mode == 'implement' && always() }}
         shell: bash
+        env:
+          IMPLEMENTER_OUTCOME: ${{ steps.implementer.outcome }}
         run: |
-          {
-            echo '## BedAim Implementer report'
-            echo
-            if [[ "${{ steps.implementer.outcome }}" == "failure" ]]; then
-              echo '> The Copilot CLI step reported failure. Any resulting diff is still untrusted and will be offered only as a draft PR if one exists.'
+          if [[ -f "$RUNNER_TEMP/bedaim-implementation-report.md" ]]; then
+            {
+              echo '## BedAim Implementer report'
               echo
-            fi
-            cat "$RUNNER_TEMP/bedaim-implementation-report.md"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
+              if [[ "$IMPLEMENTER_OUTCOME" == "failure" ]]; then
+                echo '> The Copilot CLI step reported failure. Any resulting diff is untrusted and will not be packaged automatically.'
+                echo
+              fi
+              cat "$RUNNER_TEMP/bedaim-implementation-report.md"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create a draft pull request from the isolated diff
         id: cpr
-        if: ${{ inputs.mode == 'implement' }}
+        if: ${{ inputs.mode == 'implement' && steps.implementer.outcome == 'success' }}
         uses: peter-evans/create-pull-request@v7
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
