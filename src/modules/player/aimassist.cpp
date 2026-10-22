@@ -808,11 +808,18 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         if (isPlayer) {
             if (!m_targetPlayers) continue;
             if (m_ignoreCreativeSpectator) {
-                std::int32_t gameType = -1;
-                if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
-                    if (gameType == 1 || gameType == 3) continue;
-                } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                    aimAssistLogger().warn("Creative/Spectator filter unavailable: no verified GameType export; those players may still be eligible.");
+                bool isAttackable = true;
+                if (bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(
+                        candidate, isAttackable)) {
+                    if (!isAttackable) continue;
+                } else {
+                    std::int32_t gameType = -1;
+                    if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
+                        if (gameType == 1 || gameType == 3) continue;
+                    } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
+                        aimAssistLogger().warn(
+                            "Creative/Spectator filter unavailable: native attackability and GameType lookup both unresolved; those players may still be eligible.");
+                    }
                 }
             }
         } else {
