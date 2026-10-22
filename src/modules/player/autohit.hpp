@@ -27,6 +27,7 @@ private:
 
     std::mutex m_stateMutex;
     float m_cps = 8.0f;
+    bool m_loggedFirstDispatch = false;
     std::chrono::steady_clock::time_point m_nextDispatch{};
     std::atomic_bool m_containerOpen{false};
     std::atomic_bool m_chatOpen{false};
