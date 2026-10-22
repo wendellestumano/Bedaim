@@ -1,3 +1,8 @@
+## 2026-10-22 — Route AutoHit through MacroDroid keyboard key 0
+- AutoHit now sends the package-scoped broadcast action `com.wendellestumano.bedaim.AUTOHIT_KEY0` to MacroDroid after its existing target, range, weapon-profile, input and cooldown gates pass. It no longer calls the native GameMode attack wrapper in this path.
+- Configure MacroDroid with an enabled `Intent Received` trigger matching that action and an `Input Key Event` action for keyboard digit `0` (Android `KEYCODE_0 = 7`). MacroDroid's supported input path must send the key event to the foreground Minecraft/Levi Launcher game.
+- A successful broadcast only confirms Android accepted the trigger; it does not confirm MacroDroid executed the action or Minecraft received key 0. Runtime testing and diagnostics remain required. This is rate-limited by the existing per-weapon CPS profile, not an unbounded key spam loop.
+
 ## 2026-10-22 — Restore experimental AutoHit only
 - Re-registered AutoHit and included its implementation in the native build so it can be tested again; AutoTotem remains retired and excluded.
 - This is a reactivation of the existing experimental code, not a claim that native attacks or input injection work at runtime. Validate the Android build and collect AutoHit diagnostics in-game before changing the attack route.
