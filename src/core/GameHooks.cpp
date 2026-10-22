@@ -92,9 +92,14 @@ thread_local bool syntheticAttackNativeResult = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
 using ActorIsAttackableGamemodeFn = bool (*)(void*);
+using ActorModePredicateFn = bool (*)(const void*);
 std::atomic<PlayerGetGameTypeFn> playerGetGameTypeOriginal{nullptr};
 std::atomic<ActorIsAttackableGamemodeFn> actorIsAttackableGamemodeOriginal{nullptr};
 std::chrono::steady_clock::time_point actorAttackabilityNextResolve{};
+std::atomic<ActorModePredicateFn> actorIsCreativeOriginal{nullptr};
+std::atomic<ActorModePredicateFn> actorIsSpectatorOriginal{nullptr};
+std::mutex actorModePredicateResolveMutex;
+std::chrono::steady_clock::time_point actorModePredicateNextResolve{};
 PlayerSetGameTypeFn playerSetGameTypeOriginal = nullptr;
 std::chrono::steady_clock::time_point playerGameTypeNextResolve{};
 std::chrono::steady_clock::time_point playerSetGameTypeNextResolve{};
@@ -757,6 +762,8 @@ void uninstall() {
     playerGetGameTypeOriginal.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     actorIsAttackableGamemodeOriginal.store(nullptr, std::memory_order_release);
+    actorIsCreativeOriginal.store(nullptr, std::memory_order_release);
+    actorIsSpectatorOriginal.store(nullptr, std::memory_order_release);
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
     {
@@ -765,6 +772,10 @@ void uninstall() {
         playerGameTypeNextResolve = {};
         playerSetGameTypeNextResolve = {};
         playerGameTypeCache.clear();
+    }
+    {
+        std::lock_guard predicateLock(actorModePredicateResolveMutex);
+        actorModePredicateNextResolve = {};
     }
 }
 
@@ -986,6 +997,91 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
             playerSetGameTypeHookInstalled.load(std::memory_order_acquire),
             playerSetGameTypeSeen.load(std::memory_order_acquire));
     }
+    return false;
+}
+
+bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType) {
+    if (!player) return false;
+
+    auto isCreative = actorIsCreativeOriginal.load(std::memory_order_acquire);
+    auto isSpectator = actorIsSpectatorOriginal.load(std::memory_order_acquire);
+    if (!isCreative || !isSpectator) {
+        std::lock_guard<std::mutex> resolveLock(actorModePredicateResolveMutex);
+        isCreative = actorIsCreativeOriginal.load(std::memory_order_acquire);
+        isSpectator = actorIsSpectatorOriginal.load(std::memory_order_acquire);
+        const auto now = std::chrono::steady_clock::now();
+        if ((!isCreative || !isSpectator) && now >= actorModePredicateNextResolve) {
+            actorModePredicateNextResolve = now + std::chrono::seconds(1);
+            // Resolve per-actor predicates dynamically. Do not import client-specific
+            // RVAs: exact game modes remain Unknown if the target runtime exposes no API.
+            const char* creativeSymbols[] = {
+                "_ZNK5Actor10isCreativeEv", "_ZN5Actor10isCreativeEv",
+                "_ZNK6Player10isCreativeEv", "_ZN6Player10isCreativeEv",
+                "_ZNK11LocalPlayer10isCreativeEv", "_ZN11LocalPlayer10isCreativeEv"
+            };
+            const char* spectatorSymbols[] = {
+                "_ZNK5Actor11isSpectatorEv", "_ZN5Actor11isSpectatorEv",
+                "_ZNK6Player11isSpectatorEv", "_ZN6Player11isSpectatorEv",
+                "_ZNK11LocalPlayer11isSpectatorEv", "_ZN11LocalPlayer11isSpectatorEv"
+            };
+            if (!isCreative) {
+                for (const char* symbol : creativeSymbols) {
+                    void* address = resolveMinecraftFunction(symbol);
+                    if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                    if (!address) continue;
+                    isCreative = reinterpret_cast<ActorModePredicateFn>(address);
+                    actorIsCreativeOriginal.store(isCreative, std::memory_order_release);
+                    break;
+                }
+            }
+            if (!isSpectator) {
+                for (const char* symbol : spectatorSymbols) {
+                    void* address = resolveMinecraftFunction(symbol);
+                    if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                    if (!address) continue;
+                    isSpectator = reinterpret_cast<ActorModePredicateFn>(address);
+                    actorIsSpectatorOriginal.store(isSpectator, std::memory_order_release);
+                    break;
+                }
+            }
+            if (isCreative || isSpectator) {
+                gameHooksLogger().info(
+                    "Resolved per-actor Creative/Spectator predicate(s) (creative={}, spectator={}).",
+                    isCreative != nullptr, isSpectator != nullptr);
+            }
+        }
+    }
+
+    if (!isCreative && !isSpectator) return false;
+    if (!isReadableMemory(player, sizeof(void*))) return false;
+
+    bool creative = false;
+    bool spectator = false;
+    try {
+        if (isCreative) creative = isCreative(player);
+        if (isSpectator) spectator = isSpectator(player);
+    } catch (...) {
+        return false;
+    }
+
+    if (creative && spectator) {
+        static std::atomic_bool loggedConflictingPredicates{false};
+        if (!loggedConflictingPredicates.exchange(true, std::memory_order_acq_rel)) {
+            gameHooksLogger().warn(
+                "Actor mode predicates reported Creative and Spectator for one player; exact mode remains Unknown.");
+        }
+        return false;
+    }
+    if (creative) {
+        outGameType = 1;
+        return true;
+    }
+    if (spectator) {
+        outGameType = 3;
+        return true;
+    }
+
+    // Both predicates being false cannot distinguish Survival from Adventure.
     return false;
 }
 
