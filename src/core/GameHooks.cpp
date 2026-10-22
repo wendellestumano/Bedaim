@@ -92,7 +92,7 @@ thread_local bool syntheticAttackNativeResult = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
 using ActorIsAttackableGamemodeFn = bool (*)(void*);
-PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
+std::atomic<PlayerGetGameTypeFn> playerGetGameTypeOriginal{nullptr};
 std::atomic<ActorIsAttackableGamemodeFn> actorIsAttackableGamemodeOriginal{nullptr};
 std::chrono::steady_clock::time_point actorAttackabilityNextResolve{};
 PlayerSetGameTypeFn playerSetGameTypeOriginal = nullptr;
@@ -343,14 +343,16 @@ bool installPlayerSetGameTypeHook() {
 void resolvePlayerGameTypeApi() {
     std::lock_guard<std::mutex> apiLock(playerGameTypeCacheMutex);
     const auto resolveNow = std::chrono::steady_clock::now();
-    if (!playerGetGameTypeOriginal && resolveNow >= playerGameTypeNextResolve) {
+    if (!playerGetGameTypeOriginal.load(std::memory_order_relaxed) &&
+        resolveNow >= playerGameTypeNextResolve) {
         playerGameTypeNextResolve = resolveNow + std::chrono::seconds(1);
-        playerGetGameTypeOriginal = reinterpret_cast<PlayerGetGameTypeFn>(
+        auto getter = reinterpret_cast<PlayerGetGameTypeFn>(
             resolveMinecraftFunction("_ZNK6Player17getPlayerGameTypeEv"));
-        if (!playerGetGameTypeOriginal) {
-            playerGetGameTypeOriginal = reinterpret_cast<PlayerGetGameTypeFn>(
+        if (!getter) {
+            getter = reinterpret_cast<PlayerGetGameTypeFn>(
                 resolveMinecraftFunction("_ZNK11LocalPlayer17getPlayerGameTypeEv"));
         }
+        playerGetGameTypeOriginal.store(getter, std::memory_order_release);
     }
     if (!playerSetGameTypeHookInstalled.load(std::memory_order_acquire) &&
         resolveNow >= playerSetGameTypeNextResolve) {
@@ -747,15 +749,16 @@ void uninstall() {
     installed = false;
     currentClientInstance.store(nullptr, std::memory_order_release);
     currentGameMode.store(nullptr, std::memory_order_release);
+    playerGetGameTypeOriginal.store(nullptr, std::memory_order_release);
     playerSetGameTypeOriginal = nullptr;
     actorIsAttackableGamemodeOriginal.store(nullptr, std::memory_order_release);
     playerSetGameTypeHookInstalled.store(false, std::memory_order_release);
     playerSetGameTypeSeen.store(false, std::memory_order_release);
-    playerSetGameTypeNextResolve = {};
     {
         std::lock_guard cacheLock(playerGameTypeCacheMutex);
         actorAttackabilityNextResolve = {};
         playerGameTypeNextResolve = {};
+        playerSetGameTypeNextResolve = {};
         playerGameTypeCache.clear();
     }
 }
@@ -936,15 +939,16 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     if (!player) return false;
-    if (!playerGetGameTypeOriginal &&
-        std::chrono::steady_clock::now() >= playerGameTypeNextResolve) {
-        // Retry the exported getter and setter observer at a bounded cadence. The
-        // resolver owns the separate retry schedule for the setter hook.
+    auto getter = playerGetGameTypeOriginal.load(std::memory_order_acquire);
+    if (!getter) {
+        // The resolver owns and synchronizes its retry timestamp internally.
+        // Do not read its non-atomic timestamp or function pointer outside the lock.
         resolvePlayerGameTypeApi();
+        getter = playerGetGameTypeOriginal.load(std::memory_order_acquire);
     }
 
-    if (playerGetGameTypeOriginal) {
-        const std::int32_t nativeValue = playerGetGameTypeOriginal(player);
+    if (getter) {
+        const std::int32_t nativeValue = getter(player);
         std::int32_t canonical = -1;
         // Native C++ GameType values: Survival=0, Creative=1, Adventure=2,
         // Default=5, Spectator=6. Undefined and Default are not player modes.
@@ -973,7 +977,7 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
     if (!loggedMissingGameType.exchange(true, std::memory_order_acq_rel)) {
         gameHooksLogger().warn(
             "No native GameType getter result or setter-cache entry is available yet (getter={}, setterHook={}, setterObserved={}); this player's mode remains Unknown until the engine updates a cached player or a matching-build packet hook is added.",
-            playerGetGameTypeOriginal != nullptr,
+            playerGetGameTypeOriginal.load(std::memory_order_acquire) != nullptr,
             playerSetGameTypeHookInstalled.load(std::memory_order_acquire),
             playerSetGameTypeSeen.load(std::memory_order_acquire));
     }
