@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <dlfcn.h>
+#include <limits>
 #include <optional>
 
 namespace {
@@ -76,20 +77,21 @@ bool targetWithinRange(bedrocktools::sdk::Player* player,
     return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
 }
 
-bool targetWithinDistance(bedrocktools::sdk::Player* player,
-                          const bedrocktools::sdk::AABB& targetBounds,
-                          float range) {
-    if (!player || !validBounds(targetBounds) || !std::isfinite(range)) return false;
+float distanceToTargetBounds(bedrocktools::sdk::Player* player,
+                              const bedrocktools::sdk::AABB& targetBounds) {
+    if (!player || !validBounds(targetBounds))
+        return std::numeric_limits<float>::infinity();
     const auto eye = eyePositionFor(player);
-    if (!finiteVec(eye)) return false;
+    if (!finiteVec(eye)) return std::numeric_limits<float>::infinity();
     const bedrocktools::sdk::Vec3 nearest{
         std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
         std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
         std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
     };
     const float distanceSq = distanceSquared(eye, nearest);
-    const float safeRange = std::clamp(range, 1.0f, 32.0f);
-    return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
+    return std::isfinite(distanceSq)
+        ? std::sqrt(std::max(0.0f, distanceSq))
+        : std::numeric_limits<float>::infinity();
 }
 
 using BlockSourceIsSolidBlockingBlockFn =
@@ -349,11 +351,17 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             void* target = nullptr;
             AABB targetBounds{};
             float aimRange = 0.0f;
-            if (aim->currentTargetSnapshot(target, targetBounds, aimRange) &&
-                targetWithinDistance(player, targetBounds, m_unglideTargetDistance)) {
-                m_nextUnglideAttempt = now + std::chrono::milliseconds(200);
-                const auto clearance = groundClearance(player, m_unglideHeight);
-                if (clearance && *clearance <= std::clamp(m_unglideHeight, 1.0f, 24.0f)) {
+            if (aim->currentTargetSnapshot(target, targetBounds, aimRange)) {
+                const float targetDistance = distanceToTargetBounds(player, targetBounds);
+                if (std::isfinite(targetDistance) &&
+                    targetDistance <= std::clamp(m_unglideTargetDistance, 1.0f, 32.0f)) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(200);
+                    const auto clearance = groundClearance(player, m_unglideHeight);
+                    const float clearanceValue = clearance.value_or(
+                        std::numeric_limits<float>::infinity());
+                    if (bedaim::macefall::shouldUnglide(
+                            m_unglideEnabled, true, targetDistance, m_unglideTargetDistance,
+                            clearanceValue, m_unglideHeight)) {
                     const auto stopGliding = resolvePlayerStopGliding();
                     if (stopGliding) {
                         stopGliding(player);
@@ -371,6 +379,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                         bedrocktools::diagnostics::Level::Warning,
                         "MaceSwapper", "unglide", "native_stop_gliding_unavailable",
                         "Player::stopGliding was not exported by this runtime; action skipped safely.");
+                    }
                 }
             }
         }
