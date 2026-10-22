@@ -425,18 +425,18 @@ AutomationBroadcastResult dispatchMacroDroidSpacebarMacro() {
 
     env->CallVoidMethod(application, sendBroadcast, intent);
     if (clearJniException(env)) return AutomationBroadcastResult::BroadcastFailed;
-    return MoonBroadcastResult::Sent;
+    return AutomationBroadcastResult::Sent;
 }
 
-const char* moonBroadcastResultName(MoonBroadcastResult result) {
+const char* automationBroadcastResultName(AutomationBroadcastResult result) {
     switch (result) {
-        case MoonBroadcastResult::Sent: return "keymapper_broadcast_sent";
+        case AutomationBroadcastResult::Sent: return "macrodroid_broadcast_sent";
         case AutomationBroadcastResult::JavaVmUnavailable: return "android_java_vm_unavailable";
         case AutomationBroadcastResult::ApplicationContextUnavailable: return "android_context_unavailable";
         case AutomationBroadcastResult::IntentApiUnavailable: return "android_intent_api_unavailable";
-        case AutomationBroadcastResult::BroadcastFailed: return "keymapper_broadcast_failed";
+        case AutomationBroadcastResult::BroadcastFailed: return "macrodroid_broadcast_failed";
     }
-    return "keymapper_broadcast_unknown";
+    return "macrodroid_broadcast_unknown";
 }
 
 ActorGetStatusFlagFn resolveActorGetStatusFlag() {
