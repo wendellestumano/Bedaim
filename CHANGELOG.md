@@ -1,3 +1,11 @@
+## 2026-10-22 — Follow Apollon NormalTick identity and preserve native ABI
+
+- Compared the uploaded Apollon source directly: its `NormalTick(LocalPlayer *thiz)` wrapper has a `void*` return type and assigns `localPlayer = thiz` from the exact LocalPlayer tick hook. BedAim now uses a pointer-returning hook signature and returns the original game's value unchanged.
+- BedAim now records the validated NormalTick receiver as the strong LocalPlayer source. The ClientInstance getter is skipped after this route succeeds, so a known-null getter cannot erase the fresher `this` pointer.
+- A concurrent getter failure is also prevented from clearing a pointer that the NormalTick hook has captured. Both instance transitions and hook uninstall clear the provenance marker.
+- The uploaded Apollon README identifies its codebase as Minecraft 1.21.50; no version-specific absolute offsets were copied. Only the normalTick identity/ABI pattern was used.
+- Host and Android ARM64 CI are required; the latest build has not yet been tested in-game.
+
 ## 2026-10-21 — Add a validated camera-actor fallback for LocalPlayer
 
 - The user confirmed the prior GameHooks build still showed `verified_local_player=resolution_failed`; this revision adds a genuinely different candidate source instead of repeating the same getter path.
