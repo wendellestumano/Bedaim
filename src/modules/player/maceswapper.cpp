@@ -362,7 +362,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             void* target = nullptr;
             AABB targetBounds{};
             float aimRange = 0.0f;
-            if (aim->currentTargetSnapshot(target, targetBounds, aimRange)) {
+            if (aim->currentTargetSnapshot(target, targetBounds, aimRange) &&
+                aim->currentTargetIsPlayerSnapshot(target)) {
                 const float targetDistance = distanceToTargetBounds(player, targetBounds);
                 if (std::isfinite(targetDistance) &&
                     targetDistance <= std::clamp(m_unglideTargetDistance, 1.0f, 32.0f)) {
