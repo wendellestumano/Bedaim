@@ -1,3 +1,8 @@
+## 2026-10-22 — Restore experimental AutoHit only
+- Re-registered AutoHit and included its implementation in the native build so it can be tested again; AutoTotem remains retired and excluded.
+- This is a reactivation of the existing experimental code, not a claim that native attacks or input injection work at runtime. Validate the Android build and collect AutoHit diagnostics in-game before changing the attack route.
+- No changes to `main`; work remains on `feature/elytra-aim-gamemode-checker-20261022`.
+
 ## 2026-10-22 — Fix MacroDroid Spacebar dispatcher build
 - Fixed stale Key Mapper result-enum/function names left behind during the switch to the package-scoped MacroDroid broadcast; the JNI dispatcher and diagnostics now consistently use `AutomationBroadcastResult` and MacroDroid-specific result labels.
 - Android build #1108 failed at compile time on those four unresolved identifiers. Host regression tests passed before the Android compile stage; rerun CI on this fix.
