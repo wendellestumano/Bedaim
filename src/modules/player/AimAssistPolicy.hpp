@@ -18,33 +18,57 @@ constexpr bool isRangedPredictionWeapon(HeldWeapon weapon) noexcept {
            weapon == HeldWeapon::Trident;
 }
 
-// Kept free of native game pointers so the ordering rules can be host-tested.
-constexpr bool contains(std::string_view value, std::string_view part) noexcept {
-    return value.find(part) != std::string_view::npos;
+// Treat ASCII letters/digits as identifier characters. Underscores, hyphens,
+// and path separators delimit item-name tokens.
+constexpr bool isIdentifierCharacter(char ch) noexcept {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+           (ch >= '0' && ch <= '9');
+}
+
+// Match a complete token so "rainbow_staff" cannot be classified as a Bow
+// and "swordsmith:healing_wand" cannot be classified from its namespace.
+constexpr bool containsToken(std::string_view value, std::string_view token) noexcept {
+    std::size_t pos = 0;
+    while ((pos = value.find(token, pos)) != std::string_view::npos) {
+        const std::size_t end = pos + token.size();
+        const bool leftBoundary = pos == 0 || !isIdentifierCharacter(value[pos - 1]);
+        const bool rightBoundary = end == value.size() || !isIdentifierCharacter(value[end]);
+        if (leftBoundary && rightBoundary) return true;
+        ++pos;
+    }
+    return false;
+}
+
+constexpr std::string_view itemPath(std::string_view identifier) noexcept {
+    const std::size_t namespaceSeparator = identifier.find(':');
+    if (namespaceSeparator != std::string_view::npos)
+        identifier.remove_prefix(namespaceSeparator + 1);
+    return identifier;
 }
 
 constexpr HeldWeapon classifyHeldWeaponIdentifier(std::string_view identifier) noexcept {
     if (identifier.empty()) return HeldWeapon::None;
+    const std::string_view path = itemPath(identifier);
+    if (path.empty()) return HeldWeapon::None;
 
-    // Specific classes first; notably Crossbow must precede Bow.
-    if (contains(identifier, "crossbow")) return HeldWeapon::Crossbow;
-    if (contains(identifier, "trident")) return HeldWeapon::Trident;
-    if (contains(identifier, "mace")) return HeldWeapon::Mace;
-    if (contains(identifier, "spear")) return HeldWeapon::Spear;
-    if (contains(identifier, "sword")) return HeldWeapon::Sword;
-    if (contains(identifier, "bow")) return HeldWeapon::Bow;
+    // Specific classes first; token matching prevents "bow" inside "crossbow".
+    if (containsToken(path, "crossbow")) return HeldWeapon::Crossbow;
+    if (containsToken(path, "trident")) return HeldWeapon::Trident;
+    if (containsToken(path, "mace")) return HeldWeapon::Mace;
+    if (containsToken(path, "spear")) return HeldWeapon::Spear;
+    if (containsToken(path, "sword")) return HeldWeapon::Sword;
+    if (containsToken(path, "bow")) return HeldWeapon::Bow;
 
-    if (contains(identifier, "dagger") || contains(identifier, "katana") ||
-        contains(identifier, "rapier") || contains(identifier, "scythe") ||
-        contains(identifier, "hammer") || contains(identifier, "halberd") ||
-        contains(identifier, "glaive") || contains(identifier, "lance")) {
+    if (containsToken(path, "dagger") || containsToken(path, "katana") ||
+        containsToken(path, "rapier") || containsToken(path, "scythe") ||
+        containsToken(path, "hammer") || containsToken(path, "halberd") ||
+        containsToken(path, "glaive") || containsToken(path, "lance")) {
         return HeldWeapon::OtherMelee;
     }
 
-    // Tool identifiers contain "axe", so they must precede generic axe matching.
-    if (contains(identifier, "pickaxe") || contains(identifier, "shovel") ||
-        contains(identifier, "hoe")) return HeldWeapon::Tool;
-    if (contains(identifier, "axe")) return HeldWeapon::Axe;
+    if (containsToken(path, "pickaxe") || containsToken(path, "shovel") ||
+        containsToken(path, "hoe")) return HeldWeapon::Tool;
+    if (containsToken(path, "axe")) return HeldWeapon::Axe;
     return HeldWeapon::None;
 }
 
