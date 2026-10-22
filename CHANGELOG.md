@@ -1,3 +1,9 @@
+## 2026-10-22 — Rebuild AutoHit as a minimal MacroDroid dispatcher
+- Replaced the prior target/weapon/Aim Assist/GameMode-dependent AutoHit implementation with a small dispatcher that sends the package-scoped Intent action `com.wendellestumano.bedaim.AUTOHIT_KEY0` to `com.arlosoft.macrodroid` at a configurable 1–20 CPS (default 8).
+- The module now requires only that it is enabled, a local player exists, and chat/container screens are closed; it does not call the native attack wrapper or require Aim Assist, target snapshots, weapon classification, or mouse/touch activation.
+- Diagnostics distinguish dispatch attempts from Android accepting the broadcast. A successful broadcast is not proof that MacroDroid emitted a key event or that Minecraft treated key 0 as an attack. Validate the rebuilt native target and test on-device.
+- AutoTotem remains retired; no changes to `main`.
+
 ## 2026-10-22 — Route AutoHit through MacroDroid keyboard key 0
 - AutoHit now sends the package-scoped broadcast action `com.wendellestumano.bedaim.AUTOHIT_KEY0` to MacroDroid after its existing target, range, weapon-profile, input and cooldown gates pass. It no longer calls the native GameMode attack wrapper in this path.
 - Configure MacroDroid with an enabled `Intent Received` trigger matching that action and an `Input Key Event` action for keyboard digit `0` (Android `KEYCODE_0 = 7`). MacroDroid's supported input path must send the key event to the foreground Minecraft/Levi Launcher game.
