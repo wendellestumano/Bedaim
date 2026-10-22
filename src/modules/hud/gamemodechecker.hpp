@@ -15,6 +15,7 @@ struct GamemodeCheckerDiagnostics {
     std::size_t playerCount = 0;
     std::size_t namedPlayerCount = 0;
     std::size_t exactModeCount = 0;
+    std::size_t inferredModeCount = 0;
     std::size_t unresolvedModeCount = 0;
     bool actorListReady = false;
     bool playerClassifierReady = false;
