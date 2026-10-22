@@ -15,5 +15,8 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 
 // GameType values: Survival=0, Creative=1, Adventure=2, Spectator=3.
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType);
+// Coarse fallback used by Apollon: false means the actor is not attackable in its
+// current gamemode. This does not distinguish Creative from Spectator.
+bool tryGetPlayerAttackableGamemode(void* player, bool& outAttackable);
 
 }

@@ -90,7 +90,11 @@ thread_local bool syntheticAttackResultObserved = false;
 thread_local bool syntheticAttackNativeResult = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
+using ActorIsAttackableGamemodeFn = bool (*)(const void*);
 PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
+std::atomic<ActorIsAttackableGamemodeFn> actorIsAttackableGamemodeOriginal{nullptr};
+std::mutex actorAttackableGamemodeResolveMutex;
+std::chrono::steady_clock::time_point actorAttackableGamemodeNextResolve{};
 PlayerSetGameTypeFn playerSetGameTypeOriginal = nullptr;
 std::chrono::steady_clock::time_point playerGameTypeNextResolve{};
 std::chrono::steady_clock::time_point playerSetGameTypeNextResolve{};
@@ -864,8 +868,62 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
             playerSetGameTypeHookInstalled.load(std::memory_order_acquire),
             playerSetGameTypeSeen.load(std::memory_order_acquire));
     }
-    return false;
+     return false;
 }
 
+
+bool tryGetPlayerAttackableGamemode(void* player, bool& outAttackable) {
+    if (!player) return false;
+
+    auto fn = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
+    if (!fn) {
+        std::lock_guard<std::mutex> resolveLock(actorAttackableGamemodeResolveMutex);
+        fn = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
+        const auto now = std::chrono::steady_clock::now();
+        if (!fn && now >= actorAttackableGamemodeNextResolve) {
+            actorAttackableGamemodeNextResolve = now + std::chrono::seconds(1);
+            // Apollon calls Actor::isAttackableGamemode on each remote Player
+            // to identify protected/non-attackable gamemodes. Try both common
+            // ABI spellings and the Player inheritance spelling; never use a
+            // hard-coded address from a different Bedrock build.
+            const char* symbols[] = {
+                "_ZNK5Actor20isAttackableGamemodeEv",
+                "_ZN5Actor20isAttackableGamemodeEv",
+                "_ZNK6Player20isAttackableGamemodeEv",
+                "_ZN6Player20isAttackableGamemodeEv"
+            };
+            for (const char* symbol : symbols) {
+                void* address = resolveMinecraftFunction(symbol);
+                if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                if (!address) continue;
+                fn = reinterpret_cast<ActorIsAttackableGamemodeFn>(address);
+                actorIsAttackableGamemodeOriginal.store(fn, std::memory_order_release);
+                gameHooksLogger().info(
+                    "Resolved Actor::isAttackableGamemode fallback for remote-player mode filtering.");
+                break;
+            }
+        }
+    }
+
+    if (!fn) {
+        static std::atomic_bool loggedMissingAttackableFallback{false};
+        if (!loggedMissingAttackableFallback.exchange(true, std::memory_order_acq_rel)) {
+            gameHooksLogger().warn(
+                "Actor::isAttackableGamemode fallback is unavailable by exported symbol; exact GameType lookup or a matching-build signature is still required.");
+        }
+        return false;
+    }
+
+    // Do not call a native method through an obviously stale or unmapped actor
+    // pointer. The game-mode result itself is not cached, since player objects
+    // can be replaced during respawn or world transitions.
+    if (!isReadableMemory(player, sizeof(void*))) return false;
+    try {
+        outAttackable = fn(player);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 
 }

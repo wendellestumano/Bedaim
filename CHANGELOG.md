@@ -1,10 +1,9 @@
 ## 2026-10-22 — Add Gamemode Checker HUD on stable baseline
 
-- New optional HUD module lists nearby players whose game mode is positively identified as Creative or Spectator, with a distinct label for each mode.
-- Uses the existing `tryGetPlayerGameType` API and the existing ActorManager player enumeration path; it does not guess a mode when the getter/cache cannot confirm one.
-- Refreshes at 5 Hz and caps displayed rows to 16 to limit native queries and mobile rendering cost.
-- Aim Assist's existing `m_ignoreCreativeSpectator` filter remains enabled by default and skips candidates when the checker confirms Creative or Spectator. Unknown modes are not falsely labelled by this HUD.
-- This feature branch starts from stable commit `afd088f04ebdc24dee974496a329411591ea202f`; experimental AutoHit/AutoTotem changes are not included. Android build and in-game validation are pending.
+- Adds an optional Gamemode Checker HUD listing remote players with exact modes where available, plus a clearly marked `Creative/Spectator*` fallback when the native attackability check says a player is protected but cannot distinguish the two modes.
+- Adds an Apollon-inspired `Actor::isAttackableGamemode` symbol fallback without hard-coded addresses from another Bedrock version. The aimbot now uses this coarse check as a second filter when enabled.
+- Refreshes at 5 Hz and caps displayed rows to 16 to limit rendering cost on mobile. Unknown modes remain visibly marked instead of disappearing from the diagnostic list.
+- This feature branch starts from stable commit `afd088f04ebdc24dee974496a329411591ea202f`; experimental AutoHit/AutoTotem changes are not included. Android build passes; in-game validation is still required.
 
 # Changelog
 

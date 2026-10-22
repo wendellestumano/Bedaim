@@ -48,7 +48,7 @@ const char* modeName(std::int32_t mode) {
 }
 
 GamemodeCheckerModule::GamemodeCheckerModule()
-    : Module("Gamemode Checker", "Lists nearby players confirmed as Creative or Spectator.") {
+    : Module("Gamemode Checker", "Shows player modes and marks non-attackable players when the exact mode is unavailable.") {
     g_checker = this;
 }
 
@@ -90,11 +90,19 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     const auto base = reinterpret_cast<std::uintptr_t>(localPlayer);
     void* level = *reinterpret_cast<void**>(
         base + bedrocktools::sdk::offsets::Actor::mLevel);
-    if (!level) return;
+    if (!level) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_players.clear();
+        return;
+    }
     void* actorManager = *reinterpret_cast<void**>(
         reinterpret_cast<std::uintptr_t>(level) +
         bedrocktools::sdk::offsets::Level::mActorManager);
-    if (!actorManager) return;
+    if (!actorManager) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_players.clear();
+        return;
+    }
 
     std::vector<void*> actors;
     try {
@@ -112,12 +120,28 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         if (!g_actorIsPlayer(actor) || !g_actorGetNameTag) continue;
 
         std::int32_t gameType = -1;
-        if (!bedrocktools::core::gamehooks::tryGetPlayerGameType(actor, gameType)) continue;
-        if (gameType != 1 && gameType != 3) continue;
+        const bool hasExactGameType =
+            bedrocktools::core::gamehooks::tryGetPlayerGameType(actor, gameType);
+        bool attackable = true;
+        const bool hasAttackability =
+            bedrocktools::core::gamehooks::tryGetPlayerAttackableGamemode(actor, attackable);
+
+        std::string mode;
+        if (hasExactGameType && (gameType == 1 || gameType == 3)) {
+            mode = modeName(gameType);
+        } else if (hasAttackability && !attackable) {
+            // Apollon's native check tells us the player is protected in its
+            // current mode, but cannot say whether that is Creative or Spectator.
+            mode = "Creative/Spectator*";
+        } else if (hasExactGameType) {
+            mode = modeName(gameType);
+        } else {
+            mode = "Unknown";
+        }
 
         std::string name = safeName(actor);
         if (name.empty()) continue;
-        next.push_back({std::move(name), modeName(gameType)});
+        next.push_back({std::move(name), std::move(mode)});
     }
     std::sort(next.begin(), next.end(), [](const auto& a, const auto& b) {
         return a.name < b.name;
@@ -165,7 +189,11 @@ void GamemodeCheckerModule::onFrame() {
         line.w = 0.0f;
         line.h = 16.0f;
         line.size = 16.0f;
-        line.color = entry.mode == "Spectator" ? 0xFFB68CFF : 0xFF65E6A3;
+        if (entry.mode == "Spectator") line.color = 0xFFB68CFF;
+        else if (entry.mode == "Creative") line.color = 0xFF65E6A3;
+        else if (entry.mode == "Creative/Spectator*") line.color = 0xFFFFC266;
+        else if (entry.mode == "Unknown") line.color = 0xFFBBBBBB;
+        else line.color = 0xFFFFFFFF;
         line.text = entry.name + "  [" + entry.mode + "]";
         commands.push_back(line);
     }
@@ -179,7 +207,7 @@ void GamemodeCheckerModule::onFrame() {
         empty.h = 16.0f;
         empty.size = 16.0f;
         empty.color = 0xFFBBBBBB;
-        empty.text = "No confirmed Creative/Spectator";
+        empty.text = "No remote players detected";
         commands.push_back(empty);
     }
     ::submitDrawCommands(moduleId, commands);

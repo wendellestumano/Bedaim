@@ -807,10 +807,22 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             if (!m_targetPlayers) continue;
             if (m_ignoreCreativeSpectator) {
                 std::int32_t gameType = -1;
-                if (bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType)) {
-                    if (gameType == 1 || gameType == 3) continue;
-                } else if (!g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
-                    aimAssistLogger().warn("Creative/Spectator filter unavailable: no verified GameType export; those players may still be eligible.");
+                const bool hasExactGameType =
+                    bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType);
+                if (hasExactGameType && (gameType == 1 || gameType == 3)) continue;
+
+                // Fallback modeled on Apollon's per-Player isAttackableGamemode()
+                // check. It does not distinguish Creative from Spectator, but it
+                // can still exclude both when the exact GameType getter/cache is
+                // absent or stale.
+                bool attackable = true;
+                const bool hasAttackability =
+                    bedrocktools::core::gamehooks::tryGetPlayerAttackableGamemode(candidate, attackable);
+                if (hasAttackability && !attackable) continue;
+
+                if (!hasExactGameType && !hasAttackability &&
+                    !g_loggedGameTypeUnavailable.exchange(true, std::memory_order_acq_rel)) {
+                    aimAssistLogger().warn("Creative/Spectator filter unavailable: exact GameType and attackability lookups are unavailable; this candidate may still be eligible.");
                 }
             }
         } else {
