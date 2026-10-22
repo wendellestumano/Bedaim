@@ -23,14 +23,27 @@ constexpr const char* kAutoHitKeyZeroAction =
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
 
 JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
-    static void* artHandle = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
-    static auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+    // RTLD_NOLOAD can fail in Android linker namespaces even when ART is
+    // present. Try the public soname and common APEX/system paths explicitly.
+    static void* artHandles[] = {
+        dlopen("libart.so", RTLD_NOW),
+        dlopen("/apex/com.android.art/lib64/libart.so", RTLD_NOW),
+        dlopen("/apex/com.android.art/lib/libart.so", RTLD_NOW),
+        dlopen("/system/lib64/libart.so", RTLD_NOW),
+        dlopen("/system/lib/libart.so", RTLD_NOW)
+    };
+
+    auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
         dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
-    if (!getVms && artHandle) {
+    if (getVms) return getVms;
+
+    for (void* handle : artHandles) {
+        if (!handle) continue;
         getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-            dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+            dlsym(handle, "JNI_GetCreatedJavaVMs"));
+        if (getVms) return getVms;
     }
-    return getVms;
+    return nullptr;
 }
 
 class AutoHitJniEnvironment {
