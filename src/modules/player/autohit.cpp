@@ -13,6 +13,7 @@
 #include <dlfcn.h>
 #include <jni.h>
 #include <string>
+#include <utility>
 
 namespace {
 constexpr const char* kMacroDroidPackage = "com.arlosoft.macrodroid";
@@ -264,7 +265,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     const DispatchResult result = sendKeyZeroIntentToMacroDroid();
     const bool sent = result == DispatchResult::Sent;
     diagnostics::probe(
-        sent ? diagnostics::Level::Info : diagnostics::Level::Warning,
+        sent ? diagnostics::Level::Debug : diagnostics::Level::Warning,
         "AutoHit", "key0_dispatch", dispatchResultName(result),
         sent
             ? "Android accepted the broadcast. This does not confirm MacroDroid ran or Minecraft received key 0."
