@@ -6,7 +6,7 @@ concurrency:
 
 on:
   push:
-    branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017, test/autohit-autototem-mainline-20261017, feature/diagnostics-download-autosave-20261017, fix/local-player-tick-diagnostics-20261017]
+    branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017, test/autohit-autototem-mainline-20261017, feature/diagnostics-download-autosave-20261017, fix/local-player-tick-diagnostics-20261017, experiment/shadowhook-backend-20261022]
   pull_request:
   workflow_dispatch:
 
