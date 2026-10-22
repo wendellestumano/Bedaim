@@ -120,10 +120,23 @@ int main() {
           "known custom melee identifiers retain OtherMelee classification");
     check(classifyHeldWeaponIdentifier("addon:war_spear") == HeldWeapon::Spear,
           "spear identifier maps to the spear category");
+    check(classifyHeldWeaponIdentifier("minecraft:diamond_axe") == HeldWeapon::Axe,
+          "vanilla axe item identifier selects Axe");
+    check(classifyHeldWeaponIdentifier("bowcraft:staff") == HeldWeapon::None,
+          "weapon-like namespace does not classify a non-weapon path");
+    check(classifyHeldWeaponIdentifier("swordsmith:healing_wand") == HeldWeapon::None,
+          "sword-like namespace does not classify a non-weapon path");
+    check(classifyHeldWeaponIdentifier("axe_pack:apple") == HeldWeapon::None,
+          "axe-like namespace does not classify a non-weapon path");
+    check(classifyHeldWeaponIdentifier("addon:rainbow_staff") == HeldWeapon::None,
+          "bow substring inside rainbow does not classify a Bow");
+    check(classifyHeldWeaponIdentifier("addon:iron-sword") == HeldWeapon::Sword,
+          "hyphen-delimited custom weapon token is recognized");
+    check(classifyHeldWeaponIdentifier("addon:staff") == HeldWeapon::None,
+          "unrecognized item path fails closed");
     check(classifyHeldWeaponIdentifier("") == HeldWeapon::None,
           "empty item identifier fails closed");
-    // Weapon classification uses ordered substring matching against runtime item IDs;
-    // policy tests above ensure its result can be passed to the ranged predicate safely.
+    // Matching is namespace-independent and token-bounded against the item path.
     check(shouldApplyElytraDistanceDislocation(true, true, true),
           "Elytra dislocation is allowed only when enabled, actively gliding, and Sticky");
     check(!shouldApplyElytraDistanceDislocation(false, true, true),
