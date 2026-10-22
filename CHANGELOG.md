@@ -1,7 +1,8 @@
-## 2026-10-22 — Elytra Aim and Gamemode Checker
-- Exposed Aim Assist's existing Elytra Mode and distance-based downward aim displacement controls in the settings UI; the mode toggle accepts true/false and persists through the existing config.
-- Added Gamemode Checker player overlay with bounded actor enumeration, explicit Unknown handling when native mode information is unavailable, and colors: Spectator purple, Creative red, Survival white, Adventure blue.
-- Gamemode detection uses the existing GameHooks GameType and attackability APIs; no speculative offsets were introduced.
+## 2026-10-22 — Unglide and Gamemode Checker repair
+- Removed the Elytra Mode/lookdown option and its distance-based aim-point displacement code.
+- Made Unglide acquire nearby player targets without requiring Aim Assist to be enabled, while preserving target-distance and safe-ground checks.
+- Gamemode Checker now reads names from the SDK player field first, retries native dependencies, and marks inferred modes separately from exact GameType results.
+- Added additional const/non-const native GameType getter resolution attempts without introducing version-specific offsets.
 
 # Changelog
 
