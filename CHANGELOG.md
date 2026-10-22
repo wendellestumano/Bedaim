@@ -1,3 +1,16 @@
+## 2026-10-22 — Fail-closed AimAssist player gamemode filter
+
+- Changed the player-target gate so AimAssist only selects a player after a native GameType, Creative/Spectator predicate, or native attackability lookup positively confirms the target is attackable.
+- Creative, Spectator, and unresolved/unknown player modes are skipped when **Ignore Creative/Spectator** is enabled; unavailable gamemode APIs are no longer silently treated as permission to aim at a player.
+- Mob targeting and unrelated modules are unchanged. This prevents targeting protected players conservatively, but player AimAssist will also skip Survival/Adventure players until at least one lookup works on the runtime. Build and in-game verification are still required.
+
+## 2026-10-22 — Improve Gamemode Checker runtime diagnostics
+
+- Runtime testing showed that the first checker build compiled but did not identify Creative/Spectator players. The exported-symbol-only approach was not sufficient for the stripped Bedrock library.
+- The HUD now displays actor-list/player counts, whether the level/actor-manager path resolved, and whether any game-mode lookups succeeded. This separates enumeration failures from game-mode API failures rather than reporting only an empty list.
+- No Apollon offsets are hardcoded into this change. The per-version `isAttackableGamemode` native entry and active-player iterator still require validated signatures for the target runtime.
+- This branch remains based on stable commit `afd088f04ebdc24dee974496a329411591ea202f`; no AutoHit or AutoTotem changes are included. CI and in-game validation are required.
+
 # Changelog
 
 ## 2026-10-17 — Downloads export and periodic diagnostics

@@ -90,7 +90,16 @@ thread_local bool syntheticAttackResultObserved = false;
 thread_local bool syntheticAttackNativeResult = false;
 using PlayerGetGameTypeFn = std::int32_t (*)(const void*);
 using PlayerSetGameTypeFn = void (*)(void*, std::int32_t);
+using ActorIsAttackableGamemodeFn = bool (*)(const void*);
+using ActorModePredicateFn = bool (*)(const void*);
 PlayerGetGameTypeFn playerGetGameTypeOriginal = nullptr;
+std::atomic<ActorIsAttackableGamemodeFn> actorIsAttackableGamemodeOriginal{nullptr};
+std::mutex actorAttackableGamemodeResolveMutex;
+std::chrono::steady_clock::time_point actorAttackableGamemodeNextResolve{};
+std::atomic<ActorModePredicateFn> actorIsCreativeOriginal{nullptr};
+std::atomic<ActorModePredicateFn> actorIsSpectatorOriginal{nullptr};
+std::mutex actorModePredicateResolveMutex;
+std::chrono::steady_clock::time_point actorModePredicateNextResolve{};
 PlayerSetGameTypeFn playerSetGameTypeOriginal = nullptr;
 std::chrono::steady_clock::time_point playerGameTypeNextResolve{};
 std::chrono::steady_clock::time_point playerSetGameTypeNextResolve{};
@@ -864,8 +873,149 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
             playerSetGameTypeHookInstalled.load(std::memory_order_acquire),
             playerSetGameTypeSeen.load(std::memory_order_acquire));
     }
+     return false;
+}
+
+
+bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType) {
+    if (!player) return false;
+
+    auto isCreative = actorIsCreativeOriginal.load(std::memory_order_acquire);
+    auto isSpectator = actorIsSpectatorOriginal.load(std::memory_order_acquire);
+    if (!isCreative || !isSpectator) {
+        std::lock_guard<std::mutex> resolveLock(actorModePredicateResolveMutex);
+        isCreative = actorIsCreativeOriginal.load(std::memory_order_acquire);
+        isSpectator = actorIsSpectatorOriginal.load(std::memory_order_acquire);
+        const auto now = std::chrono::steady_clock::now();
+        if ((!isCreative || !isSpectator) && now >= actorModePredicateNextResolve) {
+            actorModePredicateNextResolve = now + std::chrono::seconds(1);
+            // Modern Bedrock/LeviLamina Actor APIs expose these per-actor
+            // predicates. Prefer them to a cache that may never see remote players.
+            const char* creativeSymbols[] = {
+                "_ZNK5Actor10isCreativeEv", "_ZN5Actor10isCreativeEv",
+                "_ZNK6Player10isCreativeEv", "_ZN6Player10isCreativeEv"
+            };
+            const char* spectatorSymbols[] = {
+                "_ZNK5Actor11isSpectatorEv", "_ZN5Actor11isSpectatorEv",
+                "_ZNK6Player11isSpectatorEv", "_ZN6Player11isSpectatorEv"
+            };
+            if (!isCreative) {
+                for (const char* symbol : creativeSymbols) {
+                    void* address = resolveMinecraftFunction(symbol);
+                    if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                    if (!address) continue;
+                    isCreative = reinterpret_cast<ActorModePredicateFn>(address);
+                    actorIsCreativeOriginal.store(isCreative, std::memory_order_release);
+                    break;
+                }
+            }
+            if (!isSpectator) {
+                for (const char* symbol : spectatorSymbols) {
+                    void* address = resolveMinecraftFunction(symbol);
+                    if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                    if (!address) continue;
+                    isSpectator = reinterpret_cast<ActorModePredicateFn>(address);
+                    actorIsSpectatorOriginal.store(isSpectator, std::memory_order_release);
+                    break;
+                }
+            }
+            if (isCreative || isSpectator) {
+                gameHooksLogger().info(
+                    "Resolved per-actor Creative/Spectator predicate(s) (creative={}, spectator={}).",
+                    isCreative != nullptr, isSpectator != nullptr);
+            }
+        }
+    }
+
+    if (!isCreative && !isSpectator) return false;
+    if (!isReadableMemory(player, sizeof(void*))) return false;
+
+    bool creative = false;
+    bool spectator = false;
+    try {
+        if (isCreative) creative = isCreative(player);
+        if (isSpectator) spectator = isSpectator(player);
+    } catch (...) {
+        return false;
+    }
+
+    if (creative && spectator) {
+        static std::atomic_bool loggedConflictingPredicates{false};
+        if (!loggedConflictingPredicates.exchange(true, std::memory_order_acq_rel)) {
+            gameHooksLogger().warn(
+                "Actor mode predicates reported Creative and Spectator for one player; leaving exact mode Unknown.");
+        }
+        return false;
+    }
+    if (creative) {
+        outGameType = 1;
+        return true;
+    }
+    if (spectator) {
+        outGameType = 3;
+        return true;
+    }
+
+    // A negative result is conclusive only if both predicates were resolved.
+    if (isCreative && isSpectator) {
+        outGameType = 0; // Known not to be Creative or Spectator.
+        return true;
+    }
     return false;
 }
 
+bool tryGetPlayerAttackableGamemode(void* player, bool& outAttackable) {
+    if (!player) return false;
+
+    auto fn = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
+    if (!fn) {
+        std::lock_guard<std::mutex> resolveLock(actorAttackableGamemodeResolveMutex);
+        fn = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
+        const auto now = std::chrono::steady_clock::now();
+        if (!fn && now >= actorAttackableGamemodeNextResolve) {
+            actorAttackableGamemodeNextResolve = now + std::chrono::seconds(1);
+            // Apollon calls Actor::isAttackableGamemode on each remote Player
+            // to identify protected/non-attackable gamemodes. Try both common
+            // ABI spellings and the Player inheritance spelling; never use a
+            // hard-coded address from a different Bedrock build.
+            const char* symbols[] = {
+                "_ZNK5Actor20isAttackableGamemodeEv",
+                "_ZN5Actor20isAttackableGamemodeEv",
+                "_ZNK6Player20isAttackableGamemodeEv",
+                "_ZN6Player20isAttackableGamemodeEv"
+            };
+            for (const char* symbol : symbols) {
+                void* address = resolveMinecraftFunction(symbol);
+                if (!address) address = resolveLoadedClientSupportFunction(symbol);
+                if (!address) continue;
+                fn = reinterpret_cast<ActorIsAttackableGamemodeFn>(address);
+                actorIsAttackableGamemodeOriginal.store(fn, std::memory_order_release);
+                gameHooksLogger().info(
+                    "Resolved Actor::isAttackableGamemode fallback for remote-player mode filtering.");
+                break;
+            }
+        }
+    }
+
+    if (!fn) {
+        static std::atomic_bool loggedMissingAttackableFallback{false};
+        if (!loggedMissingAttackableFallback.exchange(true, std::memory_order_acq_rel)) {
+            gameHooksLogger().warn(
+                "Actor::isAttackableGamemode fallback is unavailable by exported symbol; exact GameType lookup or a matching-build signature is still required.");
+        }
+        return false;
+    }
+
+    // Do not call a native method through an obviously stale or unmapped actor
+    // pointer. The game-mode result itself is not cached, since player objects
+    // can be replaced during respawn or world transitions.
+    if (!isReadableMemory(player, sizeof(void*))) return false;
+    try {
+        outAttackable = fn(player);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 
 }

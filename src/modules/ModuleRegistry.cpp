@@ -37,6 +37,7 @@
 #include "hud/keystrokes.hpp"
 #include "visual/thirdpersonnametag.hpp"
 #include "hud/tablist.hpp"
+#include "hud/gamemodechecker.hpp"
 #include "hud/combocounter.hpp"
 #include "hud/ultrakillhud.hpp"
 #include "visual/chunkborder.hpp"
@@ -142,6 +143,7 @@ void registerAllModules() {
     registry.emplace<KeystrokesModule>();
     registry.emplace<ThirdPersonNametagModule>();
     registry.emplace<TablistModule>();
+    registry.emplace<GamemodeCheckerModule>();
     registry.emplace<ChunkBorderModule>();
     registry.emplace<HitboxModule>();
     registry.emplace<ZoomModule>();
