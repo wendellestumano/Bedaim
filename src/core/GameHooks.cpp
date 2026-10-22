@@ -1786,33 +1786,48 @@ bool clientUpdateDetour(void* clientInstance, bool value) {
         ? clientUpdateOriginal(clientInstance, value) : false;
 
     void* acceptedClient = currentClientInstance.load(std::memory_order_acquire);
-    // Once LocalPlayer::normalTick has supplied its own Player* receiver,
-    // don't repeatedly call a getter known to return null for this runtime.
-    // That independent capture is refreshed by every subsequent LocalPlayer tick.
-    const bool hasTickIdentity =
-        g_tickCapturedLocalPlayer.load(std::memory_order_acquire) != nullptr;
-    if (receiverValid && acceptedClient == clientInstance && !hasTickIdentity &&
+    // Keep a 250 ms cadence for GameMode discovery, but stop asking the
+    // known-null ClientInstance getter after LocalPlayer::normalTick has supplied
+    // an authoritative Player* receiver. This preserves attack-observer setup
+    // without allowing a failed getter to erase the direct tick identity.
+    if (receiverValid && acceptedClient == clientInstance &&
         shouldResolveLocalPlayer(acceptedClient)) {
-        // Snapshot the cache before probing. If all authoritative routes fail,
-        // clear only that exact cached value; a concurrent fresh capture wins.
-        void* cachedBeforeResolution =
-            currentLocalPlayer.load(std::memory_order_acquire);
-        void* resolvedPlayer = resolveLocalPlayerFromClientInstance(acceptedClient);
-        if (resolvedPlayer) {
-            void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
+        void* tickIdentity =
+            g_tickCapturedLocalPlayer.load(std::memory_order_acquire);
+        if (tickIdentity) {
+            // Prefer the actual LocalPlayer::normalTick receiver over any result
+            // from a getter invocation that started before the tick capture.
+            currentLocalPlayer.store(tickIdentity, std::memory_order_release);
+            void* resolvedGameMode = gameModeForPlayer(tickIdentity);
             if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
-        } else if (g_tickCapturedLocalPlayer.load(std::memory_order_acquire) !=
-                       currentLocalPlayer.load(std::memory_order_acquire) &&
-                   bedaim::core::clearCachedPointerIfUnchanged(
-                       currentLocalPlayer, cachedBeforeResolution)) {
-            currentGameMode.store(nullptr, std::memory_order_release);
-            bedrocktools::diagnostics::probe(
-                bedrocktools::diagnostics::Level::Warning, "GameHooks",
-                "verified_local_player", "cached_player_invalidated_after_resolution_miss",
-                std::string("client_instance=") +
-                    std::to_string(reinterpret_cast<std::uintptr_t>(acceptedClient)) +
-                    "; stale_player=" +
-                    std::to_string(reinterpret_cast<std::uintptr_t>(cachedBeforeResolution)));
+        } else {
+            // Snapshot the cache before probing. If all authoritative routes fail,
+            // clear only that exact cached value; a concurrent fresh capture wins.
+            void* cachedBeforeResolution =
+                currentLocalPlayer.load(std::memory_order_acquire);
+            void* resolvedPlayer = resolveLocalPlayerFromClientInstance(acceptedClient);
+            // The NormalTick source may have appeared while the resolver ran. It
+            // wins over both a null result and any stale cached pointer.
+            void* capturedDuringResolution =
+                g_tickCapturedLocalPlayer.load(std::memory_order_acquire);
+            if (capturedDuringResolution) {
+                currentLocalPlayer.store(capturedDuringResolution, std::memory_order_release);
+                void* resolvedGameMode = gameModeForPlayer(capturedDuringResolution);
+                if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
+            } else if (resolvedPlayer) {
+                void* resolvedGameMode = gameModeForPlayer(resolvedPlayer);
+                if (resolvedGameMode) (void)attackAvailable(resolvedGameMode);
+            } else if (bedaim::core::clearCachedPointerIfUnchanged(
+                           currentLocalPlayer, cachedBeforeResolution)) {
+                currentGameMode.store(nullptr, std::memory_order_release);
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Warning, "GameHooks",
+                    "verified_local_player", "cached_player_invalidated_after_resolution_miss",
+                    std::string("client_instance=") +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(acceptedClient)) +
+                        "; stale_player=" +
+                        std::to_string(reinterpret_cast<std::uintptr_t>(cachedBeforeResolution)));
+            }
         }
     }
 
