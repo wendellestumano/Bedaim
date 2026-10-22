@@ -13,6 +13,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <mutex>
+#include <string>
 #include <unistd.h>
 
 namespace bedrocktools::core {
