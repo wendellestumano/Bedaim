@@ -12,6 +12,8 @@ public:
  bool m_unglideEnabled=false; float m_targetDistance=8.0f; float m_maxVerticalDifference=4.0f; int m_burstCount=3; int m_pressIntervalMs=120;
 private:
  void processPlayerTick(bedrocktools::sdk::Player*);
+ enum class TriggerState { Idle, Tracking, Triggered };
  std::mutex m_stateMutex; std::chrono::steady_clock::time_point m_nextAttempt{},m_nextDiagnostic{};
+ TriggerState m_triggerState=TriggerState::Idle; void* m_triggeredTarget=nullptr;
  int m_burstRemaining=0;
 };
