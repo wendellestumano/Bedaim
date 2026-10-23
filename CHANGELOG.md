@@ -1,9 +1,18 @@
+## 2026-10-23 — Elytra Macing one-shot trigger and persistent settings
+
+- Changed Unglide from a repeating in-range burst to one Space keymap pulse per target approach. It stays latched while the selected target remains nearby and only re-arms after the target leaves the configured trigger distance plus a configurable margin, or the selected player changes.
+- Kept the required current Aim Assist player target, crosshair-hitbox confirmation, actual Elytra-gliding check, target distance and vertical-difference checks. Gliding detection now accepts a positive result from either the native status-flag query or the synchronized actor-data fallback instead of trusting a single false result.
+- Replaced burst count/interval controls with a configurable re-arm distance margin. Legacy burst keys are ignored so older saved values cannot re-enable repeated pulses.
+- Persist every Unglide setting change immediately through ConfigManager and rebuild the V2 schema from the updated live values so leaving/reopening the LeviLauncher menu does not restore stale slider values.
+- Added host regression checks for the one-shot re-arm policy. Android CI and in-game Elytra/Mace testing are still required; an accepted Key Mapper broadcast is not proof that Space was delivered to Minecraft.
+
 ## 2026-10-23 — Functional Key Mapper AutoHit baseline, per-item profiles, and crosshair-gated Unglide
 
 - Used the AutoHit implementation associated with functional build run `39892141288` as the reference for the explicit Key Mapper broadcast route. AutoHit continues to dispatch through the configured Key Mapper keymap; this branch does not call the native GameMode attack wrapper.
 - Kept the Weapon Profiles bench with Add Weapon, exact item-ID matching (including custom add-on namespaces), independent enabled state, Settings/Delete controls, per-item range/CPS, and a bounded initial burst. Legacy sword/axe/mace/trident settings are migrated into item profiles.
 - Restored the functional Key Mapper cadence limit: at least 83 ms between requests (12 requests/second maximum). The burst CPS setting is also capped at 12 so its UI matches the maximum effective dispatch rate. Target/profile loss cancels a partial burst but does not clear the shared cooldown.
 - Unglide now uses Aim Assist's fresh current target, requires it to be a player, and checks that the camera ray intersects that same target before sending Space through the dedicated Key Mapper keymap. The configured distance and vertical-difference gates remain in force; target loss, a different target type, or an off-target crosshair prevents dispatch.
+- Restored an explicit local-player gliding-state gate before Unglide dispatch on the current feature base; if the player is not gliding, pending burst state is cleared and retries back off for 250 ms. Existing player, crosshair, range, and height gates remain in force.
 - Added host tests for the Unglide crosshair gate and profile burst-rate normalization. Android runtime input delivery still requires an in-game device test; CI build verification is pending for this final commit.
 
 - Extracted Unglide into its own module with independent Key Mapper dispatch, target distance/height settings, cooldown, burst state, diagnostics, and keybind; MaceFall no longer owns Unglide state or settings.

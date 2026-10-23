@@ -1,5 +1,6 @@
 #include "unglide.hpp"
 #include "aimassist.hpp"
+#include "config/ConfigManager.hpp"
 #include "MaceFallPolicy.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
@@ -316,13 +317,16 @@ ActorGetStatusFlagFn resolveActorGetStatusFlag() {
 
 bool playerIsGlidingForUnglide(void* player) {
     if (!player) return false;
+
+    // Some Levi/Minecraft builds expose getStatusFlag but its result can be stale
+    // during Elytra state transitions. Treat either independent source as evidence
+    // of gliding instead of returning false from the first source unconditionally.
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // ActorFlags::Gliding is 32 in the public Bedrock/LeviLamina enum.
-            return getStatusFlag(player, 32);
+            if (getStatusFlag(player, 32)) return true;
         } catch (...) {
-            // Fall through to the existing synchronized-data reader.
+            // Try synchronized actor data below.
         }
     }
     return actorIsGliding(player);
@@ -332,25 +336,44 @@ bool playerIsGlidingForUnglide(void* player) {
 
 
 
-UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
-void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
-void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;}
+UnglideModule::UnglideModule()
+    : Module("Unglide", "Triggers one Space keymap pulse per target approach while Elytra-gliding.", "Unglide") {
+    keybind = 0;
+}
+
+void UnglideModule::onInit() {
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+        [this](auto& event) { processPlayerTick(event.player); });
+}
+
+void UnglideModule::onEnable() {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_nextAttempt = {};
+    m_nextDiagnostic = {};
+    m_triggerArmed = true;
+    m_lastTriggeredTarget = nullptr;
+}
+
+void UnglideModule::onDisable() {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_nextAttempt = {};
+    m_triggerArmed = true;
+    m_lastTriggeredTarget = nullptr;
+}
+
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
 
-    float targetDistance = 8.0f;
+    float targetDistance = 5.0f;
     float maximumHeightDifference = 4.0f;
-    int burstCount = 3;
-    int pressIntervalMs = 120;
+    float rearmDistanceMargin = 2.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || !player || tickStarted < m_nextAttempt) return;
         targetDistance = m_targetDistance;
         maximumHeightDifference = m_maxVerticalDifference;
-        burstCount = m_burstCount;
-        pressIntervalMs = m_pressIntervalMs;
+        rearmDistanceMargin = m_rearmDistanceMargin;
     }
 
     auto report = [&](const char* state, const std::string& detail) {
@@ -366,19 +389,15 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto reject = [&](const char* state, const std::string& detail, int retryMs) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_burstRemaining = 0;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryMs);
         }
         report(state, detail);
     };
 
-    // Match AutoHit's targeting contract: use the fresh Aim Assist target,
-    // require that it is a player, and verify the camera ray intersects that
-    // same target. A nearby player elsewhere on screen is not sufficient.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
         reject("aim_assist_unavailable",
-               "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
+               "Enable Aim Assist so Unglide can read the current player target.", 250);
         return;
     }
 
@@ -387,43 +406,67 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     AABB targetBounds{};
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
-        reject("target_missing_or_stale",
-               "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
+        reject("target_missing_or_stale", "No fresh Aim Assist target; no Space keymap request sent.", 120);
         return;
     }
     if (!aim->currentTargetIsPlayerSnapshot(target)) {
-        reject("target_not_player",
-               "Unglide only triggers for a player target, not a mob target.", 120);
+        reject("target_not_player", "Unglide only triggers for a player target.", 120);
         return;
     }
     if (!validBounds(targetBounds)) {
-        reject("target_bounds_invalid",
-               "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
+        reject("target_bounds_invalid", "Aim Assist target bounds are invalid.", 120);
         return;
     }
-    const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
+
     const auto geometry = targetGeometryFor(player, targetBounds);
     if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
-        reject("target_geometry_invalid",
-               "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
+        reject("target_geometry_invalid", "Target geometry or Aim Assist range is invalid.", 120);
         return;
     }
+
+    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
+    bool triggerArmed = false;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        const bool targetChanged = target != m_lastTriggeredTarget;
+        if (bedaim::macefall::shouldRearmUnglide(
+                m_triggerArmed, targetChanged, geometry.distance,
+                effectiveMaximumDistance, rearmDistanceMargin)) {
+            m_triggerArmed = true;
+        }
+        triggerArmed = m_triggerArmed;
+        if (!triggerArmed) {
+            m_nextAttempt = tickStarted + std::chrono::milliseconds(100);
+        }
+    }
+    if (!triggerArmed) {
+        report("target_approach_latched",
+               "Already triggered for this approach; re-arm only after the target leaves range plus margin or target changes.");
+        return;
+    }
+
+    const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
     if (!crosshairConfirmed) {
         reject("crosshair_not_on_target",
                "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
         return;
     }
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
+
+    const bool isGliding = playerIsGlidingForUnglide(player);
+    if (!bedaim::macefall::shouldPulseUnglideJump(
+            true, isGliding, geometry.distance, effectiveMaximumDistance)) {
+        reject(isGliding ? "target_distance_rejected" : "player_not_gliding",
+               isGliding
+                   ? "Target is outside the configured Unglide distance."
+                   : "Gliding state was not confirmed; no Space keymap request sent.",
+               180);
+        return;
+    }
     if (!bedaim::macefall::shouldTriggerUnglideKeymap(
             true, true, crosshairConfirmed, geometry.distance, effectiveMaximumDistance)) {
-        if (!crosshairConfirmed) {
-            reject("crosshair_not_on_target",
-                   "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
-        } else {
-            reject("target_out_of_range",
-                   std::string("target_distance=") + std::to_string(geometry.distance) +
-                       ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
-        }
+        reject("target_out_of_range",
+               std::string("target_distance=") + std::to_string(geometry.distance) +
+                   ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
         return;
     }
     if (geometry.verticalDifference > maximumHeightDifference) {
@@ -433,42 +476,161 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    // One Space pulse per approach: don't repeat every tick while the target
+    // remains nearby. A new pulse is armed only when the target changes or
+    // moves beyond the configured trigger distance plus the re-arm margin.
     const auto dispatchStarted = std::chrono::steady_clock::now();
     AutomationBroadcastResult result;
-    int remaining = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (!enabled || !m_unglideEnabled || dispatchStarted < m_nextAttempt) return;
-        if (m_burstRemaining <= 0) m_burstRemaining = burstCount;
-
-        // Keep the native state lock across dispatch, matching the previous
-        // lifecycle guarantee that a disable cannot race into a new request.
+        if (!enabled || !m_unglideEnabled || !m_triggerArmed ||
+            dispatchStarted < m_nextAttempt) return;
         result = dispatchUnglideKeyMapperKeymap();
-        const bool sent = result == AutomationBroadcastResult::Sent;
-        if (sent) --m_burstRemaining;
-        else m_burstRemaining = 0;
-        remaining = m_burstRemaining;
-        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(
-            sent ? (remaining > 0 ? pressIntervalMs : 160) : 300);
+        if (result == AutomationBroadcastResult::Sent) {
+            m_triggerArmed = false;
+            m_lastTriggeredTarget = target;
+            m_nextAttempt = dispatchStarted + std::chrono::milliseconds(250);
+        } else {
+            // Failed dispatches leave the trigger armed so a later tick can retry.
+            m_nextAttempt = dispatchStarted + std::chrono::milliseconds(300);
+        }
     }
 
     report(automationBroadcastResultName(result),
-        std::string("crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
+        std::string("one_shot=true; crosshair_confirmed=true; target_distance=") +
+            std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
-            ", burst_remaining=" + std::to_string(remaining) +
+            ", rearm_margin=" + std::to_string(rearmDistanceMargin) +
             ", keymap_uid=" + kUnglideKeymapUid);
 }
-void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
-void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
-void UnglideModule::onMenuRegistered(){
- using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
- s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
- ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
- auto sl=[&](const char*k,const char*title,const char*mn,const char*mx,const char*step,const char*unit,const char*def){ConfigNodeV2 n;n.id=k;n.key=k;n.title=title;n.category="special";n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=def;n.currentValue=vs(k,def);n.hasCurrentValue=true;n.minValue=mn;n.maxValue=mx;n.step=step;n.unit=unit;s.node(std::move(n));};
- sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
- ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
+void UnglideModule::loadConfig(const nlohmann::json& j) {
+    Module::loadConfig(j);
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
+    m_targetDistance = std::clamp(j.value("m_unglideTargetDistance", m_targetDistance), 1.0f, 32.0f);
+    m_maxVerticalDifference = std::clamp(j.value("m_unglideMaxVerticalDifference", m_maxVerticalDifference), 0.5f, 16.0f);
+    m_rearmDistanceMargin = std::clamp(j.value("m_unglideRearmDistanceMargin", m_rearmDistanceMargin), 0.5f, 8.0f);
+    // Legacy burst keys are intentionally ignored: Unglide is a single pulse per
+    // approach now, so old saved burst counts cannot restore the repeated-trigger bug.
+    m_triggerArmed = true;
+    m_lastTriggeredTarget = nullptr;
 }
-bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
- if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
- try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
+
+void UnglideModule::saveConfig(nlohmann::json& j) {
+    Module::saveConfig(j);
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    j["m_unglideEnabled"] = m_unglideEnabled;
+    j["m_unglideTargetDistance"] = m_targetDistance;
+    j["m_unglideMaxVerticalDifference"] = m_maxVerticalDifference;
+    j["m_unglideRearmDistanceMargin"] = m_rearmDistanceMargin;
+}
+
+void UnglideModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    nlohmann::json config;
+    saveConfig(config);
+    auto valueString = [&](const char* key, const char* fallback) -> std::string {
+        const auto it = config.find(key);
+        if (it == config.end() || it->is_null()) return fallback;
+        if (it->is_string()) return it->get<std::string>();
+        if (it->is_boolean()) return it->get<bool>() ? "true" : "false";
+        return it->dump();
+    };
+
+    schema.defaultCategory("special").category(
+        "special", "Special", "Elytra Macing — one Unglide pulse per target approach");
+
+    ConfigNodeV2 enabledNode;
+    enabledNode.id = "m_unglideEnabled";
+    enabledNode.key = enabledNode.id;
+    enabledNode.title = "Enable Elytra Macing";
+    enabledNode.description = "Send one Space keymap pulse when gliding near the selected player.";
+    enabledNode.category = "special";
+    enabledNode.type = ConfigControlTypeV2::Toggle;
+    enabledNode.defaultValue = "false";
+    enabledNode.currentValue = valueString(enabledNode.key.c_str(), "false");
+    enabledNode.hasCurrentValue = true;
+    schema.node(std::move(enabledNode));
+
+    auto addSlider = [&](const char* key, const char* title, const char* minimum,
+                         const char* maximum, const char* step, const char* unit,
+                         const char* fallback, const char* description) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.description = description;
+        node.category = "special";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.defaultValue = fallback;
+        node.currentValue = valueString(key, fallback);
+        node.hasCurrentValue = true;
+        node.minValue = minimum;
+        node.maxValue = maximum;
+        node.step = step;
+        node.unit = unit;
+        schema.node(std::move(node));
+    };
+
+    addSlider("m_unglideTargetDistance", "Trigger distance", "1", "32", "0.5",
+              " blocks", "5.0", "Distance to the selected player that triggers the single pulse.");
+    addSlider("m_unglideMaxVerticalDifference", "Maximum height difference", "0.5", "16", "0.5",
+              " blocks", "4.0", "Reject targets that are too far above or below the player.");
+    addSlider("m_unglideRearmDistanceMargin", "Re-arm distance margin", "0.5", "8", "0.5",
+              " blocks", "2.0", "The target must move this much beyond trigger distance before another pulse is allowed.");
+
+    ConfigNodeV2 keybindNode;
+    keybindNode.id = "keybind";
+    keybindNode.key = "keybind";
+    keybindNode.title = "Keybind";
+    keybindNode.category = "special";
+    keybindNode.type = ConfigControlTypeV2::Keybind;
+    schema.node(std::move(keybindNode));
+    setConfigSchemaJson(moduleId, schema.toJson());
+}
+
+bool UnglideModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    bool recognized = true;
+    if (key == "m_unglideEnabled") {
+        const bool parsed = value == "true" || value == "1" || value == "on";
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_unglideEnabled = parsed;
+        if (!parsed) {
+            m_triggerArmed = true;
+            m_lastTriggeredTarget = nullptr;
+        }
+    } else {
+        float number = 0.0f;
+        try {
+            std::size_t parsedLength = 0;
+            const std::string text(value);
+            number = std::stof(text, &parsedLength);
+            while (parsedLength < text.size() &&
+                   std::isspace(static_cast<unsigned char>(text[parsedLength]))) ++parsedLength;
+            if (parsedLength != text.size() || !std::isfinite(number)) return false;
+        } catch (...) {
+            return false;
+        }
+
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (key == "m_unglideTargetDistance") {
+            m_targetDistance = std::clamp(number, 1.0f, 32.0f);
+            m_triggerArmed = true;
+            m_lastTriggeredTarget = nullptr;
+        } else if (key == "m_unglideMaxVerticalDifference") {
+            m_maxVerticalDifference = std::clamp(number, 0.5f, 16.0f);
+        } else if (key == "m_unglideRearmDistanceMargin") {
+            m_rearmDistanceMargin = std::clamp(number, 0.5f, 8.0f);
+        } else {
+            recognized = false;
+        }
+    }
+    if (!recognized) return false;
+
+    // Persist immediately; merely updating runtime fields lets the old schema
+    // reappear with stale values when the LeviLauncher menu closes/reopens.
+    bedrocktools::config::ConfigManager::get().save();
+    onMenuRegistered(); // Rebuild currentValue from the just-updated module state.
+    return true;
 }
