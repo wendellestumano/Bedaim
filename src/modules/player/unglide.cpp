@@ -337,36 +337,50 @@ void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nex
 void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;}
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
-    std::lock_guard<std::mutex> lock(m_stateMutex);
-    if (!enabled || !m_unglideEnabled || !player) return;
+    const auto tickStarted = std::chrono::steady_clock::now();
 
-    const auto now = std::chrono::steady_clock::now();
+    float targetDistance = 8.0f;
+    float maximumHeightDifference = 4.0f;
+    int burstCount = 3;
+    int pressIntervalMs = 120;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (!enabled || !m_unglideEnabled || !player || tickStarted < m_nextAttempt) return;
+        targetDistance = m_targetDistance;
+        maximumHeightDifference = m_maxVerticalDifference;
+        burstCount = m_burstCount;
+        pressIntervalMs = m_pressIntervalMs;
+    }
+
     auto report = [&](const char* state, const std::string& detail) {
-        if (now < m_nextDiagnostic) return;
-        m_nextDiagnostic = now + std::chrono::seconds(1);
+        const auto eventTime = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            if (eventTime < m_nextDiagnostic) return;
+            m_nextDiagnostic = eventTime + std::chrono::seconds(1);
+        }
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Debug, "Unglide", "gate", state, detail);
     };
     auto reject = [&](const char* state, const std::string& detail, int retryMs) {
-        // Cancel a partially consumed burst while preserving the last target
-        // identity. Brief target/crosshair loss must not re-arm an opening burst
-        // for the same actor when the view returns.
-        m_burstRemaining = 0;
-        m_nextAttempt = now + std::chrono::milliseconds(retryMs);
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryMs);
+        }
         report(state, detail);
     };
 
-    if (now < m_nextAttempt) return;
-
-    // Match AutoHit's targeting contract: use the current fresh Aim Assist target,
-    // require that it is a player, and verify the camera ray intersects that same
-    // target. A nearby player elsewhere on screen is not sufficient to trigger.
+    // Match AutoHit's targeting contract: use the fresh Aim Assist target,
+    // require that it is a player, and verify the camera ray intersects that
+    // same target. A nearby player elsewhere on screen is not sufficient.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
         reject("aim_assist_unavailable",
                "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
         return;
     }
+
     auto* aim = static_cast<AimAssistModule*>(aimBase);
     void* target = nullptr;
     AABB targetBounds{};
@@ -399,36 +413,44 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    const float maximumDistance = std::min(m_targetDistance, aimRange);
-    if (geometry.distance > maximumDistance) {
+    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
+    if (geometry.distance > effectiveMaximumDistance) {
         reject("target_out_of_range",
                std::string("target_distance=") + std::to_string(geometry.distance) +
-                   ", maximum=" + std::to_string(maximumDistance), 120);
+                   ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
         return;
     }
-    if (geometry.verticalDifference > m_maxVerticalDifference) {
+    if (geometry.verticalDifference > maximumHeightDifference) {
         reject("target_height_out_of_range",
                std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
-                   ", maximum=" + std::to_string(m_maxVerticalDifference), 120);
+                   ", maximum=" + std::to_string(maximumHeightDifference), 120);
         return;
     }
 
-    if (m_burstRemaining <= 0) m_burstRemaining = m_burstCount;
-    const auto result = dispatchUnglideKeyMapperKeymap();
-    const bool sent = result == AutomationBroadcastResult::Sent;
-    if (sent) --m_burstRemaining;
-    else m_burstRemaining = 0;
+    const auto dispatchStarted = std::chrono::steady_clock::now();
+    AutomationBroadcastResult result;
+    int remaining = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (!enabled || !m_unglideEnabled || dispatchStarted < m_nextAttempt) return;
+        if (m_burstRemaining <= 0) m_burstRemaining = burstCount;
+
+        // Keep the native state lock across dispatch, matching the previous
+        // lifecycle guarantee that a disable cannot race into a new request.
+        result = dispatchUnglideKeyMapperKeymap();
+        const bool sent = result == AutomationBroadcastResult::Sent;
+        if (sent) --m_burstRemaining;
+        else m_burstRemaining = 0;
+        remaining = m_burstRemaining;
+        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(
+            sent ? (remaining > 0 ? pressIntervalMs : 160) : 300);
+    }
 
     report(automationBroadcastResultName(result),
         std::string("crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
-            ", burst_remaining=" + std::to_string(m_burstRemaining) +
+            ", burst_remaining=" + std::to_string(remaining) +
             ", keymap_uid=" + kUnglideKeymapUid);
-
-    // Space keymap remains asynchronous; keep the configured burst cadence and
-    // a longer quiet period once the burst completes.
-    m_nextAttempt = now + std::chrono::milliseconds(
-        sent ? (m_burstRemaining > 0 ? m_pressIntervalMs : 160) : 300);
 }
 void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
