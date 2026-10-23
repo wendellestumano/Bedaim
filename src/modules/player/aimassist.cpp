@@ -1327,12 +1327,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         m_hasAimPoint = true;
     }
     const float slideAlpha = stickyMode ? 1.0f : (1.0f - std::exp(-12.0f * deltaSeconds));
-    // Preserve the established Grudado behavior. The configured virtual hitbox
-    // selects the sliding point when distance-dependent hitbox is enabled; disabling
-    // it restores center-lock. Smooth/Adaptativo keep their existing interpolation.
-    // Sticky follows a stable center/four-point anchor regardless of distance hitbox.
-    // Smooth and Adaptive retain horizontal hitbox sliding.
-    const Vec3 effectiveAimPoint = stickyMode ? centerAimPoint : slidePoint;
+    // Sticky always follows a stable center/four-point anchor. Distance-based
+    // hitbox scaling affects the steering region, not the lock point. Smooth and
+    // Adaptive retain the sliding point.
+    const Vec3 effectiveAimPoint =
+        bedaim::aimpolicy::shouldUseStableAimAnchor(stickyMode) ? centerAimPoint : slidePoint;
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
