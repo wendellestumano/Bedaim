@@ -4,6 +4,7 @@
 #include "AutoHitGuards.hpp"
 #include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
+#include "../../core/JavaVm.hpp"
 #include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
 
@@ -15,6 +16,9 @@
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
+#include <charconv>
+#include <optional>
+#include <unordered_set>
 #include <dlfcn.h>
 #include <jni.h>
 #include <cmath>
@@ -43,12 +47,17 @@ JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
 class AutoHitJniEnvironment {
 public:
     AutoHitJniEnvironment() {
-        const auto getVms = resolveJniGetCreatedJavaVMs();
-        if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
-        JavaVM* vm = nullptr; jsize count = 0;
-        if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
-        if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
-        mVm = vm;
+        // Prefer the JavaVM provided by Preloader; dynamic lookup is a fallback
+        // for runtimes that do not expose ModContext::javaVm().
+        mVm = bedrocktools::core::javaVm();
+        if (!mVm) {
+            const auto getVms = resolveJniGetCreatedJavaVMs();
+            if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
+            JavaVM* vm = nullptr; jsize count = 0;
+            if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
+            if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
+            mVm = vm;
+        }
         const jint envStatus = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
         if (envStatus == JNI_OK) { status = VmLookupStatus::Ready; return; }
         if (envStatus != JNI_EDETACHED) { status = VmLookupStatus::AttachFailed; return; }
@@ -183,6 +192,59 @@ Vec3 eyePosition(Player* player) {
     Vec3 eye = position;
     eye.y += 1.5f;
     return eye;
+}
+
+using WeaponCustomProfile = bedaim::autohit::weapon::CustomProfile;
+using WeaponCatalogEntry = bedaim::autohit::weapon::CatalogEntry;
+
+WeaponCustomProfile makeLegacyProfile(const WeaponCatalogEntry& entry, float range,
+                                      bool swordEnabled, float swordCps,
+                                      bool axeEnabled, float axeCps,
+                                      bool maceEnabled, float maceCps,
+                                      bool tridentEnabled, float tridentCps) {
+    using namespace bedaim::autohit::weapon;
+    const Class category = classify(entry.identifier);
+    const Profile old = resolve(category, swordEnabled, swordCps, axeEnabled, axeCps,
+                                maceEnabled, maceCps, tridentEnabled, tridentCps);
+    WeaponCustomProfile profile;
+    profile.identifier = std::string(entry.identifier);
+    profile.displayName = std::string(entry.displayName);
+    profile.enabled = old.enabled;
+    profile.range = normalizeRange(range);
+    profile.cps = old.cps > 0.0f ? normalizeNormalCps(old.cps) : 4.0f;
+    if (category == Class::Spear) {
+        profile.enabled = false;
+        profile.cps = 3.0f;
+    } else if (category == Class::Bow || category == Class::Crossbow) {
+        profile.enabled = false;
+        profile.cps = 4.0f;
+    }
+    profile.initialBurstHits = 0;
+    profile.initialBurstCps = 13.0f;
+    return normalizeCustomProfile(std::move(profile));
+}
+
+bool parseIndexSuffix(std::string_view key, std::string_view prefix, std::size_t& index) {
+    if (!key.starts_with(prefix)) return false;
+    const auto suffix = key.substr(prefix.size());
+    if (suffix.empty()) return false;
+    std::size_t parsed = 0;
+    const auto result = std::from_chars(suffix.data(), suffix.data() + suffix.size(), parsed);
+    if (result.ec != std::errc{} || result.ptr != suffix.data() + suffix.size()) return false;
+    index = parsed;
+    return true;
+}
+
+bool parseBoolValue(std::string_view value, bool& out) {
+    if (value == "true" || value == "1" || value == "on" || value == "yes") {
+        out = true;
+        return true;
+    }
+    if (value == "false" || value == "0" || value == "off" || value == "no") {
+        out = false;
+        return true;
+    }
+    return false;
 }
 
 }
