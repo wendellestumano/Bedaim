@@ -1,3 +1,11 @@
+## 2026-10-23 — Functional Key Mapper AutoHit baseline, per-item profiles, and crosshair-gated Unglide
+
+- Used the AutoHit implementation associated with functional build run `39892141288` as the reference for the explicit Key Mapper broadcast route. AutoHit continues to dispatch through the configured Key Mapper keymap; this branch does not call the native GameMode attack wrapper.
+- Kept the Weapon Profiles bench with Add Weapon, exact item-ID matching (including custom add-on namespaces), independent enabled state, Settings/Delete controls, per-item range/CPS, and a bounded initial burst. Legacy sword/axe/mace/trident settings are migrated into item profiles.
+- Restored the functional Key Mapper cadence limit: at least 83 ms between requests (12 requests/second maximum). The burst CPS setting is also capped at 12 so its UI matches the maximum effective dispatch rate. Target/profile loss cancels a partial burst but does not clear the shared cooldown.
+- Unglide now uses Aim Assist's fresh current target, requires it to be a player, and checks that the camera ray intersects that same target before sending Space through the dedicated Key Mapper keymap. The configured distance and vertical-difference gates remain in force; target loss, a different target type, or an off-target crosshair prevents dispatch.
+- Added host tests for the Unglide crosshair gate and profile burst-rate normalization. Android runtime input delivery still requires an in-game device test; CI build verification is pending for this final commit.
+
 - Extracted Unglide into its own module with independent Key Mapper dispatch, target distance/height settings, cooldown, burst state, diagnostics, and keybind; MaceFall no longer owns Unglide state or settings.
 - Removed the unused MaceFall attack-interval setting/state (it was written but never consulted before attacks).
 - ShiftBlade no longer exits early solely because MaceFall has claimed slam priority; it can continue its target/slot logic during combat.
@@ -15,7 +23,7 @@
 
 - Replaced Unglide's MacroDroid Spacebar trigger with the supplied Key Mapper explicit receiver/action/UID-extra broadcast and keymap UID `e2225852-1df2-4232-bb26-606f11fc8745`.
 - Reused AutoHit's JNI dispatch pattern: prefer the Preloader-cached JavaVM, retain dynamic VM discovery as fallback, build an explicit `ComponentName`, and pass the UID as a string extra.
-- Kept Unglide's existing gliding/target/ground-clearance gates and throttling unchanged. A successful Android broadcast confirms dispatch only; actual keymap execution and in-game Spacebar behavior still require device testing.
+- Kept the configured target distance and vertical-difference gates and dedicated keymap. The current implementation additionally checks Aim Assist's selected player and crosshair ray before dispatch; a successful Android broadcast confirms dispatch only, not in-game Space input.
 - Android build and runtime validation pending CI/device testing.
 
 ## 2026-10-23 — Per-item weapon profiles, initial burst, and Unglide VM bootstrap
@@ -24,7 +32,7 @@
 - Migrated the previous sword/axe/mace/trident defaults into item-specific profiles on first load, while keeping old config fields for backwards compatibility.
 - Added per-item attack range, steady normal CPS (up to 12), Initial Burst Hits, and Initial Burst CPS (up to 20). A burst starts when the held item or target changes, consumes only accepted Key Mapper broadcast requests, and switches to normal CPS after the final accepted burst request. Android acceptance is not server-confirmed damage.
 - Added host regression assertions for custom ID normalization/matching and profile range/CPS/burst clamping.
-- Cached the JavaVM supplied by Preloader and updated both Android input bridges to prefer it, retaining dynamic JNI discovery as fallback. Unglide still uses its documented MacroDroid Spacebar broadcast and its independent nearby-player lookup; runtime delivery and in-game behavior require device testing.
+- Cached the JavaVM supplied by Preloader and updated the input bridges to use it as a fallback when dynamic VM discovery is unavailable. Unglide now validates the current Aim Assist target and crosshair before its dedicated Key Mapper Space keymap; actual device delivery still requires runtime testing.
 - Build and device validation are pending CI after this change. All work stays off `main`.
 
 ## 2026-10-22 — Key Mapper routing and steady AutoHit cadence
