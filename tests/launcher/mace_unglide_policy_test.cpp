@@ -46,6 +46,20 @@ int main() {
     check(!bedaim::macefall::shouldDispatchUnglideBurst(true, 0),
           "same target cannot restart after burst exhaustion");
 
+    using bedaim::macefall::shouldBeginUnglideDispatch;
+    check(shouldBeginUnglideDispatch(true, false, false, 0),
+          "first eligible dispatch can reserve the keymap request");
+    check(shouldBeginUnglideDispatch(true, false, true, 2),
+          "remaining burst press can reserve a dispatch");
+    check(!shouldBeginUnglideDispatch(true, true, true, 2),
+          "concurrent tick cannot dispatch while JNI request is in flight");
+    check(!shouldBeginUnglideDispatch(false, false, false, 0),
+          "disabled Unglide cannot reserve a dispatch");
+    check(!shouldBeginUnglideDispatch(true, false, true, 0),
+          "spent one-shot latch cannot reserve another dispatch");
+    check(!shouldBeginUnglideDispatch(true, false, true, -1),
+          "invalid negative burst count cannot reserve a dispatch");
+
     using bedaim::macefall::shouldKeepUnglideTriggerLatch;
     check(shouldKeepUnglideTriggerLatch(true, false, false, false),
           "transient crosshair, range, height, or gliding gate preserves a spent trigger latch");

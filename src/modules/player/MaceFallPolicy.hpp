@@ -31,6 +31,12 @@ inline bool shouldDispatchUnglideBurst(bool alreadyTriggered, int burstRemaining
     return !alreadyTriggered || burstRemaining > 0;
 }
 
+inline bool shouldBeginUnglideDispatch(bool enabled, bool dispatchInProgress,
+                                       bool alreadyTriggered, int burstRemaining) noexcept {
+    return enabled && !dispatchInProgress && burstRemaining >= 0 &&
+           shouldDispatchUnglideBurst(alreadyTriggered, burstRemaining);
+}
+
 // A completed trigger stays latched through transient gate failures. Only a
 // lost/changed target or explicit separation beyond the re-arm radius may reset it.
 inline bool shouldKeepUnglideTriggerLatch(bool wasTriggered, bool targetLost,

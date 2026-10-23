@@ -391,7 +391,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     float maximumHeightDifference = 4.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (!enabled || !m_unglideEnabled || !player || tickStarted < m_nextAttempt) return;
+        if (!enabled || !m_unglideEnabled || !player || m_dispatchInProgress || tickStarted < m_nextAttempt) return;
         targetDistance = m_targetDistance;
         maximumHeightDifference = m_maxVerticalDifference;
     }
@@ -547,36 +547,54 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    bool burstAlreadyFinished = false;
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        burstAlreadyFinished = !bedaim::macefall::shouldDispatchUnglideBurst(
-            m_triggerState == TriggerState::Triggered, m_burstRemaining);
-        if (burstAlreadyFinished) m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
-    }
-    if (burstAlreadyFinished) return;
-
     const auto dispatchStarted = std::chrono::steady_clock::now();
     AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
     int remaining = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (!enabled || !m_unglideEnabled || dispatchStarted < m_nextAttempt) return;
+        if (!enabled || !m_unglideEnabled || m_dispatchInProgress ||
+            dispatchStarted < m_nextAttempt) {
+            return;
+        }
         if (m_triggerState != TriggerState::Triggered) {
             m_triggerState = TriggerState::Triggered;
             m_targetLatched = true;
             m_latchedTarget = target;
             m_burstRemaining = std::clamp(m_burstCount, 1, 10);
         }
+        if (!bedaim::macefall::shouldBeginUnglideDispatch(
+                enabled && m_unglideEnabled, m_dispatchInProgress,
+                m_triggerState == TriggerState::Triggered, m_burstRemaining)) {
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+            return;
+        }
+        // Reserve one dispatch while locked, then release the mutex before JNI
+        // and sendBroadcast so slow Java work cannot block config/disable callbacks.
+        m_dispatchInProgress = true;
+    }
 
-        // Send the configured bounded burst only once for this approach.
+    try {
         result = dispatchUnglideKeyMapperKeymap();
-        const bool sent = result == AutomationBroadcastResult::Sent;
-        if (sent) --m_burstRemaining;
-        else m_burstRemaining = 0;
-        remaining = m_burstRemaining;
-        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(
-            sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 160) : 500);
+    } catch (...) {
+        result = AutomationBroadcastResult::BroadcastFailed;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_dispatchInProgress = false;
+        // Disable/re-enable may reset the state while the broadcast is in flight.
+        // Do not let a late completion overwrite that newer state.
+        if (m_latchedTarget == target &&
+            m_triggerState == TriggerState::Triggered) {
+            const bool sent = result == AutomationBroadcastResult::Sent;
+            if (sent) --m_burstRemaining;
+            else m_burstRemaining = 0;
+            remaining = m_burstRemaining;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(
+                sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 160) : 500);
+        } else {
+            remaining = m_burstRemaining;
+        }
     }
 
     report(automationBroadcastResultName(result),

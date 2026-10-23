@@ -13,6 +13,8 @@ public:
 private:
  void processPlayerTick(bedrocktools::sdk::Player*);
  std::mutex m_stateMutex; std::chrono::steady_clock::time_point m_nextAttempt{},m_nextDiagnostic{};
+ // Protects the state while the potentially blocking JNI broadcast runs without the mutex.
+ bool m_dispatchInProgress=false;
  int m_burstRemaining=0;
  enum class TriggerState { Idle, Tracking, Triggered };
  TriggerState m_triggerState=TriggerState::Idle;

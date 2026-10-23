@@ -1,3 +1,9 @@
+## 2026-10-23 — Run Unglide JNI dispatch outside the state mutex
+- Reserve a single in-flight keymap dispatch under the mutex, then release the lock before JNI object creation and `sendBroadcast`.
+- Suppress concurrent ticks while a dispatch is in flight and prevent a late completion from overwriting a disabled/reset module state.
+- Add host policy checks for in-flight suppression, disabled state, exhausted bursts, and invalid burst counts.
+- Device-side timing and gameplay behavior remain unverified.
+
 ## 2026-10-23 — Carry memory-safe Unglide fallback onto the one-shot state machine
 - Port the bounded `/proc/self/mem` reader onto the latest one-shot latch branch so the state-machine fixes do not reintroduce direct dereferences of entity-data pointers.
 - Keep the native status-flag lookup as a positive fast path; when the state cannot be read safely, fail closed with `gliding_state_unavailable` and do not send Space.
