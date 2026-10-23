@@ -31,6 +31,13 @@ inline bool shouldDispatchUnglideBurst(bool alreadyTriggered, int burstRemaining
     return !alreadyTriggered || burstRemaining > 0;
 }
 
+// A completed trigger stays latched through transient gate failures. Only a
+// lost/changed target or explicit separation beyond the re-arm radius may reset it.
+inline bool shouldKeepUnglideTriggerLatch(bool wasTriggered, bool targetLost,
+                                          bool targetChanged, bool outsideRearmRadius) noexcept {
+    return wasTriggered && !targetLost && !targetChanged && !outsideRearmRadius;
+}
+
 inline bool shouldTriggerUnglideKeymap(bool enabled, bool targetIsPlayer,
                                        bool crosshairConfirmed, float targetDistance,
                                        float maximumTargetDistance) noexcept {
