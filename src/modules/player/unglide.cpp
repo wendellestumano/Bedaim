@@ -436,12 +436,15 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    if (!playerIsGlidingForUnglide(player)) {
-        resetTargetState();
-        reject("player_not_gliding",
-               "Local player is not gliding with Elytra; no Space keymap request sent.", 250);
-        return;
-    }
+    // On recent Bedrock builds both the native ActorFlags query and the
+    // synchronized-data fallback can report "not gliding" while the local
+    // player is visibly flying with Elytra. Do not make this unreliable state
+    // reader a hard blocker: retain the strict fresh-player-target, geometry,
+    // height, range and crosshair gates below, then issue only the configured
+    // bounded Key Mapper burst. This can also produce a one-shot jump when
+    // grounded, so device validation should specifically check the intended
+    // Elytra approach behavior.
+    const bool glidingStateConfirmed = playerIsGlidingForUnglide(player);
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.
@@ -524,7 +527,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     report(automationBroadcastResultName(result),
-        std::string("state=triggered; crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
+        std::string("state=triggered; crosshair_confirmed=true; gliding_state_confirmed=") +\n        (glidingStateConfirmed ? "true" : "false") + ", target_distance=" + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
             ", keymap_uid=" + kUnglideKeymapUid);
