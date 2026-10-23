@@ -417,31 +417,40 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
     const bool isGliding = playerIsGlidingForUnglide(player);
-    if (!bedaim::macefall::shouldPulseUnglideJump(
-            true, isGliding, geometry.distance, effectiveMaximumDistance)) {
-        reject(isGliding ? "target_distance_rejected" : "player_not_gliding",
-               isGliding
-                   ? "Target distance rejected by Unglide pulse policy."
-                   : "Local player is not gliding; Space keymap request suppressed.",
-               250);
+    if (!isGliding) {
+        reject("player_not_gliding",
+               "Local player is not gliding; Space keymap request suppressed.", 250);
+        return;
+    }
+
+    // Keep a target in Tracking while the player is approaching. Range/height
+    // gates are activation conditions, not reasons to discard the current target.
+    auto trackWithoutDispatch = [&](const char* state, const std::string& detail) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_triggeredTarget = target;
+            m_triggerState = TriggerState::Tracking;
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+        }
+        report(state, detail);
+    };
+    if (geometry.distance > effectiveMaximumDistance) {
+        trackWithoutDispatch("tracking_out_of_range",
+            std::string("target_distance=") + std::to_string(geometry.distance) +
+                ", activation_distance=" + std::to_string(effectiveMaximumDistance));
         return;
     }
     if (!bedaim::macefall::shouldTriggerUnglideKeymap(
             true, true, crosshairConfirmed, geometry.distance, effectiveMaximumDistance)) {
-        if (!crosshairConfirmed) {
-            reject("crosshair_not_on_target",
-                   "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
-        } else {
-            reject("target_out_of_range",
-                   std::string("target_distance=") + std::to_string(geometry.distance) +
-                       ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
-        }
+        reject("crosshair_not_on_target",
+               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
         return;
     }
     if (geometry.verticalDifference > maximumHeightDifference) {
-        reject("target_height_out_of_range",
+        trackWithoutDispatch("tracking_height_out_of_range",
                std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
-                   ", maximum=" + std::to_string(maximumHeightDifference), 120);
+                   ", activation_height=" + std::to_string(maximumHeightDifference));
         return;
     }
 
