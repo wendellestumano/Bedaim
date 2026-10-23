@@ -84,8 +84,23 @@ inline std::string normalizeIdentifier(std::string_view identifier) {
     std::string normalized(identifier.substr(begin, end - begin));
     std::transform(normalized.begin(), normalized.end(), normalized.begin(),
         [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (!normalized.empty() && normalized.find(':') == std::string::npos)
+
+    // InventoryAccess currently reads Item::getDescriptionId, which can return
+    // localization keys (item.minecraft.diamond_sword) instead of registry IDs.
+    // Canonicalize both forms so profile matching uses one stable key.
+    if (normalized.starts_with("item.")) {
+        normalized.erase(0, 5);
+        const auto separator = normalized.find('.');
+        if (separator == std::string::npos) {
+            normalized = "minecraft:" + normalized;
+        } else {
+            const auto namespaceName = normalized.substr(0, separator);
+            const auto itemName = normalized.substr(separator + 1);
+            normalized = namespaceName + ":" + itemName;
+        }
+    } else if (!normalized.empty() && normalized.find(':') == std::string::npos) {
         normalized = "minecraft:" + normalized;
+    }
     return normalized;
 }
 
