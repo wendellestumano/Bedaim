@@ -4,6 +4,7 @@
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
+#include "../../core/memory/SafeRead.hpp"
 #include "../../config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
@@ -11,6 +12,7 @@
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cctype>
@@ -19,6 +21,7 @@
 #include <dlfcn.h>
 #include <jni.h>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -91,48 +94,79 @@ TargetGeometry targetGeometryFor(
 }
 
 using ActorGetStatusFlagFn = bool (*)(const void*, int);
-bool actorIsGliding(void* actor) {
+std::optional<bool> actorIsGliding(void* actor) {
     using namespace bedrocktools::sdk;
-    if (!actor) return false;
+    if (!actor) return std::nullopt;
 
     const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
     if (actorAddress <= 0x1000 ||
         actorAddress > std::numeric_limits<std::uintptr_t>::max() -
-            offsets::Actor::mEntityData - sizeof(void*)) return false;
+            offsets::Actor::mEntityData - sizeof(void*)) {
+        return std::nullopt;
+    }
 
-    const auto wrapperAddress = actorAddress + offsets::Actor::mEntityData;
     void* component = nullptr;
-    std::memcpy(&component, reinterpret_cast<const void*>(wrapperAddress), sizeof(component));
-    if (reinterpret_cast<std::uintptr_t>(component) <= 0x1000) return false;
-
+    if (!bedrocktools::core::memory::readSelfMemory(
+            actorAddress + offsets::Actor::mEntityData, &component, sizeof(component))) {
+        return std::nullopt;
+    }
     const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
-    auto** begin = *reinterpret_cast<void***>(componentAddress);
-    auto** end = *reinterpret_cast<void***>(componentAddress + sizeof(void*));
-    if (!begin || !end) return false;
+    if (componentAddress <= 0x1000) return std::nullopt;
 
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
-    if (endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(void*) != 0 ||
-        (endAddress - beginAddress) / sizeof(void*) > 192) return false;
+    struct ComponentVectorView {
+        void** begin;
+        void** end;
+    } view{};
+    if (!bedrocktools::core::memory::readSelfMemory(
+            componentAddress, &view, sizeof(view))) {
+        return std::nullopt;
+    }
+    if (!view.begin || !view.end) return std::nullopt;
 
-    const auto count = (endAddress - beginAddress) / sizeof(void*);
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(view.begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(view.end);
+    if (endAddress < beginAddress) return std::nullopt;
+    const auto span = endAddress - beginAddress;
+    if (span % sizeof(void*) != 0 || span / sizeof(void*) > 192) {
+        return std::nullopt;
+    }
+
+    const auto count = static_cast<std::size_t>(span / sizeof(void*));
+    if (count == 0) return std::nullopt;
+    std::array<void*, 192> items{};
+    if (!bedrocktools::core::memory::readSelfMemory(
+            beginAddress, items.data(), count * sizeof(void*))) {
+        return std::nullopt;
+    }
+
+    constexpr std::size_t dataStart = offsets::DataItem::mType;
+    constexpr std::size_t dataEnd = offsets::DataItem::mValue + sizeof(std::uint64_t);
+    constexpr std::size_t dataLength = dataEnd - dataStart;
     for (std::size_t index = 0; index < count; ++index) {
-        void* item = begin[index];
-        if (reinterpret_cast<std::uintptr_t>(item) <= 0x1000) continue;
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
+        const auto itemAddress = reinterpret_cast<std::uintptr_t>(items[index]);
+        if (itemAddress <= 0x1000 ||
+            itemAddress > std::numeric_limits<std::uintptr_t>::max() - dataEnd) {
+            continue;
+        }
+
+        std::array<std::uint8_t, dataLength> snapshot{};
+        if (!bedrocktools::core::memory::readSelfMemory(
+                itemAddress + dataStart, snapshot.data(), snapshot.size())) {
+            continue;
+        }
+
         std::uint8_t type = 0;
         std::uint16_t id = 0;
-        std::memcpy(&type, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mType), sizeof(type));
-        std::memcpy(&id, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mId), sizeof(id));
+        std::uint64_t flags = 0;
+        std::memcpy(&type, snapshot.data(), sizeof(type));
+        std::memcpy(&id, snapshot.data() + (offsets::DataItem::mId - dataStart), sizeof(id));
+        std::memcpy(&flags, snapshot.data() + (offsets::DataItem::mValue - dataStart), sizeof(flags));
         if (type != 7 || id != 0) continue;
 
-        std::uint64_t flags = 0;
-        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue), sizeof(flags));
         constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
         return (flags & kGlidingFlag) != 0;
     }
-    return false;
+    return std::nullopt;
 }
 
 bool isTrustedGameProvider(void* address) {
@@ -326,17 +360,16 @@ ActorGetStatusFlagFn resolveActorGetStatusFlag() {
     return function;
 }
 
-bool playerIsGlidingForUnglide(void* player) {
-    if (!player) return false;
+std::optional<bool> playerIsGlidingForUnglide(void* player) {
+    if (!player) return std::nullopt;
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // Treat the native status flag as a positive signal, not an
-            // authoritative negative: builds may differ in flag layout.
-            // A false result must not suppress the synchronized-data fallback.
+            // Treat the native status flag as a positive signal only; some builds
+            // differ in flag layout, so a negative result still tries safe entity data.
             if (getStatusFlag(player, 32)) return true;
         } catch (...) {
-            // Fall through to the synchronized-data reader.
+            // Fall through to the bounded synchronized-data reader.
         }
     }
     return actorIsGliding(player);
@@ -442,7 +475,14 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    if (!playerIsGlidingForUnglide(player)) {
+    const auto glidingState = playerIsGlidingForUnglide(player);
+    if (!glidingState) {
+        reject("gliding_state_unavailable",
+               "Trusted status-flag lookup and the safe synchronized-data read are unavailable; no Space keymap request sent.",
+               1000);
+        return;
+    }
+    if (!*glidingState) {
         reject("player_not_gliding",
                "Local player is not gliding with Elytra; no Space keymap request sent.", 250);
         return;
