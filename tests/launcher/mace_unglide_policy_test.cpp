@@ -46,6 +46,18 @@ int main() {
     check(!bedaim::macefall::shouldDispatchUnglideBurst(true, 0),
           "same target cannot restart after burst exhaustion");
 
+    using bedaim::macefall::shouldKeepUnglideTriggerLatch;
+    check(shouldKeepUnglideTriggerLatch(true, false, false, false),
+          "transient crosshair, range, height, or gliding gate preserves a spent trigger latch");
+    check(!shouldKeepUnglideTriggerLatch(true, true, false, false),
+          "target loss releases the trigger latch");
+    check(!shouldKeepUnglideTriggerLatch(true, false, true, false),
+          "a different target can start a new trigger");
+    check(!shouldKeepUnglideTriggerLatch(true, false, false, true),
+          "separation beyond the outer radius releases the trigger latch");
+    check(!shouldKeepUnglideTriggerLatch(false, false, false, false),
+          "an untriggered tracking state is not treated as a spent latch");
+
     using bedaim::macefall::shouldRearmUnglide;
     check(!shouldRearmUnglide(5.0f, 8.0f),
           "remaining inside trigger range does not re-arm another Unglide");

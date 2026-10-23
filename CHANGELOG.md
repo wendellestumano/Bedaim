@@ -1,3 +1,8 @@
+## 2026-10-23 — Preserve Unglide one-shot latch across transient gates
+- Cancel a partial burst on transient crosshair, range/height, or gliding gate failures without re-arming a target whose burst already fired.
+- Keep the completed trigger latched until target loss, a different target, or separation beyond the configured outer re-arm radius.
+- Add host policy regressions for transient-gate latch preservation and the explicit re-arm conditions.
+
 ## 2026-10-23 — Unglide input dispatch and Aim Assist ignore-list crash hardening
 - Updated Unglide's gliding check so a negative result from the native `Actor::getStatusFlag` lookup no longer immediately rejects the tick; it now falls back to the synchronized entity-data flag reader. Runtime confirmation is still required.
 

@@ -376,13 +376,17 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto reject = [&](const char* state, const std::string& detail, int retryMs) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            // A hard gate failure invalidates the previous trigger latch. Without
-            // this reset, toggling Aim Assist off/on or briefly losing target data
-            // could leave the same target permanently blocked after a spent burst.
+            const bool preserveTriggeredLatch = bedaim::macefall::shouldKeepUnglideTriggerLatch(
+                m_triggerState == TriggerState::Triggered && m_targetLatched,
+                false, false, false);
+            // A transient gate failure cancels the remaining burst but must not
+            // re-arm the same approach. Reset target state before reject() when
+            // target identity/data is genuinely lost or invalid.
             m_burstRemaining = 0;
-            m_latchedTarget = nullptr;
-            m_targetLatched = false;
-            m_triggerState = TriggerState::Idle;
+            if (!preserveTriggeredLatch) {
+                m_targetLatched = false;
+                m_triggerState = m_latchedTarget ? TriggerState::Tracking : TriggerState::Idle;
+            }
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryMs);
         }
         report(state, detail);
@@ -400,6 +404,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // same target. A nearby player elsewhere on screen is not sufficient.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
+        resetTargetState();
         reject("aim_assist_unavailable",
                "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
         return;
@@ -430,6 +435,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
     const auto geometry = targetGeometryFor(player, targetBounds);
     if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
+        resetTargetState();
         reject("target_geometry_invalid",
                "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
         return;
@@ -437,7 +443,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
     if (!playerIsGlidingForUnglide(player)) {
-        resetTargetState();
         reject("player_not_gliding",
                "Local player is not gliding with Elytra; no Space keymap request sent.", 250);
         return;
@@ -463,7 +468,13 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (geometry.distance > effectiveMaximumDistance) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_triggerState = TriggerState::Tracking;
+            const bool preserveTriggeredLatch = bedaim::macefall::shouldKeepUnglideTriggerLatch(
+                m_triggerState == TriggerState::Triggered && m_targetLatched,
+                false, false, false);
+            if (!preserveTriggeredLatch) {
+                m_targetLatched = false;
+                m_triggerState = TriggerState::Tracking;
+            }
             m_burstRemaining = 0;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
         }
@@ -475,7 +486,13 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (geometry.verticalDifference > maximumHeightDifference) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_triggerState = TriggerState::Tracking;
+            const bool preserveTriggeredLatch = bedaim::macefall::shouldKeepUnglideTriggerLatch(
+                m_triggerState == TriggerState::Triggered && m_targetLatched,
+                false, false, false);
+            if (!preserveTriggeredLatch) {
+                m_targetLatched = false;
+                m_triggerState = TriggerState::Tracking;
+            }
             m_burstRemaining = 0;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
         }
@@ -485,7 +502,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
     if (!crosshairConfirmed) {
-        resetTargetState();
         reject("crosshair_not_on_target",
                "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
         return;
