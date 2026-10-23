@@ -1,4 +1,7 @@
 #include "esp.hpp"
+#include "hitbox.hpp"
+#include "../ModuleRegistry.hpp"
+#include "core/Diagnostics.hpp"
 #include <pl/ModMenu.hpp>
 #include <algorithm>
 #include <cctype>
@@ -29,6 +32,15 @@ void loadColor(const nlohmann::json& j,const char* key,std::uint32_t& v){
 }
 }
 EspModule::EspModule():Module("ESP","Draws player outlines colored by detected game mode."){showInMenu=true;}
+void EspModule::onEnable() {
+    auto* hitbox = static_cast<HitboxModule*>(ModuleRegistry::get().find("bedrocktools.Hitbox"));
+    if (hitbox) {
+        hitbox->ensureRenderHook();
+    } else {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "ESP",
+            "renderlevel_hook=unavailable; Hitbox renderer module was not registered");
+    }
+}
 void EspModule::onMenuRegistered(){
  using namespace pl::modmenu;ConfigSchemaBuilder schema;nlohmann::json config;saveConfig(config);
  schema.defaultCategory("players").category("players","Players","Player outline visibility and distance")

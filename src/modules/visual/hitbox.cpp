@@ -518,8 +518,17 @@ void HitboxModule::applyPatch() {
       "ESP",m_patched?"renderlevel_hook=installed":"renderlevel_hook=installation_failed");
 }
 
-void HitboxModule::onEnable() {
+void HitboxModule::ensureRenderHook() {
+    if (!m_patchTarget) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "ESP",
+            "renderlevel_hook=unavailable; RenderLevel signature was not resolved");
+        return;
+    }
     applyPatch();
+}
+
+void HitboxModule::onEnable() {
+    ensureRenderHook();
 }
 
 void HitboxModule::onDisable() {

@@ -12,6 +12,8 @@ public:
     void onInit() override;
     void onEnable() override;
     void onDisable() override;
+    // Retry shared RenderLevel hook installation when a dependent visual module turns on.
+    void ensureRenderHook();
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
