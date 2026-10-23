@@ -414,6 +414,16 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
+    const bool isGliding = playerIsGlidingForUnglide(player);
+    if (!bedaim::macefall::shouldPulseUnglideJump(
+            true, isGliding, geometry.distance, effectiveMaximumDistance)) {
+        reject(isGliding ? "target_distance_rejected" : "player_not_gliding",
+               isGliding
+                   ? "Target distance rejected by Unglide pulse policy."
+                   : "Local player is not gliding; Space keymap request suppressed.",
+               250);
+        return;
+    }
     if (!bedaim::macefall::shouldTriggerUnglideKeymap(
             true, true, crosshairConfirmed, geometry.distance, effectiveMaximumDistance)) {
         if (!crosshairConfirmed) {
