@@ -1,4 +1,6 @@
 #include "unglide.hpp"
+#include "aimassist.hpp"
+#include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
 #include <pl/ModMenu.hpp>
@@ -6,7 +8,6 @@
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
-#include <bedrocktools/memory/Signatures.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -18,7 +19,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <vector>
 namespace {
 
 bool finiteVec(const bedrocktools::sdk::Vec3& value) {
@@ -56,107 +56,38 @@ bedrocktools::sdk::Vec3 eyePositionFor(bedrocktools::sdk::Player* player) {
     return eyePosition;
 }
 
-bool targetWithinRange(bedrocktools::sdk::Player* player,
-                       const bedrocktools::sdk::AABB& targetBounds,
-                       float range) {
-    if (!player || !validBounds(targetBounds)) return false;
-    const auto eye = eyePositionFor(player);
-    if (!finiteVec(eye)) return false;
-    const bedrocktools::sdk::Vec3 hitPoint{
-        std::clamp(eye.x, targetBounds.min.x, targetBounds.max.x),
-        std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
-        std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
-    };
-    const float distanceSq = distanceSquared(eye, hitPoint);
-    const float safeRange = std::clamp(range, 2.0f, 6.0f);
-    // Overlap with the player's eye still counts as in range.
-    return std::isfinite(distanceSq) && distanceSq <= safeRange * safeRange;
-}
-
-
-using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
-using ActorIsPlayerFn = bool (*)(void*);
-using ActorGetStatusFlagFn = bool (*)(const void*, int);
-
-// Unglide resolves its own nearby-player snapshot; it does not depend on the
-// Aim Assist module toggle or the camera-tracking module's cached target.
-struct NearbyPlayerSearch {
-    bool queryReady = false;
-    bool found = false;
+struct TargetGeometry {
+    bool valid = false;
     float distance = std::numeric_limits<float>::infinity();
     float verticalDifference = std::numeric_limits<float>::infinity();
 };
 
-NearbyPlayerSearch nearestNearbyPlayerDistance(
-    bedrocktools::sdk::Player* player, float maximumDistance) {
+TargetGeometry targetGeometryFor(
+    bedrocktools::sdk::Player* player,
+    const bedrocktools::sdk::AABB& bounds) {
     using namespace bedrocktools::sdk;
-    NearbyPlayerSearch result{};
-    if (!player) return result;
-
-    static GetRuntimeActorListFn actorList = nullptr;
-    static ActorIsPlayerFn actorIsPlayer = nullptr;
-    if (!actorList) actorList = reinterpret_cast<GetRuntimeActorListFn>(
-        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
-    if (!actorIsPlayer) actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
-        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
-    if (!actorList || !actorIsPlayer) return result;
-
-    auto* localActor = reinterpret_cast<Actor*>(player);
-    auto* level = localActor->level();
-    void* manager = level ? level->actorManager() : nullptr;
-    if (!manager) return result;
-
-    std::vector<void*> actors;
-    try {
-        actors = actorList(manager);
-    } catch (...) {
-        return result;
-    }
-    if (actors.size() > 4096) return result;
-    result.queryReady = true;
+    TargetGeometry result{};
+    if (!player || !validBounds(bounds)) return result;
 
     const Vec3 eye = eyePositionFor(player);
-    if (!finiteVec(eye)) {
-        result.queryReady = false;
-        return result;
-    }
-    const float range = std::clamp(
-        std::isfinite(maximumDistance) ? maximumDistance : 8.0f, 1.0f, 32.0f);
+    if (!finiteVec(eye)) return result;
 
-    for (void* candidate : actors) {
-        if (!candidate || candidate == player ||
-            reinterpret_cast<std::uintptr_t>(candidate) <= 0x1000) continue;
+    const Vec3 nearest{
+        std::clamp(eye.x, bounds.min.x, bounds.max.x),
+        std::clamp(eye.y, bounds.min.y, bounds.max.y),
+        std::clamp(eye.z, bounds.min.z, bounds.max.z)
+    };
+    const float distanceSq = distanceSquared(eye, nearest);
+    if (!std::isfinite(distanceSq) || distanceSq < 0.0f) return result;
 
-        bool isPlayer = false;
-        try {
-            isPlayer = actorIsPlayer(candidate);
-        } catch (...) {
-            continue;
-        }
-        if (!isPlayer) continue;
-
-        auto* target = reinterpret_cast<Actor*>(candidate);
-        if (target->level() != level) continue;
-        const AABB bounds = target->bounds();
-        if (!validBounds(bounds)) continue;
-
-        const Vec3 nearest{
-            std::clamp(eye.x, bounds.min.x, bounds.max.x),
-            std::clamp(eye.y, bounds.min.y, bounds.max.y),
-            std::clamp(eye.z, bounds.min.z, bounds.max.z)
-        };
-        const float distanceSq = distanceSquared(eye, nearest);
-        if (!std::isfinite(distanceSq) || distanceSq > range * range) continue;
-        const float distance = std::sqrt(std::max(0.0f, distanceSq));
-        if (!result.found || distance < result.distance) {
-            result.found = true;
-            result.distance = distance;
-            result.verticalDifference = std::abs(((bounds.min.y + bounds.max.y) * 0.5f) - eye.y);
-        }
-    }
+    result.valid = true;
+    result.distance = std::sqrt(std::max(0.0f, distanceSq));
+    result.verticalDifference = std::abs(
+        ((bounds.min.y + bounds.max.y) * 0.5f) - eye.y);
     return result;
 }
 
+using ActorGetStatusFlagFn = bool (*)(const void*, int);
 bool actorIsGliding(void* actor) {
     using namespace bedrocktools::sdk;
     if (!actor) return false;
@@ -404,18 +335,100 @@ UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapp
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
 void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;}
 void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;}
-void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* p){
- using namespace bedrocktools::sdk;std::lock_guard<std::mutex> l(m_stateMutex);if(!enabled||!m_unglideEnabled||!p)return;const auto now=std::chrono::steady_clock::now();
- auto report=[&](const char* s,const std::string& d){if(now<m_nextDiagnostic)return;m_nextDiagnostic=now+std::chrono::seconds(1);bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,"Unglide","gate",s,d);};
- if(now<m_nextAttempt)return;const auto t=nearestNearbyPlayerDistance(p,m_targetDistance);
- if(!t.queryReady){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_lookup_unavailable","ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable; retrying after a short backoff.");return;}
- if(!t.found){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("no_nearby_player","No other player inside configured target distance.");return;}
- if(t.verticalDifference>m_maxVerticalDifference){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_height_out_of_range",std::string("vertical_difference=")+std::to_string(t.verticalDifference)+", maximum="+std::to_string(m_maxVerticalDifference));return;}
- if(t.distance>m_targetDistance){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_out_of_range","Closest player exceeds configured distance.");return;}
- if(m_burstRemaining<=0)m_burstRemaining=m_burstCount;const auto r=dispatchUnglideKeyMapperKeymap();const bool sent=r==AutomationBroadcastResult::Sent;if(sent)--m_burstRemaining;else m_burstRemaining=0;
- report(automationBroadcastResultName(r),std::string("target_distance=")+std::to_string(t.distance)+", vertical_difference="+std::to_string(t.verticalDifference)+", burst_remaining="+std::to_string(m_burstRemaining)+", keymap_uid="+kUnglideKeymapUid);
- // Keep the burst cadence short and retry failed broadcasts promptly without blocking the tick thread.
- m_nextAttempt=now+std::chrono::milliseconds(sent?(m_burstRemaining>0?m_pressIntervalMs:160):300);
+void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    if (!enabled || !m_unglideEnabled || !player) return;
+
+    const auto now = std::chrono::steady_clock::now();
+    auto report = [&](const char* state, const std::string& detail) {
+        if (now < m_nextDiagnostic) return;
+        m_nextDiagnostic = now + std::chrono::seconds(1);
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug, "Unglide", "gate", state, detail);
+    };
+    auto reject = [&](const char* state, const std::string& detail, int retryMs) {
+        // Cancel a partially consumed burst while preserving the last target
+        // identity. Brief target/crosshair loss must not re-arm an opening burst
+        // for the same actor when the view returns.
+        m_burstRemaining = 0;
+        m_nextAttempt = now + std::chrono::milliseconds(retryMs);
+        report(state, detail);
+    };
+
+    if (now < m_nextAttempt) return;
+
+    // Match AutoHit's targeting contract: use the current fresh Aim Assist target,
+    // require that it is a player, and verify the camera ray intersects that same
+    // target. A nearby player elsewhere on screen is not sufficient to trigger.
+    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    if (!aimBase || !aimBase->enabled) {
+        reject("aim_assist_unavailable",
+               "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
+        return;
+    }
+    auto* aim = static_cast<AimAssistModule*>(aimBase);
+    void* target = nullptr;
+    AABB targetBounds{};
+    float aimRange = 0.0f;
+    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+        reject("target_missing_or_stale",
+               "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
+        return;
+    }
+    if (!aim->currentTargetIsPlayerSnapshot(target)) {
+        reject("target_not_player",
+               "Unglide only triggers for a player target, not a mob target.", 120);
+        return;
+    }
+    if (!validBounds(targetBounds)) {
+        reject("target_bounds_invalid",
+               "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
+        return;
+    }
+    if (!aim->currentTargetInCrosshair(player, target)) {
+        reject("crosshair_not_on_target",
+               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
+        return;
+    }
+
+    const auto geometry = targetGeometryFor(player, targetBounds);
+    if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
+        reject("target_geometry_invalid",
+               "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
+        return;
+    }
+
+    const float maximumDistance = std::min(m_targetDistance, aimRange);
+    if (geometry.distance > maximumDistance) {
+        reject("target_out_of_range",
+               std::string("target_distance=") + std::to_string(geometry.distance) +
+                   ", maximum=" + std::to_string(maximumDistance), 120);
+        return;
+    }
+    if (geometry.verticalDifference > m_maxVerticalDifference) {
+        reject("target_height_out_of_range",
+               std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
+                   ", maximum=" + std::to_string(m_maxVerticalDifference), 120);
+        return;
+    }
+
+    if (m_burstRemaining <= 0) m_burstRemaining = m_burstCount;
+    const auto result = dispatchUnglideKeyMapperKeymap();
+    const bool sent = result == AutomationBroadcastResult::Sent;
+    if (sent) --m_burstRemaining;
+    else m_burstRemaining = 0;
+
+    report(automationBroadcastResultName(result),
+        std::string("crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
+            ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
+            ", burst_remaining=" + std::to_string(m_burstRemaining) +
+            ", keymap_uid=" + kUnglideKeymapUid);
+
+    // Space keymap remains asynchronous; keep the configured burst cadence and
+    // a longer quiet period once the burst completes.
+    m_nextAttempt = now + std::chrono::milliseconds(
+        sent ? (m_burstRemaining > 0 ? m_pressIntervalMs : 160) : 300);
 }
 void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
