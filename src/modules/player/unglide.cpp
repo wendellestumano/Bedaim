@@ -334,8 +334,8 @@ bool playerIsGlidingForUnglide(void* player) {
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
-void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;}
+void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_triggerState=TriggerState::Idle;m_triggeredTarget=nullptr;}
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_triggerState=TriggerState::Idle;m_triggeredTarget=nullptr;}
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
@@ -367,6 +367,8 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
             m_burstRemaining = 0;
+            m_triggerState = TriggerState::Idle;
+            m_triggeredTarget = nullptr;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryMs);
         }
         report(state, detail);
@@ -444,12 +446,29 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const auto dispatchStarted = std::chrono::steady_clock::now();
-    AutomationBroadcastResult result;
+    AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
     int remaining = 0;
+    bool alreadyTriggered = false;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || dispatchStarted < m_nextAttempt) return;
-        if (m_burstRemaining <= 0) m_burstRemaining = burstCount;
+
+        // A target change starts a new approach. The same target can trigger
+        // only one bounded burst until a gate rejects it or the target is lost.
+        if (m_triggeredTarget != target) {
+            m_triggeredTarget = target;
+            m_triggerState = TriggerState::Tracking;
+            m_burstRemaining = 0;
+        }
+        alreadyTriggered = m_triggerState == TriggerState::Triggered && m_burstRemaining <= 0;
+        if (alreadyTriggered) {
+            m_nextAttempt = dispatchStarted + std::chrono::milliseconds(80);
+            return;
+        }
+        if (m_triggerState != TriggerState::Triggered) {
+            m_triggerState = TriggerState::Triggered;
+            m_burstRemaining = burstCount;
+        }
 
         // Keep the native state lock across dispatch, matching the previous
         // lifecycle guarantee that a disable cannot race into a new request.
@@ -463,7 +482,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     report(automationBroadcastResultName(result),
-        std::string("crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
+        std::string("state=triggered; crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
             ", keymap_uid=" + kUnglideKeymapUid);
