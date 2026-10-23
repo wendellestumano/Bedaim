@@ -408,13 +408,14 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* p){
  using namespace bedrocktools::sdk;std::lock_guard<std::mutex> l(m_stateMutex);if(!enabled||!m_unglideEnabled||!p)return;const auto now=std::chrono::steady_clock::now();
  auto report=[&](const char* s,const std::string& d){if(now<m_nextDiagnostic)return;m_nextDiagnostic=now+std::chrono::seconds(1);bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,"Unglide","gate",s,d);};
  if(now<m_nextAttempt)return;const auto t=nearestNearbyPlayerDistance(p,m_targetDistance);
- if(!t.queryReady){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(1000);report("target_lookup_unavailable","ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable.");return;}
+ if(!t.queryReady){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_lookup_unavailable","ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable; retrying after a short backoff.");return;}
  if(!t.found){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("no_nearby_player","No other player inside configured target distance.");return;}
  if(t.verticalDifference>m_maxVerticalDifference){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_height_out_of_range",std::string("vertical_difference=")+std::to_string(t.verticalDifference)+", maximum="+std::to_string(m_maxVerticalDifference));return;}
  if(t.distance>m_targetDistance){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_out_of_range","Closest player exceeds configured distance.");return;}
  if(m_burstRemaining<=0)m_burstRemaining=3;const auto r=dispatchUnglideKeyMapperKeymap();const bool sent=r==AutomationBroadcastResult::Sent;if(sent)--m_burstRemaining;else m_burstRemaining=0;
  report(automationBroadcastResultName(r),std::string("target_distance=")+std::to_string(t.distance)+", vertical_difference="+std::to_string(t.verticalDifference)+", burst_remaining="+std::to_string(m_burstRemaining)+", keymap_uid="+kUnglideKeymapUid);
- m_nextAttempt=now+std::chrono::milliseconds(sent?(m_burstRemaining>0?120:1000):1500);
+ // Keep the burst cadence short and retry failed broadcasts promptly without blocking the tick thread.
+ m_nextAttempt=now+std::chrono::milliseconds(sent?(m_burstRemaining>0?80:160):300);
 }
 void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;}
