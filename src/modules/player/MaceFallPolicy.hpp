@@ -16,8 +16,9 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
 }
 
 inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
-                                    float targetDistance, float maximumTargetDistance) noexcept {
-    if (!enabled || !isGliding ||
+                                    float targetDistance, float maximumTargetDistance,
+                                    bool crosshairConfirmed = true) noexcept {
+    if (!enabled || !isGliding || !crosshairConfirmed ||
         !std::isfinite(targetDistance) || !std::isfinite(maximumTargetDistance) ||
         targetDistance < 0.0f) {
         return false;
