@@ -99,330 +99,6 @@ float distanceToTargetBounds(bedrocktools::sdk::Player* player,
         : std::numeric_limits<float>::infinity();
 }
 
-using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
-using ActorIsPlayerFn = bool (*)(void*);
-using ActorGetStatusFlagFn = bool (*)(const void*, int);
-
-// Unglide resolves its own nearby-player snapshot; it does not depend on the
-// Aim Assist module toggle or the camera-tracking module's cached target.
-struct NearbyPlayerSearch {
-    bool queryReady = false;
-    bool found = false;
-    float distance = std::numeric_limits<float>::infinity();
-    float verticalDifference = std::numeric_limits<float>::infinity();
-};
-
-NearbyPlayerSearch nearestNearbyPlayerDistance(
-    bedrocktools::sdk::Player* player, float maximumDistance) {
-    using namespace bedrocktools::sdk;
-    NearbyPlayerSearch result{};
-    if (!player) return result;
-
-    static GetRuntimeActorListFn actorList = nullptr;
-    static ActorIsPlayerFn actorIsPlayer = nullptr;
-    if (!actorList) actorList = reinterpret_cast<GetRuntimeActorListFn>(
-        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
-    if (!actorIsPlayer) actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
-        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
-    if (!actorList || !actorIsPlayer) return result;
-
-    auto* localActor = reinterpret_cast<Actor*>(player);
-    auto* level = localActor->level();
-    void* manager = level ? level->actorManager() : nullptr;
-    if (!manager) return result;
-
-    std::vector<void*> actors;
-    try {
-        actors = actorList(manager);
-    } catch (...) {
-        return result;
-    }
-    if (actors.size() > 4096) return result;
-    result.queryReady = true;
-
-    const Vec3 eye = eyePositionFor(player);
-    if (!finiteVec(eye)) {
-        result.queryReady = false;
-        return result;
-    }
-    const float range = std::clamp(
-        std::isfinite(maximumDistance) ? maximumDistance : 8.0f, 1.0f, 32.0f);
-
-    for (void* candidate : actors) {
-        if (!candidate || candidate == player ||
-            reinterpret_cast<std::uintptr_t>(candidate) <= 0x1000) continue;
-
-        bool isPlayer = false;
-        try {
-            isPlayer = actorIsPlayer(candidate);
-        } catch (...) {
-            continue;
-        }
-        if (!isPlayer) continue;
-
-        auto* target = reinterpret_cast<Actor*>(candidate);
-        if (target->level() != level) continue;
-        const AABB bounds = target->bounds();
-        if (!validBounds(bounds)) continue;
-
-        const Vec3 nearest{
-            std::clamp(eye.x, bounds.min.x, bounds.max.x),
-            std::clamp(eye.y, bounds.min.y, bounds.max.y),
-            std::clamp(eye.z, bounds.min.z, bounds.max.z)
-        };
-        const float distanceSq = distanceSquared(eye, nearest);
-        if (!std::isfinite(distanceSq) || distanceSq > range * range) continue;
-        const float distance = std::sqrt(std::max(0.0f, distanceSq));
-        if (!result.found || distance < result.distance) {
-            result.found = true;
-            result.distance = distance;
-            result.verticalDifference = std::abs(((bounds.min.y + bounds.max.y) * 0.5f) - eye.y);
-        }
-    }
-    return result;
-}
-
-bool actorIsGliding(void* actor) {
-    using namespace bedrocktools::sdk;
-    if (!actor) return false;
-
-    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-    if (actorAddress <= 0x1000 ||
-        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
-            offsets::Actor::mEntityData - sizeof(void*)) return false;
-
-    const auto wrapperAddress = actorAddress + offsets::Actor::mEntityData;
-    void* component = nullptr;
-    std::memcpy(&component, reinterpret_cast<const void*>(wrapperAddress), sizeof(component));
-    if (reinterpret_cast<std::uintptr_t>(component) <= 0x1000) return false;
-
-    const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
-    auto** begin = *reinterpret_cast<void***>(componentAddress);
-    auto** end = *reinterpret_cast<void***>(componentAddress + sizeof(void*));
-    if (!begin || !end) return false;
-
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
-    if (endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(void*) != 0 ||
-        (endAddress - beginAddress) / sizeof(void*) > 192) return false;
-
-    const auto count = (endAddress - beginAddress) / sizeof(void*);
-    for (std::size_t index = 0; index < count; ++index) {
-        void* item = begin[index];
-        if (reinterpret_cast<std::uintptr_t>(item) <= 0x1000) continue;
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
-        std::uint8_t type = 0;
-        std::uint16_t id = 0;
-        std::memcpy(&type, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mType), sizeof(type));
-        std::memcpy(&id, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mId), sizeof(id));
-        if (type != 7 || id != 0) continue;
-
-        std::uint64_t flags = 0;
-        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue), sizeof(flags));
-        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-        return (flags & kGlidingFlag) != 0;
-    }
-    return false;
-}
-
-bool isTrustedGameProvider(void* address) {
-    if (!address) return false;
-    Dl_info info{};
-    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
-    const std::string_view path(info.dli_fname);
-    return path.find("libminecraftpe.so") != std::string_view::npos ||
-        path.find("liblevilamina.so") != std::string_view::npos ||
-        path.find("libLeviLamina.so") != std::string_view::npos;
-}
-
-void* resolveTrustedGameSymbol(const char* symbol) {
-    if (!symbol) return nullptr;
-    static void* minecraftHandle = nullptr;
-    static void* leviLaminaHandle = nullptr;
-    static void* leviLaminaAltHandle = nullptr;
-    if (!minecraftHandle)
-        minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaHandle)
-        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaAltHandle)
-        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
-
-    void* address = dlsym(RTLD_DEFAULT, symbol);
-    if (isTrustedGameProvider(address)) return address;
-    if (minecraftHandle) {
-        address = dlsym(minecraftHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaHandle) {
-        address = dlsym(leviLaminaHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaAltHandle) {
-        address = dlsym(leviLaminaAltHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    return nullptr;
-}
-
-// Trigger the user's dedicated Key Mapper keymap for Unglide.
-// Reuse AutoHit's JNI/JavaVM and explicit-component broadcast pattern, with a
-// separate UID so the Unglide action remains independent from AutoHit.
-constexpr const char* kKeyMapperPackage = "io.github.sds100.keymapper";
-constexpr const char* kKeyMapperReceiver =
-    "io.github.sds100.keymapper.api.TriggerKeyMapsBroadcastReceiver";
-constexpr const char* kKeyMapperAction =
-    "io.github.sds100.keymapper.ACTION_TRIGGER_KEYMAP_BY_UID";
-constexpr const char* kKeyMapperUidExtra =
-    "io.github.sds100.keymapper.EXTRA_KEYMAP_UID";
-constexpr const char* kUnglideKeymapUid =
-    "e2225852-1df2-4232-bb26-606f11fc8745";
-
-using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
-enum class VmLookupStatus { Ready, SymbolUnavailable, QueryFailed, NoVmFound, AttachFailed };
-JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
-    // RTLD_NOLOAD may fail under Android linker namespaces even if ART is loaded.
-    static void* artHandle = dlopen("libart.so", RTLD_NOW);
-    static void* helperHandle = dlopen("libnativehelper.so", RTLD_NOW);
-    auto fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
-    if (!fn && artHandle) fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
-    if (!fn && helperHandle) fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(helperHandle, "JNI_GetCreatedJavaVMs"));
-    return fn;
-}
-class UnglideJniEnvironment {
-public:
-    UnglideJniEnvironment() {
-        // Prefer the JavaVM provided by Preloader; dynamic lookup is a fallback
-        // for runtimes that do not expose ModContext::javaVm().
-        mVm = bedrocktools::core::javaVm();
-        if (!mVm) {
-            const auto getVms = resolveJniGetCreatedJavaVMs();
-            if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
-            JavaVM* vm = nullptr; jsize count = 0;
-            if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
-            if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
-            mVm = vm;
-        }
-        const jint envStatus = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
-        if (envStatus == JNI_OK) { status = VmLookupStatus::Ready; return; }
-        if (envStatus != JNI_EDETACHED) { status = VmLookupStatus::AttachFailed; return; }
-        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) { mAttached = true; status = VmLookupStatus::Ready; }
-        else { mEnv = nullptr; status = VmLookupStatus::AttachFailed; }
-    }
-    ~UnglideJniEnvironment() { if (mAttached && mVm) mVm->DetachCurrentThread(); }
-    JNIEnv* get() const noexcept { return mEnv; }
-    VmLookupStatus lookupStatus() const noexcept { return status; }
-private:
-    JavaVM* mVm = nullptr; JNIEnv* mEnv = nullptr; bool mAttached = false;
-    VmLookupStatus status = VmLookupStatus::SymbolUnavailable;
-};
-
-
-bool clearUnglideJniException(JNIEnv* env) {
-    if (!env || !env->ExceptionCheck()) return false;
-    env->ExceptionClear();
-    return true;
-}
-
-enum class AutomationBroadcastResult { Sent, VmSymbolUnavailable, VmQueryFailed, VmNotFound, ThreadAttachFailed, ContextUnavailable, IntentUnavailable, BroadcastFailed };
-AutomationBroadcastResult dispatchUnglideKeyMapperKeymap() {
-    UnglideJniEnvironment jni;
-    JNIEnv* env = jni.get();
-    if (!env) {
-        switch (jni.lookupStatus()) {
-            case VmLookupStatus::SymbolUnavailable: return AutomationBroadcastResult::VmSymbolUnavailable;
-            case VmLookupStatus::QueryFailed: return AutomationBroadcastResult::VmQueryFailed;
-            case VmLookupStatus::NoVmFound: return AutomationBroadcastResult::VmNotFound;
-            case VmLookupStatus::AttachFailed: return AutomationBroadcastResult::ThreadAttachFailed;
-            case VmLookupStatus::Ready: break;
-        }
-        return AutomationBroadcastResult::VmSymbolUnavailable;
-    }
-    if (env->PushLocalFrame(40) != JNI_OK) { clearUnglideJniException(env); return AutomationBroadcastResult::IntentUnavailable; }
-    struct LocalFrameGuard { JNIEnv* env; ~LocalFrameGuard() { env->PopLocalFrame(nullptr); } } frame{env};
-    jobject app = nullptr;
-    jclass threadClass = env->FindClass("android/app/ActivityThread");
-    if (threadClass && !clearUnglideJniException(env)) {
-        jmethodID m = env->GetStaticMethodID(threadClass, "currentApplication", "()Landroid/app/Application;");
-        if (m && !clearUnglideJniException(env)) { app = env->CallStaticObjectMethod(threadClass, m); if (clearUnglideJniException(env)) app = nullptr; }
-        else clearUnglideJniException(env);
-    } else clearUnglideJniException(env);
-    if (!app) {
-        jclass globals = env->FindClass("android/app/AppGlobals");
-        if (globals && !clearUnglideJniException(env)) {
-            jmethodID m = env->GetStaticMethodID(globals, "getInitialApplication", "()Landroid/app/Application;");
-            if (m && !clearUnglideJniException(env)) { app = env->CallStaticObjectMethod(globals, m); if (clearUnglideJniException(env)) app = nullptr; }
-            else clearUnglideJniException(env);
-        } else clearUnglideJniException(env);
-    }
-    if (!app) return AutomationBroadcastResult::ContextUnavailable;
-    jclass ic = env->FindClass("android/content/Intent");
-    if (!ic || clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    jmethodID ctor=env->GetMethodID(ic,"<init>","()V");
-    jmethodID setAction=env->GetMethodID(ic,"setAction","(Ljava/lang/String;)Landroid/content/Intent;");
-    jmethodID setComponent=env->GetMethodID(ic,"setComponent","(Landroid/content/ComponentName;)Landroid/content/Intent;");
-    jmethodID putExtra=env->GetMethodID(ic,"putExtra","(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
-    if (clearUnglideJniException(env)||!ctor||!setAction||!setComponent||!putExtra) return AutomationBroadcastResult::IntentUnavailable;
-    jclass cc=env->FindClass("android/content/ComponentName");
-    if (!cc||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    jmethodID cctor=env->GetMethodID(cc,"<init>","(Ljava/lang/String;Ljava/lang/String;)V");
-    if (!cctor||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    jobject intent=env->NewObject(ic,ctor);
-    if (!intent||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    jstring action=env->NewStringUTF(kKeyMapperAction), pkg=env->NewStringUTF(kKeyMapperPackage);
-    jstring receiver=env->NewStringUTF(kKeyMapperReceiver), extra=env->NewStringUTF(kKeyMapperUidExtra);
-    jstring uid=env->NewStringUTF(kUnglideKeymapUid);
-    if (!action||!pkg||!receiver||!extra||!uid||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    jobject component=env->NewObject(cc,cctor,pkg,receiver);
-    if (!component||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    env->CallObjectMethod(intent,setAction,action); if(clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    env->CallObjectMethod(intent,setComponent,component); if(clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    env->CallObjectMethod(intent,putExtra,extra,uid); if(clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    jclass context=env->FindClass("android/content/Context");
-    if (!context||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    jmethodID send=env->GetMethodID(context,"sendBroadcast","(Landroid/content/Intent;)V");
-    if (!send||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
-    env->CallVoidMethod(app,send,intent);
-    if(clearUnglideJniException(env)) return AutomationBroadcastResult::BroadcastFailed;
-    return AutomationBroadcastResult::Sent;
-}
-const char* automationBroadcastResultName(AutomationBroadcastResult result) {
-    switch(result) {
-        case AutomationBroadcastResult::Sent: return "keymapper_unglide_keymap_broadcast_sent";
-        case AutomationBroadcastResult::VmSymbolUnavailable: return "android_jni_vm_symbol_unavailable";
-        case AutomationBroadcastResult::VmQueryFailed: return "android_jni_vm_query_failed";
-        case AutomationBroadcastResult::VmNotFound: return "android_jni_vm_not_found";
-        case AutomationBroadcastResult::ThreadAttachFailed: return "android_jni_thread_attach_failed";
-        case AutomationBroadcastResult::ContextUnavailable: return "android_context_unavailable";
-        case AutomationBroadcastResult::IntentUnavailable: return "keymapper_unglide_intent_api_unavailable";
-        case AutomationBroadcastResult::BroadcastFailed: return "keymapper_unglide_broadcast_failed";
-    }
-    return "keymapper_unglide_broadcast_unknown";
-}
-
-ActorGetStatusFlagFn resolveActorGetStatusFlag() {
-    static ActorGetStatusFlagFn function = nullptr;
-    if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
-        resolveTrustedGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
-    return function;
-}
-
-bool playerIsGlidingForUnglide(void* player) {
-    if (!player) return false;
-    const auto getStatusFlag = resolveActorGetStatusFlag();
-    if (getStatusFlag) {
-        try {
-            // ActorFlags::Gliding is 32 in the public Bedrock/LeviLamina enum.
-            return getStatusFlag(player, 32);
-        } catch (...) {
-            // Fall through to the existing synchronized-data reader.
-        }
-    }
-    return actorIsGliding(player);
-}
-
-}
-
 MaceSwapperModule::MaceSwapperModule()
     : Module("MaceFall", "Selects the mace for a falling hit when the BedrockAim target is in the crosshair.",
              "Mace Swapper") {
@@ -442,9 +118,6 @@ void MaceSwapperModule::onEnable() {
     m_hasLastPlayerY = false;
     m_peakY = 0.0f;
     m_hasPeakY = false;
-    m_nextUnglideAttempt = {};
-    m_unglideBurstRemaining = 0;
-    m_nextUnglideDiagnostic = {};
 
     // A rapid disable/re-enable can happen before the next player tick. Preserve
     // pending slot ownership so that tick can restore the old slot; never drop
@@ -471,8 +144,6 @@ void MaceSwapperModule::onDisable() {
     m_peakY = 0.0f;
     m_hasPeakY = false;
     m_nextAttack = {};
-    m_nextUnglideAttempt = {};
-    m_nextUnglideDiagnostic = {};
 }
 
 void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
@@ -619,65 +290,6 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Unglide triggers a dedicated Key Mapper keymap by UID. Configure that
-    // keymap to send Space through an available input method; an accepted
-    // broadcast alone does not confirm that Minecraft received the key.
-    if (m_unglideEnabled) {
-        const auto now = std::chrono::steady_clock::now();
-        auto reportUnglideGate = [&](const char* state, const std::string& details) {
-            if (now < m_nextUnglideDiagnostic) return;
-            m_nextUnglideDiagnostic = now + std::chrono::seconds(1);
-            bedrocktools::diagnostics::probe(
-                bedrocktools::diagnostics::Level::Debug, "MaceSwapper", "unglide_gate", state, details);
-        };
-
-        if (now >= m_nextUnglideAttempt) {
-            // Do not gate on the native Gliding flag here: the flag reader is
-            // build-sensitive and the diagnostics repeatedly showed not_gliding,
-            // preventing Key Mapper from ever receiving Space. The configured
-            // target distance + vertical difference are the activation criteria.
-            const auto target = nearestNearbyPlayerDistance(player, m_unglideTargetDistance);
-            if (!target.queryReady) {
-                m_nextUnglideAttempt = now + std::chrono::milliseconds(1000);
-                reportUnglideGate("target_lookup_unavailable",
-                    "ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable.");
-            } else if (!target.found) {
-                m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                reportUnglideGate("no_nearby_player",
-                    std::string("No other player inside ") +
-                        std::to_string(m_unglideTargetDistance) + " blocks.");
-            } else if (target.verticalDifference > m_unglideMaxVerticalDifference) {
-                m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                reportUnglideGate("target_height_out_of_range",
-                    std::string("vertical_difference=") + std::to_string(target.verticalDifference) +
-                    ", maximum=" + std::to_string(m_unglideMaxVerticalDifference));
-            } else if (!bedaim::macefall::shouldPulseUnglideJump(
-                           m_unglideEnabled, true, target.distance, m_unglideTargetDistance)) {
-                m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
-            } else {
-                // Bounded startup burst: retry a few times quickly because Android
-                // accepts the broadcast asynchronously; do not spam continuously.
-                if (m_unglideBurstRemaining <= 0) m_unglideBurstRemaining = 3;
-                const auto result = dispatchUnglideKeyMapperKeymap();
-                const bool sent = result == AutomationBroadcastResult::Sent;
-                if (sent) --m_unglideBurstRemaining;
-                else m_unglideBurstRemaining = 0;
-                reportUnglideGate(
-                    automationBroadcastResultName(result),
-                    std::string("target_distance=") + std::to_string(target.distance) +
-                        ", vertical_difference=" + std::to_string(target.verticalDifference) +
-                        ", burst_remaining=" + std::to_string(m_unglideBurstRemaining) +
-                        ", action=" + kKeyMapperAction +
-                        ", keymap_uid=" + kUnglideKeymapUid +
-                        ", configure that Key Mapper keymap to send Space and enable a supported input method (e.g. Shizuku/root).");
-                m_nextUnglideAttempt = now + std::chrono::milliseconds(
-                    sent ? (m_unglideBurstRemaining > 0 ? 120 : 1000) : 1500);
-                return;
-            }
-        }
-    }
-
     if (!m_enableMaceSwapper) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
             "MaceSwapper", "attack_gate", "mace_swapper_disabled");
@@ -768,11 +380,6 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(j.value("m_minimumFallDistance", m_minimumFallDistance));
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
-    m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
-    m_unglideTargetDistance = std::clamp(
-        j.value("m_unglideTargetDistance", m_unglideTargetDistance), 1.0f, 32.0f);
-    m_unglideMaxVerticalDifference = std::clamp(
-        j.value("m_unglideMaxVerticalDifference", m_unglideMaxVerticalDifference), 0.5f, 16.0f);
 }
 
 void MaceSwapperModule::saveConfig(nlohmann::json& j) {
@@ -782,9 +389,6 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_attackRange"] = m_attackRange;
     j["m_minimumFallDistance"] = bedaim::macefall::normalizeMinimumFallDistance(m_minimumFallDistance);
     j["m_restoreSlot"] = m_restoreSlot;
-    j["m_unglideEnabled"] = m_unglideEnabled;
-    j["m_unglideTargetDistance"] = m_unglideTargetDistance;
-    j["m_unglideMaxVerticalDifference"] = m_unglideMaxVerticalDifference;
 }
 
 void MaceSwapperModule::onMenuRegistered() {
@@ -799,9 +403,7 @@ void MaceSwapperModule::onMenuRegistered() {
         if (it->is_boolean()) return it->get<bool>() ? "true" : "false";
         return it->dump();
     };
-    schema.defaultCategory("combat")
-        .category("combat", "Combat", "Mace swap and fall requirements")
-        .category("special", "Special", "Elytra Unglide conditions");
+    schema.defaultCategory("combat").category("combat", "Combat", "Mace swap and fall requirements");
 
     auto slider = [&](const char* key, const char* title,
                       const char* minimum, const char* maximum,
@@ -837,22 +439,6 @@ void MaceSwapperModule::onMenuRegistered() {
     slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks", "combat", "3.0");
     slider("m_minimumFallDistance", "Minimum fall distance", "0.30", "10.0", "0.10", " blocks", "combat", "1.55");
 
-    ConfigNodeV2 unglideEnabledNode;
-    unglideEnabledNode.id = "m_unglideEnabled";
-    unglideEnabledNode.key = "m_unglideEnabled";
-    unglideEnabledNode.title = "Enable Unglide";
-    unglideEnabledNode.description =
-        "Stop Elytra gliding only when a target is nearby and a solid floor is within the configured clearance.";
-    unglideEnabledNode.category = "special";
-    unglideEnabledNode.type = ConfigControlTypeV2::Toggle;
-    unglideEnabledNode.defaultValue = "false";
-    unglideEnabledNode.currentValue = valueString("m_unglideEnabled", "false");
-    unglideEnabledNode.hasCurrentValue = true;
-    schema.node(std::move(unglideEnabledNode));
-
-    slider("m_unglideTargetDistance", "Unglide horizontal distance", "1", "32", "0.5", " blocks", "special", "8.0");
-    slider("m_unglideMaxVerticalDifference", "Unglide maximum height difference", "0.5", "16", "0.5", " blocks", "special", "4.0");
-
     ConfigNodeV2 restoreNode;
     restoreNode.id = "m_restoreSlot";
     restoreNode.key = "m_restoreSlot";
@@ -875,13 +461,11 @@ void MaceSwapperModule::onMenuRegistered() {
 }
 
 bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
-    if (key == "m_enableMaceSwapper" || key == "m_restoreSlot" ||
-        key == "m_unglideEnabled") {
+    if (key == "m_enableMaceSwapper" || key == "m_restoreSlot") {
         const bool flag = value == "true" || value == "1" || value == "on";
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (key == "m_enableMaceSwapper") m_enableMaceSwapper = flag;
         else if (key == "m_restoreSlot") m_restoreSlot = flag;
-        else m_unglideEnabled = flag;
         return true;
     }
     try {
@@ -895,10 +479,6 @@ bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_vi
         if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
         else if (key == "m_minimumFallDistance")
             m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(number);
-        else if (key == "m_unglideTargetDistance")
-            m_unglideTargetDistance = std::clamp(number, 1.0f, 32.0f);
-        else if (key == "m_unglideMaxVerticalDifference")
-            m_unglideMaxVerticalDifference = std::clamp(number, 0.5f, 16.0f);
         else return false;
         return true;
     } catch (...) {
