@@ -1,3 +1,8 @@
+## 2026-10-23 — Carry memory-safe Unglide fallback onto the one-shot state machine
+- Port the bounded `/proc/self/mem` reader onto the latest one-shot latch branch so the state-machine fixes do not reintroduce direct dereferences of entity-data pointers.
+- Keep the native status-flag lookup as a positive fast path; when the state cannot be read safely, fail closed with `gliding_state_unavailable` and do not send Space.
+- Register host regression coverage for valid, low/null/zero/overflow, and unmapped-address reads. Android procfs/device compatibility still requires runtime validation.
+
 ## 2026-10-23 — Preserve Unglide one-shot latch across transient gates
 - Cancel a partial burst on transient crosshair, range/height, or gliding gate failures without re-arming a target whose burst already fired.
 - Keep the completed trigger latched until target loss, a different target, or separation beyond the configured outer re-arm radius.
