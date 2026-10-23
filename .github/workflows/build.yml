@@ -34,6 +34,7 @@ jobs:
           xmake run -P . diagnostics_test
           xmake run -P . autohit_guards_test
           xmake run -P . autohit_weapon_profile_test
+          xmake run -P . autohit_burst_state_test
           xmake run -P . autototem_policy_test
           xmake run -P . mace_unglide_policy_test
           xmake run -P . player_game_type_test
