@@ -331,6 +331,9 @@ void AutoHitModule::onEnable() {
     m_heldButton = -1;
     m_touchRepeatUntil = {};
     m_nextAttack = {};
+    m_burstWeaponIdentifier.clear();
+    m_burstTarget = nullptr;
+    m_burstRemaining = 0;
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "enabled");
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
@@ -342,6 +345,9 @@ void AutoHitModule::onDisable() {
     m_attackHeld = false;
     m_heldButton = -1;
     m_nextAttack = {};
+    m_burstWeaponIdentifier.clear();
+    m_burstTarget = nullptr;
+    m_burstRemaining = 0;
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "disabled");
 }
