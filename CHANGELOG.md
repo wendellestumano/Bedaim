@@ -1,3 +1,12 @@
+## 2026-10-23 — Per-item weapon profiles, initial burst, and Unglide VM bootstrap
+
+- Added a dynamic Weapon Profiles bench with Add Weapon, exact item-ID matching, per-item Switch/Settings/Delete controls, and a custom namespaced identifier field for add-on weapons.
+- Migrated the previous sword/axe/mace/trident defaults into item-specific profiles on first load, while keeping old config fields for backwards compatibility.
+- Added per-item attack range, steady normal CPS (up to 12), Initial Burst Hits, and Initial Burst CPS (up to 20). A burst starts when the held item or target changes, consumes only accepted Key Mapper broadcast requests, and switches to normal CPS after the final accepted burst request. Android acceptance is not server-confirmed damage.
+- Added host regression assertions for custom ID normalization/matching and profile range/CPS/burst clamping.
+- Cached the JavaVM supplied by Preloader and updated both Android input bridges to prefer it, retaining dynamic JNI discovery as fallback. Unglide still uses its documented MacroDroid Spacebar broadcast and its independent nearby-player lookup; runtime delivery and in-game behavior require device testing.
+- Build and device validation are pending CI after this change. All work stays off `main`.
+
 ## 2026-10-22 — Key Mapper routing and steady AutoHit cadence
 
 - Replaced the MacroDroid broadcast route with an explicit broadcast to Key Mapper's receiver, action, UUID extra and configured keymap UUID.
