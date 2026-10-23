@@ -519,7 +519,6 @@ void UnglideModule::onMenuRegistered(){
    if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
  }
  ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
- using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
  s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
  ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
  auto sl=[&](const char*k,const char*title,const char*mn,const char*mx,const char*step,const char*unit,const char*def){ConfigNodeV2 n;n.id=k;n.key=k;n.title=title;n.category="special";n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=def;n.currentValue=vs(k,def);n.hasCurrentValue=true;n.minValue=mn;n.maxValue=mx;n.step=step;n.unit=unit;s.node(std::move(n));};
