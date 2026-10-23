@@ -1,3 +1,7 @@
+## Unglide target gating
+- Added a configurable maximum vertical difference between the gliding player and the nearest player target.
+- Unglide now sends the Key Mapper keymap only when the target is within both the configured distance and height thresholds; diagnostic logs identify height-gate blocks.
+
 ## 2026-10-23 — Route Unglide through its dedicated Key Mapper keymap
 
 - Replaced Unglide's MacroDroid Spacebar trigger with the supplied Key Mapper explicit receiver/action/UID-extra broadcast and keymap UID `e2225852-1df2-4232-bb26-606f11fc8745`.
