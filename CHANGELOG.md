@@ -1,5 +1,8 @@
 ## 2026-10-23 — Functional Key Mapper AutoHit baseline, per-item profiles, and crosshair-gated Unglide
 
+- Added an explicit Unglide trigger state (Idle/Tracking/Triggered) keyed to the current target. A valid approach starts one bounded burst; the same target cannot restart it after the burst is exhausted. Losing the target or failing a required gate resets the state, and a different target starts a fresh approach.
+- Added host regression checks for one-burst-per-approach behavior. The existing menu callback path snapshots the updated module settings and schedules ConfigManager persistence; the runtime configuration is now explicitly covered in this branch's review rather than assumed from the visible slider value.
+
 - Used the AutoHit implementation associated with functional build run `39892141288` as the reference for the explicit Key Mapper broadcast route. AutoHit continues to dispatch through the configured Key Mapper keymap; this branch does not call the native GameMode attack wrapper.
 - Kept the Weapon Profiles bench with Add Weapon, exact item-ID matching (including custom add-on namespaces), independent enabled state, Settings/Delete controls, per-item range/CPS, and a bounded initial burst. Legacy sword/axe/mace/trident settings are migrated into item profiles.
 - Restored the functional Key Mapper cadence limit: at least 83 ms between requests (12 requests/second maximum). The burst CPS setting is also capped at 12 so its UI matches the maximum effective dispatch rate. Target/profile loss cancels a partial burst but does not clear the shared cooldown.
