@@ -1,3 +1,6 @@
+- Removed the unused MaceFall attack-interval setting/state (it was written but never consulted before attacks).
+- ShiftBlade no longer exits early solely because MaceFall has claimed slam priority; it can continue its target/slot logic during combat.
+- Unglide extraction into a standalone module remains a separate refactor to avoid mixing JNI/keymap state with MaceFall attack state.
 - Unglide now uses a bounded three-request startup burst at 120 ms intervals, then returns to a 1-second steady cooldown; failed dispatches reset the burst and use a longer retry cooldown.
 - Unglide no longer depends on the build-sensitive native Gliding flag; Key Mapper activation is now gated by configured target distance and vertical difference, with both measurements logged.
 ## Unglide Key Mapper dispatch
