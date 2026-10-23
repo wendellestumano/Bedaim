@@ -4,6 +4,7 @@
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
+#include "../../config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
@@ -519,17 +520,30 @@ void UnglideModule::onMenuRegistered(){
  static std::atomic<bool> persistentSettingsRegistered{false};
  bool expected = false;
  if (persistentSettingsRegistered.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+   nlohmann::json persistentConfig;
+   saveConfig(persistentConfig);
+   auto persistentValue = [&](const char* key, const char* fallback) {
+     const auto it = persistentConfig.find(key);
+     if (it == persistentConfig.end() || it->is_null()) return std::string(fallback);
+     if (it->is_string()) return it->get<std::string>();
+     if (it->is_boolean()) return it->get<bool>() ? std::string("true") : std::string("false");
+     return it->dump();
+   };
    ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
    settings.modId("Bedaim")
      .description("Persistent Unglide controls; values apply immediately.")
      .defaultEnabled(true)
-     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, "false")
-     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, "8.0")
-     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, "4.0")
-     .config("m_unglideBurstCount", "Burst presses (legacy)", ConfigType::Text, "3")
-     .config("m_unglidePressIntervalMs", "Time between presses ms (legacy)", ConfigType::Text, "120")
+     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, persistentValue("m_unglideEnabled", "false"))
+     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, persistentValue("m_unglideTargetDistance", "8.0"))
+     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, persistentValue("m_unglideMaxVerticalDifference", "4.0"))
+     .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
+     .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
      .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-       onMenuConfigChanged(key, value);
+       if (onMenuConfigChanged(key, value)) {
+         // This custom ModuleBuilder callback bypasses ModuleMenu.cpp's normal
+         // persistence callback, so explicitly enqueue the updated module config.
+         bedrocktools::config::ConfigManager::get().save();
+       }
      });
    if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
  }
