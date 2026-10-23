@@ -225,8 +225,8 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
 
     const float targetRange = std::clamp(esp->range, 8.0f, 80.0f);
     const float queryRange = std::max(30.0f, targetRange);
-    const bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
-    ActorVec actors = s_actorFetchNearby(localPlayer, const_cast<bedrocktools::sdk::Vec3*>(&extent), 1);
+    bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
+    ActorVec actors = s_actorFetchNearby(localPlayer, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
     const bool empty = begin == 0 && end == 0;
