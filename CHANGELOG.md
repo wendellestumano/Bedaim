@@ -1,3 +1,10 @@
+## 2026-10-23 — Route Unglide through its dedicated Key Mapper keymap
+
+- Replaced Unglide's MacroDroid Spacebar trigger with the supplied Key Mapper explicit receiver/action/UID-extra broadcast and keymap UID `e2225852-1df2-4232-bb26-606f11fc8745`.
+- Reused AutoHit's JNI dispatch pattern: prefer the Preloader-cached JavaVM, retain dynamic VM discovery as fallback, build an explicit `ComponentName`, and pass the UID as a string extra.
+- Kept Unglide's existing gliding/target/ground-clearance gates and throttling unchanged. A successful Android broadcast confirms dispatch only; actual keymap execution and in-game Spacebar behavior still require device testing.
+- Android build and runtime validation pending CI/device testing.
+
 ## 2026-10-23 — Per-item weapon profiles, initial burst, and Unglide VM bootstrap
 
 - Added a dynamic Weapon Profiles bench with Add Weapon, exact item-ID matching, per-item Switch/Settings/Delete controls, and a custom namespaced identifier field for add-on weapons.
