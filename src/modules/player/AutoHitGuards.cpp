@@ -11,8 +11,6 @@ Decision evaluate(const Inputs& input) noexcept {
     if (!input.targetPresent) return Decision::MissingTarget;
     if (!input.boundsValid) return Decision::InvalidBounds;
     if (!input.targetFresh) return Decision::StaleTarget;
-    if (!input.gameModeValid) return Decision::MissingGameMode;
-    if (!input.attackRouteAvailable) return Decision::MissingAttackRoute;
 
     if (!input.hitPointFinite ||
         !std::isfinite(input.distance) || input.distance < 0.0f ||
