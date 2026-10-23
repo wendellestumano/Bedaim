@@ -30,38 +30,39 @@ constexpr const char* kKeyMapperUidExtra = "io.github.sds100.keymapper.EXTRA_KEY
 constexpr const char* kKeyMapperKeymapUid = "fb36fd6d-8811-4a87-8ca4-bf970a6fcb83";
 
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
+enum class VmLookupStatus { Ready, SymbolUnavailable, QueryFailed, NoVmFound, AttachFailed };
 JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
-    static void* artHandle = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
-    static auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
-    if (!getVms && artHandle)
-        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-            dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
-    return getVms;
+    // RTLD_NOLOAD may fail under Android linker namespaces even if ART is loaded.
+    static void* artHandle = dlopen("libart.so", RTLD_NOW);
+    static void* helperHandle = dlopen("libnativehelper.so", RTLD_NOW);
+    auto fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    if (!fn && artHandle) fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+    if (!fn && helperHandle) fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(helperHandle, "JNI_GetCreatedJavaVMs"));
+    return fn;
 }
-
 class AutoHitJniEnvironment {
 public:
     AutoHitJniEnvironment() {
         const auto getVms = resolveJniGetCreatedJavaVMs();
-        if (!getVms) return;
-        JavaVM* vm = nullptr;
-        jsize count = 0;
-        if (getVms(&vm, 1, &count) != JNI_OK || count < 1 || !vm) return;
+        if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
+        JavaVM* vm = nullptr; jsize count = 0;
+        if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
+        if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
         mVm = vm;
-        const jint status = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
-        if (status == JNI_OK) return;
-        if (status != JNI_EDETACHED) { mEnv = nullptr; return; }
-        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) mAttached = true;
-        else mEnv = nullptr;
+        const jint envStatus = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
+        if (envStatus == JNI_OK) { status = VmLookupStatus::Ready; return; }
+        if (envStatus != JNI_EDETACHED) { status = VmLookupStatus::AttachFailed; return; }
+        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) { mAttached = true; status = VmLookupStatus::Ready; }
+        else { mEnv = nullptr; status = VmLookupStatus::AttachFailed; }
     }
     ~AutoHitJniEnvironment() { if (mAttached && mVm) mVm->DetachCurrentThread(); }
     JNIEnv* get() const noexcept { return mEnv; }
+    VmLookupStatus lookupStatus() const noexcept { return status; }
 private:
-    JavaVM* mVm = nullptr;
-    JNIEnv* mEnv = nullptr;
-    bool mAttached = false;
+    JavaVM* mVm = nullptr; JNIEnv* mEnv = nullptr; bool mAttached = false;
+    VmLookupStatus status = VmLookupStatus::SymbolUnavailable;
 };
+
 
 bool clearAutoHitJniException(JNIEnv* env) {
     if (!env || !env->ExceptionCheck()) return false;
@@ -69,11 +70,20 @@ bool clearAutoHitJniException(JNIEnv* env) {
     return true;
 }
 
-enum class KeyZeroDispatchResult { Sent, VmUnavailable, ContextUnavailable, IntentUnavailable, BroadcastFailed };
+enum class KeyZeroDispatchResult { Sent, VmSymbolUnavailable, VmQueryFailed, VmNotFound, ThreadAttachFailed, ContextUnavailable, IntentUnavailable, BroadcastFailed };
 KeyZeroDispatchResult dispatchKeyMapperKeyZero() {
     AutoHitJniEnvironment jni;
     JNIEnv* env = jni.get();
-    if (!env) return KeyZeroDispatchResult::VmUnavailable;
+    if (!env) {
+        switch (jni.lookupStatus()) {
+            case VmLookupStatus::SymbolUnavailable: return KeyZeroDispatchResult::VmSymbolUnavailable;
+            case VmLookupStatus::QueryFailed: return KeyZeroDispatchResult::VmQueryFailed;
+            case VmLookupStatus::NoVmFound: return KeyZeroDispatchResult::VmNotFound;
+            case VmLookupStatus::AttachFailed: return KeyZeroDispatchResult::ThreadAttachFailed;
+            case VmLookupStatus::Ready: break;
+        }
+        return KeyZeroDispatchResult::VmSymbolUnavailable;
+    }
     if (env->PushLocalFrame(40) != JNI_OK) { clearAutoHitJniException(env); return KeyZeroDispatchResult::IntentUnavailable; }
     struct LocalFrameGuard { JNIEnv* env; ~LocalFrameGuard() { env->PopLocalFrame(nullptr); } } frame{env};
     jobject app = nullptr;
@@ -125,7 +135,10 @@ KeyZeroDispatchResult dispatchKeyMapperKeyZero() {
 const char* keyZeroDispatchResultName(KeyZeroDispatchResult result) {
     switch(result) {
         case KeyZeroDispatchResult::Sent: return "keymapper_key0_broadcast_sent";
-        case KeyZeroDispatchResult::VmUnavailable: return "android_java_vm_unavailable";
+        case KeyZeroDispatchResult::VmSymbolUnavailable: return "android_jni_vm_symbol_unavailable";
+        case KeyZeroDispatchResult::VmQueryFailed: return "android_jni_vm_query_failed";
+        case KeyZeroDispatchResult::VmNotFound: return "android_jni_vm_not_found";
+        case KeyZeroDispatchResult::ThreadAttachFailed: return "android_jni_thread_attach_failed";
         case KeyZeroDispatchResult::ContextUnavailable: return "android_context_unavailable";
         case KeyZeroDispatchResult::IntentUnavailable: return "keymapper_intent_api_unavailable";
         case KeyZeroDispatchResult::BroadcastFailed: return "keymapper_broadcast_failed";
