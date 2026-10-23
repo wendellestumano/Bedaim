@@ -303,8 +303,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         float b = ((color      ) & 0xFF) / 255.0f;
         float a = ((color >> 24) & 0xFF) / 255.0f;
 
-                // Vertex pairs are submitted as a line list; triangle-list mode discarded the ESP edges.
-        s_tessBegin(tessellator, nullptr, 1, static_cast<int>(lines.size() * 2), 0);
+                // Bedrock mce::PrimitiveMode::LineList is 4 (QuadList=1, TriangleList=2, TriangleStrip=3).
+        s_tessBegin(tessellator, nullptr, 4, static_cast<int>(lines.size() * 2), 0);
         s_tessColor(tessellator, r, g, b, a);
 
         for (const auto& line : lines) {
