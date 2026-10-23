@@ -1,3 +1,6 @@
+## Unglide Key Mapper dispatch
+- Aligned the Unglide JNI/JavaVM lookup, local JNI frame, application-context fallback, explicit component broadcast, and error reporting with AutoHit while preserving the dedicated Unglide keymap UID.
+
 ## Unglide target gating
 - Added a configurable maximum vertical difference between the gliding player and the nearest player target.
 - Unglide now sends the Key Mapper keymap only when the target is within both the configured distance and height thresholds; diagnostic logs identify height-gate blocks.
