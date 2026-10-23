@@ -26,6 +26,7 @@ public:
     bool m_restoreSlot = true;
     bool m_unglideEnabled = false;
     float m_unglideTargetDistance = 8.0f;
+    float m_unglideMaxVerticalDifference = 4.0f;
 
 private:
     void processPlayerTick(bedrocktools::sdk::Player* player);
