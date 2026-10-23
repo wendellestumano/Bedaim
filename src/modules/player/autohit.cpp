@@ -535,7 +535,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     }
     // The per-item profile provides its own maximum; current Aim Assist tracking
     // range remains an independent upper bound.
-    const float maxRange = std::clamp(std::min(configuredRange, aimRange), 1.0f, 6.0f);
+    const float maxRange = std::clamp(std::min(configuredRange, aimRange), 1.0f, 30.0f);
     if (!finiteVec(hitPoint) || !std::isfinite(distanceSq) || distanceSq > maxRange * maxRange) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
@@ -630,7 +630,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     // item profile is first introduced. They are no longer exposed as global
     // per-class toggles in the UI.
     m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
-    m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 30.0f);
     m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
     m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
     m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
