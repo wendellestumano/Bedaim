@@ -433,7 +433,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
         // A switch to a different held item breaks the old burst cycle immediately.
         // Preserve the shared cooldown so transient empty item reads cannot bypass
         // the steady Key Mapper request rate.
-        if (m_burstWeaponIdentifier != normalizedItem) {
+        if (normalizedItem.empty()) {
+            // InventoryAccess can briefly return an unreadable ID while the hotbar
+            // updates. Cancel a partial burst but preserve identity/cooldown so that
+            // one empty read cannot re-arm the opening burst on the next tick.
+            m_burstRemaining = 0;
+        } else if (m_burstWeaponIdentifier != normalizedItem) {
             m_burstWeaponIdentifier = normalizedItem;
             m_burstTarget = nullptr;
             m_burstRemaining = 0;
@@ -448,6 +453,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     *customProfile = bedaim::autohit::weapon::normalizeCustomProfile(std::move(*customProfile));
     if (!customProfile->enabled) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "disabled",
             std::string("item=") + customProfile->identifier);
         return;
@@ -470,14 +479,28 @@ void AutoHitModule::processPlayerTick(Player* player) {
     AABB targetBounds{};
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            // A stale/missing-target gap ends a partial burst but intentionally
+            // preserves target identity and the shared Key Mapper cooldown.
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "target", "missing_or_stale");
         return;
     }
     if (!validBounds(targetBounds)) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "target", "invalid_bounds");
         return;
     }
     if (!aim->currentTargetInCrosshair(player, target)) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "crosshair", "target_not_centered");
         return;
     }
@@ -485,6 +508,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     const Vec3 eye = eyePosition(player);
     if (!finiteVec(eye)) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "hit_point", "invalid_player_eye");
         return;
     }
@@ -495,6 +522,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
     };
     const float distanceSq = distanceSquared(eye, hitPoint);
     if (!std::isfinite(aimRange) || aimRange <= 0.0f) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "aim_range_invalid");
         return;
     }
@@ -502,6 +533,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
     // range remains an independent upper bound.
     const float maxRange = std::clamp(std::min(configuredRange, aimRange), 1.0f, 6.0f);
     if (!finiteVec(hitPoint) || !std::isfinite(distanceSq) || distanceSq > maxRange * maxRange) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "out_of_range");
         return;
     }
@@ -556,8 +591,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
     const bool dispatched = dispatchResult == KeyZeroDispatchResult::Sent;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        // Normal CPS remains capped at 12. Burst CPS may reach 20 CPS and is
-        // rate-limited even when Android rejects the broadcast.
+        // Match the functional Key Mapper baseline: never enqueue requests faster
+        // than the established 83 ms minimum, even if a profile asks for more CPS.
         if (dispatched && usingInitialBurst && m_burstWeaponIdentifier == normalizedItem &&
             m_burstTarget == target && m_burstRemaining > 0) {
             --m_burstRemaining;
@@ -566,13 +601,13 @@ void AutoHitModule::processPlayerTick(Player* player) {
         const int nextIntervalMs = burstJustEnded
             ? bedaim::autohit::weapon::attemptIntervalMs(customProfile->cps)
             : intervalMs;
-        m_nextAttack = now + std::chrono::milliseconds(std::clamp(nextIntervalMs, 50, 1000));
+        m_nextAttack = now + std::chrono::milliseconds(std::clamp(nextIntervalMs, 83, 1000));
         burstRemaining = m_burstRemaining;
     }
     diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Warning,
-        "AutoHit", "key0_dispatch", keyZeroDispatchResultName(dispatchResult),
+        "AutoHit", "keymapper_dispatch", keyZeroDispatchResultName(dispatchResult),
         dispatched
-            ? "Android accepted the explicit Key Mapper broadcast for the configured keymap UUID; this does not prove Key Mapper executed the keymap or Minecraft received key 0."
+            ? "Android accepted the explicit Key Mapper broadcast for the configured keymap UUID; actual in-game input delivery still requires runtime verification."
             : "Key Mapper trigger dispatch failed before key delivery; inspect Android VM/context/Intent diagnostics");
     if (usingInitialBurst) {
         diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Debug,
