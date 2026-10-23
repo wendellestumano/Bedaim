@@ -1,6 +1,5 @@
 #include "unglide.hpp"
 #include "aimassist.hpp"
-#include "MaceFallPolicy.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
@@ -402,7 +401,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
     const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
-    const bool isGliding = playerIsGlidingForUnglide(player);
     const auto geometry = targetGeometryFor(player, targetBounds);
     if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
         reject("target_geometry_invalid",
@@ -414,18 +412,17 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
         return;
     }
-    if (!isGliding) {
-        reject("player_not_gliding",
-               "Player is not currently gliding with an Elytra; no Space keymap request sent.", 120);
-        return;
-    }
-
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    if (!bedaim::macefall::shouldPulseUnglideJump(
-            true, isGliding, geometry.distance, effectiveMaximumDistance, crosshairConfirmed)) {
-        reject("target_out_of_range",
-               std::string("target_distance=") + std::to_string(geometry.distance) +
-                   ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
+    if (!bedaim::macefall::shouldTriggerUnglideKeymap(
+            true, true, crosshairConfirmed, geometry.distance, effectiveMaximumDistance)) {
+        if (!crosshairConfirmed) {
+            reject("crosshair_not_on_target",
+                   "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
+        } else {
+            reject("target_out_of_range",
+                   std::string("target_distance=") + std::to_string(geometry.distance) +
+                       ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
+        }
         return;
     }
     if (geometry.verticalDifference > maximumHeightDifference) {
