@@ -547,11 +547,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         // Normal CPS remains capped at 12. Burst CPS may reach 20 CPS and is
         // rate-limited even when Android rejects the broadcast.
-        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
         if (dispatched && usingInitialBurst && m_burstWeaponIdentifier == normalizedItem &&
             m_burstTarget == target && m_burstRemaining > 0) {
             --m_burstRemaining;
         }
+        const bool burstJustEnded = dispatched && usingInitialBurst && m_burstRemaining == 0;
+        const int nextIntervalMs = burstJustEnded
+            ? bedaim::autohit::weapon::attemptIntervalMs(customProfile->cps)
+            : intervalMs;
+        m_nextAttack = now + std::chrono::milliseconds(std::clamp(nextIntervalMs, 50, 1000));
         burstRemaining = m_burstRemaining;
     }
     diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Warning,
