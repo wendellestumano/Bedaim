@@ -342,15 +342,11 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     float targetDistance = 8.0f;
     float maximumHeightDifference = 4.0f;
-    int burstCount = 3;
-    int pressIntervalMs = 120;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || !player || tickStarted < m_nextAttempt) return;
         targetDistance = m_targetDistance;
         maximumHeightDifference = m_maxVerticalDifference;
-        burstCount = m_burstCount;
-        pressIntervalMs = m_pressIntervalMs;
     }
 
     auto report = [&](const char* state, const std::string& detail) {
@@ -407,6 +403,18 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         reject("target_geometry_invalid",
                "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
         return;
+    }
+
+    // Re-arm as soon as the same target has separated beyond the outer radius,
+    // even if the crosshair has already moved away. This avoids a stale latch
+    // when the player leaves range and later approaches again.
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (m_targetLatched && m_latchedTarget == target &&
+            bedaim::macefall::shouldRearmUnglide(geometry.distance, targetDistance)) {
+            m_latchedTarget = nullptr;
+            m_targetLatched = false;
+        }
     }
     if (!crosshairConfirmed) {
         reject("crosshair_not_on_target",
