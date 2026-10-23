@@ -58,6 +58,9 @@ int main() {
     using bedaim::autohit::weapon::normalizeCustomProfile;
     using bedaim::autohit::weapon::matchesIdentifier;
     assert(normalizeIdentifier("  MACE  ") == "minecraft:mace");
+    assert(normalizeIdentifier("item.minecraft.diamond_sword") == "minecraft:diamond_sword");
+    assert(normalizeIdentifier("item.minecraft.mace") == "minecraft:mace");
+    assert(normalizeIdentifier("item.myaddon.blazing_sword") == "myaddon:blazing_sword");
     assert(normalizeIdentifier("MyAddon:Blazing_Sword") == "myaddon:blazing_sword");
     assert(normalizeRange(4.5f) == 4.5f);
     assert(normalizeRange(100.0f) == 8.0f);
