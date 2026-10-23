@@ -231,7 +231,7 @@ WeaponCustomProfile makeLegacyProfile(const WeaponCatalogEntry& entry, float ran
         profile.cps = 4.0f;
     }
     profile.initialBurstHits = 0;
-    profile.initialBurstCps = 13.0f;
+    profile.initialBurstCps = 12.0f;
     return normalizeCustomProfile(std::move(profile));
 }
 
@@ -651,7 +651,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
             profile.range = item.value("range", m_attackRange);
             profile.cps = item.value("cps", 5.0f);
             profile.initialBurstHits = item.value("initialBurstHits", 0);
-            profile.initialBurstCps = item.value("initialBurstCps", 13.0f);
+            profile.initialBurstCps = item.value("initialBurstCps", 12.0f);
             profile = bedaim::autohit::weapon::normalizeCustomProfile(std::move(profile));
             if (profile.identifier.empty() || !seen.insert(profile.identifier).second) continue;
             m_customWeaponProfiles.push_back(std::move(profile));
@@ -927,7 +927,7 @@ void AutoHitModule::onMenuRegistered() {
         burstHits.maxValue = "20";
         burstHits.step = "1";
         schema.node(std::move(burstHits));
-        addProfileSlider("m_selected_profile_burst_cps", "Initial Burst CPS", "1", "20", "0.5",
+        addProfileSlider("m_selected_profile_burst_cps", "Initial Burst CPS", "1", "12", "0.5",
                          " CPS", std::to_string(selected->initialBurstCps),
                          "Only applies to the configured first N accepted requests; then Normal CPS takes over.");
         ConfigNodeV2 backButton;
@@ -1015,7 +1015,7 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
                         case bedaim::autohit::weapon::Class::Unsupported: profile.cps = 4.0f; break;
                     }
                     profile.initialBurstHits = 0;
-                    profile.initialBurstCps = 13.0f;
+                    profile.initialBurstCps = 12.0f;
                     profile = bedaim::autohit::weapon::normalizeCustomProfile(std::move(profile));
                 }
                 m_customWeaponProfiles.push_back(std::move(profile));
