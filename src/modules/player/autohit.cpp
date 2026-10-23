@@ -23,9 +23,11 @@
 #include <utility>
 
 namespace {
-constexpr const char* kMacroDroidPackage = "com.arlosoft.macrodroid";
-constexpr const char* kAutoHitKeyZeroAction =
-    "com.wendellestumano.bedaim.AUTOHIT_KEY0";
+constexpr const char* kKeyMapperPackage = "io.github.sds100.keymapper";
+constexpr const char* kKeyMapperReceiver = "io.github.sds100.keymapper.api.TriggerKeyMapsBroadcastReceiver";
+constexpr const char* kKeyMapperAction = "io.github.sds100.keymapper.ACTION_TRIGGER_KEYMAP_BY_UID";
+constexpr const char* kKeyMapperUidExtra = "io.github.sds100.keymapper.EXTRA_KEYMAP_UID";
+constexpr const char* kKeyMapperKeymapUid = "fb36fd6d-8811-4a87-8ca4-bf970a6fcb83";
 
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
 JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
@@ -68,73 +70,67 @@ bool clearAutoHitJniException(JNIEnv* env) {
 }
 
 enum class KeyZeroDispatchResult { Sent, VmUnavailable, ContextUnavailable, IntentUnavailable, BroadcastFailed };
-
-KeyZeroDispatchResult dispatchMacroDroidKeyZero() {
+KeyZeroDispatchResult dispatchKeyMapperKeyZero() {
     AutoHitJniEnvironment jni;
     JNIEnv* env = jni.get();
     if (!env) return KeyZeroDispatchResult::VmUnavailable;
-    if (env->PushLocalFrame(32) != JNI_OK) {
-        clearAutoHitJniException(env);
-        return KeyZeroDispatchResult::IntentUnavailable;
-    }
+    if (env->PushLocalFrame(40) != JNI_OK) { clearAutoHitJniException(env); return KeyZeroDispatchResult::IntentUnavailable; }
     struct LocalFrameGuard { JNIEnv* env; ~LocalFrameGuard() { env->PopLocalFrame(nullptr); } } frame{env};
-
     jobject app = nullptr;
     jclass threadClass = env->FindClass("android/app/ActivityThread");
     if (threadClass && !clearAutoHitJniException(env)) {
-        jmethodID currentApp = env->GetStaticMethodID(threadClass, "currentApplication", "()Landroid/app/Application;");
-        if (currentApp && !clearAutoHitJniException(env)) {
-            app = env->CallStaticObjectMethod(threadClass, currentApp);
-            if (clearAutoHitJniException(env)) app = nullptr;
-        } else clearAutoHitJniException(env);
+        jmethodID m = env->GetStaticMethodID(threadClass, "currentApplication", "()Landroid/app/Application;");
+        if (m && !clearAutoHitJniException(env)) { app = env->CallStaticObjectMethod(threadClass, m); if (clearAutoHitJniException(env)) app = nullptr; }
+        else clearAutoHitJniException(env);
     } else clearAutoHitJniException(env);
     if (!app) {
         jclass globals = env->FindClass("android/app/AppGlobals");
         if (globals && !clearAutoHitJniException(env)) {
-            jmethodID initialApp = env->GetStaticMethodID(globals, "getInitialApplication", "()Landroid/app/Application;");
-            if (initialApp && !clearAutoHitJniException(env)) {
-                app = env->CallStaticObjectMethod(globals, initialApp);
-                if (clearAutoHitJniException(env)) app = nullptr;
-            } else clearAutoHitJniException(env);
+            jmethodID m = env->GetStaticMethodID(globals, "getInitialApplication", "()Landroid/app/Application;");
+            if (m && !clearAutoHitJniException(env)) { app = env->CallStaticObjectMethod(globals, m); if (clearAutoHitJniException(env)) app = nullptr; }
+            else clearAutoHitJniException(env);
         } else clearAutoHitJniException(env);
     }
     if (!app) return KeyZeroDispatchResult::ContextUnavailable;
-
-    jclass intentClass = env->FindClass("android/content/Intent");
-    if (!intentClass || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
-    jmethodID ctor = env->GetMethodID(intentClass, "<init>", "()V");
-    jmethodID setAction = env->GetMethodID(intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
-    jmethodID setPackage = env->GetMethodID(intentClass, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;");
-    if (clearAutoHitJniException(env) || !ctor || !setAction || !setPackage)
-        return KeyZeroDispatchResult::IntentUnavailable;
-    jobject intent = env->NewObject(intentClass, ctor);
-    if (!intent || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
-    jstring action = env->NewStringUTF(kAutoHitKeyZeroAction);
-    jstring packageName = env->NewStringUTF(kMacroDroidPackage);
-    if (!action || !packageName || clearAutoHitJniException(env))
-        return KeyZeroDispatchResult::IntentUnavailable;
-    env->CallObjectMethod(intent, setAction, action);
-    if (clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
-    env->CallObjectMethod(intent, setPackage, packageName);
-    if (clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
-    jclass contextClass = env->FindClass("android/content/Context");
-    if (!contextClass || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
-    jmethodID sendBroadcast = env->GetMethodID(contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
-    if (!sendBroadcast || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
-    env->CallVoidMethod(app, sendBroadcast, intent);
-    if (clearAutoHitJniException(env)) return KeyZeroDispatchResult::BroadcastFailed;
+    jclass ic = env->FindClass("android/content/Intent");
+    if (!ic || clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jmethodID ctor=env->GetMethodID(ic,"<init>","()V");
+    jmethodID setAction=env->GetMethodID(ic,"setAction","(Ljava/lang/String;)Landroid/content/Intent;");
+    jmethodID setComponent=env->GetMethodID(ic,"setComponent","(Landroid/content/ComponentName;)Landroid/content/Intent;");
+    jmethodID putExtra=env->GetMethodID(ic,"putExtra","(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearAutoHitJniException(env)||!ctor||!setAction||!setComponent||!putExtra) return KeyZeroDispatchResult::IntentUnavailable;
+    jclass cc=env->FindClass("android/content/ComponentName");
+    if (!cc||clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jmethodID cctor=env->GetMethodID(cc,"<init>","(Ljava/lang/String;Ljava/lang/String;)V");
+    if (!cctor||clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jobject intent=env->NewObject(ic,ctor);
+    if (!intent||clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jstring action=env->NewStringUTF(kKeyMapperAction), pkg=env->NewStringUTF(kKeyMapperPackage);
+    jstring receiver=env->NewStringUTF(kKeyMapperReceiver), extra=env->NewStringUTF(kKeyMapperUidExtra);
+    jstring uid=env->NewStringUTF(kKeyMapperKeymapUid);
+    if (!action||!pkg||!receiver||!extra||!uid||clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jobject component=env->NewObject(cc,cctor,pkg,receiver);
+    if (!component||clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    env->CallObjectMethod(intent,setAction,action); if(clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    env->CallObjectMethod(intent,setComponent,component); if(clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    env->CallObjectMethod(intent,putExtra,extra,uid); if(clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jclass context=env->FindClass("android/content/Context");
+    if (!context||clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    jmethodID send=env->GetMethodID(context,"sendBroadcast","(Landroid/content/Intent;)V");
+    if (!send||clearAutoHitJniException(env)) return KeyZeroDispatchResult::IntentUnavailable;
+    env->CallVoidMethod(app,send,intent);
+    if(clearAutoHitJniException(env)) return KeyZeroDispatchResult::BroadcastFailed;
     return KeyZeroDispatchResult::Sent;
 }
-
 const char* keyZeroDispatchResultName(KeyZeroDispatchResult result) {
-    switch (result) {
-        case KeyZeroDispatchResult::Sent: return "macrodroid_key0_broadcast_sent";
+    switch(result) {
+        case KeyZeroDispatchResult::Sent: return "keymapper_key0_broadcast_sent";
         case KeyZeroDispatchResult::VmUnavailable: return "android_java_vm_unavailable";
         case KeyZeroDispatchResult::ContextUnavailable: return "android_context_unavailable";
-        case KeyZeroDispatchResult::IntentUnavailable: return "android_intent_api_unavailable";
-        case KeyZeroDispatchResult::BroadcastFailed: return "macrodroid_key0_broadcast_failed";
+        case KeyZeroDispatchResult::IntentUnavailable: return "keymapper_intent_api_unavailable";
+        case KeyZeroDispatchResult::BroadcastFailed: return "keymapper_broadcast_failed";
     }
-    return "macrodroid_key0_broadcast_unknown";
+    return "keymapper_broadcast_unknown";
 }
 
 thread_local bool g_autoHitSyntheticAttack = false;
@@ -251,7 +247,7 @@ void AutoHitModule::onInit() {
         });
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
         "AutoHit", "lifecycle", "initialized",
-        "mouse-held input plus optional bounded native-attack repeat for touchscreen input");
+        "target-gated continuous attacks through the configured Key Mapper keymap");
 }
 
 void AutoHitModule::onEnable() {
@@ -322,7 +318,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     int touchWindowRemainingMs = 0;
     float configuredRange = 3.2f;
     bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
-    float swordCps = 8.0f, axeCps = 4.0f, maceCps = 2.0f, tridentCps = 3.0f;
+    float swordCps = 5.0f, axeCps = 3.0f, maceCps = 1.5f, tridentCps = 2.5f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         const auto tickNow = std::chrono::steady_clock::now();
@@ -361,19 +357,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
         return;
     }
-    // AutoHit now asks MacroDroid to emit a physical KEYCODE_0 event.
-    // The external input route does not require a native GameMode attack function.
-
-    if (!attackHeld) {
-        const std::string inputState = std::string("waiting_for_attack_input_button_") +
-            std::to_string(attackButton) + (touchRepeatEnabled ? "_touch_repeat_on" : "_touch_repeat_off");
-        const std::string inputDetail = std::string("configured_button=") + std::to_string(attackButton) +
-            "; held_button=" + std::to_string(heldButton) +
-            "; touch_repeat=" + (touchRepeatEnabled ? "enabled" : "disabled") +
-            "; repeat_window_remaining_ms=" + std::to_string(touchWindowRemainingMs);
-        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", inputState, inputDetail);
-        return;
-    }
+    // AutoHit requests the configured Key Mapper keymap after target and rate gates pass.
 
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
@@ -453,8 +437,8 @@ void AutoHitModule::processPlayerTick(Player* player) {
         target != nullptr,
         validBounds(targetBounds),
         true, // currentTargetSnapshot rejects stale target data
-        true, // external MacroDroid input route does not use GameMode
-        true, // external MacroDroid input route does not use the native attack wrapper
+        true, // external Key Mapper input route does not use GameMode
+        true, // external Key Mapper input route does not use the native attack wrapper
         finiteVec(hitPoint),
         true, // cooldown was checked immediately before resolving GameMode
         std::sqrt(distanceSq),
@@ -467,18 +451,18 @@ void AutoHitModule::processPlayerTick(Player* player) {
         return;
     }
 
-    const auto dispatchResult = dispatchMacroDroidKeyZero();
+    const auto dispatchResult = dispatchKeyMapperKeyZero();
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         // Rate-limit key-event requests according to the selected weapon profile.
-        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
+        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 83, 1000));
     }
     const bool dispatched = dispatchResult == KeyZeroDispatchResult::Sent;
     diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Warning,
         "AutoHit", "key0_dispatch", keyZeroDispatchResultName(dispatchResult),
         dispatched
-            ? "Android accepted the package-scoped MacroDroid trigger; configure its Intent Received action to emit keyboard key 0 (KEYCODE_0=7). This does not prove the key event reached Minecraft."
-            : "MacroDroid trigger dispatch failed before key delivery; inspect Android VM/context/Intent diagnostics");
+            ? "Android accepted the explicit Key Mapper broadcast for the configured keymap UUID; this does not prove Key Mapper executed the keymap or Minecraft received key 0."
+            : "Key Mapper trigger dispatch failed before key delivery; inspect Android VM/context/Intent diagnostics");
 }
 
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
@@ -492,7 +476,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     const float legacyInterval = std::clamp(json.value("m_attackIntervalMs", 180.0f), 80.0f, 1000.0f);
     const float legacySwordCps = std::clamp(1000.0f / legacyInterval, 1.0f, 20.0f);
     m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
-    m_swordCps = std::clamp(json.value("m_swordCps", legacySwordCps), 1.0f, 20.0f);
+    m_swordCps = std::clamp(json.value("m_swordCps", 5.0f), 1.0f, 12.0f);
     m_axeEnabled = json.value("m_axeEnabled", m_axeEnabled);
     m_axeCps = std::clamp(json.value("m_axeCps", m_axeCps), 1.0f, 20.0f);
     m_maceEnabled = json.value("m_maceEnabled", m_maceEnabled);
@@ -552,25 +536,15 @@ void AutoHitModule::onMenuRegistered() {
         schema.node(std::move(node));
     };
 
-    slider("m_attackButton", "Mouse button index", "combat", "0", "16", "1", "");
-    ConfigNodeV2 activationNode;
-    activationNode.id = "m_requireAttackInput";
-    activationNode.key = "m_requireAttackInput";
-    activationNode.title = "Require attack input (desktop)";
-    activationNode.category = "combat";
-    activationNode.type = ConfigControlTypeV2::Toggle;
-    schema.node(std::move(activationNode));
     slider("m_attackRange", "Attack range", "combat", "2", "6", "0.1", " blocks");
-    toggle("m_touchRepeatEnabled", "Enable touchscreen attack repeat");
-    slider("m_touchRepeatWindowMs", "Touch repeat window", "combat", "100", "1000", "50", " ms");
     toggle("m_swordEnabled", "Enable sword profile");
-    slider("m_swordCps", "Sword CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    slider("m_swordCps", "Sword attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
     toggle("m_axeEnabled", "Enable axe profile");
-    slider("m_axeCps", "Axe CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    slider("m_axeCps", "Axe attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
     toggle("m_maceEnabled", "Enable mace profile");
-    slider("m_maceCps", "Mace CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    slider("m_maceCps", "Axe attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
     toggle("m_tridentEnabled", "Enable trident profile");
-    slider("m_tridentCps", "Trident CPS cap", "weapon_profiles", "1", "20", "0.5", " CPS");
+    slider("m_tridentCps", "Trident attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
 
     ConfigNodeV2 keybindNode;
     keybindNode.id = "keybind";
@@ -584,32 +558,6 @@ void AutoHitModule::onMenuRegistered() {
 
 bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "keybind") return false;
-    if (key == "m_requireAttackInput") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_requireAttackInput = on;
-        if (!on) {
-            m_attackHeld = false;
-            m_heldButton = -1;
-            m_touchRepeatUntil = {};
-        }
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "activation_mode", on ? "input_required" : "automatic_when_enabled");
-        return true;
-    }
-    if (key == "m_touchRepeatEnabled") {
-        const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
-        const bool off = value == "false" || value == "0" || value == "off" || value == "no";
-        if (!on && !off) return false;
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_touchRepeatEnabled = on;
-        if (!on) m_touchRepeatUntil = {};
-        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
-            "AutoHit", "touch_input", on ? "enabled" : "disabled");
-        return true;
-    }
     if (key == "m_swordEnabled" || key == "m_axeEnabled" ||
         key == "m_maceEnabled" || key == "m_tridentEnabled") {
         const bool on = value == "true" || value == "1" || value == "on" || value == "yes";
