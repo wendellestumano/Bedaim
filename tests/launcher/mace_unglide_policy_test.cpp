@@ -21,6 +21,7 @@ void check(bool condition, std::string_view name) {
 int main() {
     using bedaim::macefall::shouldPulseUnglideJump;
     using bedaim::macefall::shouldTriggerUnglideKeymap;
+    using bedaim::macefall::shouldRearmUnglide;
     check(shouldPulseUnglideJump(true, true, 5.0f, 8.0f),
           "Unglide pulses jump when another player is within configured distance");
     check(!shouldPulseUnglideJump(false, true, 5.0f, 8.0f),
@@ -39,6 +40,14 @@ int main() {
           "Unglide only triggers for a player target");
     check(!shouldTriggerUnglideKeymap(true, true, true, 8.01f, 8.0f),
           "Unglide target policy blocks targets beyond configured range");
+    check(!shouldRearmUnglide(false, false, 5.0f, 5.0f, 2.0f),
+          "Unglide stays latched while the same target remains inside re-arm margin");
+    check(shouldRearmUnglide(false, false, 7.1f, 5.0f, 2.0f),
+          "Unglide re-arms only after target leaves trigger range plus margin");
+    check(shouldRearmUnglide(false, true, 5.0f, 5.0f, 2.0f),
+          "Unglide re-arms when selected target changes");
+    check(shouldRearmUnglide(true, false, 5.0f, 5.0f, 2.0f),
+          "Unglide stays ready before its first trigger");
     check(!shouldPulseUnglideJump(true, true, std::numeric_limits<float>::infinity(), 8.0f),
           "invalid target distance fails closed");
     check(!shouldPulseUnglideJump(true, true, -1.0f, 8.0f),
