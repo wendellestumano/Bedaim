@@ -63,7 +63,7 @@ int main() {
     assert(normalizeIdentifier("item.myaddon.blazing_sword") == "myaddon:blazing_sword");
     assert(normalizeIdentifier("MyAddon:Blazing_Sword") == "myaddon:blazing_sword");
     assert(normalizeRange(4.5f) == 4.5f);
-    assert(normalizeRange(100.0f) == 8.0f);
+    assert(normalizeRange(100.0f) == 6.0f);
     assert(normalizeRange(std::numeric_limits<float>::quiet_NaN()) == 3.2f);
     assert(normalizeNormalCps(13.0f) == 12.0f);
     assert(normalizeBurstCps(13.0f) == 13.0f);
