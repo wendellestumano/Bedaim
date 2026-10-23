@@ -20,7 +20,7 @@ void check(bool condition, std::string_view name) {
 
 bedaim::autohit::Inputs validInputs() {
     return {
-        true, true, true, true, true, true, true, true, true, 2.5f, 3.0f
+        true, true, true, true, true, true, true, 2.5f, 3.0f
     };
 }
 }
@@ -46,7 +46,7 @@ int main() {
           "non-finite Aim Assist range falls back to the safe default");
 
     check(evaluate(validInputs()) == Decision::Ready,
-          "all valid prerequisites allow the attack attempt");
+          "valid target facts allow a Key Mapper request");
 
     auto input = validInputs();
     input.enabled = false;
@@ -65,12 +65,6 @@ int main() {
     input = validInputs(); input.targetFresh = false;
     check(evaluate(input) == Decision::StaleTarget,
           "stale target snapshot blocks dispatch");
-    input = validInputs(); input.gameModeValid = false;
-    check(evaluate(input) == Decision::MissingGameMode,
-          "missing GameMode blocks dispatch");
-    input = validInputs(); input.attackRouteAvailable = false;
-    check(evaluate(input) == Decision::MissingAttackRoute,
-          "unvalidated native attack route blocks dispatch");
     input = validInputs(); input.hitPointFinite = false;
     check(evaluate(input) == Decision::InvalidHitPoint,
           "invalid hit point blocks dispatch");
