@@ -201,16 +201,26 @@ JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
 class UnglideJniEnvironment {
 public:
     UnglideJniEnvironment() {
-        // Prefer the JavaVM provided by Preloader; dynamic lookup is a fallback
-        // for runtimes that do not expose ModContext::javaVm().
-        mVm = bedrocktools::core::javaVm();
+        // Match AutoHit's known-working Key Mapper route: ask ART for the
+        // process JavaVM first, then fall back to the Preloader-cached VM.
+        VmLookupStatus lookupFailure = VmLookupStatus::SymbolUnavailable;
+        const auto getVms = resolveJniGetCreatedJavaVMs();
+        if (getVms) {
+            JavaVM* vm = nullptr;
+            jsize count = 0;
+            const jint query = getVms(&vm, 1, &count);
+            if (query == JNI_OK && count > 0 && vm) {
+                mVm = vm;
+            } else if (query != JNI_OK) {
+                lookupFailure = VmLookupStatus::QueryFailed;
+            } else {
+                lookupFailure = VmLookupStatus::NoVmFound;
+            }
+        }
+        if (!mVm) mVm = bedrocktools::core::javaVm();
         if (!mVm) {
-            const auto getVms = resolveJniGetCreatedJavaVMs();
-            if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
-            JavaVM* vm = nullptr; jsize count = 0;
-            if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
-            if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
-            mVm = vm;
+            status = lookupFailure;
+            return;
         }
         const jint envStatus = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
         if (envStatus == JNI_OK) { status = VmLookupStatus::Ready; return; }
