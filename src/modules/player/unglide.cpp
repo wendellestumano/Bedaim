@@ -335,8 +335,8 @@ bool playerIsGlidingForUnglide(void* player) {
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
-void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;}
+void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
@@ -368,6 +368,13 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
         report(state, detail);
     };
+    auto resetTargetState = [&]() {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_burstRemaining = 0;
+        m_latchedTarget = nullptr;
+        m_targetLatched = false;
+        m_triggerState = TriggerState::Idle;
+    };
 
     // Match AutoHit's targeting contract: use the fresh Aim Assist target,
     // require that it is a player, and verify the camera ray intersects that
@@ -384,16 +391,19 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     AABB targetBounds{};
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+        resetTargetState();
         reject("target_missing_or_stale",
                "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
         return;
     }
     if (!aim->currentTargetIsPlayerSnapshot(target)) {
+        resetTargetState();
         reject("target_not_player",
                "Unglide only triggers for a player target, not a mob target.", 120);
         return;
     }
     if (!validBounds(targetBounds)) {
+        resetTargetState();
         reject("target_bounds_invalid",
                "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
         return;
@@ -406,94 +416,98 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Re-arm as soon as the same target has separated beyond the outer radius,
-    // even if the crosshair has already moved away. This avoids a stale latch
-    // when the player leaves range and later approaches again.
+    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
+    if (!playerIsGlidingForUnglide(player)) {
+        resetTargetState();
+        reject("player_not_gliding",
+               "Local player is not gliding with Elytra; no Space keymap request sent.", 250);
+        return;
+    }
+
+    // A new target starts Tracking. Range/height gates keep tracking active
+    // until the activation conditions pass, without sending Space prematurely.
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (m_targetLatched && m_latchedTarget == target &&
-            bedaim::macefall::shouldRearmUnglide(geometry.distance, targetDistance)) {
-            m_latchedTarget = nullptr;
+        if (m_latchedTarget != target) {
+            m_latchedTarget = target;
             m_targetLatched = false;
+            m_burstRemaining = 0;
+            m_triggerState = TriggerState::Tracking;
+        }
+        if (m_targetLatched &&
+            bedaim::macefall::shouldRearmUnglide(geometry.distance, targetDistance)) {
+            m_targetLatched = false;
+            m_burstRemaining = 0;
+            m_triggerState = TriggerState::Tracking;
         }
     }
+    if (geometry.distance > effectiveMaximumDistance) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_triggerState = TriggerState::Tracking;
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+        }
+        report("tracking_out_of_range",
+            std::string("target_distance=") + std::to_string(geometry.distance) +
+                ", activation_distance=" + std::to_string(effectiveMaximumDistance));
+        return;
+    }
+    if (geometry.verticalDifference > maximumHeightDifference) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_triggerState = TriggerState::Tracking;
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+        }
+        report("tracking_height_out_of_range",
+            std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
+                ", activation_height=" + std::to_string(maximumHeightDifference));
+        return;
+    }
     if (!crosshairConfirmed) {
+        resetTargetState();
         reject("crosshair_not_on_target",
                "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
         return;
     }
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    if (!bedaim::macefall::shouldTriggerUnglideKeymap(
-            true, true, crosshairConfirmed, geometry.distance, effectiveMaximumDistance)) {
-        if (!crosshairConfirmed) {
-            reject("crosshair_not_on_target",
-                   "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
-        } else {
-            reject("target_out_of_range",
-                   std::string("target_distance=") + std::to_string(geometry.distance) +
-                       ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
-        }
-        return;
-    }
-    // Only trigger while the local player is actually gliding. A grounded
-    // player holding a mace must never spam Space keymap requests.
-    if (!playerIsGlidingForUnglide(player)) {
-        reject("player_not_gliding",
-               "Local player is not gliding with Elytra; no Space keymap request sent.", 150);
-        return;
-    }
 
-    bool alreadyTriggeredForTarget = false;
+    bool burstAlreadyFinished = false;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        // A new target is a new attack opportunity; the same target remains
-        // latched until it separates beyond the outer radius.
-        if (m_targetLatched && m_latchedTarget == target) {
-            alreadyTriggeredForTarget = true;
-        } else if (m_targetLatched && m_latchedTarget != target) {
-            m_latchedTarget = nullptr;
-            m_targetLatched = false;
-        }
+        burstAlreadyFinished = m_triggerState == TriggerState::Triggered && m_burstRemaining <= 0;
+        if (burstAlreadyFinished) m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
     }
-    if (alreadyTriggeredForTarget) {
-        reject("target_already_triggered",
-               "Unglide already fired for this target; waiting for separation before re-arming.", 120);
-        return;
-    }
-
-    if (geometry.verticalDifference > maximumHeightDifference) {
-        reject("target_height_out_of_range",
-               std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
-                   ", maximum=" + std::to_string(maximumHeightDifference), 120);
-        return;
-    }
+    if (burstAlreadyFinished) return;
 
     const auto dispatchStarted = std::chrono::steady_clock::now();
-    AutomationBroadcastResult result;
+    AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
     int remaining = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || dispatchStarted < m_nextAttempt) return;
-        // Keep the dispatch synchronized with module enable/disable state.
+        if (m_triggerState != TriggerState::Triggered) {
+            m_triggerState = TriggerState::Triggered;
+            m_targetLatched = true;
+            m_latchedTarget = target;
+            m_burstRemaining = std::clamp(m_burstCount, 1, 10);
+        }
+
+        // Send the configured bounded burst only once for this approach.
         result = dispatchUnglideKeyMapperKeymap();
         const bool sent = result == AutomationBroadcastResult::Sent;
-        // This mode is a one-shot trigger, not a repeating pulse train. The
-        // configured burst settings remain in the UI for compatibility, but
-        // one target approach produces exactly one Space request.
-        m_burstRemaining = 0;
-        remaining = 0;
-        if (sent) {
-            m_latchedTarget = target;
-            m_targetLatched = true;
-        }
-        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(sent ? 250 : 500);
+        if (sent) --m_burstRemaining;
+        else m_burstRemaining = 0;
+        remaining = m_burstRemaining;
+        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(
+            sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 160) : 500);
     }
 
     report(automationBroadcastResultName(result),
-        std::string("crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
+        std::string("state=triggered; crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
-            ", keymap_uid=" + kUnglideKeymapUid);
+            ", keymap_uid=" + kKeyMapperUidExtra);
 }
 void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
@@ -518,7 +532,6 @@ void UnglideModule::onMenuRegistered(){
      });
    if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
  }
- ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
  using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
  s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
  ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
