@@ -1,3 +1,4 @@
+- Unglide now uses a bounded three-request startup burst at 120 ms intervals, then returns to a 1-second steady cooldown; failed dispatches reset the burst and use a longer retry cooldown.
 - Unglide no longer depends on the build-sensitive native Gliding flag; Key Mapper activation is now gated by configured target distance and vertical difference, with both measurements logged.
 ## Unglide Key Mapper dispatch
 - Aligned the Unglide JNI/JavaVM lookup, local JNI frame, application-context fallback, explicit component broadcast, and error reporting with AutoHit while preserving the dedicated Unglide keymap UID.
