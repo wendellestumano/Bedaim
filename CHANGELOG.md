@@ -1,4 +1,6 @@
 ## 2026-10-23 — Unglide input dispatch and Aim Assist ignore-list crash hardening
+- Updated Unglide's gliding check so a negative result from the native `Actor::getStatusFlag` lookup no longer immediately rejects the tick; it now falls back to the synchronized entity-data flag reader. Runtime confirmation is still required.
+
 
 - Aligned Unglide's JavaVM selection with the known-working AutoHit path: query ART's process JavaVM first and use the Preloader-cached VM only as fallback. This keeps the explicit Key Mapper broadcast/action and the dedicated Space keymap UUID unchanged.
 - Restricted Aim Assist's name-ignore lookup to player names from the SDK wrapper. The old path fell through to a resolved native `Actor::getNameTag` call whenever a player name did not match; that unnecessary native call is removed from target filtering to avoid the crash seen with a populated ignore list.
