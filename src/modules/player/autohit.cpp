@@ -580,7 +580,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     // item profile is first introduced. They are no longer exposed as global
     // per-class toggles in the UI.
     m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
-    m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 1.0f, 8.0f);
+    m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
     m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
     m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
@@ -815,8 +815,8 @@ void AutoHitModule::onMenuRegistered() {
     defaultRangeNode.defaultValue = "3.2";
     defaultRangeNode.currentValue = std::to_string(defaultRange);
     defaultRangeNode.hasCurrentValue = true;
-    defaultRangeNode.minValue = "1";
-    defaultRangeNode.maxValue = "8";
+    defaultRangeNode.minValue = "2";
+    defaultRangeNode.maxValue = "6";
     defaultRangeNode.step = "0.1";
     defaultRangeNode.unit = " blocks";
     schema.node(std::move(defaultRangeNode));
@@ -861,7 +861,7 @@ void AutoHitModule::onMenuRegistered() {
             node.unit = unit;
             schema.node(std::move(node));
         };
-        addProfileSlider("m_selected_profile_range", "Attack range", "1", "8", "0.1",
+        addProfileSlider("m_selected_profile_range", "Attack range", "1", "6", "0.1",
                          " blocks", std::to_string(selected->range),
                          "This item's range is additionally limited by the current Aim Assist tracking range.");
         addProfileSlider("m_selected_profile_cps", "Normal CPS", "1", "12", "0.5",
@@ -1041,7 +1041,7 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
             while (parsed < raw.size() && std::isspace(static_cast<unsigned char>(raw[parsed]))) ++parsed;
             if (parsed != raw.size() || !std::isfinite(number)) return false;
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_attackRange = std::clamp(number, 1.0f, 8.0f);
+            m_attackRange = std::clamp(number, 2.0f, 6.0f);
             return true;
         } catch (...) { return false; }
     }
