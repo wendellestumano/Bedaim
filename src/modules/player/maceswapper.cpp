@@ -263,72 +263,54 @@ void* resolveTrustedGameSymbol(const char* symbol) {
     return nullptr;
 }
 
-// MacroDroid exposes an "Intent Received" trigger for custom broadcasts.
-// Configure it with this action and a single "Input Key Event: Space" action.
-// MacroDroid then uses its supported input/Accessibility/Shizuku path; Bedaim
-// only emits the trigger intent and does not inject input or install additional hooks.
-constexpr const char* kMacroDroidPackage = "com.arlosoft.macrodroid";
-constexpr const char* kBedaimSpacebarIntentAction =
-    "com.wendellestumano.bedaim.UNGLIDE_SPACEBAR";
+// Trigger the user's dedicated Key Mapper keymap for Unglide.
+// Reuse AutoHit's JNI/JavaVM and explicit-component broadcast pattern, with a
+// separate UID so the Unglide action remains independent from AutoHit.
+constexpr const char* kKeyMapperPackage = "io.github.sds100.keymapper";
+constexpr const char* kKeyMapperReceiver =
+    "io.github.sds100.keymapper.api.TriggerKeyMapsBroadcastReceiver";
+constexpr const char* kKeyMapperAction =
+    "io.github.sds100.keymapper.ACTION_TRIGGER_KEYMAP_BY_UID";
+constexpr const char* kKeyMapperUidExtra =
+    "io.github.sds100.keymapper.EXTRA_KEYMAP_UID";
+constexpr const char* kUnglideKeymapUid =
+    "e2225852-1df2-4232-bb26-606f11fc8745";
 
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
 
 JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
-    // Fallback only: the Preloader-provided VM is preferred below. RTLD_NOLOAD
-    // can fail across Android linker namespaces even when ART is already loaded.
     static void* artHandle = dlopen("libart.so", RTLD_NOW);
     static void* helperHandle = dlopen("libnativehelper.so", RTLD_NOW);
     auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
         dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
-    if (!getVms && artHandle) {
-        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-            dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
-    }
-    if (!getVms && helperHandle) {
-        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-            dlsym(helperHandle, "JNI_GetCreatedJavaVMs"));
-    }
+    if (!getVms && artHandle) getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+        dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+    if (!getVms && helperHandle) getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+        dlsym(helperHandle, "JNI_GetCreatedJavaVMs"));
     return getVms;
 }
 
 class ScopedJniEnvironment {
 public:
     ScopedJniEnvironment() {
-        // Use the exact VM passed by Preloader during ModContext::load first.
-        // Querying JNI_GetCreatedJavaVMs alone is unreliable on some Android
-        // linker namespaces and was observed to fail before Unglide broadcast.
         mVm = bedrocktools::core::javaVm();
         if (!mVm) {
             const auto getVms = resolveJniGetCreatedJavaVMs();
             if (!getVms) return;
-
             JavaVM* discoveredVm = nullptr;
             jsize vmCount = 0;
             if (getVms(&discoveredVm, 1, &vmCount) != JNI_OK ||
                 vmCount < 1 || !discoveredVm) return;
             mVm = discoveredVm;
         }
-
         const jint status = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
         if (status == JNI_OK) return;
-        if (status != JNI_EDETACHED) {
-            mEnv = nullptr;
-            return;
-        }
-
-        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) {
-            mAttached = true;
-        } else {
-            mEnv = nullptr;
-        }
+        if (status != JNI_EDETACHED) { mEnv = nullptr; return; }
+        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) mAttached = true;
+        else mEnv = nullptr;
     }
-
-    ~ScopedJniEnvironment() {
-        if (mAttached && mVm) mVm->DetachCurrentThread();
-    }
-
+    ~ScopedJniEnvironment() { if (mAttached && mVm) mVm->DetachCurrentThread(); }
     JNIEnv* get() const noexcept { return mEnv; }
-
 private:
     JavaVM* mVm = nullptr;
     JNIEnv* mEnv = nullptr;
@@ -338,12 +320,10 @@ private:
 class ScopedJniLocalFrame {
 public:
     explicit ScopedJniLocalFrame(JNIEnv* env) : mEnv(env) {
-        mReady = mEnv && mEnv->PushLocalFrame(32) == JNI_OK;
+        mReady = mEnv && mEnv->PushLocalFrame(40) == JNI_OK;
         if (!mReady && mEnv && mEnv->ExceptionCheck()) mEnv->ExceptionClear();
     }
-    ~ScopedJniLocalFrame() {
-        if (mReady) mEnv->PopLocalFrame(nullptr);
-    }
+    ~ScopedJniLocalFrame() { if (mReady) mEnv->PopLocalFrame(nullptr); }
     bool ready() const noexcept { return mReady; }
 private:
     JNIEnv* mEnv = nullptr;
@@ -351,11 +331,8 @@ private:
 };
 
 enum class AutomationBroadcastResult {
-    Sent,
-    JavaVmUnavailable,
-    ApplicationContextUnavailable,
-    IntentApiUnavailable,
-    BroadcastFailed,
+    Sent, JavaVmUnavailable, ApplicationContextUnavailable,
+    IntentApiUnavailable, BroadcastFailed,
 };
 
 bool clearJniException(JNIEnv* env) {
@@ -364,7 +341,7 @@ bool clearJniException(JNIEnv* env) {
     return true;
 }
 
-AutomationBroadcastResult dispatchMacroDroidSpacebarMacro() {
+AutomationBroadcastResult dispatchUnglideKeyMapperKeymap() {
     ScopedJniEnvironment jni;
     JNIEnv* env = jni.get();
     if (!env) return AutomationBroadcastResult::JavaVmUnavailable;
@@ -379,14 +356,9 @@ AutomationBroadcastResult dispatchMacroDroidSpacebarMacro() {
         if (currentApplication && !clearJniException(env)) {
             application = env->CallStaticObjectMethod(activityThread, currentApplication);
             if (clearJniException(env)) application = nullptr;
-        } else {
-            clearJniException(env);
-        }
-    } else {
-        clearJniException(env);
-    }
+        } else clearJniException(env);
+    } else clearJniException(env);
 
-    // Some Android builds expose this equivalent accessor more reliably.
     if (!application) {
         jclass appGlobals = env->FindClass("android/app/AppGlobals");
         if (appGlobals && !clearJniException(env)) {
@@ -395,49 +367,54 @@ AutomationBroadcastResult dispatchMacroDroidSpacebarMacro() {
             if (initialApplication && !clearJniException(env)) {
                 application = env->CallStaticObjectMethod(appGlobals, initialApplication);
                 if (clearJniException(env)) application = nullptr;
-            } else {
-                clearJniException(env);
-            }
-        } else {
-            clearJniException(env);
-        }
+            } else clearJniException(env);
+        } else clearJniException(env);
     }
     if (!application) return AutomationBroadcastResult::ApplicationContextUnavailable;
 
     jclass intentClass = env->FindClass("android/content/Intent");
-    if (!intentClass || clearJniException(env))
-        return AutomationBroadcastResult::IntentApiUnavailable;
-
+    if (!intentClass || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
     jmethodID intentConstructor = env->GetMethodID(intentClass, "<init>", "()V");
     jmethodID setAction = env->GetMethodID(
         intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
-    jmethodID setPackage = env->GetMethodID(
-        intentClass, "setPackage", "(Ljava/lang/String;)Landroid/content/Intent;");
-    if (clearJniException(env) || !intentConstructor || !setAction || !setPackage)
+    jmethodID setComponent = env->GetMethodID(
+        intentClass, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;");
+    jmethodID putExtra = env->GetMethodID(
+        intentClass, "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearJniException(env) || !intentConstructor || !setAction || !setComponent || !putExtra)
         return AutomationBroadcastResult::IntentApiUnavailable;
+
+    jclass componentClass = env->FindClass("android/content/ComponentName");
+    if (!componentClass || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
+    jmethodID componentConstructor = env->GetMethodID(
+        componentClass, "<init>", "(Ljava/lang/String;Ljava/lang/String;)V");
+    if (!componentConstructor || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
 
     jobject intent = env->NewObject(intentClass, intentConstructor);
-    if (!intent || clearJniException(env))
-        return AutomationBroadcastResult::IntentApiUnavailable;
+    if (!intent || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
+    jstring action = env->NewStringUTF(kKeyMapperAction);
+    jstring packageName = env->NewStringUTF(kKeyMapperPackage);
+    jstring receiverName = env->NewStringUTF(kKeyMapperReceiver);
+    jstring extraName = env->NewStringUTF(kKeyMapperUidExtra);
+    jstring keymapUid = env->NewStringUTF(kUnglideKeymapUid);
+    if (!action || !packageName || !receiverName || !extraName || !keymapUid ||
+        clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
 
-    jstring action = env->NewStringUTF(kBedaimSpacebarIntentAction);
-    jstring packageName = env->NewStringUTF(kMacroDroidPackage);
-    if (!action || !packageName || clearJniException(env))
-        return AutomationBroadcastResult::IntentApiUnavailable;
-
+    jobject component = env->NewObject(
+        componentClass, componentConstructor, packageName, receiverName);
+    if (!component || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
     env->CallObjectMethod(intent, setAction, action);
     if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    env->CallObjectMethod(intent, setPackage, packageName);
+    env->CallObjectMethod(intent, setComponent, component);
+    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
+    env->CallObjectMethod(intent, putExtra, extraName, keymapUid);
     if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
 
     jclass contextClass = env->FindClass("android/content/Context");
-    if (!contextClass || clearJniException(env))
-        return AutomationBroadcastResult::IntentApiUnavailable;
+    if (!contextClass || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
     jmethodID sendBroadcast = env->GetMethodID(
         contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
-    if (!sendBroadcast || clearJniException(env))
-        return AutomationBroadcastResult::IntentApiUnavailable;
-
+    if (!sendBroadcast || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
     env->CallVoidMethod(application, sendBroadcast, intent);
     if (clearJniException(env)) return AutomationBroadcastResult::BroadcastFailed;
     return AutomationBroadcastResult::Sent;
@@ -445,13 +422,13 @@ AutomationBroadcastResult dispatchMacroDroidSpacebarMacro() {
 
 const char* automationBroadcastResultName(AutomationBroadcastResult result) {
     switch (result) {
-        case AutomationBroadcastResult::Sent: return "macrodroid_broadcast_sent";
+        case AutomationBroadcastResult::Sent: return "keymapper_unglide_keymap_broadcast_sent";
         case AutomationBroadcastResult::JavaVmUnavailable: return "android_java_vm_unavailable";
         case AutomationBroadcastResult::ApplicationContextUnavailable: return "android_context_unavailable";
-        case AutomationBroadcastResult::IntentApiUnavailable: return "android_intent_api_unavailable";
-        case AutomationBroadcastResult::BroadcastFailed: return "macrodroid_broadcast_failed";
+        case AutomationBroadcastResult::IntentApiUnavailable: return "keymapper_unglide_intent_api_unavailable";
+        case AutomationBroadcastResult::BroadcastFailed: return "keymapper_unglide_broadcast_failed";
     }
-    return "macrodroid_broadcast_unknown";
+    return "keymapper_unglide_broadcast_unknown";
 }
 
 ActorGetStatusFlagFn resolveActorGetStatusFlag() {
@@ -710,7 +687,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
                     reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
                 } else {
-                    const auto result = dispatchMacroDroidSpacebarMacro();
+                    const auto result = dispatchUnglideKeyMapperKeymap();
                     // A successful sendBroadcast confirms Android accepted the
                     // request, not that a MacroDroid macro/input route was active.
                     reportUnglideGate(
