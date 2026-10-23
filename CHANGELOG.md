@@ -1,3 +1,11 @@
+## 2026-10-22 — Key Mapper routing and steady AutoHit cadence
+
+- Replaced the MacroDroid broadcast route with an explicit broadcast to Key Mapper's receiver, action, UUID extra and configured keymap UUID.
+- Removed the Require Attack Input and Touchscreen Repeat controls from the UI; AutoHit checks target/weapon/range gates continuously while enabled.
+- Reduced default rates to sword 5 CPS, axe 3 CPS, mace 1.5 CPS and trident 2.5 CPS; rate controls are capped at 12 CPS.
+- Enforced an 83 ms minimum request interval and consume the interval on failed dispatches too, preventing unbounded retry bursts.
+- Build/CI and in-game input delivery remain unverified. Successful broadcast dispatch does not prove Key Mapper emitted input to Minecraft.
+
 ## 2026-10-22 — Route AutoHit through MacroDroid keyboard key 0
 - AutoHit now sends the package-scoped broadcast action `com.wendellestumano.bedaim.AUTOHIT_KEY0` to MacroDroid after its existing target, range, weapon-profile, input and cooldown gates pass. It no longer calls the native GameMode attack wrapper in this path.
 - Configure MacroDroid with an enabled `Intent Received` trigger matching that action and an `Input Key Event` action for keyboard digit `0` (Android `KEYCODE_0 = 7`). MacroDroid's supported input path must send the key event to the foreground Minecraft/Levi Launcher game.
