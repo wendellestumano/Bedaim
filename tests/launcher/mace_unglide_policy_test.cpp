@@ -39,6 +39,16 @@ int main() {
           "Unglide only triggers for a player target");
     check(!shouldTriggerUnglideKeymap(true, true, true, 8.01f, 8.0f),
           "Unglide target policy blocks targets beyond configured range");
+
+    using bedaim::macefall::shouldRearmUnglide;
+    check(!shouldRearmUnglide(5.0f, 8.0f),
+          "remaining inside trigger range does not re-arm another Unglide");
+    check(!shouldRearmUnglide(9.0f, 8.0f),
+          "hysteresis prevents rapid re-arm at the edge of range");
+    check(shouldRearmUnglide(9.6f, 8.0f),
+          "leaving trigger range plus hysteresis re-arms the next attack");
+    check(!shouldRearmUnglide(std::numeric_limits<float>::infinity(), 8.0f),
+          "invalid distance cannot re-arm Unglide");
     check(!shouldPulseUnglideJump(true, true, std::numeric_limits<float>::infinity(), 8.0f),
           "invalid target distance fails closed");
     check(!shouldPulseUnglideJump(true, true, -1.0f, 8.0f),
