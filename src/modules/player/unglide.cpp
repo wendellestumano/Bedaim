@@ -365,7 +365,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
 
-    float targetDistance = 8.0f;
+    float targetDistance = 5.0f;
     float maximumHeightDifference = 4.0f;
     float rearmDistanceMargin = 2.0f;
     {
@@ -573,7 +573,7 @@ void UnglideModule::onMenuRegistered() {
     };
 
     addSlider("m_unglideTargetDistance", "Trigger distance", "1", "32", "0.5",
-              " blocks", "8.0", "Distance to the selected player that triggers the single pulse.");
+              " blocks", "5.0", "Distance to the selected player that triggers the single pulse.");
     addSlider("m_unglideMaxVerticalDifference", "Maximum height difference", "0.5", "16", "0.5",
               " blocks", "4.0", "Reject targets that are too far above or below the player.");
     addSlider("m_unglideRearmDistanceMargin", "Re-arm distance margin", "0.5", "8", "0.5",
