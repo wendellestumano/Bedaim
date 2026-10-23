@@ -32,6 +32,10 @@ int main() {
     using bedaim::aimmath::nearestAnchorToRay;
     using bedaim::aimpolicy::HeldWeapon;
     using bedaim::aimpolicy::isRangedPredictionWeapon;
+    check(bedaim::aimpolicy::shouldUseStableAimAnchor(true),
+          "Sticky tracking uses the stable hitbox anchor");
+    check(!bedaim::aimpolicy::shouldUseStableAimAnchor(false),
+          "Smooth and Adaptive tracking retain the sliding hitbox point");
 
     const float wrapAcrossBoundary = wrapDegrees(-179.0f - 179.0f);
     check(std::abs(wrapAcrossBoundary - 2.0f) < 1.0e-4f,

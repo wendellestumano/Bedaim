@@ -12,6 +12,9 @@ enum class HeldWeapon {
 // In Ranged prediction mode, lead projectile/throwable weapons only.
 // Bedrock 1.26.50.4 sample spear definitions use piercing/kinetic weapon
 // components rather than a projectile component, so Spears remain melee here.
+// Sticky uses a stable anchor; Smooth/Adaptive follow a sliding point.
+constexpr bool shouldUseStableAimAnchor(bool sticky) noexcept { return sticky; }
+
 constexpr bool isRangedPredictionWeapon(HeldWeapon weapon) noexcept {
     return weapon == HeldWeapon::Bow ||
            weapon == HeldWeapon::Crossbow ||

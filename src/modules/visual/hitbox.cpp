@@ -349,7 +349,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             aabb = {expanded.min, expanded.max};
         }
         const uint32_t boxColor = g_hitboxMod ? g_hitboxMod->hitboxColor : 0xFF00FFFF;
-        drawBox(aabb, boxColor);
+        // Do not repaint the same native player bounds over an ESP game-mode color.
+        // Expanded bounds remain separately visible when Bedrock Bounds is enabled.
+        if (!wantsEsp || isExpandedTarget) drawBox(aabb, boxColor);
 
         if (!nativeHitboxesEnabled) return;
         if (g_hitboxMod->showEyeLine) {
@@ -503,7 +505,7 @@ void HitboxModule::onInit() {
     if(!s_actorFetchNearby)missing+=" ActorFetchNearbyActorsSorted";
     if(!s_actorIsPlayer)missing+=" ActorIsPlayer";
     bedrocktools::diagnostics::log(missing.empty()?bedrocktools::diagnostics::Level::Info:bedrocktools::diagnostics::Level::Warning,
-      "ESP",missing.empty()?"renderer_dependencies=ready; shared RenderLevel path available":std::string("renderer_dependencies_missing:")+missing);
+      "ESP",missing.empty()?std::string("renderer_dependencies=ready; shared RenderLevel path available"):std::string("renderer_dependencies_missing:")+missing);
     applyPatch();
 }
 
