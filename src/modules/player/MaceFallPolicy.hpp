@@ -26,6 +26,12 @@ inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
     return targetDistance <= safeTargetDistance;
 }
 
+// A target can start one bounded burst. Once that burst is exhausted, the
+// same still-valid target must not start another burst until state is reset.
+inline bool shouldDispatchUnglideBurst(bool alreadyTriggered, int burstRemaining) noexcept {
+    return !alreadyTriggered || burstRemaining > 0;
+}
+
 inline bool shouldTriggerUnglideKeymap(bool enabled, bool targetIsPlayer,
                                        bool crosshairConfirmed, float targetDistance,
                                        float maximumTargetDistance) noexcept {
