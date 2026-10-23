@@ -39,6 +39,12 @@ int main() {
           "Unglide only triggers for a player target");
     check(!shouldTriggerUnglideKeymap(true, true, true, 8.01f, 8.0f),
           "Unglide target policy blocks targets beyond configured range");
+    check(shouldDispatchUnglideBurst(false, 0),
+          "first valid approach can start its bounded burst");
+    check(shouldDispatchUnglideBurst(true, 2),
+          "remaining presses in the current burst can dispatch");
+    check(!shouldDispatchUnglideBurst(true, 0),
+          "same target cannot restart after burst exhaustion");
 
     using bedaim::macefall::shouldRearmUnglide;
     check(!shouldRearmUnglide(5.0f, 8.0f),
