@@ -655,9 +655,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Unglide asks MacroDroid to perform the Android Space key event through its
-    // supported Input Key Event action. MacroDroid must have the Intent Received
-    // trigger and privileged input route configured by the user.
+    // Unglide triggers a dedicated Key Mapper keymap by UID. Configure that
+    // keymap to send Space through an available input method; an accepted
+    // broadcast alone does not confirm that Minecraft received the key.
     if (m_unglideEnabled) {
         const auto now = std::chrono::steady_clock::now();
         auto reportUnglideGate = [&](const char* state, const std::string& details) {
@@ -694,7 +694,8 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                         automationBroadcastResultName(result),
                         std::string("target_distance=") + std::to_string(target.distance) +
                             ", action=" + kKeyMapperAction +
-                            ", configure MacroDroid Intent Received + Input Key Event Space, and enable its supported Shizuku/root input route.");
+                            ", keymap_uid=" + kUnglideKeymapUid +
+                            ", configure that Key Mapper keymap to send Space and enable a supported input method (e.g. Shizuku/root).");
                     // Keep repeats at >=1s because Android may throttle background broadcasts.
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(
                         result == AutomationBroadcastResult::Sent ? 1000 : 1500);
