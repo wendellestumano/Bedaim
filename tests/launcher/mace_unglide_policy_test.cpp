@@ -30,6 +30,8 @@ int main() {
           "target just beyond configured distance does not trigger");
     check(shouldPulseUnglideJump(true, true, 8.0f, 8.0f),
           "exact target-distance boundary is inclusive");
+    check(!shouldPulseUnglideJump(true, true, 5.0f, 8.0f, false),
+          "Unglide requires the crosshair ray to confirm the target");
     check(!shouldPulseUnglideJump(true, true, std::numeric_limits<float>::infinity(), 8.0f),
           "invalid target distance fails closed");
     check(!shouldPulseUnglideJump(true, true, -1.0f, 8.0f),
