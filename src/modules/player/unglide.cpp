@@ -584,7 +584,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_dispatchInProgress = false;
         // Disable/re-enable may reset the state while the broadcast is in flight.
         // Do not let a late completion overwrite that newer state.
-        if (enabled && m_unglideEnabled && m_latchedTarget == target &&
+        if (m_latchedTarget == target &&
             m_triggerState == TriggerState::Triggered) {
             const bool sent = result == AutomationBroadcastResult::Sent;
             if (sent) --m_burstRemaining;
