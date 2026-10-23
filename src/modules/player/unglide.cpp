@@ -440,7 +440,13 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         // A new target is a new attack opportunity. The same target remains
         // latched until it leaves the configured range plus hysteresis.
         if (m_targetLatched && m_latchedTarget == target) {
-            alreadyTriggeredForTarget = true;
+            if (bedaim::macefall::shouldRearmUnglide(
+                    geometry.distance, targetDistance)) {
+                m_latchedTarget = nullptr;
+                m_targetLatched = false;
+            } else {
+                alreadyTriggeredForTarget = true;
+            }
         } else if (m_targetLatched && m_latchedTarget != target) {
             m_latchedTarget = nullptr;
             m_targetLatched = false;
