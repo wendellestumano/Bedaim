@@ -473,16 +473,14 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
     m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
-    const float legacyInterval = std::clamp(json.value("m_attackIntervalMs", 180.0f), 80.0f, 1000.0f);
-    const float legacySwordCps = std::clamp(1000.0f / legacyInterval, 1.0f, 20.0f);
     m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
     m_swordCps = std::clamp(json.value("m_swordCps", 5.0f), 1.0f, 12.0f);
     m_axeEnabled = json.value("m_axeEnabled", m_axeEnabled);
-    m_axeCps = std::clamp(json.value("m_axeCps", m_axeCps), 1.0f, 20.0f);
+    m_axeCps = std::clamp(json.value("m_axeCps", m_axeCps), 1.0f, 12.0f);
     m_maceEnabled = json.value("m_maceEnabled", m_maceEnabled);
-    m_maceCps = std::clamp(json.value("m_maceCps", m_maceCps), 1.0f, 20.0f);
+    m_maceCps = std::clamp(json.value("m_maceCps", m_maceCps), 1.0f, 12.0f);
     m_tridentEnabled = json.value("m_tridentEnabled", m_tridentEnabled);
-    m_tridentCps = std::clamp(json.value("m_tridentCps", m_tridentCps), 1.0f, 20.0f);
+    m_tridentCps = std::clamp(json.value("m_tridentCps", m_tridentCps), 1.0f, 12.0f);
 }
 
 void AutoHitModule::saveConfig(nlohmann::json& json) {
@@ -493,7 +491,6 @@ void AutoHitModule::saveConfig(nlohmann::json& json) {
     json["m_attackRange"] = m_attackRange;
     json["m_touchRepeatEnabled"] = m_touchRepeatEnabled;
     json["m_touchRepeatWindowMs"] = m_touchRepeatWindowMs;
-    json["m_attackIntervalMs"] = 1000.0f / m_swordCps; // legacy config compatibility
     json["m_swordEnabled"] = m_swordEnabled;
     json["m_swordCps"] = m_swordCps;
     json["m_axeEnabled"] = m_axeEnabled;
