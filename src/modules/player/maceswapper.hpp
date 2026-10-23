@@ -23,9 +23,6 @@ public:
     float m_attackRange = 3.0f;
     float m_minimumFallDistance = 1.55f;
     bool m_restoreSlot = true;
-    bool m_unglideEnabled = false;
-    float m_unglideTargetDistance = 8.0f;
-    float m_unglideMaxVerticalDifference = 4.0f;
 
 private:
     void processPlayerTick(bedrocktools::sdk::Player* player);
@@ -35,9 +32,7 @@ private:
     bool m_hasLastPlayerY = false;
     float m_peakY = 0.0f;
     bool m_hasPeakY = false;
-    std::chrono::steady_clock::time_point m_nextUnglideAttempt{};
-    int m_unglideBurstRemaining = 0;
-    std::chrono::steady_clock::time_point m_nextUnglideDiagnostic{};
+    std::chrono::steady_clock::time_point m_nextAttack{};
     bool m_pendingAttack = false;
     bool m_cancelPendingAttack = false;
     int m_pendingMaceSlot = -1;
