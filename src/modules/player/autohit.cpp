@@ -597,7 +597,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     if (profilesIt != json.end() && profilesIt->is_array()) {
         std::unordered_set<std::string> seen;
         for (const auto& item : *profilesIt) {
-            if (!item.is_object() || m_customWeaponProfiles.size() >= 128) continue;
+            if (!item.is_object() || m_customWeaponProfiles.size() >= 120) continue;
             WeaponCustomProfile profile;
             profile.identifier = item.value("identifier", std::string{});
             profile.displayName = item.value("displayName", std::string{});
@@ -706,22 +706,6 @@ void AutoHitModule::onMenuRegistered() {
         .category("weapon_profiles", "Weapon Profiles", "Create and manage independent settings for each held item")
         .category("profile_settings", "Profile Settings", "Range, normal CPS and initial burst for the selected weapon")
         .category("combat", "Combat", "General AutoHit settings");
-
-    auto addNode = [&](std::string id, std::string key, std::string title,
-                       ConfigControlTypeV2 type, std::string category,
-                       std::string value, bool hasValue, std::string description = {}) {
-        ConfigNodeV2 node;
-        node.id = std::move(id);
-        node.key = std::move(key);
-        node.title = std::move(title);
-        node.type = type;
-        node.category = std::move(category);
-        node.description = std::move(description);
-        node.defaultValue = value;
-        node.currentValue = std::move(value);
-        node.hasCurrentValue = hasValue;
-        schema.node(std::move(node));
-    };
 
     ConfigNodeV2 weaponChoice;
     weaponChoice.id = "m_addWeaponChoice";
@@ -955,7 +939,7 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
                 m_selectedProfileIdentifier = existing->identifier;
                 schemaNeedsRefresh = true;
             } else {
-                if (m_customWeaponProfiles.size() >= 128) return false;
+                if (m_customWeaponProfiles.size() >= 120) return false;
                 const auto catalogEntry = std::find_if(
                     bedaim::autohit::weapon::kWeaponCatalog.begin(),
                     bedaim::autohit::weapon::kWeaponCatalog.end(),
