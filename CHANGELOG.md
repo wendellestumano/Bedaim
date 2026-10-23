@@ -1,3 +1,10 @@
+## 2026-10-23 — Guard Unglide synchronized-data fallback reads
+
+- Replace direct dereferences in the legacy gliding-state fallback with bounded reads through `/proc/self/mem`; invalid, unmapped, overflowed, or unreadable pointers now fail closed instead of risking a process crash.
+- Keep the trusted native `Actor::getStatusFlag` lookup as the preferred fast path. If both the symbol and safe fallback are unavailable, suppress the Key Mapper request and emit `gliding_state_unavailable` rather than misreporting the player as grounded.
+- Add host regression coverage for valid reads, low/null/zero/overflow inputs, and an unmapped address; register it in the Build workflow.
+- CI and device compatibility validation are pending. On Android, if procfs access is restricted, the fallback intentionally fails closed.
+
 ## 2026-10-23 — Fix duplicate Unglide schema declaration
 
 - Remove a duplicated `ConfigSchemaBuilder`, JSON snapshot, and value-reader lambda declaration in `UnglideModule::onMenuRegistered()` that caused the Android compile to fail with redefinition errors.
