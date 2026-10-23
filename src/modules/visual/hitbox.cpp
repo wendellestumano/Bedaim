@@ -218,22 +218,16 @@ static bool hasCategory(void* actor, uint32_t categoryBit) {
 
 
 static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
-                                          const bedrocktools::sdk::Vec3& localPosition) {
+                                          const bedrocktools::sdk::Vec3& localPosition,
+                                          const ActorVec& actors, bool actorSnapshotValid,
+                                          bool actorSnapshotEmpty, float targetRange) {
     if (!esp || !localPlayer) return;
     esp->beginOffscreenFrame(localPosition, getActorRotation(localPlayer));
     if (!esp->enabled || !esp->showOffscreenIndicators ||
         !s_actorFetchNearby || !s_actorIsPlayer) return;
 
-    const float targetRange = std::clamp(esp->range, 8.0f, 80.0f);
-    const float queryRange = std::max(30.0f, targetRange);
-    bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
-    ActorVec actors = s_actorFetchNearby(localPlayer, &extent, 1);
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    const bool empty = begin == 0 && end == 0;
-    const bool valid = empty || (begin > 0x1000 && end >= begin &&
-        (end - begin) % sizeof(DistanceSortedActor) == 0 &&
-        (end - begin) / sizeof(DistanceSortedActor) <= 8192);
+    const bool empty = actorSnapshotEmpty;
+    const bool valid = actorSnapshotValid;
     if (!valid) {
         espLogOnce(espLoggedSnapshot, bedrocktools::diagnostics::Level::Warning,
                    "offscreen_actor_snapshot=malformed");
@@ -282,7 +276,29 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
     if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
     if (!g_localPlayerPtr) { if(espEnabled)espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
-    if (espEnabled) updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos);
+
+    // Fetch the native actor vector once per RenderLevel call and reuse it for both
+    // off-screen HUD targeting and 3D ESP/Hitbox rendering.
+    const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
+    const float queryRange = std::max(30.0f, espRange);
+    ActorVec actors{};
+    bool actorSnapshotValid = false;
+    bool actorSnapshotEmpty = true;
+    if (s_actorFetchNearby) {
+        bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
+        actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
+        const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
+        const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+        actorSnapshotEmpty = begin == 0 && end == 0;
+        actorSnapshotValid = actorSnapshotEmpty ||
+            (begin > 0x1000 && end >= begin &&
+             (end - begin) % sizeof(DistanceSortedActor) == 0 &&
+             (end - begin) / sizeof(DistanceSortedActor) <= 8192);
+    }
+    if (espEnabled) {
+        updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
+                                  actors, actorSnapshotValid, actorSnapshotEmpty, espRange);
+    }
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
     if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
 
@@ -457,15 +473,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     }
 
     if(s_actorFetchNearby){
-        const float espRange=espEnabled?std::clamp(esp->range,8.0f,80.0f):30.0f;
-        const float queryRange=std::max(30.0f,espRange);
-        bedrocktools::sdk::Vec3 extent={queryRange,queryRange,queryRange};
-        ActorVec actors=s_actorFetchNearby(g_localPlayerPtr,&extent,1);
-        const auto begin=reinterpret_cast<std::uintptr_t>(actors.begin),end=reinterpret_cast<std::uintptr_t>(actors.end);
-        const bool empty=begin==0&&end==0;
-        const bool valid=empty||(begin>0x1000&&end>=begin&&(end-begin)%sizeof(DistanceSortedActor)==0&&(end-begin)/sizeof(DistanceSortedActor)<=8192);
-        if(!valid){if(espEnabled)espLogOnce(espLoggedSnapshot,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=malformed; skipped nearby actor list");}
-        else if(empty){if(espEnabled)espLogOnce(espLoggedEmptyActors,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=empty; no nearby actors returned by ActorFetchNearbyActorsSorted");}
+        if(!actorSnapshotValid){if(espEnabled)espLogOnce(espLoggedSnapshot,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=malformed; skipped nearby actor list");}
+        else if(actorSnapshotEmpty){if(espEnabled)espLogOnce(espLoggedEmptyActors,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=empty; no nearby actors returned by ActorFetchNearbyActorsSorted");}
         else for(DistanceSortedActor* it=actors.begin;it<actors.end;++it){
             void* ent=it->mActor;
             if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
