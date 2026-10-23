@@ -39,6 +39,14 @@ int main() {
           "Unglide only triggers for a player target");
     check(!shouldTriggerUnglideKeymap(true, true, true, 8.01f, 8.0f),
           "Unglide target policy blocks targets beyond configured range");
+    check(shouldDispatchUnglideBurst(false, 0),
+          "first valid approach is allowed to start its burst");
+    check(shouldDispatchUnglideBurst(true, 2),
+          "remaining presses in the current bounded burst may dispatch");
+    check(!shouldDispatchUnglideBurst(true, 0),
+          "same target cannot restart a burst after it is exhausted");
+    check(!shouldDispatchUnglideBurst(true, -1),
+          "exhausted burst remains latched even with invalid negative count");
     check(!shouldPulseUnglideJump(true, true, std::numeric_limits<float>::infinity(), 8.0f),
           "invalid target distance fails closed");
     check(!shouldPulseUnglideJump(true, true, -1.0f, 8.0f),
