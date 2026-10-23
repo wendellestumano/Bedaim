@@ -66,8 +66,8 @@ int main() {
     assert(normalizeRange(100.0f) == 6.0f);
     assert(normalizeRange(std::numeric_limits<float>::quiet_NaN()) == 3.2f);
     assert(normalizeNormalCps(13.0f) == 12.0f);
-    assert(normalizeBurstCps(13.0f) == 13.0f);
-    assert(normalizeBurstCps(50.0f) == 20.0f);
+    assert(normalizeBurstCps(13.0f) == 12.0f);
+    assert(normalizeBurstCps(50.0f) == 12.0f);
     assert(normalizeBurstHits(-1) == 0);
     assert(normalizeBurstHits(21) == 20);
     CustomProfile custom{
@@ -77,13 +77,13 @@ int main() {
         .range = 4.5f,
         .cps = 5.5f,
         .initialBurstHits = 3,
-        .initialBurstCps = 13.0f
+        .initialBurstCps = 12.0f
     };
     custom = normalizeCustomProfile(std::move(custom));
     assert(custom.identifier == "minecraft:diamond_sword");
     assert(custom.displayName == "Diamond Sword");
     assert(custom.range == 4.5f && custom.cps == 5.5f);
-    assert(custom.initialBurstHits == 3 && custom.initialBurstCps == 13.0f);
+    assert(custom.initialBurstHits == 3 && custom.initialBurstCps == 12.0f);
     assert(matchesIdentifier(custom, "minecraft:diamond_sword"));
     assert(!matchesIdentifier(custom, "minecraft:netherite_sword"));
     assert(!matchesIdentifier(custom, ""));
