@@ -109,6 +109,7 @@ struct NearbyPlayerSearch {
     bool queryReady = false;
     bool found = false;
     float distance = std::numeric_limits<float>::infinity();
+    float verticalDifference = std::numeric_limits<float>::infinity();
 };
 
 NearbyPlayerSearch nearestNearbyPlayerDistance(
@@ -175,6 +176,7 @@ NearbyPlayerSearch nearestNearbyPlayerDistance(
         if (!result.found || distance < result.distance) {
             result.found = true;
             result.distance = distance;
+            result.verticalDifference = std::abs(((bounds.min.y + bounds.max.y) * 0.5f) - eye.y);
         }
     }
     return result;
@@ -682,6 +684,11 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                     reportUnglideGate("no_nearby_player",
                         std::string("No other player inside ") +
                             std::to_string(m_unglideTargetDistance) + " blocks.");
+                } else if (target.verticalDifference > m_unglideMaxVerticalDifference) {
+                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                    reportUnglideGate("target_height_out_of_range",
+                        std::string("vertical_difference=") + std::to_string(target.verticalDifference) +
+                        ", maximum=" + std::to_string(m_unglideMaxVerticalDifference));
                 } else if (!bedaim::macefall::shouldPulseUnglideJump(
                                m_unglideEnabled, true, target.distance, m_unglideTargetDistance)) {
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
@@ -799,6 +806,8 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
     m_unglideTargetDistance = std::clamp(
         j.value("m_unglideTargetDistance", m_unglideTargetDistance), 1.0f, 32.0f);
+    m_unglideMaxVerticalDifference = std::clamp(
+        j.value("m_unglideMaxVerticalDifference", m_unglideMaxVerticalDifference), 0.5f, 16.0f);
 }
 
 void MaceSwapperModule::saveConfig(nlohmann::json& j) {
@@ -811,6 +820,7 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_restoreSlot"] = m_restoreSlot;
     j["m_unglideEnabled"] = m_unglideEnabled;
     j["m_unglideTargetDistance"] = m_unglideTargetDistance;
+    j["m_unglideMaxVerticalDifference"] = m_unglideMaxVerticalDifference;
 }
 
 void MaceSwapperModule::onMenuRegistered() {
@@ -877,7 +887,8 @@ void MaceSwapperModule::onMenuRegistered() {
     unglideEnabledNode.hasCurrentValue = true;
     schema.node(std::move(unglideEnabledNode));
 
-    slider("m_unglideTargetDistance", "Unglide target distance", "1", "32", "0.5", " blocks", "special", "8.0");
+    slider("m_unglideTargetDistance", "Unglide horizontal distance", "1", "32", "0.5", " blocks", "special", "8.0");
+    slider("m_unglideMaxVerticalDifference", "Unglide maximum height difference", "0.5", "16", "0.5", " blocks", "special", "4.0");
 
     ConfigNodeV2 restoreNode;
     restoreNode.id = "m_restoreSlot";
@@ -924,6 +935,8 @@ bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_vi
         else if (key == "m_attackIntervalMs") m_attackIntervalMs = std::clamp(number, 80.0f, 1000.0f);
         else if (key == "m_unglideTargetDistance")
             m_unglideTargetDistance = std::clamp(number, 1.0f, 32.0f);
+        else if (key == "m_unglideMaxVerticalDifference")
+            m_unglideMaxVerticalDifference = std::clamp(number, 0.5f, 16.0f);
         else return false;
         return true;
     } catch (...) {
