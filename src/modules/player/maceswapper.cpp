@@ -444,6 +444,7 @@ void MaceSwapperModule::onEnable() {
     m_hasPeakY = false;
     m_nextAttack = {};
     m_nextUnglideAttempt = {};
+    m_unglideBurstRemaining = 0;
     m_nextUnglideDiagnostic = {};
 
     // A rapid disable/re-enable can happen before the next player tick. Preserve
@@ -661,16 +662,23 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
                 reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
             } else {
+                // Bounded startup burst: retry a few times quickly because Android
+                // accepts the broadcast asynchronously; do not spam continuously.
+                if (m_unglideBurstRemaining <= 0) m_unglideBurstRemaining = 3;
                 const auto result = dispatchUnglideKeyMapperKeymap();
+                const bool sent = result == AutomationBroadcastResult::Sent;
+                if (sent) --m_unglideBurstRemaining;
+                else m_unglideBurstRemaining = 0;
                 reportUnglideGate(
                     automationBroadcastResultName(result),
                     std::string("target_distance=") + std::to_string(target.distance) +
                         ", vertical_difference=" + std::to_string(target.verticalDifference) +
+                        ", burst_remaining=" + std::to_string(m_unglideBurstRemaining) +
                         ", action=" + kKeyMapperAction +
                         ", keymap_uid=" + kUnglideKeymapUid +
                         ", configure that Key Mapper keymap to send Space and enable a supported input method (e.g. Shizuku/root).");
                 m_nextUnglideAttempt = now + std::chrono::milliseconds(
-                    result == AutomationBroadcastResult::Sent ? 1000 : 1500);
+                    sent ? (m_unglideBurstRemaining > 0 ? 120 : 1000) : 1500);
                 return;
             }
         }
