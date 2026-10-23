@@ -1,3 +1,11 @@
+## 2026-10-23 — Integrate ESP Lock in Aim and off-screen indicators
+- Add transparent cyberpunk Lock in Aim and direction-arrow sprites based on the provided Bedaim ESP concepts; register a 16-direction arrow set for HUD rendering.
+- Add ESP HUD controls for Lock in Aim, off-screen player indicators, subtle animation, indicator size, player visibility, invisibility, range, and game-mode outline colors.
+- Draw Lock in Aim while Aim Assist has a current player target; collect a nearby off-screen player candidate for the HUD arrow without storing actor pointers in the HUD snapshot.
+- Keep off-screen target collection separate from 3D render dependency checks and add rate-limited diagnostics for empty/malformed actor snapshots.
+- Preserve Bedrock `mce::PrimitiveMode::LineList = 4` for world-space outline vertices.
+- Validation: host regression tests passed in workflow run #1277, but that run was canceled during NDK setup before Android compilation/package creation. Latest ESP code still needs a completed Android build and in-game/device validation.
+
 ## 2026-10-23 — Run Unglide JNI dispatch outside the state mutex
 - Reserve a single in-flight keymap dispatch under the mutex, then release the lock before JNI object creation and `sendBroadcast`.
 - Suppress concurrent ticks while a dispatch is in flight and prevent a late completion from overwriting a disabled/reset module state.
