@@ -374,7 +374,13 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto reject = [&](const char* state, const std::string& detail, int retryMs) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
+            // A hard gate failure invalidates the previous trigger latch. Without
+            // this reset, toggling Aim Assist off/on or briefly losing target data
+            // could leave the same target permanently blocked after a spent burst.
             m_burstRemaining = 0;
+            m_latchedTarget = nullptr;
+            m_targetLatched = false;
+            m_triggerState = TriggerState::Idle;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryMs);
         }
         report(state, detail);
