@@ -30,7 +30,7 @@ struct Inputs {
 // facts already gathered by the caller; it never dispatches a game hit.
 Decision evaluate(const Inputs& input) noexcept;
 
-// Extends the native actor query far enough to include AutoHit's configured reach.
+// Extends the Aim Assist target query far enough to include AutoHit's configured reach.
 float effectiveScanRange(float aimAssistRange, bool autoHitEnabled, float autoHitRange,
                          float queryExpansionMargin = 0.0f) noexcept;
 
