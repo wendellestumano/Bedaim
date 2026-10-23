@@ -385,40 +385,6 @@ bool AutoHitModule::onMouseEvent(int button, bool isDown) {
 
 void AutoHitModule::processPlayerTick(Player* player) {
     using namespace bedrocktools;
-    bool attackHeld = false;
-    bool requireAttackInput = false;
-    int attackButton = 0;
-    int heldButton = -1;
-    bool touchRepeatEnabled = false;
-    int touchWindowRemainingMs = 0;
-    float configuredRange = 3.2f;
-    bool swordEnabled = true, axeEnabled = false, maceEnabled = false, tridentEnabled = false;
-    float swordCps = 5.0f, axeCps = 3.0f, maceCps = 1.5f, tridentCps = 2.5f;
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        const auto tickNow = std::chrono::steady_clock::now();
-        requireAttackInput = m_requireAttackInput;
-        attackHeld = !requireAttackInput || m_attackHeld ||
-            (m_touchRepeatEnabled && m_touchRepeatUntil.time_since_epoch().count() != 0 &&
-             tickNow < m_touchRepeatUntil);
-        attackButton = m_attackButton;
-        heldButton = m_heldButton;
-        touchRepeatEnabled = m_touchRepeatEnabled;
-        if (m_touchRepeatUntil.time_since_epoch().count() != 0 && tickNow < m_touchRepeatUntil) {
-            touchWindowRemainingMs = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                m_touchRepeatUntil - tickNow).count());
-        }
-        configuredRange = m_attackRange;
-        swordEnabled = m_swordEnabled;
-        swordCps = m_swordCps;
-        axeEnabled = m_axeEnabled;
-        axeCps = m_axeCps;
-        maceEnabled = m_maceEnabled;
-        maceCps = m_maceCps;
-        tridentEnabled = m_tridentEnabled;
-        tridentCps = m_tridentCps;
-    }
-
     if (!enabled) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "disabled");
         return;
@@ -432,24 +398,47 @@ void AutoHitModule::processPlayerTick(Player* player) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "dispatch_gate", "screen_open");
         return;
     }
-    // AutoHit requests the configured Key Mapper keymap after target and rate gates pass.
 
+    // The active AutoHit input route is the existing Key Mapper keymap. Keep this
+    // dispatcher unchanged; this section only resolves the selected item's profile.
     auto& inventory = core::InventoryAccess::get();
     const std::string heldItem = inventory.selectedHotbarIdentifier(player);
-    const auto weapon = bedaim::autohit::weapon::classify(heldItem);
-    const auto profile = bedaim::autohit::weapon::resolve(
-        weapon, swordEnabled, swordCps, axeEnabled, axeCps,
-        maceEnabled, maceCps, tridentEnabled, tridentCps);
-    if (!profile.enabled) {
-        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile", "blocked",
-            std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; item=" +
-                (heldItem.empty() ? "empty_or_unreadable" : heldItem));
+    const std::string normalizedItem = bedaim::autohit::weapon::normalizeIdentifier(heldItem);
+    std::optional<WeaponCustomProfile> customProfile;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        const auto found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+            [&](const auto& item) {
+                return item.identifier == normalizedItem;
+            });
+        if (found != m_customWeaponProfiles.end()) customProfile = *found;
+
+        // A switch to a different held item breaks the old burst cycle immediately.
+        if (m_burstWeaponIdentifier != normalizedItem) {
+            m_burstWeaponIdentifier = normalizedItem;
+            m_burstTarget = nullptr;
+            m_burstRemaining = 0;
+            m_nextAttack = {};
+        }
+    }
+    if (!customProfile) {
+        diagnostics::probe(diagnostics::Level::Info, "AutoHit", "weapon_profile", "no_item_profile",
+            std::string("item=") + (normalizedItem.empty() ? "empty_or_unreadable" : normalizedItem) +
+                "; add this item to Weapon Profiles to enable AutoHit for it");
         return;
     }
-    const float configuredCps = profile.cps;
-    const int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(configuredCps);
+
+    *customProfile = bedaim::autohit::weapon::normalizeCustomProfile(std::move(*customProfile));
+    if (!customProfile->enabled) {
+        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "disabled",
+            std::string("item=") + customProfile->identifier);
+        return;
+    }
+    float configuredRange = customProfile->range;
+    float configuredCps = customProfile->cps;
     diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "weapon_profile", "allowed",
-        std::string("weapon=") + bedaim::autohit::weapon::name(weapon) + "; cps=" + std::to_string(configuredCps));
+        std::string("item=") + customProfile->identifier + "; cps=" + std::to_string(configuredCps) +
+            "; range=" + std::to_string(configuredRange));
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
@@ -487,7 +476,13 @@ void AutoHitModule::processPlayerTick(Player* player) {
         std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
     };
     const float distanceSq = distanceSquared(eye, hitPoint);
-    const float maxRange = std::clamp(std::min(configuredRange, aimRange), 2.0f, 6.0f);
+    if (!std::isfinite(aimRange) || aimRange <= 0.0f) {
+        diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "aim_range_invalid");
+        return;
+    }
+    // The per-item profile provides its own maximum; current Aim Assist tracking
+    // range remains an independent upper bound.
+    const float maxRange = std::clamp(std::min(configuredRange, aimRange), 1.0f, 6.0f);
     if (!finiteVec(hitPoint) || !std::isfinite(distanceSq) || distanceSq > maxRange * maxRange) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "out_of_range");
         return;
@@ -495,17 +490,31 @@ void AutoHitModule::processPlayerTick(Player* player) {
     diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "range", "in_range");
 
     const auto now = std::chrono::steady_clock::now();
+    bool usingInitialBurst = false;
+    int intervalMs = bedaim::autohit::weapon::attemptIntervalMs(configuredCps);
+    int burstRemaining = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
+        // Re-arm only when the selected weapon or target changes, never on each tick.
+        if (m_burstWeaponIdentifier != normalizedItem || m_burstTarget != target) {
+            m_burstWeaponIdentifier = normalizedItem;
+            m_burstTarget = target;
+            m_burstRemaining = customProfile->initialBurstHits;
+            m_nextAttack = {};
+        }
+        if (m_burstRemaining > 0) {
+            configuredCps = customProfile->initialBurstCps;
+            usingInitialBurst = true;
+        }
+        intervalMs = bedaim::autohit::weapon::attemptIntervalMs(configuredCps);
+        burstRemaining = m_burstRemaining;
         if (m_nextAttack.time_since_epoch().count() != 0 && now < m_nextAttack) {
             diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "cooldown", "waiting");
             return;
         }
     }
 
-    // Final native-free gate is shared with host tests. The earlier checks are
-    // intentionally retained for precise per-stage diagnostics; this last gate
-    // ensures no dispatch occurs if any prerequisite becomes invalid.
+    // Final native-free gate ensures no dispatch occurs if a prerequisite became invalid.
     const bedaim::autohit::Inputs dispatchFacts{
         enabled,
         player != nullptr,
@@ -515,29 +524,42 @@ void AutoHitModule::processPlayerTick(Player* player) {
         true, // external Key Mapper input route does not use GameMode
         true, // external Key Mapper input route does not use the native attack wrapper
         finiteVec(hitPoint),
-        true, // cooldown was checked immediately before resolving GameMode
+        true, // cooldown was checked immediately before dispatch
         std::sqrt(distanceSq),
         maxRange
     };
     const auto dispatchDecision = bedaim::autohit::evaluate(dispatchFacts);
     if (dispatchDecision != bedaim::autohit::Decision::Ready) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "final_guard",
-            "blocked", "native dispatch prerequisites changed or failed validation");
+            "blocked", "Key Mapper dispatch prerequisites changed or failed validation");
         return;
     }
 
     const auto dispatchResult = dispatchKeyMapperKeyZero();
+    const bool dispatched = dispatchResult == KeyZeroDispatchResult::Sent;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        // Rate-limit key-event requests according to the selected weapon profile.
-        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 83, 1000));
+        // Normal CPS remains capped at 12. Burst CPS may reach 20 CPS and is
+        // rate-limited even when Android rejects the broadcast.
+        m_nextAttack = now + std::chrono::milliseconds(std::clamp(intervalMs, 50, 1000));
+        if (dispatched && usingInitialBurst && m_burstWeaponIdentifier == normalizedItem &&
+            m_burstTarget == target && m_burstRemaining > 0) {
+            --m_burstRemaining;
+        }
+        burstRemaining = m_burstRemaining;
     }
-    const bool dispatched = dispatchResult == KeyZeroDispatchResult::Sent;
     diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Warning,
         "AutoHit", "key0_dispatch", keyZeroDispatchResultName(dispatchResult),
         dispatched
             ? "Android accepted the explicit Key Mapper broadcast for the configured keymap UUID; this does not prove Key Mapper executed the keymap or Minecraft received key 0."
             : "Key Mapper trigger dispatch failed before key delivery; inspect Android VM/context/Intent diagnostics");
+    if (usingInitialBurst) {
+        diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Debug,
+            "AutoHit", "initial_burst", dispatched ? "request_accepted" : "request_failed",
+            std::string("item=") + normalizedItem + "; remaining_requests=" +
+                std::to_string(burstRemaining) +
+                "; accepted broadcast requests are counted, not confirmed in-game damage hits");
+    }
 }
 
 void AutoHitModule::loadConfig(const nlohmann::json& json) {
