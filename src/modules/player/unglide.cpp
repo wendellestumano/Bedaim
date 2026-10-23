@@ -424,12 +424,14 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
+    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
     bool triggerArmed = false;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         const bool targetChanged = target != m_lastTriggeredTarget;
         if (bedaim::macefall::shouldRearmUnglide(
-                m_triggerArmed, targetChanged, geometry.distance, targetDistance, rearmDistanceMargin)) {
+                m_triggerArmed, targetChanged, geometry.distance,
+                effectiveMaximumDistance, rearmDistanceMargin)) {
             m_triggerArmed = true;
         }
         triggerArmed = m_triggerArmed;
@@ -450,7 +452,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
     const bool isGliding = playerIsGlidingForUnglide(player);
     if (!bedaim::macefall::shouldPulseUnglideJump(
             true, isGliding, geometry.distance, effectiveMaximumDistance)) {
