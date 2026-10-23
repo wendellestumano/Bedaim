@@ -609,7 +609,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         burstRemaining = m_burstRemaining;
     }
     diagnostics::probe(dispatched ? diagnostics::Level::Info : diagnostics::Level::Warning,
-        "AutoHit", "keymapper_dispatch", keyZeroDispatchResultName(dispatchResult),
+        "AutoHit", "key0_dispatch", keyZeroDispatchResultName(dispatchResult),
         dispatched
             ? "Android accepted the explicit Key Mapper broadcast for the configured keymap UUID; actual in-game input delivery still requires runtime verification."
             : "Key Mapper trigger dispatch failed before key delivery; inspect Android VM/context/Intent diagnostics");
