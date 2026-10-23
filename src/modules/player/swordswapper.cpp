@@ -183,13 +183,6 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (groundedOrNearGround && heightAboveGround <= 0.02f)
         m_lastGroundY = position.y;
 
-    // Never let ShiftBlade override the mace while it owns a confirmed downward slam.
-    if (swapperstate::maceFallPriority.load(std::memory_order_acquire)) {
-        reportStatus("paused: Mace Swapper has slam priority");
-        restoreIfOwned();
-        return;
-    }
-
     if (m_ownsSwap && inventory.selectedHotbarSlot(player) != m_swordSlot) {
         // A changed slot can be a manual choice or a transient inventory selection
         // update. By default ShiftBlade keeps its sword equipped while the target is
