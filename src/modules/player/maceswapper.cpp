@@ -689,11 +689,11 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 } else {
                     const auto result = dispatchUnglideKeyMapperKeymap();
                     // A successful sendBroadcast confirms Android accepted the
-                    // request, not that a MacroDroid macro/input route was active.
+                    // request, not that Key Mapper executed the keymap or Minecraft received Space.
                     reportUnglideGate(
                         automationBroadcastResultName(result),
                         std::string("target_distance=") + std::to_string(target.distance) +
-                            ", action=" + kBedaimSpacebarIntentAction +
+                            ", action=" + kKeyMapperAction +
                             ", configure MacroDroid Intent Received + Input Key Event Space, and enable its supported Shizuku/root input route.");
                     // Keep repeats at >=1s because Android may throttle background broadcasts.
                     m_nextUnglideAttempt = now + std::chrono::milliseconds(
