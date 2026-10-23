@@ -1,4 +1,5 @@
 #include "unglide.hpp"
+#include "MaceFallPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
 #include <pl/ModMenu.hpp>
@@ -410,6 +411,12 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* p){
  if(now<m_nextAttempt)return;const auto t=nearestNearbyPlayerDistance(p,m_targetDistance);
  if(!t.queryReady){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_lookup_unavailable","ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable; retrying after a short backoff.");return;}
  if(!t.found){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("no_nearby_player","No other player inside configured target distance.");return;}
+ const bool isGliding = playerIsGlidingForUnglide(p);
+ if(!bedaim::macefall::shouldPulseUnglideJump(m_unglideEnabled,isGliding,t.distance,m_targetDistance)){
+  m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);
+  report(isGliding?"target_distance_rejected":"player_not_gliding",isGliding?"Target distance rejected by Unglide policy.":"Local player is not gliding; Spacebar dispatch suppressed.");
+  return;
+ }
  if(t.verticalDifference>m_maxVerticalDifference){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_height_out_of_range",std::string("vertical_difference=")+std::to_string(t.verticalDifference)+", maximum="+std::to_string(m_maxVerticalDifference));return;}
  if(t.distance>m_targetDistance){m_burstRemaining=0;m_nextAttempt=now+std::chrono::milliseconds(250);report("target_out_of_range","Closest player exceeds configured distance.");return;}
  if(m_burstRemaining<=0)m_burstRemaining=m_burstCount;const auto r=dispatchUnglideKeyMapperKeymap();const bool sent=r==AutomationBroadcastResult::Sent;if(sent)--m_burstRemaining;else m_burstRemaining=0;
