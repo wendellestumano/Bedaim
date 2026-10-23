@@ -37,4 +37,15 @@ inline bool shouldTriggerUnglideKeymap(bool enabled, bool targetIsPlayer,
     const float safeTargetDistance = std::clamp(maximumTargetDistance, 1.0f, 32.0f);
     return targetDistance <= safeTargetDistance;
 }
+
+inline bool shouldRearmUnglide(bool currentlyArmed, bool targetChanged,
+                               float targetDistance, float triggerDistance,
+                               float rearmMargin) noexcept {
+    if (currentlyArmed || targetChanged) return true;
+    if (!std::isfinite(targetDistance) || !std::isfinite(triggerDistance) ||
+        !std::isfinite(rearmMargin) || targetDistance < 0.0f) return false;
+    const float safeTriggerDistance = std::clamp(triggerDistance, 1.0f, 32.0f);
+    const float safeMargin = std::clamp(rearmMargin, 0.5f, 8.0f);
+    return targetDistance > safeTriggerDistance + safeMargin;
+}
 } // namespace bedaim::macefall
