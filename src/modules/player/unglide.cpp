@@ -334,8 +334,8 @@ bool playerIsGlidingForUnglide(void* player) {
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
-void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;}
+void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;}
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;}
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
@@ -426,6 +426,32 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
         return;
     }
+    // Only trigger while the local player is actually gliding. A grounded
+    // player holding a mace must never spam Space keymap requests.
+    if (!playerIsGlidingForUnglide(player)) {
+        reject("player_not_gliding",
+               "Local player is not gliding with Elytra; no Space keymap request sent.", 150);
+        return;
+    }
+
+    bool alreadyTriggeredForTarget = false;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        // A new target is a new attack opportunity. The same target remains
+        // latched until it leaves the configured range plus hysteresis.
+        if (m_targetLatched && m_latchedTarget == target) {
+            alreadyTriggeredForTarget = true;
+        } else if (m_targetLatched && m_latchedTarget != target) {
+            m_latchedTarget = nullptr;
+            m_targetLatched = false;
+        }
+    }
+    if (alreadyTriggeredForTarget) {
+        reject("target_already_triggered",
+               "Unglide already fired for this target; waiting for separation before re-arming.", 120);
+        return;
+    }
+
     if (geometry.verticalDifference > maximumHeightDifference) {
         reject("target_height_out_of_range",
                std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
@@ -445,11 +471,16 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         // lifecycle guarantee that a disable cannot race into a new request.
         result = dispatchUnglideKeyMapperKeymap();
         const bool sent = result == AutomationBroadcastResult::Sent;
-        if (sent) --m_burstRemaining;
-        else m_burstRemaining = 0;
-        remaining = m_burstRemaining;
-        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(
-            sent ? (remaining > 0 ? pressIntervalMs : 160) : 300);
+        // This mode is a one-shot trigger, not a repeating pulse train. The
+        // configured burst settings remain in the UI for compatibility, but
+        // one target approach produces exactly one Space request.
+        m_burstRemaining = 0;
+        remaining = 0;
+        if (sent) {
+            m_latchedTarget = target;
+            m_targetLatched = true;
+        }
+        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(sent ? 250 : 500);
     }
 
     report(automationBroadcastResultName(result),
