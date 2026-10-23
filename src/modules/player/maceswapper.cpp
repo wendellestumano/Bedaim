@@ -1,6 +1,7 @@
 #include "maceswapper.hpp"
 #include "MaceFallPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
+#include "../../core/JavaVm.hpp"
 #include "swapperstate.hpp"
 
 #include <pl/ModMenu.hpp>
@@ -273,12 +274,19 @@ constexpr const char* kBedaimSpacebarIntentAction =
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
 
 JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
-    static void* artHandle = dlopen("libart.so", RTLD_NOW | RTLD_NOLOAD);
-    static auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+    // Fallback only: the Preloader-provided VM is preferred below. RTLD_NOLOAD
+    // can fail across Android linker namespaces even when ART is already loaded.
+    static void* artHandle = dlopen("libart.so", RTLD_NOW);
+    static void* helperHandle = dlopen("libnativehelper.so", RTLD_NOW);
+    auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
         dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
     if (!getVms && artHandle) {
         getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
             dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+    }
+    if (!getVms && helperHandle) {
+        getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
+            dlsym(helperHandle, "JNI_GetCreatedJavaVMs"));
     }
     return getVms;
 }
@@ -286,13 +294,20 @@ JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
 class ScopedJniEnvironment {
 public:
     ScopedJniEnvironment() {
-        const auto getVms = resolveJniGetCreatedJavaVMs();
-        if (!getVms) return;
+        // Use the exact VM passed by Preloader during ModContext::load first.
+        // Querying JNI_GetCreatedJavaVMs alone is unreliable on some Android
+        // linker namespaces and was observed to fail before Unglide broadcast.
+        mVm = bedrocktools::core::javaVm();
+        if (!mVm) {
+            const auto getVms = resolveJniGetCreatedJavaVMs();
+            if (!getVms) return;
 
-        JavaVM* vm = nullptr;
-        jsize vmCount = 0;
-        if (getVms(&vm, 1, &vmCount) != JNI_OK || vmCount < 1 || !vm) return;
-        mVm = vm;
+            JavaVM* discoveredVm = nullptr;
+            jsize vmCount = 0;
+            if (getVms(&discoveredVm, 1, &vmCount) != JNI_OK ||
+                vmCount < 1 || !discoveredVm) return;
+            mVm = discoveredVm;
+        }
 
         const jint status = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
         if (status == JNI_OK) return;
