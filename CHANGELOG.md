@@ -1,3 +1,10 @@
+## 2026-10-23 — Unglide false-negative workaround, spear profile matching, and 30-block AutoHit range
+
+- Diagnostics showed repeated `player_not_gliding` gates while the user was flying with Elytra. The native status flag and synchronized-data fallback are both unreliable on this runtime, so Unglide no longer hard-blocks solely on that state result; the fresh player target, target geometry, range, height and crosshair gates still apply. This may allow a one-shot jump while grounded and must be verified in-game.
+- Canonicalized Bedrock item-description strings such as `netherite_spear:name` and `wind_charge:name` to stable registry IDs. This directly addresses the logs where the held Netherite Spear never matched its configured `minecraft:netherite_spear` profile.
+- Increased the AutoHit weapon-profile range normalization, profile slider, default range control, and runtime upper bound to 30 blocks; Aim Assist's default target scan range is also 30 blocks. Existing saved Aim Assist ranges may remain lower and still constrain target acquisition.
+- Added host regression assertions for the description-ID suffix normalization and the 30-block range cap. A 30-block client-side gate does not override Minecraft/server reach validation; the configured Key Mapper click and actual damage still require device/server testing.
+
 ## 2026-10-23 — Unglide input dispatch and Aim Assist ignore-list crash hardening
 - Updated Unglide's gliding check so a negative result from the native `Actor::getStatusFlag` lookup no longer immediately rejects the tick; it now falls back to the synchronized entity-data flag reader. Runtime confirmation is still required.
 
