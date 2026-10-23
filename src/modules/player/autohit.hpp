@@ -41,13 +41,13 @@ private:
     // Weapon profiles default to swords only. Each category has its own
     // enable switch and CPS cap; unknown/non-weapon items never dispatch attacks.
     bool m_swordEnabled = true;
-    float m_swordCps = 8.0f;
+    float m_swordCps = 5.0f;
     bool m_axeEnabled = false;
-    float m_axeCps = 4.0f;
+    float m_axeCps = 3.0f;
     bool m_maceEnabled = false;
-    float m_maceCps = 2.0f;
+    float m_maceCps = 1.5f;
     bool m_tridentEnabled = false;
-    float m_tridentCps = 3.0f;
+    float m_tridentCps = 2.5f;
 
     std::chrono::steady_clock::time_point m_nextAttack{};
 };
