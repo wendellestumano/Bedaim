@@ -1,5 +1,6 @@
 #include "unglide.hpp"
 #include "aimassist.hpp"
+#include "MaceFallPolicy.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
@@ -400,21 +401,28 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
         return;
     }
-    if (!aim->currentTargetInCrosshair(player, target)) {
-        reject("crosshair_not_on_target",
-               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
-        return;
-    }
-
+    const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
+    const bool isGliding = playerIsGlidingForUnglide(player);
     const auto geometry = targetGeometryFor(player, targetBounds);
     if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
         reject("target_geometry_invalid",
                "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
         return;
     }
+    if (!crosshairConfirmed) {
+        reject("crosshair_not_on_target",
+               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
+        return;
+    }
+    if (!isGliding) {
+        reject("player_not_gliding",
+               "Player is not currently gliding with an Elytra; no Space keymap request sent.", 120);
+        return;
+    }
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    if (geometry.distance > effectiveMaximumDistance) {
+    if (!bedaim::macefall::shouldPulseUnglideJump(
+            true, isGliding, geometry.distance, effectiveMaximumDistance, crosshairConfirmed)) {
         reject("target_out_of_range",
                std::string("target_distance=") + std::to_string(geometry.distance) +
                    ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
