@@ -331,10 +331,12 @@ bool playerIsGlidingForUnglide(void* player) {
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // ActorFlags::Gliding is 32 in the public Bedrock/LeviLamina enum.
-            return getStatusFlag(player, 32);
+            // Treat the native status flag as a positive signal, not an
+            // authoritative negative: builds may differ in flag layout.
+            // A false result must not suppress the synchronized-data fallback.
+            if (getStatusFlag(player, 32)) return true;
         } catch (...) {
-            // Fall through to the existing synchronized-data reader.
+            // Fall through to the synchronized-data reader.
         }
     }
     return actorIsGliding(player);
