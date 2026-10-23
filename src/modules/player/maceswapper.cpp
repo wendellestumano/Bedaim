@@ -637,44 +637,41 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         };
 
         if (now >= m_nextUnglideAttempt) {
-            if (!playerIsGlidingForUnglide(player)) {
+            // Do not gate on the native Gliding flag here: the flag reader is
+            // build-sensitive and the diagnostics repeatedly showed not_gliding,
+            // preventing Key Mapper from ever receiving Space. The configured
+            // target distance + vertical difference are the activation criteria.
+            const auto target = nearestNearbyPlayerDistance(player, m_unglideTargetDistance);
+            if (!target.queryReady) {
+                m_nextUnglideAttempt = now + std::chrono::milliseconds(1000);
+                reportUnglideGate("target_lookup_unavailable",
+                    "ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable.");
+            } else if (!target.found) {
                 m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                reportUnglideGate("not_gliding", "The native gliding flag is not set.");
+                reportUnglideGate("no_nearby_player",
+                    std::string("No other player inside ") +
+                        std::to_string(m_unglideTargetDistance) + " blocks.");
+            } else if (target.verticalDifference > m_unglideMaxVerticalDifference) {
+                m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                reportUnglideGate("target_height_out_of_range",
+                    std::string("vertical_difference=") + std::to_string(target.verticalDifference) +
+                    ", maximum=" + std::to_string(m_unglideMaxVerticalDifference));
+            } else if (!bedaim::macefall::shouldPulseUnglideJump(
+                           m_unglideEnabled, true, target.distance, m_unglideTargetDistance)) {
+                m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
+                reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
             } else {
-                const auto target = nearestNearbyPlayerDistance(player, m_unglideTargetDistance);
-                if (!target.queryReady) {
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(1000);
-                    reportUnglideGate("target_lookup_unavailable",
-                        "ActorManagerList or ActorIsPlayer signature, level, or actor snapshot unavailable.");
-                } else if (!target.found) {
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                    reportUnglideGate("no_nearby_player",
-                        std::string("No other player inside ") +
-                            std::to_string(m_unglideTargetDistance) + " blocks.");
-                } else if (target.verticalDifference > m_unglideMaxVerticalDifference) {
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                    reportUnglideGate("target_height_out_of_range",
-                        std::string("vertical_difference=") + std::to_string(target.verticalDifference) +
-                        ", maximum=" + std::to_string(m_unglideMaxVerticalDifference));
-                } else if (!bedaim::macefall::shouldPulseUnglideJump(
-                               m_unglideEnabled, true, target.distance, m_unglideTargetDistance)) {
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(250);
-                    reportUnglideGate("target_out_of_range", "Closest player exceeds the configured distance.");
-                } else {
-                    const auto result = dispatchUnglideKeyMapperKeymap();
-                    // A successful sendBroadcast confirms Android accepted the
-                    // request, not that Key Mapper executed the keymap or Minecraft received Space.
-                    reportUnglideGate(
-                        automationBroadcastResultName(result),
-                        std::string("target_distance=") + std::to_string(target.distance) +
-                            ", action=" + kKeyMapperAction +
-                            ", keymap_uid=" + kUnglideKeymapUid +
-                            ", configure that Key Mapper keymap to send Space and enable a supported input method (e.g. Shizuku/root).");
-                    // Keep repeats at >=1s because Android may throttle background broadcasts.
-                    m_nextUnglideAttempt = now + std::chrono::milliseconds(
-                        result == AutomationBroadcastResult::Sent ? 1000 : 1500);
-                    return;
-                }
+                const auto result = dispatchUnglideKeyMapperKeymap();
+                reportUnglideGate(
+                    automationBroadcastResultName(result),
+                    std::string("target_distance=") + std::to_string(target.distance) +
+                        ", vertical_difference=" + std::to_string(target.verticalDifference) +
+                        ", action=" + kKeyMapperAction +
+                        ", keymap_uid=" + kUnglideKeymapUid +
+                        ", configure that Key Mapper keymap to send Space and enable a supported input method (e.g. Shizuku/root).");
+                m_nextUnglideAttempt = now + std::chrono::milliseconds(
+                    result == AutomationBroadcastResult::Sent ? 1000 : 1500);
+                return;
             }
         }
     }
