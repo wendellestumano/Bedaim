@@ -10,6 +10,7 @@
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -506,6 +507,27 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
 void UnglideModule::onMenuRegistered(){
+ using namespace pl::modmenu;
+ // Launcher-owned fields provide a persistent edit path; the compact slider
+ // schema below remains available in the Unglide module page.
+ static std::atomic<bool> persistentSettingsRegistered{false};
+ bool expected = false;
+ if (persistentSettingsRegistered.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+   ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
+   settings.modId("Bedaim")
+     .description("Persistent Unglide controls; values apply immediately.")
+     .defaultEnabled(true)
+     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, "false")
+     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, "8.0")
+     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, "4.0")
+     .config("m_unglideBurstCount", "Burst presses (legacy)", ConfigType::Text, "3")
+     .config("m_unglidePressIntervalMs", "Time between presses ms (legacy)", ConfigType::Text, "120")
+     .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
+       onMenuConfigChanged(key, value);
+     });
+   if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
+ }
+ ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
  using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
  s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
  ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
