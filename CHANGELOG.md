@@ -1,3 +1,11 @@
+## 2026-10-23 — Unglide one-shot trigger and persistent settings path
+
+- Changed Unglide from a repeated burst loop to a one-shot Space keymap request per target approach. A successful request latches the target and cannot repeat continuously while the player remains within range.
+- Re-arms for the same target only after it separates beyond the configured trigger distance plus 1.5 blocks of hysteresis; a different valid target may trigger a new attempt.
+- Requires the local player to be actively gliding, a fresh Aim Assist player target, a confirmed camera-ray/hitbox intersection, and the configured range/vertical constraints before dispatching Space through Key Mapper.
+- Added a launcher-owned `Unglide Settings` page with explicit config-change callbacks as a durable alternative to the transient slider form. The original compact slider page remains available. The settings persistence behavior must still be verified on the device.
+- Added policy tests for one-shot re-arm hysteresis. CI/device build validation for this latest change is pending; successful Android broadcast still does not prove that the keymap executes in-game.
+
 ## 2026-10-23 — Functional Key Mapper AutoHit baseline, per-item profiles, and crosshair-gated Unglide
 
 - Used the AutoHit implementation associated with functional build run `39892141288` as the reference for the explicit Key Mapper broadcast route. AutoHit continues to dispatch through the configured Key Mapper keymap; this branch does not call the native GameMode attack wrapper.
