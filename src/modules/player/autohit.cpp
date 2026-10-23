@@ -47,16 +47,27 @@ JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
 class AutoHitJniEnvironment {
 public:
     AutoHitJniEnvironment() {
-        // Prefer the JavaVM provided by Preloader; dynamic lookup is a fallback
-        // for runtimes that do not expose ModContext::javaVm().
-        mVm = bedrocktools::core::javaVm();
+        // Match the previously working Key Mapper route: prefer ART's process VM
+        // lookup. The Preloader-captured VM remains a fallback for linker/runtime
+        // configurations where JNI_GetCreatedJavaVMs cannot be resolved.
+        VmLookupStatus lookupFailure = VmLookupStatus::SymbolUnavailable;
+        const auto getVms = resolveJniGetCreatedJavaVMs();
+        if (getVms) {
+            JavaVM* vm = nullptr;
+            jsize count = 0;
+            const jint query = getVms(&vm, 1, &count);
+            if (query == JNI_OK && count > 0 && vm) {
+                mVm = vm;
+            } else if (query != JNI_OK) {
+                lookupFailure = VmLookupStatus::QueryFailed;
+            } else {
+                lookupFailure = VmLookupStatus::NoVmFound;
+            }
+        }
+        if (!mVm) mVm = bedrocktools::core::javaVm();
         if (!mVm) {
-            const auto getVms = resolveJniGetCreatedJavaVMs();
-            if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
-            JavaVM* vm = nullptr; jsize count = 0;
-            if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
-            if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
-            mVm = vm;
+            status = lookupFailure;
+            return;
         }
         const jint envStatus = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
         if (envStatus == JNI_OK) { status = VmLookupStatus::Ready; return; }
@@ -537,7 +548,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     const auto dispatchDecision = bedaim::autohit::evaluate(dispatchFacts);
     if (dispatchDecision != bedaim::autohit::Decision::Ready) {
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "final_guard",
-            "blocked", "Key Mapper dispatch prerequisites changed or failed validation");
+            "blocked", "Key Mapper dispatch prerequisites failed validation");
         return;
     }
 
