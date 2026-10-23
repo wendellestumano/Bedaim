@@ -446,16 +446,10 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     bool alreadyTriggeredForTarget = false;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        // A new target is a new attack opportunity. The same target remains
-        // latched until it leaves the configured range plus hysteresis.
+        // A new target is a new attack opportunity; the same target remains
+        // latched until it separates beyond the outer radius.
         if (m_targetLatched && m_latchedTarget == target) {
-            if (bedaim::macefall::shouldRearmUnglide(
-                    geometry.distance, targetDistance)) {
-                m_latchedTarget = nullptr;
-                m_targetLatched = false;
-            } else {
-                alreadyTriggeredForTarget = true;
-            }
+            alreadyTriggeredForTarget = true;
         } else if (m_targetLatched && m_latchedTarget != target) {
             m_latchedTarget = nullptr;
             m_targetLatched = false;
@@ -480,10 +474,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || dispatchStarted < m_nextAttempt) return;
-        if (m_burstRemaining <= 0) m_burstRemaining = burstCount;
-
-        // Keep the native state lock across dispatch, matching the previous
-        // lifecycle guarantee that a disable cannot race into a new request.
+        // Keep the dispatch synchronized with module enable/disable state.
         result = dispatchUnglideKeyMapperKeymap();
         const bool sent = result == AutomationBroadcastResult::Sent;
         // This mode is a one-shot trigger, not a repeating pulse train. The
