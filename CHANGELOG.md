@@ -1,3 +1,4 @@
+- Restored the Unglide runtime gate: Spacebar Key Mapper dispatch now requires the local player to be reported as gliding and a target inside the configured distance; failed gates clear the pending burst and emit a rate-limited diagnostic.
 - Extracted Unglide into its own module with independent Key Mapper dispatch, target distance/height settings, cooldown, burst state, diagnostics, and keybind; MaceFall no longer owns Unglide state or settings.
 - Removed the unused MaceFall attack-interval setting/state (it was written but never consulted before attacks).
 - ShiftBlade no longer exits early solely because MaceFall has claimed slam priority; it can continue its target/slot logic during combat.
