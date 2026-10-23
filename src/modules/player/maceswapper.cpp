@@ -99,6 +99,8 @@ float distanceToTargetBounds(bedrocktools::sdk::Player* player,
         : std::numeric_limits<float>::infinity();
 }
 
+}
+
 MaceSwapperModule::MaceSwapperModule()
     : Module("MaceFall", "Selects the mace for a falling hit when the BedrockAim target is in the crosshair.",
              "Mace Swapper") {
