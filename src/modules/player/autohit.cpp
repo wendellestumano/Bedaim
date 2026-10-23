@@ -469,6 +469,10 @@ void AutoHitModule::processPlayerTick(Player* player) {
 
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_burstRemaining = 0;
+        }
         diagnostics::probe(diagnostics::Level::Warning, "AutoHit", "dependency", "bedrockaim_disabled",
             "enable BedrockAim to provide target tracking");
         return;
