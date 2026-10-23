@@ -508,8 +508,8 @@ void AutoHitModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema;
     schema.defaultCategory("combat")
-        .category("combat", "Combat", "Experimental held-input attack and per-weapon CPS profiles")
-        .category("weapon_profiles", "Weapon Profiles", "Choose which held weapons may activate AutoHit and their CPS cap");
+        .category("combat", "Combat", "Target-gated continuous attack with per-weapon rate profiles")
+        .category("weapon_profiles", "Weapon Profiles", "Choose allowed weapons and configure each attack rate");
 
     auto slider = [&](const char* key, const char* title, const char* category,
                       const char* minimum, const char* maximum,
@@ -542,7 +542,7 @@ void AutoHitModule::onMenuRegistered() {
     toggle("m_axeEnabled", "Enable axe profile");
     slider("m_axeCps", "Axe attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
     toggle("m_maceEnabled", "Enable mace profile");
-    slider("m_maceCps", "Axe attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
+    slider("m_maceCps", "Mace attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
     toggle("m_tridentEnabled", "Enable trident profile");
     slider("m_tridentCps", "Trident attack rate", "weapon_profiles", "1", "12", "0.5", " CPS");
 
