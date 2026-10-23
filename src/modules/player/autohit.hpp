@@ -1,10 +1,13 @@
 #pragma once
 
 #include "../Module.hpp"
+#include "AutoHitWeaponProfile.hpp"
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace bedrocktools::sdk { class Player; }
 
@@ -48,6 +51,18 @@ private:
     float m_maceCps = 1.5f;
     bool m_tridentEnabled = false;
     float m_tridentCps = 2.5f;
+
+    // Item-specific profiles override the legacy weapon-class defaults above.
+    // The profile list is serialized in config.json and is intentionally bounded.
+    std::vector<bedaim::autohit::weapon::CustomProfile> m_customWeaponProfiles;
+    std::string m_addWeaponChoice = "minecraft:mace";
+    std::string m_customWeaponIdentifier;
+    std::string m_selectedProfileIdentifier;
+
+    // Initial burst is tied to a held item + target pair so it cannot re-arm every tick.
+    std::string m_burstWeaponIdentifier;
+    void* m_burstTarget = nullptr;
+    int m_burstRemaining = 0;
 
     std::chrono::steady_clock::time_point m_nextAttack{};
 };

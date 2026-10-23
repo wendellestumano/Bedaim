@@ -1,4 +1,5 @@
 #include "Runtime.hpp"
+#include "JavaVm.hpp"
 #include "GameHooks.hpp"
 #include "config/ConfigManager.hpp"
 #include "launcher/ModuleMenu.hpp"
@@ -124,6 +125,16 @@ void Runtime::minecraftLoaded() {
 }
 
 bool Runtime::load(pl::mod::ModContext& context) {
+    // The official Preloader exposes the correct process JavaVM here. Game-tick
+    // callbacks run after load() returns, so cache it instead of relying only on
+    // JNI_GetCreatedJavaVMs, which may be hidden by Android linker namespaces.
+    setJavaVm(context.javaVm());
+    bedrocktools::diagnostics::log(
+        context.javaVm() ? bedrocktools::diagnostics::Level::Info
+                         : bedrocktools::diagnostics::Level::Warning,
+        "Runtime",
+        context.javaVm() ? "JavaVM captured from Preloader ModContext"
+                         : "Preloader ModContext provided a null JavaVM");
     mResourceDirectory = context.resourceDir();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "Bedaim load requested");
     bedrocktools::config::ConfigManager::get().setConfigPath((context.configDir() / "config.json").string());

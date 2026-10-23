@@ -1,3 +1,48 @@
+## 2026-10-23 — Unglide one-shot trigger and persistent settings path
+
+- Changed Unglide from a repeated burst loop to a one-shot Space keymap request per target approach. A successful request latches the target and cannot repeat continuously while the player remains within range.
+- Re-arms for the same target only after it separates beyond the configured trigger distance plus 1.5 blocks of hysteresis; a different valid target may trigger a new attempt.
+- Requires the local player to be actively gliding, a fresh Aim Assist player target, a confirmed camera-ray/hitbox intersection, and the configured range/vertical constraints before dispatching Space through Key Mapper.
+- Added a launcher-owned `Unglide Settings` page with explicit config-change callbacks as a durable alternative to the transient slider form. The original compact slider page remains available. The settings persistence behavior must still be verified on the device.
+- Added policy tests for one-shot re-arm hysteresis. CI/device build validation for this latest change is pending; successful Android broadcast still does not prove that the keymap executes in-game.
+
+## 2026-10-23 — Functional Key Mapper AutoHit baseline, per-item profiles, and crosshair-gated Unglide
+
+- Used the AutoHit implementation associated with functional build run `39892141288` as the reference for the explicit Key Mapper broadcast route. AutoHit continues to dispatch through the configured Key Mapper keymap; this branch does not call the native GameMode attack wrapper.
+- Kept the Weapon Profiles bench with Add Weapon, exact item-ID matching (including custom add-on namespaces), independent enabled state, Settings/Delete controls, per-item range/CPS, and a bounded initial burst. Legacy sword/axe/mace/trident settings are migrated into item profiles.
+- Restored the functional Key Mapper cadence limit: at least 83 ms between requests (12 requests/second maximum). The burst CPS setting is also capped at 12 so its UI matches the maximum effective dispatch rate. Target/profile loss cancels a partial burst but does not clear the shared cooldown.
+- Unglide now uses Aim Assist's fresh current target, requires it to be a player, and checks that the camera ray intersects that same target before sending Space through the dedicated Key Mapper keymap. The configured distance and vertical-difference gates remain in force; target loss, a different target type, or an off-target crosshair prevents dispatch.
+- Added host tests for the Unglide crosshair gate and profile burst-rate normalization. Android runtime input delivery still requires an in-game device test; CI build verification is pending for this final commit.
+
+- Extracted Unglide into its own module with independent Key Mapper dispatch, target distance/height settings, cooldown, burst state, diagnostics, and keybind; MaceFall no longer owns Unglide state or settings.
+- Removed the unused MaceFall attack-interval setting/state (it was written but never consulted before attacks).
+- ShiftBlade no longer exits early solely because MaceFall has claimed slam priority; it can continue its target/slot logic during combat.
+- Unglide extraction into a standalone module remains a separate refactor to avoid mixing JNI/keymap state with MaceFall attack state.
+- Unglide now uses a bounded three-request startup burst at 120 ms intervals, then returns to a 1-second steady cooldown; failed dispatches reset the burst and use a longer retry cooldown.
+- Unglide no longer depends on the build-sensitive native Gliding flag; Key Mapper activation is now gated by configured target distance and vertical difference, with both measurements logged.
+## Unglide Key Mapper dispatch
+- Aligned the Unglide JNI/JavaVM lookup, local JNI frame, application-context fallback, explicit component broadcast, and error reporting with AutoHit while preserving the dedicated Unglide keymap UID.
+
+## Unglide target gating
+- Added a configurable maximum vertical difference between the gliding player and the nearest player target.
+- Unglide now sends the Key Mapper keymap only when the target is within both the configured distance and height thresholds; diagnostic logs identify height-gate blocks.
+
+## 2026-10-23 — Route Unglide through its dedicated Key Mapper keymap
+
+- Replaced Unglide's MacroDroid Spacebar trigger with the supplied Key Mapper explicit receiver/action/UID-extra broadcast and keymap UID `e2225852-1df2-4232-bb26-606f11fc8745`.
+- Reused AutoHit's JNI dispatch pattern: prefer the Preloader-cached JavaVM, retain dynamic VM discovery as fallback, build an explicit `ComponentName`, and pass the UID as a string extra.
+- Kept the configured target distance and vertical-difference gates and dedicated keymap. The current implementation additionally checks Aim Assist's selected player and crosshair ray before dispatch; a successful Android broadcast confirms dispatch only, not in-game Space input.
+- Android build and runtime validation pending CI/device testing.
+
+## 2026-10-23 — Per-item weapon profiles, initial burst, and Unglide VM bootstrap
+
+- Added a dynamic Weapon Profiles bench with Add Weapon, exact item-ID matching, per-item Switch/Settings/Delete controls, and a custom namespaced identifier field for add-on weapons.
+- Migrated the previous sword/axe/mace/trident defaults into item-specific profiles on first load, while keeping old config fields for backwards compatibility.
+- Added per-item attack range, steady normal CPS (up to 12), Initial Burst Hits, and Initial Burst CPS (up to 20). A burst starts when the held item or target changes, consumes only accepted Key Mapper broadcast requests, and switches to normal CPS after the final accepted burst request. Android acceptance is not server-confirmed damage.
+- Added host regression assertions for custom ID normalization/matching and profile range/CPS/burst clamping.
+- Cached the JavaVM supplied by Preloader and updated the input bridges to use it as a fallback when dynamic VM discovery is unavailable. Unglide now validates the current Aim Assist target and crosshair before its dedicated Key Mapper Space keymap; actual device delivery still requires runtime testing.
+- Build and device validation are pending CI after this change. All work stays off `main`.
+
 ## 2026-10-22 — Key Mapper routing and steady AutoHit cadence
 
 - Replaced the MacroDroid broadcast route with an explicit broadcast to Key Mapper's receiver, action, UUID extra and configured keymap UUID.

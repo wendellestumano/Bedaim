@@ -16,6 +16,7 @@
 #include "player/aimassist.hpp"
 #include "player/autohit.hpp"
 #include "player/maceswapper.hpp"
+#include "player/unglide.hpp"
 #include "player/swordswapper.hpp"
 #include "hud/reachcounter.hpp"
 #include "hud/breakindicator.hpp"
@@ -131,6 +132,7 @@ void registerAllModules() {
     registry.emplace<AutoHitModule>();
     registry.emplace<HitboxExpanderModule>();
     registry.emplace<MaceSwapperModule>();
+    registry.emplace<UnglideModule>();
     registry.emplace<SwordSwapperModule>();
     registry.emplace<WeatherChangerModule>();
     registry.emplace<NickModule>();

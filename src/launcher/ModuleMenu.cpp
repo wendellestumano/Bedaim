@@ -429,7 +429,8 @@ private:
                     registerAimAssistConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Hitbox Expander") {
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
-                } else if (entry.first == "bedrocktools.Mace Swapper") {
+                } else if (entry.first == "bedrocktools.Mace Swapper" ||
+                           entry.first == "bedrocktools.Auto Hit") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
                 } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
@@ -455,6 +456,7 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
     if (!mod || (mod->moduleId != "bedrocktools.Aim Assist" &&
                  mod->moduleId != "bedrocktools.Hitbox Expander" &&
                  mod->moduleId != "bedrocktools.Mace Swapper" &&
+                 mod->moduleId != "bedrocktools.Auto Hit" &&
                  mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
                  mod->moduleId != "bedrocktools.Module Diagnostics")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
