@@ -631,8 +631,27 @@ bool install() {
     std::lock_guard lock(installMutex);
     if (installed) return true;
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", "starting hook installation");
+    // Install required lifecycle hooks first so a missing required hook cannot leave
+    // optional detours active after Runtime::install() reports failure.
+    const bool tickHooked = hookSignature(
+        SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
+    const bool clientUpdateHooked = tickHooked && hookSignature(
+        SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
+    if (!tickHooked || !clientUpdateHooked || !tickOriginal || !clientUpdateOriginal) {
+        for (std::size_t i = 0; i < handleCount; ++i) {
+            if (handles[i]) bedrocktools::hooks::remove(handles[i]);
+            handles[i] = nullptr;
+        }
+        handleCount = 0;
+        tickOriginal = nullptr;
+        clientUpdateOriginal = nullptr;
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Error, "GameHooks",
+            "required tick/client hook installation failed; partial hooks rolled back");
+        return false;
+    }
+
     hookSignature(SignatureId::VersionString, reinterpret_cast<void*>(versionDetour), &versionOriginal);
-    hookSignature(SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
     hookSignature(SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
     hookSignature(SignatureId::SurvivalModeStartDestroyBlock, reinterpret_cast<void*>(survivalModeStartDestroyBlockDetour), &survivalModeStartDestroyBlockOriginal);
     hookSignature(SignatureId::GameModeStopDestroyBlock, reinterpret_cast<void*>(gameModeStopDestroyBlockDetour), &gameModeStopDestroyBlockOriginal);
@@ -655,7 +674,6 @@ bool install() {
         "Attack setup: public signature={}, survival signature={}, internal signature={}, internal hook={}, trampoline={}",
         publicAttackSignature, survivalAttackSignature, internalAttackSignature,
         internalAttackHooked, gameModeAttackOriginal != nullptr);
-    hookSignature(SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
     hookSignature(SignatureId::ContainerScreenControllerOpen, reinterpret_cast<void*>(containerOpenDetour), &containerOpenOriginal);
     hookSignature(SignatureId::ContainerScreenControllerDtor, reinterpret_cast<void*>(containerCloseDetour), &containerCloseOriginal);
     hookSignature(SignatureId::ChatScreenOpen, reinterpret_cast<void*>(chatOpenDetour), &chatOpenOriginal);
