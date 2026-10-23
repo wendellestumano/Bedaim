@@ -1,5 +1,6 @@
 #include "unglide.hpp"
 #include "aimassist.hpp"
+#include "MaceFallPolicy.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
