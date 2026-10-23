@@ -98,8 +98,20 @@ inline std::string normalizeIdentifier(std::string_view identifier) {
             const auto itemName = normalized.substr(separator + 1);
             normalized = namespaceName + ":" + itemName;
         }
-    } else if (!normalized.empty() && normalized.find(':') == std::string::npos) {
-        normalized = "minecraft:" + normalized;
+    } else {
+        // Some recent Bedrock item-description readers return a suffix form
+        // such as "netherite_spear:name" instead of a registry ID or the
+        // conventional "item.minecraft.netherite_spear" localization key.
+        // Strip only the known description marker so saved weapon profiles
+        // match the actual held item rather than becoming "minecraft:...:name".
+        constexpr std::string_view kDescriptionMarker = ":name";
+        if (normalized.size() > kDescriptionMarker.size() &&
+            normalized.ends_with(kDescriptionMarker)) {
+            normalized.resize(normalized.size() - kDescriptionMarker.size());
+        }
+        if (!normalized.empty() && normalized.find(':') == std::string::npos) {
+            normalized = "minecraft:" + normalized;
+        }
     }
     return normalized;
 }
@@ -125,7 +137,7 @@ inline std::string displayNameForIdentifier(std::string_view identifier) {
 }
 
 inline float normalizeRange(float range) noexcept {
-    return std::isfinite(range) ? std::clamp(range, 1.0f, 6.0f) : 3.2f;
+    return std::isfinite(range) ? std::clamp(range, 1.0f, 30.0f) : 3.2f;
 }
 
 inline float normalizeNormalCps(float cps) noexcept {
