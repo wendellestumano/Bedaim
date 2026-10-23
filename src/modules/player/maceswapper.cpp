@@ -279,155 +279,122 @@ constexpr const char* kUnglideKeymapUid =
     "e2225852-1df2-4232-bb26-606f11fc8745";
 
 using JniGetCreatedJavaVMsFn = jint (*)(JavaVM**, jsize, jsize*);
-
+enum class VmLookupStatus { Ready, SymbolUnavailable, QueryFailed, NoVmFound, AttachFailed };
 JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
+    // RTLD_NOLOAD may fail under Android linker namespaces even if ART is loaded.
     static void* artHandle = dlopen("libart.so", RTLD_NOW);
     static void* helperHandle = dlopen("libnativehelper.so", RTLD_NOW);
-    auto getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-        dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
-    if (!getVms && artHandle) getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-        dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
-    if (!getVms && helperHandle) getVms = reinterpret_cast<JniGetCreatedJavaVMsFn>(
-        dlsym(helperHandle, "JNI_GetCreatedJavaVMs"));
-    return getVms;
+    auto fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs"));
+    if (!fn && artHandle) fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(artHandle, "JNI_GetCreatedJavaVMs"));
+    if (!fn && helperHandle) fn = reinterpret_cast<JniGetCreatedJavaVMsFn>(dlsym(helperHandle, "JNI_GetCreatedJavaVMs"));
+    return fn;
 }
-
-class ScopedJniEnvironment {
+class UnglideJniEnvironment {
 public:
-    ScopedJniEnvironment() {
+    UnglideJniEnvironment() {
+        // Prefer the JavaVM provided by Preloader; dynamic lookup is a fallback
+        // for runtimes that do not expose ModContext::javaVm().
         mVm = bedrocktools::core::javaVm();
         if (!mVm) {
             const auto getVms = resolveJniGetCreatedJavaVMs();
-            if (!getVms) return;
-            JavaVM* discoveredVm = nullptr;
-            jsize vmCount = 0;
-            if (getVms(&discoveredVm, 1, &vmCount) != JNI_OK ||
-                vmCount < 1 || !discoveredVm) return;
-            mVm = discoveredVm;
+            if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
+            JavaVM* vm = nullptr; jsize count = 0;
+            if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
+            if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
+            mVm = vm;
         }
-        const jint status = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
-        if (status == JNI_OK) return;
-        if (status != JNI_EDETACHED) { mEnv = nullptr; return; }
-        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) mAttached = true;
-        else mEnv = nullptr;
+        const jint envStatus = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
+        if (envStatus == JNI_OK) { status = VmLookupStatus::Ready; return; }
+        if (envStatus != JNI_EDETACHED) { status = VmLookupStatus::AttachFailed; return; }
+        if (mVm->AttachCurrentThread(&mEnv, nullptr) == JNI_OK) { mAttached = true; status = VmLookupStatus::Ready; }
+        else { mEnv = nullptr; status = VmLookupStatus::AttachFailed; }
     }
-    ~ScopedJniEnvironment() { if (mAttached && mVm) mVm->DetachCurrentThread(); }
+    ~UnglideJniEnvironment() { if (mAttached && mVm) mVm->DetachCurrentThread(); }
     JNIEnv* get() const noexcept { return mEnv; }
+    VmLookupStatus lookupStatus() const noexcept { return status; }
 private:
-    JavaVM* mVm = nullptr;
-    JNIEnv* mEnv = nullptr;
-    bool mAttached = false;
+    JavaVM* mVm = nullptr; JNIEnv* mEnv = nullptr; bool mAttached = false;
+    VmLookupStatus status = VmLookupStatus::SymbolUnavailable;
 };
 
-class ScopedJniLocalFrame {
-public:
-    explicit ScopedJniLocalFrame(JNIEnv* env) : mEnv(env) {
-        mReady = mEnv && mEnv->PushLocalFrame(40) == JNI_OK;
-        if (!mReady && mEnv && mEnv->ExceptionCheck()) mEnv->ExceptionClear();
-    }
-    ~ScopedJniLocalFrame() { if (mReady) mEnv->PopLocalFrame(nullptr); }
-    bool ready() const noexcept { return mReady; }
-private:
-    JNIEnv* mEnv = nullptr;
-    bool mReady = false;
-};
 
-enum class AutomationBroadcastResult {
-    Sent, JavaVmUnavailable, ApplicationContextUnavailable,
-    IntentApiUnavailable, BroadcastFailed,
-};
-
-bool clearJniException(JNIEnv* env) {
+bool clearUnglideJniException(JNIEnv* env) {
     if (!env || !env->ExceptionCheck()) return false;
     env->ExceptionClear();
     return true;
 }
 
+enum class AutomationBroadcastResult { Sent, VmSymbolUnavailable, VmQueryFailed, VmNotFound, ThreadAttachFailed, ContextUnavailable, IntentUnavailable, BroadcastFailed };
 AutomationBroadcastResult dispatchUnglideKeyMapperKeymap() {
-    ScopedJniEnvironment jni;
+    UnglideJniEnvironment jni;
     JNIEnv* env = jni.get();
-    if (!env) return AutomationBroadcastResult::JavaVmUnavailable;
-    ScopedJniLocalFrame localFrame(env);
-    if (!localFrame.ready()) return AutomationBroadcastResult::IntentApiUnavailable;
-
-    jobject application = nullptr;
-    jclass activityThread = env->FindClass("android/app/ActivityThread");
-    if (activityThread && !clearJniException(env)) {
-        jmethodID currentApplication = env->GetStaticMethodID(
-            activityThread, "currentApplication", "()Landroid/app/Application;");
-        if (currentApplication && !clearJniException(env)) {
-            application = env->CallStaticObjectMethod(activityThread, currentApplication);
-            if (clearJniException(env)) application = nullptr;
-        } else clearJniException(env);
-    } else clearJniException(env);
-
-    if (!application) {
-        jclass appGlobals = env->FindClass("android/app/AppGlobals");
-        if (appGlobals && !clearJniException(env)) {
-            jmethodID initialApplication = env->GetStaticMethodID(
-                appGlobals, "getInitialApplication", "()Landroid/app/Application;");
-            if (initialApplication && !clearJniException(env)) {
-                application = env->CallStaticObjectMethod(appGlobals, initialApplication);
-                if (clearJniException(env)) application = nullptr;
-            } else clearJniException(env);
-        } else clearJniException(env);
+    if (!env) {
+        switch (jni.lookupStatus()) {
+            case VmLookupStatus::SymbolUnavailable: return AutomationBroadcastResult::VmSymbolUnavailable;
+            case VmLookupStatus::QueryFailed: return AutomationBroadcastResult::VmQueryFailed;
+            case VmLookupStatus::NoVmFound: return AutomationBroadcastResult::VmNotFound;
+            case VmLookupStatus::AttachFailed: return AutomationBroadcastResult::ThreadAttachFailed;
+            case VmLookupStatus::Ready: break;
+        }
+        return AutomationBroadcastResult::VmSymbolUnavailable;
     }
-    if (!application) return AutomationBroadcastResult::ApplicationContextUnavailable;
-
-    jclass intentClass = env->FindClass("android/content/Intent");
-    if (!intentClass || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    jmethodID intentConstructor = env->GetMethodID(intentClass, "<init>", "()V");
-    jmethodID setAction = env->GetMethodID(
-        intentClass, "setAction", "(Ljava/lang/String;)Landroid/content/Intent;");
-    jmethodID setComponent = env->GetMethodID(
-        intentClass, "setComponent", "(Landroid/content/ComponentName;)Landroid/content/Intent;");
-    jmethodID putExtra = env->GetMethodID(
-        intentClass, "putExtra", "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
-    if (clearJniException(env) || !intentConstructor || !setAction || !setComponent || !putExtra)
-        return AutomationBroadcastResult::IntentApiUnavailable;
-
-    jclass componentClass = env->FindClass("android/content/ComponentName");
-    if (!componentClass || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    jmethodID componentConstructor = env->GetMethodID(
-        componentClass, "<init>", "(Ljava/lang/String;Ljava/lang/String;)V");
-    if (!componentConstructor || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-
-    jobject intent = env->NewObject(intentClass, intentConstructor);
-    if (!intent || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    jstring action = env->NewStringUTF(kKeyMapperAction);
-    jstring packageName = env->NewStringUTF(kKeyMapperPackage);
-    jstring receiverName = env->NewStringUTF(kKeyMapperReceiver);
-    jstring extraName = env->NewStringUTF(kKeyMapperUidExtra);
-    jstring keymapUid = env->NewStringUTF(kUnglideKeymapUid);
-    if (!action || !packageName || !receiverName || !extraName || !keymapUid ||
-        clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-
-    jobject component = env->NewObject(
-        componentClass, componentConstructor, packageName, receiverName);
-    if (!component || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    env->CallObjectMethod(intent, setAction, action);
-    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    env->CallObjectMethod(intent, setComponent, component);
-    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    env->CallObjectMethod(intent, putExtra, extraName, keymapUid);
-    if (clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-
-    jclass contextClass = env->FindClass("android/content/Context");
-    if (!contextClass || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    jmethodID sendBroadcast = env->GetMethodID(
-        contextClass, "sendBroadcast", "(Landroid/content/Intent;)V");
-    if (!sendBroadcast || clearJniException(env)) return AutomationBroadcastResult::IntentApiUnavailable;
-    env->CallVoidMethod(application, sendBroadcast, intent);
-    if (clearJniException(env)) return AutomationBroadcastResult::BroadcastFailed;
+    if (env->PushLocalFrame(40) != JNI_OK) { clearUnglideJniException(env); return AutomationBroadcastResult::IntentUnavailable; }
+    struct LocalFrameGuard { JNIEnv* env; ~LocalFrameGuard() { env->PopLocalFrame(nullptr); } } frame{env};
+    jobject app = nullptr;
+    jclass threadClass = env->FindClass("android/app/ActivityThread");
+    if (threadClass && !clearUnglideJniException(env)) {
+        jmethodID m = env->GetStaticMethodID(threadClass, "currentApplication", "()Landroid/app/Application;");
+        if (m && !clearUnglideJniException(env)) { app = env->CallStaticObjectMethod(threadClass, m); if (clearUnglideJniException(env)) app = nullptr; }
+        else clearUnglideJniException(env);
+    } else clearUnglideJniException(env);
+    if (!app) {
+        jclass globals = env->FindClass("android/app/AppGlobals");
+        if (globals && !clearUnglideJniException(env)) {
+            jmethodID m = env->GetStaticMethodID(globals, "getInitialApplication", "()Landroid/app/Application;");
+            if (m && !clearUnglideJniException(env)) { app = env->CallStaticObjectMethod(globals, m); if (clearUnglideJniException(env)) app = nullptr; }
+            else clearUnglideJniException(env);
+        } else clearUnglideJniException(env);
+    }
+    if (!app) return AutomationBroadcastResult::ContextUnavailable;
+    jclass ic = env->FindClass("android/content/Intent");
+    if (!ic || clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    jmethodID ctor=env->GetMethodID(ic,"<init>","()V");
+    jmethodID setAction=env->GetMethodID(ic,"setAction","(Ljava/lang/String;)Landroid/content/Intent;");
+    jmethodID setComponent=env->GetMethodID(ic,"setComponent","(Landroid/content/ComponentName;)Landroid/content/Intent;");
+    jmethodID putExtra=env->GetMethodID(ic,"putExtra","(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
+    if (clearUnglideJniException(env)||!ctor||!setAction||!setComponent||!putExtra) return AutomationBroadcastResult::IntentUnavailable;
+    jclass cc=env->FindClass("android/content/ComponentName");
+    if (!cc||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    jmethodID cctor=env->GetMethodID(cc,"<init>","(Ljava/lang/String;Ljava/lang/String;)V");
+    if (!cctor||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    jobject intent=env->NewObject(ic,ctor);
+    if (!intent||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    jstring action=env->NewStringUTF(kKeyMapperAction), pkg=env->NewStringUTF(kKeyMapperPackage);
+    jstring receiver=env->NewStringUTF(kKeyMapperReceiver), extra=env->NewStringUTF(kKeyMapperUidExtra);
+    jstring uid=env->NewStringUTF(kUnglideKeymapUid);
+    if (!action||!pkg||!receiver||!extra||!uid||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    jobject component=env->NewObject(cc,cctor,pkg,receiver);
+    if (!component||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    env->CallObjectMethod(intent,setAction,action); if(clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    env->CallObjectMethod(intent,setComponent,component); if(clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    env->CallObjectMethod(intent,putExtra,extra,uid); if(clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    jclass context=env->FindClass("android/content/Context");
+    if (!context||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    jmethodID send=env->GetMethodID(context,"sendBroadcast","(Landroid/content/Intent;)V");
+    if (!send||clearUnglideJniException(env)) return AutomationBroadcastResult::IntentUnavailable;
+    env->CallVoidMethod(app,send,intent);
+    if(clearUnglideJniException(env)) return AutomationBroadcastResult::BroadcastFailed;
     return AutomationBroadcastResult::Sent;
 }
-
 const char* automationBroadcastResultName(AutomationBroadcastResult result) {
-    switch (result) {
+    switch(result) {
         case AutomationBroadcastResult::Sent: return "keymapper_unglide_keymap_broadcast_sent";
-        case AutomationBroadcastResult::JavaVmUnavailable: return "android_java_vm_unavailable";
-        case AutomationBroadcastResult::ApplicationContextUnavailable: return "android_context_unavailable";
-        case AutomationBroadcastResult::IntentApiUnavailable: return "keymapper_unglide_intent_api_unavailable";
+        case AutomationBroadcastResult::VmSymbolUnavailable: return "android_jni_vm_symbol_unavailable";
+        case AutomationBroadcastResult::VmQueryFailed: return "android_jni_vm_query_failed";
+        case AutomationBroadcastResult::VmNotFound: return "android_jni_vm_not_found";
+        case AutomationBroadcastResult::ThreadAttachFailed: return "android_jni_thread_attach_failed";
+        case AutomationBroadcastResult::ContextUnavailable: return "android_context_unavailable";
+        case AutomationBroadcastResult::IntentUnavailable: return "keymapper_unglide_intent_api_unavailable";
         case AutomationBroadcastResult::BroadcastFailed: return "keymapper_unglide_broadcast_failed";
     }
     return "keymapper_unglide_broadcast_unknown";
