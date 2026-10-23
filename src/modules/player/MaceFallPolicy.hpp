@@ -16,9 +16,20 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
 }
 
 inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
-                                    float targetDistance, float maximumTargetDistance,
-                                    bool crosshairConfirmed = true) noexcept {
-    if (!enabled || !isGliding || !crosshairConfirmed ||
+                                    float targetDistance, float maximumTargetDistance) noexcept {
+    if (!enabled || !isGliding ||
+        !std::isfinite(targetDistance) || !std::isfinite(maximumTargetDistance) ||
+        targetDistance < 0.0f) {
+        return false;
+    }
+    const float safeTargetDistance = std::clamp(maximumTargetDistance, 1.0f, 32.0f);
+    return targetDistance <= safeTargetDistance;
+}
+
+inline bool shouldTriggerUnglideKeymap(bool enabled, bool targetIsPlayer,
+                                       bool crosshairConfirmed, float targetDistance,
+                                       float maximumTargetDistance) noexcept {
+    if (!enabled || !targetIsPlayer || !crosshairConfirmed ||
         !std::isfinite(targetDistance) || !std::isfinite(maximumTargetDistance) ||
         targetDistance < 0.0f) {
         return false;
