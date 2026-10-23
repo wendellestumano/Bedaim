@@ -53,6 +53,7 @@
 #include "misc/hiveutils.hpp"
 #include "misc/modulediagnostics.hpp"
 #include "visual/swingmodifier.hpp"
+#include "visual/esp.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
     static ModuleRegistry registry;
@@ -157,4 +158,5 @@ void registerAllModules() {
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
     registry.emplace<ForceGlobalRPModule>();
+    registry.emplace<EspModule>();
 }
