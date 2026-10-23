@@ -152,7 +152,8 @@ static bool validRenderBounds(const AABB& b) {
         b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
 }
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
- espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedBounds{false},espLoggedOutline{false};
+ espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
+ espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -233,14 +234,25 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
     const bool valid = empty || (begin > 0x1000 && end >= begin &&
         (end - begin) % sizeof(DistanceSortedActor) == 0 &&
         (end - begin) / sizeof(DistanceSortedActor) <= 8192);
-    if (!valid || empty) return;
+    if (!valid) {
+        espLogOnce(espLoggedSnapshot, bedrocktools::diagnostics::Level::Warning,
+                   "offscreen_actor_snapshot=malformed");
+        return;
+    }
+    if (empty) {
+        espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Warning,
+                   "offscreen_actor_snapshot=empty; no nearby actors returned");
+        return;
+    }
 
+    bool foundPlayer = false;
     for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
         void* actor = it->mActor;
         if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000 ||
             actor == localPlayer || !std::isfinite(it->mDistance) ||
             it->mDistance < 0.0f || it->mDistance > targetRange ||
             !s_actorIsPlayer(actor)) continue;
+        foundPlayer = true;
         if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
         const AABB bounds = getActorAABB(actor);
         if (!validRenderBounds(bounds)) continue;
@@ -250,6 +262,10 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
             (bounds.min.z + bounds.max.z) * 0.5f
         };
         esp->considerOffscreenCandidate(center, it->mDistance);
+    }
+    if (!foundPlayer) {
+        espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Info,
+                   "offscreen_actor_snapshot=valid_but_no_players_in_range");
     }
 }
 
@@ -449,7 +465,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const bool empty=begin==0&&end==0;
         const bool valid=empty||(begin>0x1000&&end>=begin&&(end-begin)%sizeof(DistanceSortedActor)==0&&(end-begin)/sizeof(DistanceSortedActor)<=8192);
         if(!valid){if(espEnabled)espLogOnce(espLoggedSnapshot,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=malformed; skipped nearby actor list");}
-        else if(!empty)for(DistanceSortedActor* it=actors.begin;it<actors.end;++it){
+        else if(empty){if(espEnabled)espLogOnce(espLoggedEmptyActors,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=empty; no nearby actors returned by ActorFetchNearbyActorsSorted");}
+        else for(DistanceSortedActor* it=actors.begin;it<actors.end;++it){
             void* ent=it->mActor;
             if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
                !std::isfinite(it->mDistance)||it->mDistance<0||it->mDistance>queryRange)continue;
