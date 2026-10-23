@@ -38,6 +38,7 @@ private:
     bool m_hasPeakY = false;
     std::chrono::steady_clock::time_point m_nextAttack{};
     std::chrono::steady_clock::time_point m_nextUnglideAttempt{};
+    int m_unglideBurstRemaining = 0;
     std::chrono::steady_clock::time_point m_nextUnglideDiagnostic{};
     bool m_pendingAttack = false;
     bool m_cancelPendingAttack = false;
