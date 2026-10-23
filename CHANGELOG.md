@@ -1,3 +1,18 @@
+## 2026-10-23 — Unglide false-negative workaround, spear profile matching, and 30-block AutoHit range
+
+- Diagnostics showed repeated `player_not_gliding` gates while the user was flying with Elytra. The native status flag and synchronized-data fallback are both unreliable on this runtime, so Unglide no longer hard-blocks solely on that state result; the fresh player target, target geometry, range, height and crosshair gates still apply. This may allow a one-shot jump while grounded and must be verified in-game.
+- Canonicalized Bedrock item-description strings such as `netherite_spear:name` and `wind_charge:name` to stable registry IDs. This directly addresses the logs where the held Netherite Spear never matched its configured `minecraft:netherite_spear` profile.
+- Increased the AutoHit weapon-profile range normalization, profile slider, default range control, and runtime upper bound to 30 blocks; Aim Assist's default target scan range is also 30 blocks. Existing saved Aim Assist ranges may remain lower and still constrain target acquisition.
+- Added host regression assertions for the description-ID suffix normalization and the 30-block range cap. A 30-block client-side gate does not override Minecraft/server reach validation; the configured Key Mapper click and actual damage still require device/server testing.
+
+## 2026-10-23 — Unglide input dispatch and Aim Assist ignore-list crash hardening
+- Updated Unglide's gliding check so a negative result from the native `Actor::getStatusFlag` lookup no longer immediately rejects the tick; it now falls back to the synchronized entity-data flag reader. Runtime confirmation is still required.
+
+
+- Aligned Unglide's JavaVM selection with the known-working AutoHit path: query ART's process JavaVM first and use the Preloader-cached VM only as fallback. This keeps the explicit Key Mapper broadcast/action and the dedicated Space keymap UUID unchanged.
+- Restricted Aim Assist's name-ignore lookup to player names from the SDK wrapper. The old path fell through to a resolved native `Actor::getNameTag` call whenever a player name did not match; that unnecessary native call is removed from target filtering to avoid the crash seen with a populated ignore list.
+- CI success verifies compilation and host tests only. Runtime Unglide still needs an in-game check: a `keymapper_unglide_keymap_broadcast_sent` diagnostic confirms broadcast acceptance, not that Minecraft consumed Space or stopped gliding.
+
 ## 2026-10-23 — Unglide one-shot trigger and persistent settings path
 
 - Changed Unglide from a repeated burst loop to a one-shot Space keymap request per target approach. A successful request latches the target and cannot repeat continuously while the player remains within range.
@@ -7,6 +22,10 @@
 - Added policy tests for one-shot re-arm hysteresis. CI/device build validation for this latest change is pending; successful Android broadcast still does not prove that the keymap executes in-game.
 
 ## 2026-10-23 — Functional Key Mapper AutoHit baseline, per-item profiles, and crosshair-gated Unglide
+
+- Fixed duplicate Unglide menu-schema declarations that blocked Android compilation.
+- Added Idle/Tracking/Triggered state transitions: valid targets are tracked while outside activation range/height, then receive one bounded Space burst when all activation gates pass. The same target cannot restart a completed burst until it leaves the outer re-arm radius or is lost.
+- Added host regression checks for the burst latch and included Unglide in the launcher V2 schema-refresh allowlist. The custom Unglide Settings callback now explicitly queues ConfigManager saves (it bypassed ModuleMenu's normal persistence callback), and its controls initialize from the saved module values instead of hard-coded defaults.
 
 - Used the AutoHit implementation associated with functional build run `39892141288` as the reference for the explicit Key Mapper broadcast route. AutoHit continues to dispatch through the configured Key Mapper keymap; this branch does not call the native GameMode attack wrapper.
 - Kept the Weapon Profiles bench with Add Weapon, exact item-ID matching (including custom add-on namespaces), independent enabled state, Settings/Delete controls, per-item range/CPS, and a bounded initial burst. Legacy sword/axe/mace/trident settings are migrated into item profiles.

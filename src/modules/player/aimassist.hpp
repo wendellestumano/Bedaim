@@ -47,7 +47,7 @@ public:
     bool m_weaponTrident = true;
     bool m_weaponSpear = true;
     bool m_weaponOtherMelee = true;
-    float m_range = 5.5f;
+    float m_range = 30.0f;
     float m_fov = 35.0f;
     float m_targetSwitchHysteresis = 4.0f;
     float m_targetSwitchDistanceMargin = 0.75f;

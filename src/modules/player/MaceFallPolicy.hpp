@@ -26,6 +26,11 @@ inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
     return targetDistance <= safeTargetDistance;
 }
 
+// A bounded burst continues only while presses remain; an exhausted burst stays latched.
+inline bool shouldDispatchUnglideBurst(bool alreadyTriggered, int burstRemaining) noexcept {
+    return !alreadyTriggered || burstRemaining > 0;
+}
+
 inline bool shouldTriggerUnglideKeymap(bool enabled, bool targetIsPlayer,
                                        bool crosshairConfirmed, float targetDistance,
                                        float maximumTargetDistance) noexcept {

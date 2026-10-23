@@ -279,16 +279,13 @@ bool whitelistContainsName(const std::string& whitelist, const std::string& name
 }
 
 bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist) {
-    if (!actor || normalizeName(whitelist).empty()) return false;
-    if (isPlayer) {
-        const auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
-        if (whitelistContainsName(whitelist, player->name())) return true;
-    }
-    if (g_actorGetNameTag) {
-        const std::string nameTag = g_actorGetNameTag(actor);
-        if (whitelistContainsName(whitelist, nameTag)) return true;
-    }
-    return false;
+    // This list is intended to ignore player names (including bot accounts).
+    // Do not call the resolved native Actor::getNameTag function here: it is
+    // unnecessary for player filtering and has crashed on some actor instances
+    // when a non-empty list caused this path to run.
+    if (!actor || !isPlayer || normalizeName(whitelist).empty()) return false;
+    const auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    return whitelistContainsName(whitelist, player->name());
 }
 
 using HeldWeapon = bedaim::aimpolicy::HeldWeapon;

@@ -457,6 +457,7 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                  mod->moduleId != "bedrocktools.Hitbox Expander" &&
                  mod->moduleId != "bedrocktools.Mace Swapper" &&
                  mod->moduleId != "bedrocktools.Auto Hit" &&
+                 mod->moduleId != "bedrocktools.Unglide" &&
                  mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
                  mod->moduleId != "bedrocktools.Module Diagnostics")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they

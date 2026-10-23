@@ -14,6 +14,8 @@ private:
  void processPlayerTick(bedrocktools::sdk::Player*);
  std::mutex m_stateMutex; std::chrono::steady_clock::time_point m_nextAttempt{},m_nextDiagnostic{};
  int m_burstRemaining=0;
+ enum class TriggerState { Idle, Tracking, Triggered };
+ TriggerState m_triggerState=TriggerState::Idle;
  void* m_latchedTarget=nullptr;
  bool m_targetLatched=false;
 };

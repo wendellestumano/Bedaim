@@ -4,6 +4,7 @@
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
+#include "../../config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
@@ -200,16 +201,26 @@ JniGetCreatedJavaVMsFn resolveJniGetCreatedJavaVMs() {
 class UnglideJniEnvironment {
 public:
     UnglideJniEnvironment() {
-        // Prefer the JavaVM provided by Preloader; dynamic lookup is a fallback
-        // for runtimes that do not expose ModContext::javaVm().
-        mVm = bedrocktools::core::javaVm();
+        // Match AutoHit's known-working Key Mapper route: ask ART for the
+        // process JavaVM first, then fall back to the Preloader-cached VM.
+        VmLookupStatus lookupFailure = VmLookupStatus::SymbolUnavailable;
+        const auto getVms = resolveJniGetCreatedJavaVMs();
+        if (getVms) {
+            JavaVM* vm = nullptr;
+            jsize count = 0;
+            const jint query = getVms(&vm, 1, &count);
+            if (query == JNI_OK && count > 0 && vm) {
+                mVm = vm;
+            } else if (query != JNI_OK) {
+                lookupFailure = VmLookupStatus::QueryFailed;
+            } else {
+                lookupFailure = VmLookupStatus::NoVmFound;
+            }
+        }
+        if (!mVm) mVm = bedrocktools::core::javaVm();
         if (!mVm) {
-            const auto getVms = resolveJniGetCreatedJavaVMs();
-            if (!getVms) { status = VmLookupStatus::SymbolUnavailable; return; }
-            JavaVM* vm = nullptr; jsize count = 0;
-            if (getVms(&vm, 1, &count) != JNI_OK) { status = VmLookupStatus::QueryFailed; return; }
-            if (count < 1 || !vm) { status = VmLookupStatus::NoVmFound; return; }
-            mVm = vm;
+            status = lookupFailure;
+            return;
         }
         const jint envStatus = mVm->GetEnv(reinterpret_cast<void**>(&mEnv), JNI_VERSION_1_6);
         if (envStatus == JNI_OK) { status = VmLookupStatus::Ready; return; }
@@ -320,10 +331,12 @@ bool playerIsGlidingForUnglide(void* player) {
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // ActorFlags::Gliding is 32 in the public Bedrock/LeviLamina enum.
-            return getStatusFlag(player, 32);
+            // Treat the native status flag as a positive signal, not an
+            // authoritative negative: builds may differ in flag layout.
+            // A false result must not suppress the synchronized-data fallback.
+            if (getStatusFlag(player, 32)) return true;
         } catch (...) {
-            // Fall through to the existing synchronized-data reader.
+            // Fall through to the synchronized-data reader.
         }
     }
     return actorIsGliding(player);
@@ -335,8 +348,8 @@ bool playerIsGlidingForUnglide(void* player) {
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
-void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;}
+void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
@@ -363,10 +376,23 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto reject = [&](const char* state, const std::string& detail, int retryMs) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
+            // A hard gate failure invalidates the previous trigger latch. Without
+            // this reset, toggling Aim Assist off/on or briefly losing target data
+            // could leave the same target permanently blocked after a spent burst.
             m_burstRemaining = 0;
+            m_latchedTarget = nullptr;
+            m_targetLatched = false;
+            m_triggerState = TriggerState::Idle;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(retryMs);
         }
         report(state, detail);
+    };
+    auto resetTargetState = [&]() {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_burstRemaining = 0;
+        m_latchedTarget = nullptr;
+        m_targetLatched = false;
+        m_triggerState = TriggerState::Idle;
     };
 
     // Match AutoHit's targeting contract: use the fresh Aim Assist target,
@@ -384,16 +410,19 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     AABB targetBounds{};
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+        resetTargetState();
         reject("target_missing_or_stale",
                "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
         return;
     }
     if (!aim->currentTargetIsPlayerSnapshot(target)) {
+        resetTargetState();
         reject("target_not_player",
                "Unglide only triggers for a player target, not a mob target.", 120);
         return;
     }
     if (!validBounds(targetBounds)) {
+        resetTargetState();
         reject("target_bounds_invalid",
                "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
         return;
@@ -406,91 +435,100 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    // Re-arm as soon as the same target has separated beyond the outer radius,
-    // even if the crosshair has already moved away. This avoids a stale latch
-    // when the player leaves range and later approaches again.
+    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
+    // On recent Bedrock builds both the native ActorFlags query and the
+    // synchronized-data fallback can report "not gliding" while the local
+    // player is visibly flying with Elytra. Do not make this unreliable state
+    // reader a hard blocker: retain the strict fresh-player-target, geometry,
+    // height, range and crosshair gates below, then issue only the configured
+    // bounded Key Mapper burst. This can also produce a one-shot jump when
+    // grounded, so device validation should specifically check the intended
+    // Elytra approach behavior.
+    const bool glidingStateConfirmed = playerIsGlidingForUnglide(player);
+
+    // A new target starts Tracking. Range/height gates keep tracking active
+    // until the activation conditions pass, without sending Space prematurely.
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (m_targetLatched && m_latchedTarget == target &&
-            bedaim::macefall::shouldRearmUnglide(geometry.distance, targetDistance)) {
-            m_latchedTarget = nullptr;
+        if (m_latchedTarget != target) {
+            m_latchedTarget = target;
             m_targetLatched = false;
+            m_burstRemaining = 0;
+            m_triggerState = TriggerState::Tracking;
+        }
+        if (m_targetLatched &&
+            bedaim::macefall::shouldRearmUnglide(geometry.distance, targetDistance)) {
+            m_targetLatched = false;
+            m_burstRemaining = 0;
+            m_triggerState = TriggerState::Tracking;
         }
     }
+    if (geometry.distance > effectiveMaximumDistance) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_triggerState = TriggerState::Tracking;
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+        }
+        report("tracking_out_of_range",
+            std::string("target_distance=") + std::to_string(geometry.distance) +
+                ", activation_distance=" + std::to_string(effectiveMaximumDistance));
+        return;
+    }
+    if (geometry.verticalDifference > maximumHeightDifference) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_triggerState = TriggerState::Tracking;
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+        }
+        report("tracking_height_out_of_range",
+            std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
+                ", activation_height=" + std::to_string(maximumHeightDifference));
+        return;
+    }
     if (!crosshairConfirmed) {
+        resetTargetState();
         reject("crosshair_not_on_target",
                "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
         return;
     }
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    if (!bedaim::macefall::shouldTriggerUnglideKeymap(
-            true, true, crosshairConfirmed, geometry.distance, effectiveMaximumDistance)) {
-        if (!crosshairConfirmed) {
-            reject("crosshair_not_on_target",
-                   "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
-        } else {
-            reject("target_out_of_range",
-                   std::string("target_distance=") + std::to_string(geometry.distance) +
-                       ", maximum=" + std::to_string(effectiveMaximumDistance), 120);
-        }
-        return;
-    }
-    // Only trigger while the local player is actually gliding. A grounded
-    // player holding a mace must never spam Space keymap requests.
-    if (!playerIsGlidingForUnglide(player)) {
-        reject("player_not_gliding",
-               "Local player is not gliding with Elytra; no Space keymap request sent.", 150);
-        return;
-    }
 
-    bool alreadyTriggeredForTarget = false;
+    bool burstAlreadyFinished = false;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        // A new target is a new attack opportunity; the same target remains
-        // latched until it separates beyond the outer radius.
-        if (m_targetLatched && m_latchedTarget == target) {
-            alreadyTriggeredForTarget = true;
-        } else if (m_targetLatched && m_latchedTarget != target) {
-            m_latchedTarget = nullptr;
-            m_targetLatched = false;
-        }
+        burstAlreadyFinished = !bedaim::macefall::shouldDispatchUnglideBurst(
+            m_triggerState == TriggerState::Triggered, m_burstRemaining);
+        if (burstAlreadyFinished) m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
     }
-    if (alreadyTriggeredForTarget) {
-        reject("target_already_triggered",
-               "Unglide already fired for this target; waiting for separation before re-arming.", 120);
-        return;
-    }
-
-    if (geometry.verticalDifference > maximumHeightDifference) {
-        reject("target_height_out_of_range",
-               std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
-                   ", maximum=" + std::to_string(maximumHeightDifference), 120);
-        return;
-    }
+    if (burstAlreadyFinished) return;
 
     const auto dispatchStarted = std::chrono::steady_clock::now();
-    AutomationBroadcastResult result;
+    AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
     int remaining = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || dispatchStarted < m_nextAttempt) return;
-        // Keep the dispatch synchronized with module enable/disable state.
+        if (m_triggerState != TriggerState::Triggered) {
+            m_triggerState = TriggerState::Triggered;
+            m_targetLatched = true;
+            m_latchedTarget = target;
+            m_burstRemaining = std::clamp(m_burstCount, 1, 10);
+        }
+
+        // Send the configured bounded burst only once for this approach.
         result = dispatchUnglideKeyMapperKeymap();
         const bool sent = result == AutomationBroadcastResult::Sent;
-        // This mode is a one-shot trigger, not a repeating pulse train. The
-        // configured burst settings remain in the UI for compatibility, but
-        // one target approach produces exactly one Space request.
-        m_burstRemaining = 0;
-        remaining = 0;
-        if (sent) {
-            m_latchedTarget = target;
-            m_targetLatched = true;
-        }
-        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(sent ? 250 : 500);
+        if (sent) --m_burstRemaining;
+        else m_burstRemaining = 0;
+        remaining = m_burstRemaining;
+        m_nextAttempt = dispatchStarted + std::chrono::milliseconds(
+            sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 160) : 500);
     }
 
     report(automationBroadcastResultName(result),
-        std::string("crosshair_confirmed=true; target_distance=") + std::to_string(geometry.distance) +
+        std::string("state=triggered; crosshair_confirmed=true; gliding_state_confirmed=") +
+        (glidingStateConfirmed ? "true" : "false") + ", target_distance=" + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
             ", keymap_uid=" + kUnglideKeymapUid);
@@ -504,21 +542,33 @@ void UnglideModule::onMenuRegistered(){
  static std::atomic<bool> persistentSettingsRegistered{false};
  bool expected = false;
  if (persistentSettingsRegistered.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+   nlohmann::json persistentConfig;
+   saveConfig(persistentConfig);
+   auto persistentValue = [&](const char* key, const char* fallback) {
+     const auto it = persistentConfig.find(key);
+     if (it == persistentConfig.end() || it->is_null()) return std::string(fallback);
+     if (it->is_string()) return it->get<std::string>();
+     if (it->is_boolean()) return it->get<bool>() ? std::string("true") : std::string("false");
+     return it->dump();
+   };
    ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
    settings.modId("Bedaim")
      .description("Persistent Unglide controls; values apply immediately.")
      .defaultEnabled(true)
-     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, "false")
-     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, "8.0")
-     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, "4.0")
-     .config("m_unglideBurstCount", "Burst presses (legacy)", ConfigType::Text, "3")
-     .config("m_unglidePressIntervalMs", "Time between presses ms (legacy)", ConfigType::Text, "120")
+     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, persistentValue("m_unglideEnabled", "false"))
+     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, persistentValue("m_unglideTargetDistance", "8.0"))
+     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, persistentValue("m_unglideMaxVerticalDifference", "4.0"))
+     .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
+     .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
      .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-       onMenuConfigChanged(key, value);
+       if (onMenuConfigChanged(key, value)) {
+         // This custom ModuleBuilder callback bypasses ModuleMenu.cpp's normal
+         // persistence callback, so explicitly enqueue the updated module config.
+         bedrocktools::config::ConfigManager::get().save();
+       }
      });
    if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
  }
- ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
  using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
  s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
  ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
