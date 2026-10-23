@@ -431,11 +431,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
         if (found != m_customWeaponProfiles.end()) customProfile = *found;
 
         // A switch to a different held item breaks the old burst cycle immediately.
+        // Preserve the shared cooldown so transient empty item reads cannot bypass
+        // the steady Key Mapper request rate.
         if (m_burstWeaponIdentifier != normalizedItem) {
             m_burstWeaponIdentifier = normalizedItem;
             m_burstTarget = nullptr;
             m_burstRemaining = 0;
-            m_nextAttack = {};
         }
     }
     if (!customProfile) {
@@ -513,11 +514,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         // Re-arm only when the selected weapon or target changes, never on each tick.
+        // Do not clear m_nextAttack here: target/weapon churn must not bypass the
+        // rate limiter used to pace Key Mapper's asynchronous keymap execution.
         if (m_burstWeaponIdentifier != normalizedItem || m_burstTarget != target) {
             m_burstWeaponIdentifier = normalizedItem;
             m_burstTarget = target;
             m_burstRemaining = customProfile->initialBurstHits;
-            m_nextAttack = {};
         }
         if (m_burstRemaining > 0) {
             configuredCps = customProfile->initialBurstCps;
