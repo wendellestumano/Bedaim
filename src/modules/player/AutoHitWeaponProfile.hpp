@@ -133,7 +133,7 @@ inline float normalizeNormalCps(float cps) noexcept {
 }
 
 inline float normalizeBurstCps(float cps) noexcept {
-    return std::isfinite(cps) ? std::clamp(cps, 1.0f, 20.0f) : 13.0f;
+    return std::isfinite(cps) ? std::clamp(cps, 1.0f, 12.0f) : 12.0f;
 }
 
 inline int normalizeBurstHits(int hits) noexcept {
@@ -162,7 +162,7 @@ struct CustomProfile {
     float range = 3.2f;
     float cps = 5.0f;
     int initialBurstHits = 0;
-    float initialBurstCps = 13.0f;
+    float initialBurstCps = 12.0f;
 };
 
 inline CustomProfile normalizeCustomProfile(CustomProfile profile) {
