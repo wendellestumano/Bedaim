@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-23 — ESP first implementation
+
+- Added a standalone **ESP** module with configurable player visibility, invisible-player handling, range, and persisted ARGB colors.
+- Reused the existing RenderLevel/entity-box renderer rather than installing a second competing render hook.
+- Added game-mode coloring: Survival white, Creative red, Spectator purple, Adventure cyan, and yellow for unknown/unavailable mode data.
+- Kept the ESP independent from the Hitbox toggle; names, distance labels, and through-wall depth behavior are not included in this first pass.
+- Requires Android ARM64 CI and in-game validation before treating the feature as complete.
+
 ## 2026-10-17 — Downloads export and periodic diagnostics
 
 - Changed manual log export to create timestamped `.txt` or structured `.json` files in `/sdcard/Download/Bedaim/`.
