@@ -527,7 +527,8 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     report(automationBroadcastResultName(result),
-        std::string("state=triggered; crosshair_confirmed=true; gliding_state_confirmed=") +\n        (glidingStateConfirmed ? "true" : "false") + ", target_distance=" + std::to_string(geometry.distance) +
+        std::string("state=triggered; crosshair_confirmed=true; gliding_state_confirmed=") +
+        (glidingStateConfirmed ? "true" : "false") + ", target_distance=" + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
             ", keymap_uid=" + kUnglideKeymapUid);
