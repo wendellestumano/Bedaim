@@ -1,3 +1,9 @@
+## 2026-10-23 — Fix duplicate Unglide schema declaration
+
+- Remove a duplicated `ConfigSchemaBuilder`, JSON snapshot, and value-reader lambda declaration in `UnglideModule::onMenuRegistered()` that caused the Android compile to fail with redefinition errors.
+- Keep the existing single schema builder and settings callbacks unchanged. This is a compile-only fix; no gameplay behavior is intentionally changed.
+- Validation pending PR CI on this experimental branch.
+
 ## 2026-10-23 — Unglide one-shot trigger and persistent settings path
 
 - Changed Unglide from a repeated burst loop to a one-shot Space keymap request per target approach. A successful request latches the target and cannot repeat continuously while the player remains within range.
