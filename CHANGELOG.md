@@ -1,3 +1,9 @@
+## 2026-10-23 — Unglide input dispatch and Aim Assist ignore-list crash hardening
+
+- Aligned Unglide's JavaVM selection with the known-working AutoHit path: query ART's process JavaVM first and use the Preloader-cached VM only as fallback. This keeps the explicit Key Mapper broadcast/action and the dedicated Space keymap UUID unchanged.
+- Restricted Aim Assist's name-ignore lookup to player names from the SDK wrapper. The old path fell through to a resolved native `Actor::getNameTag` call whenever a player name did not match; that unnecessary native call is removed from target filtering to avoid the crash seen with a populated ignore list.
+- CI success verifies compilation and host tests only. Runtime Unglide still needs an in-game check: a `keymapper_unglide_keymap_broadcast_sent` diagnostic confirms broadcast acceptance, not that Minecraft consumed Space or stopped gliding.
+
 ## 2026-10-23 — Unglide one-shot trigger and persistent settings path
 
 - Changed Unglide from a repeated burst loop to a one-shot Space keymap request per target approach. A successful request latches the target and cannot repeat continuously while the player remains within range.
