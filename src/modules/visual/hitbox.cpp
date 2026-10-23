@@ -1,4 +1,6 @@
 #include "hitbox.hpp"
+#include "esp.hpp"
+#include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
@@ -7,6 +9,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
+#include <algorithm>
 #include <string>
 #include <cstring>
 #include <vector>
@@ -210,9 +213,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     auto* expander = static_cast<HitboxExpanderModule*>(
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
+    auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
+    const bool espEnabled = esp && esp->enabled;
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
-    if (!nativeHitboxesEnabled && !showExpandedHitboxes) return;
+    if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
     if (!g_localPlayerPtr) return;
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) return;
     if (!screenContext || (uintptr_t)screenContext < 0x1000) return;
@@ -314,8 +319,23 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             aabb.max.x == 0.f && aabb.max.y == 0.f && aabb.max.z == 0.f) return;
 
         const bool isPlayer = s_actorIsPlayer && s_actorIsPlayer(ent);
-        const bool isExpandedTarget = showExpandedHitboxes && ent != g_localPlayerPtr &&
+        const bool wantsEsp = espEnabled && esp->showPlayers && isPlayer && ent != g_localPlayerPtr;
+        const bool isExpandedTarget = showExpandedHitboxes && expander && ent != g_localPlayerPtr &&
             expander->expandsType(isPlayer);
+        if (wantsEsp) {
+            std::int32_t gameType = -1;
+            uint32_t espColor = esp->unknownColor;
+            if (bedrocktools::core::gamehooks::tryGetPlayerGameType(ent, gameType)) {
+                switch (gameType) {
+                    case 0: espColor = esp->survivalColor; break;
+                    case 1: espColor = esp->creativeColor; break;
+                    case 2: espColor = esp->adventureColor; break;
+                    case 3: espColor = esp->spectatorColor; break;
+                    default: espColor = esp->unknownColor; break;
+                }
+            }
+            drawBox(aabb, espColor);
+        }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
             const bedrocktools::sdk::AABB nativeBounds{aabb.min, aabb.max};
@@ -374,7 +394,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     }
 
     if (s_actorFetchNearby) {
-        bedrocktools::sdk::Vec3 extent = {30.0f, 30.0f, 30.0f};
+        const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
+        const float queryRange = std::max(30.0f, espRange);
+        bedrocktools::sdk::Vec3 extent = {queryRange, queryRange, queryRange};
         ActorVec actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
 
         if (actors.begin && actors.end) {
@@ -387,18 +409,15 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                     isPlayer = s_actorIsPlayer(ent);
                 }
 
-                if (nativeHitboxesEnabled) {
-                    if (isPlayer && !g_hitboxMod->showPlayers &&
-                        (!showExpandedHitboxes || !expander->expandsType(true))) continue;
-                    if (!isPlayer && !hasCategory(ent, 2)) continue;
-                    if (!isPlayer && !g_hitboxMod->showEntities &&
-                        (!showExpandedHitboxes || !expander->expandsType(false))) continue;
-                } else if (!showExpandedHitboxes || !expander->expandsType(isPlayer) ||
-                           (!isPlayer && !hasCategory(ent, 2))) {
-                    continue;
-                }
-
-                if (s_actorIsInvisible && s_actorIsInvisible(ent)) continue;
+                const bool wantsEsp = espEnabled && esp->showPlayers && isPlayer;
+                const bool isEntityCategory = isPlayer || hasCategory(ent, 2);
+                const bool wantsExpanded = showExpandedHitboxes && expander &&
+                    expander->expandsType(isPlayer) && isEntityCategory;
+                const bool wantsNative = nativeHitboxesEnabled &&
+                    (isPlayer ? g_hitboxMod->showPlayers : (hasCategory(ent, 2) && g_hitboxMod->showEntities));
+                if (!wantsEsp && !wantsExpanded && !wantsNative) continue;
+                if (it->mDistance > queryRange) continue;
+                if (s_actorIsInvisible && s_actorIsInvisible(ent) && !(wantsEsp && esp->showInvisible)) continue;
 
                 renderActor(ent);
             }
