@@ -533,17 +533,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
         }
     }
 
-    // Final native-free gate ensures no dispatch occurs if a prerequisite became invalid.
+    // Final Key Mapper gate ensures target, geometry, range and pacing are valid.
     const bedaim::autohit::Inputs dispatchFacts{
         enabled,
         player != nullptr,
         target != nullptr,
         validBounds(targetBounds),
         true, // currentTargetSnapshot rejects stale target data
-        true, // external Key Mapper input route does not use GameMode
-        true, // external Key Mapper input route does not use the native attack wrapper
         finiteVec(hitPoint),
-        true, // cooldown was checked immediately before dispatch
+        true, // shared cooldown was checked immediately before dispatch
         std::sqrt(distanceSq),
         maxRange
     };
