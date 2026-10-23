@@ -430,7 +430,8 @@ private:
                 } else if (entry.first == "bedrocktools.Hitbox Expander") {
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Mace Swapper" ||
-                           entry.first == "bedrocktools.Auto Hit") {
+                           entry.first == "bedrocktools.Auto Hit" ||
+                           entry.first == "bedrocktools.ESP") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
                 } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
@@ -458,6 +459,7 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                  mod->moduleId != "bedrocktools.Mace Swapper" &&
                  mod->moduleId != "bedrocktools.Auto Hit" &&
                  mod->moduleId != "bedrocktools.Unglide" &&
+                 mod->moduleId != "bedrocktools.ESP" &&
                  mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
                  mod->moduleId != "bedrocktools.Module Diagnostics")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they

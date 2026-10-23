@@ -1,4 +1,7 @@
 #include "hitbox.hpp"
+#include "esp.hpp"
+#include "core/GameHooks.hpp"
+#include "core/Diagnostics.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
@@ -7,6 +10,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
+#include <atomic>
 #include <string>
 #include <cstring>
 #include <vector>
@@ -141,6 +145,16 @@ struct AABB {
     bedrocktools::sdk::Vec3 min;
     bedrocktools::sdk::Vec3 max;
 };
+static bool validRenderBounds(const AABB& b) {
+ return std::isfinite(b.min.x)&&std::isfinite(b.min.y)&&std::isfinite(b.min.z)&&
+        std::isfinite(b.max.x)&&std::isfinite(b.max.y)&&std::isfinite(b.max.z)&&
+        b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
+}
+static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
+ espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedBounds{false},espLoggedOutline{false};
+static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
+ if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
+}
 
 static void s_hitboxTickCallback(void* _this) {
     if (!_this) return;
@@ -171,18 +185,16 @@ static void ensureMaterials() {
 }
 
 static AABB getActorAABB(void* actor) {
-    AABB aabb = {{0,0,0},{0,0,0}};
-    uintptr_t actorAddr = (uintptr_t)actor;
-
-    uintptr_t builtInPtr = *(uintptr_t*)(actorAddr + bedrocktools::sdk::offsets::Actor::mStateVectorComponent);
-    if (builtInPtr) {
-        uintptr_t aabbComponentPtr = *(uintptr_t*)(actorAddr + bedrocktools::sdk::offsets::Actor::mStateVectorComponent + bedrocktools::sdk::offsets::BuiltInActorComponents::mAABBShapeComponent);
-        if (aabbComponentPtr) {
-            aabb = *(AABB*)(aabbComponentPtr + bedrocktools::sdk::offsets::AABBShapeComponent::mAABB);
-        }
-    }
-
-    return aabb;
+ const AABB empty{{0,0,0},{0,0,0}};const auto addr=reinterpret_cast<std::uintptr_t>(actor);
+ if(addr<=0x1000)return empty;
+ const auto state=*reinterpret_cast<std::uintptr_t*>(addr+bedrocktools::sdk::offsets::Actor::mStateVectorComponent);
+ if(state<=0x1000)return empty;
+ const auto component=*reinterpret_cast<std::uintptr_t*>(addr+bedrocktools::sdk::offsets::Actor::mStateVectorComponent+
+    bedrocktools::sdk::offsets::BuiltInActorComponents::mAABBShapeComponent);
+ if(component<=0x1000)return empty;
+ AABB aabb{};std::memcpy(&aabb,reinterpret_cast<const void*>(component+
+    bedrocktools::sdk::offsets::AABBShapeComponent::mAABB),sizeof(aabb));
+ return validRenderBounds(aabb)?aabb:empty;
 }
 
 static bedrocktools::sdk::Vec2 getActorRotation(void* actor) {
@@ -210,19 +222,21 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     auto* expander = static_cast<HitboxExpanderModule*>(
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
+    auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
+    const bool espEnabled = esp && esp->enabled;
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
-    if (!nativeHitboxesEnabled && !showExpandedHitboxes) return;
-    if (!g_localPlayerPtr) return;
-    if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) return;
-    if (!screenContext || (uintptr_t)screenContext < 0x1000) return;
+    if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
+    if (!g_localPlayerPtr) { if(espEnabled)espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
+    if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
+    if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
 
     uintptr_t tessellatorPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mTessellator);
-    if (!tessellatorPtr || tessellatorPtr < 0x1000) return;
+    if (!tessellatorPtr || tessellatorPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=tessellator_unavailable"); return; }
     void* tessellator = (void*)tessellatorPtr;
 
     uintptr_t lrpPtr = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer);
-    if (!lrpPtr || lrpPtr < 0x1000) return;
+    if (!lrpPtr || lrpPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=level_renderer_player_unavailable"); return; }
 
     float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
     float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
@@ -234,7 +248,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                                     : (void*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mSelectionOverlayMaterial);
 
     uintptr_t colorHolderPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mColorHolder);
-    if (!colorHolderPtr || colorHolderPtr < 0x1000) return;
+    if (!colorHolderPtr || colorHolderPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedColor,bedrocktools::diagnostics::Level::Warning,"render_gate=color_holder_unavailable"); return; }
     float* colorHolder = (float*)colorHolderPtr;
 
     float savedColor[4] = { colorHolder[0], colorHolder[1], colorHolder[2], colorHolder[3] };
@@ -308,14 +322,25 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     float dz = camZ - localPos.z;
     bool isThirdPerson = (dx*dx + dy*dy + dz*dz) > 0.05f;
 
-    auto renderActor = [&](void* ent) {
-        AABB aabb = getActorAABB(ent);
-        if (aabb.min.x == 0.f && aabb.min.y == 0.f && aabb.min.z == 0.f &&
-            aabb.max.x == 0.f && aabb.max.y == 0.f && aabb.max.z == 0.f) return;
-
-        const bool isPlayer = s_actorIsPlayer && s_actorIsPlayer(ent);
-        const bool isExpandedTarget = showExpandedHitboxes && ent != g_localPlayerPtr &&
-            expander->expandsType(isPlayer);
+    auto renderActor = [&](void* ent, bool allowEsp) {
+        const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
+        AABB aabb=getActorAABB(ent);
+        if(!validRenderBounds(aabb)){
+            if(espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr)
+              espLogOnce(espLoggedBounds,bedrocktools::diagnostics::Level::Warning,"actor_bounds=invalid_or_unavailable; skipped ESP outline");
+            return;
+        }
+        const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
+        const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
+        if(wantsEsp){
+            std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
+            if(bedrocktools::core::gamehooks::tryGetPlayerGameType(ent,gameType)){
+                switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
+                 case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
+            }
+            drawBox(aabb,color);
+            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry");
+        }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
             const bedrocktools::sdk::AABB nativeBounds{aabb.min, aabb.max};
@@ -370,39 +395,33 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     };
 
     if (nativeHitboxesEnabled && g_hitboxMod->showSelf && isThirdPerson) {
-        renderActor(g_localPlayerPtr);
+        renderActor(g_localPlayerPtr, false);
     }
 
-    if (s_actorFetchNearby) {
-        bedrocktools::sdk::Vec3 extent = {30.0f, 30.0f, 30.0f};
-        ActorVec actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
-
-        if (actors.begin && actors.end) {
-            for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
-                void* ent = it->mActor;
-                if (!ent || ent == g_localPlayerPtr) continue;
-
-                bool isPlayer = false;
-                if (s_actorIsPlayer) {
-                    isPlayer = s_actorIsPlayer(ent);
-                }
-
-                if (nativeHitboxesEnabled) {
-                    if (isPlayer && !g_hitboxMod->showPlayers &&
-                        (!showExpandedHitboxes || !expander->expandsType(true))) continue;
-                    if (!isPlayer && !hasCategory(ent, 2)) continue;
-                    if (!isPlayer && !g_hitboxMod->showEntities &&
-                        (!showExpandedHitboxes || !expander->expandsType(false))) continue;
-                } else if (!showExpandedHitboxes || !expander->expandsType(isPlayer) ||
-                           (!isPlayer && !hasCategory(ent, 2))) {
-                    continue;
-                }
-
-                if (s_actorIsInvisible && s_actorIsInvisible(ent)) continue;
-
-                renderActor(ent);
-            }
+    if(s_actorFetchNearby){
+        const float espRange=espEnabled?std::clamp(esp->range,8.0f,80.0f):30.0f;
+        const float queryRange=std::max(30.0f,espRange);
+        bedrocktools::sdk::Vec3 extent={queryRange,queryRange,queryRange};
+        ActorVec actors=s_actorFetchNearby(g_localPlayerPtr,&extent,1);
+        const auto begin=reinterpret_cast<std::uintptr_t>(actors.begin),end=reinterpret_cast<std::uintptr_t>(actors.end);
+        const bool empty=begin==0&&end==0;
+        const bool valid=empty||(begin>0x1000&&end>=begin&&(end-begin)%sizeof(DistanceSortedActor)==0&&(end-begin)/sizeof(DistanceSortedActor)<=8192);
+        if(!valid){if(espEnabled)espLogOnce(espLoggedSnapshot,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=malformed; skipped nearby actor list");}
+        else if(!empty)for(DistanceSortedActor* it=actors.begin;it<actors.end;++it){
+            void* ent=it->mActor;
+            if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
+               !std::isfinite(it->mDistance)||it->mDistance<0||it->mDistance>queryRange)continue;
+            const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
+            const bool wantsEsp=espEnabled&&esp->showPlayers&&isPlayer&&it->mDistance<=espRange;
+            const bool isEntityCategory=isPlayer||hasCategory(ent,2);
+            const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(isPlayer)&&isEntityCategory;
+            const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_hitboxMod->showPlayers:(hasCategory(ent,2)&&g_hitboxMod->showEntities));
+            if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
+            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
+            renderActor(ent,wantsEsp);
         }
+    }else if(espEnabled){
+        espLogOnce(espLoggedQuery,bedrocktools::diagnostics::Level::Warning,"actor_query=signature_unavailable; ESP cannot enumerate nearby players");
     }
 
     colorHolder[0] = savedColor[0];
@@ -474,15 +493,26 @@ void HitboxModule::onInit() {
     if (afn) s_actorFetchNearby = (Actor_fetchNearbyActorsSorted_t)afn;
 
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([](auto& event) { s_hitboxTickCallback(event.player); });
-    // Keep the renderer hook installed so BedrockBounds can preview its expanded
-    // target AABBs even when the standalone Hitbox module is disabled.
+    std::string missing;
+    if(!m_patchTarget)missing+=" RenderLevel";
+    if(!s_tessBegin)missing+=" TessellatorBegin";
+    if(!s_tessColor)missing+=" TessellatorColor";
+    if(!s_tessVertex)missing+=" TessellatorVertex";
+    if(!s_renderMesh)missing+=" MeshHelpersRenderMeshImmediately";
+    if(!s_actorFetchNearby)missing+=" ActorFetchNearbyActorsSorted";
+    if(!s_actorIsPlayer)missing+=" ActorIsPlayer";
+    bedrocktools::diagnostics::log(missing.empty()?bedrocktools::diagnostics::Level::Info:bedrocktools::diagnostics::Level::Warning,
+      "ESP",missing.empty()?"renderer_dependencies=ready; shared RenderLevel path available":std::string("renderer_dependencies_missing:")+missing);
     applyPatch();
 }
 
 void HitboxModule::applyPatch() {
-    if (m_patched || !m_patchTarget) return;
-    bedrocktools::hooks::install(m_patchTarget, (void*)_renderLevel_hook, (void**)&_renderLevel_orig);
-    m_patched = true;
+    if(m_patched||!m_patchTarget)return;
+    const auto hook=bedrocktools::hooks::install(m_patchTarget,reinterpret_cast<void*>(_renderLevel_hook),
+                                                 reinterpret_cast<void**>(&_renderLevel_orig));
+    m_patched=hook!=nullptr;
+    bedrocktools::diagnostics::log(m_patched?bedrocktools::diagnostics::Level::Info:bedrocktools::diagnostics::Level::Warning,
+      "ESP",m_patched?"renderlevel_hook=installed":"renderlevel_hook=installation_failed");
 }
 
 void HitboxModule::onEnable() {

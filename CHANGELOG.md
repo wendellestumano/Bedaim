@@ -103,6 +103,14 @@
 
 # Changelog
 
+## 2026-10-23 — Restore AutoHit/Unglide, Sticky lock, and ESP controls
+- Keep ESP work on the feature branch that already includes AutoHit and standalone Unglide; the prior ESP branch was based on main and omitted both registrations.
+- Sticky now tracks the stable center/four-point anchor while Smooth/Adaptive retain hitbox sliding.
+- ESP exposes player visibility, invisible players, range, and per-game-mode hexadecimal colors in the settings interface.
+- Added render-hook, dependency, actor-query and bounds diagnostics rather than silently returning when an outline cannot be drawn.
+- Android CI checks compilation; graphics output and Key Mapper behavior still require in-game testing.
+
+
 ## 2026-10-22 — Testable Aim Assist held-weapon classification
 
 - Extracted item-identifier matching into a pure policy helper so weapon classification order can be verified with host tests without touching game memory.
