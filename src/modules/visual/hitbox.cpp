@@ -265,7 +265,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         float b = ((color      ) & 0xFF) / 255.0f;
         float a = ((color >> 24) & 0xFF) / 255.0f;
 
-        s_tessBegin(tessellator, nullptr, 4, static_cast<int>(lines.size() * 2), 0);
+                // Vertex pairs are submitted as a line list; triangle-list mode discarded the ESP edges.
+        s_tessBegin(tessellator, nullptr, 1, static_cast<int>(lines.size() * 2), 0);
         s_tessColor(tessellator, r, g, b, a);
 
         for (const auto& line : lines) {
@@ -401,6 +402,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         renderActor(g_localPlayerPtr, false);
     }
 
+    if(esp) esp->beginOffscreenFrame(localPos, getActorRotation(g_localPlayerPtr));
+
     if(s_actorFetchNearby){
         const float espRange=espEnabled?std::clamp(esp->range,8.0f,80.0f):30.0f;
         const float queryRange=std::max(30.0f,espRange);
@@ -416,11 +419,23 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                !std::isfinite(it->mDistance)||it->mDistance<0||it->mDistance>queryRange)continue;
             const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
             const bool wantsEsp=espEnabled&&esp->showPlayers&&isPlayer&&it->mDistance<=espRange;
+            const bool wantsIndicator=espEnabled&&esp->showOffscreenIndicators&&isPlayer&&it->mDistance<=espRange;
             const bool isEntityCategory=isPlayer||hasCategory(ent,2);
             const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(isPlayer)&&isEntityCategory;
             const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_hitboxMod->showPlayers:(hasCategory(ent,2)&&g_hitboxMod->showEntities));
-            if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
-            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
+            if(!wantsEsp&&!wantsIndicator&&!wantsExpanded&&!wantsNative)continue;
+            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!((wantsEsp||wantsIndicator)&&esp->showInvisible))continue;
+            if(wantsIndicator) {
+                const AABB targetBounds=getActorAABB(ent);
+                if(validRenderBounds(targetBounds)) {
+                    const bedrocktools::sdk::Vec3 center{
+                        (targetBounds.min.x+targetBounds.max.x)*0.5f,
+                        (targetBounds.min.y+targetBounds.max.y)*0.5f,
+                        (targetBounds.min.z+targetBounds.max.z)*0.5f
+                    };
+                    esp->considerOffscreenCandidate(center,it->mDistance);
+                }
+            }
             renderActor(ent,wantsEsp);
         }
     }else if(espEnabled){
