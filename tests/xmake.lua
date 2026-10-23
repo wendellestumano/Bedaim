@@ -42,6 +42,12 @@ target("autohit_weapon_profile_test")
     add_includedirs("../src")
 target_end()
 
+target("autohit_burst_state_test")
+    set_kind("binary")
+    add_files("launcher/autohit_burst_state_test.cpp")
+    add_includedirs("../src")
+target_end()
+
 
 target("autototem_policy_test")
     set_kind("binary")
