@@ -2,6 +2,7 @@
 
 #include "aimassist.hpp"
 #include "AutoHitGuards.hpp"
+#include "AutoHitBurstState.hpp"
 #include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
@@ -459,6 +460,12 @@ void AutoHitModule::processPlayerTick(Player* player) {
     float aimRange = 0.0f;
     if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
         diagnostics::probe(diagnostics::Level::Debug, "AutoHit", "target", "missing_or_stale");
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            // Preserve the last weapon/target identity so this same pointer cannot
+            // re-arm a partially consumed burst after a temporary resolution gap.
+            bedaim::autohit::cancelBurstOnTargetLoss(m_burstRemaining);
+        }
         return;
     }
     if (!validBounds(targetBounds)) {

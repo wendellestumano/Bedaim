@@ -1,3 +1,9 @@
+## 2026-10-23 — Cancel AutoHit burst on target-resolution loss
+
+- Cancel remaining initial-burst requests when Aim Assist cannot provide a current target snapshot.
+- Preserve the last weapon/target identity so the same target pointer cannot re-arm a partially consumed burst after a temporary resolution gap.
+- Add a host regression test to the Build workflow. Actual Android input delivery and in-game hit confirmation still require device testing.
+
 - Extracted Unglide into its own module with independent Key Mapper dispatch, target distance/height settings, cooldown, burst state, diagnostics, and keybind; MaceFall no longer owns Unglide state or settings.
 - Removed the unused MaceFall attack-interval setting/state (it was written but never consulted before attacks).
 - ShiftBlade no longer exits early solely because MaceFall has claimed slam priority; it can continue its target/slot logic during combat.
