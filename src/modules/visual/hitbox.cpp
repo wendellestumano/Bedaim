@@ -216,6 +216,43 @@ static bool hasCategory(void* actor, uint32_t categoryBit) {
 
 
 
+static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
+                                          const bedrocktools::sdk::Vec3& localPosition) {
+    if (!esp || !localPlayer) return;
+    esp->beginOffscreenFrame(localPosition, getActorRotation(localPlayer));
+    if (!esp->enabled || !esp->showOffscreenIndicators ||
+        !s_actorFetchNearby || !s_actorIsPlayer) return;
+
+    const float targetRange = std::clamp(esp->range, 8.0f, 80.0f);
+    const float queryRange = std::max(30.0f, targetRange);
+    const bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
+    ActorVec actors = s_actorFetchNearby(localPlayer, const_cast<bedrocktools::sdk::Vec3*>(&extent), 1);
+    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    const bool empty = begin == 0 && end == 0;
+    const bool valid = empty || (begin > 0x1000 && end >= begin &&
+        (end - begin) % sizeof(DistanceSortedActor) == 0 &&
+        (end - begin) / sizeof(DistanceSortedActor) <= 8192);
+    if (!valid || empty) return;
+
+    for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
+        void* actor = it->mActor;
+        if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000 ||
+            actor == localPlayer || !std::isfinite(it->mDistance) ||
+            it->mDistance < 0.0f || it->mDistance > targetRange ||
+            !s_actorIsPlayer(actor)) continue;
+        if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
+        const AABB bounds = getActorAABB(actor);
+        if (!validRenderBounds(bounds)) continue;
+        const bedrocktools::sdk::Vec3 center{
+            (bounds.min.x + bounds.max.x) * 0.5f,
+            (bounds.min.y + bounds.max.y) * 0.5f,
+            (bounds.min.z + bounds.max.z) * 0.5f
+        };
+        esp->considerOffscreenCandidate(center, it->mDistance);
+    }
+}
+
 static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     if (_renderLevel_orig) {
         _renderLevel_orig(_this, screenContext, a3);
@@ -229,6 +266,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
     if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
     if (!g_localPlayerPtr) { if(espEnabled)espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
+    if (espEnabled) updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos);
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
     if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
 
@@ -402,8 +440,6 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         renderActor(g_localPlayerPtr, false);
     }
 
-    if(esp) esp->beginOffscreenFrame(localPos, getActorRotation(g_localPlayerPtr));
-
     if(s_actorFetchNearby){
         const float espRange=espEnabled?std::clamp(esp->range,8.0f,80.0f):30.0f;
         const float queryRange=std::max(30.0f,espRange);
@@ -419,23 +455,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                !std::isfinite(it->mDistance)||it->mDistance<0||it->mDistance>queryRange)continue;
             const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
             const bool wantsEsp=espEnabled&&esp->showPlayers&&isPlayer&&it->mDistance<=espRange;
-            const bool wantsIndicator=espEnabled&&esp->showOffscreenIndicators&&isPlayer&&it->mDistance<=espRange;
             const bool isEntityCategory=isPlayer||hasCategory(ent,2);
             const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(isPlayer)&&isEntityCategory;
             const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_hitboxMod->showPlayers:(hasCategory(ent,2)&&g_hitboxMod->showEntities));
-            if(!wantsEsp&&!wantsIndicator&&!wantsExpanded&&!wantsNative)continue;
-            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!((wantsEsp||wantsIndicator)&&esp->showInvisible))continue;
-            if(wantsIndicator) {
-                const AABB targetBounds=getActorAABB(ent);
-                if(validRenderBounds(targetBounds)) {
-                    const bedrocktools::sdk::Vec3 center{
-                        (targetBounds.min.x+targetBounds.max.x)*0.5f,
-                        (targetBounds.min.y+targetBounds.max.y)*0.5f,
-                        (targetBounds.min.z+targetBounds.max.z)*0.5f
-                    };
-                    esp->considerOffscreenCandidate(center,it->mDistance);
-                }
-            }
+            if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
+            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
             renderActor(ent,wantsEsp);
         }
     }else if(espEnabled){
