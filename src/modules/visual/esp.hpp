@@ -12,6 +12,7 @@ public:
     void onInit() override;
     void onEnable() override;
     void onFrame() override;
+    void onDisable() override;
     void onMenuRegistered() override;
     bool onMenuConfigChanged(std::string_view key, std::string_view value) override;
     void loadConfig(const nlohmann::json& j) override;
