@@ -1,4 +1,5 @@
 #include "GameHooks.hpp"
+#include "core/RequiredHookInstall.hpp"
 #include "Diagnostics.hpp"
 #include "modules/player/PlayerGameType.hpp"
 #include <bedrocktools/Version.hpp>
@@ -631,25 +632,31 @@ bool install() {
     std::lock_guard lock(installMutex);
     if (installed) return true;
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "GameHooks", "starting hook installation");
-    // Install required lifecycle hooks first so a missing required hook cannot leave
-    // optional detours active after Runtime::install() reports failure.
-    const bool tickHooked = hookSignature(
-        SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
-    const bool clientUpdateHooked = tickHooked && hookSignature(
-        SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
-    if (!tickHooked || !clientUpdateHooked || !tickOriginal || !clientUpdateOriginal) {
-        for (std::size_t i = 0; i < handleCount; ++i) {
-            if (handles[i]) bedrocktools::hooks::remove(handles[i]);
-            handles[i] = nullptr;
-        }
-        handleCount = 0;
-        tickOriginal = nullptr;
-        clientUpdateOriginal = nullptr;
-        bedrocktools::diagnostics::log(
-            bedrocktools::diagnostics::Level::Error, "GameHooks",
-            "required tick/client hook installation failed; partial hooks rolled back");
-        return false;
-    }
+    // Install required lifecycle hooks transactionally before optional detours.
+    const bool requiredHooksInstalled = detail::installRequiredHooksTransactionally(
+        [&]() {
+            const bool tickHooked = hookSignature(
+                SignatureId::NormalTick, reinterpret_cast<void*>(tickDetour), &tickOriginal);
+            const bool clientUpdateHooked = tickHooked && hookSignature(
+                SignatureId::ClientInstanceUpdate, reinterpret_cast<void*>(clientUpdateDetour), &clientUpdateOriginal);
+            return tickHooked && clientUpdateHooked;
+        },
+        [&]() {
+            return tickOriginal != nullptr && clientUpdateOriginal != nullptr;
+        },
+        [&]() {
+            for (std::size_t i = 0; i < handleCount; ++i) {
+                if (handles[i]) bedrocktools::hooks::remove(handles[i]);
+                handles[i] = nullptr;
+            }
+            handleCount = 0;
+            tickOriginal = nullptr;
+            clientUpdateOriginal = nullptr;
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Error, "GameHooks",
+                "required tick/client hook installation failed; partial hooks rolled back");
+        });
+    if (!requiredHooksInstalled) return false;
 
     hookSignature(SignatureId::VersionString, reinterpret_cast<void*>(versionDetour), &versionOriginal);
     hookSignature(SignatureId::GameModeStartDestroyBlock, reinterpret_cast<void*>(gameModeStartDestroyBlockDetour), &gameModeStartDestroyBlockOriginal);
