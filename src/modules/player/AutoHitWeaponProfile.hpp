@@ -141,7 +141,8 @@ inline int normalizeBurstHits(int hits) noexcept {
 }
 
 inline float normalizeCps(float cps) noexcept {
-    return normalizeBurstCps(cps);
+    // Preserve the original generic rate helper's invalid-value fallback.
+    return std::isfinite(cps) ? std::clamp(cps, 1.0f, 20.0f) : 1.0f;
 }
 
 inline int attemptIntervalMs(float cps) noexcept {
