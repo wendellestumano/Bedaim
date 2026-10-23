@@ -125,7 +125,7 @@ inline std::string displayNameForIdentifier(std::string_view identifier) {
 }
 
 inline float normalizeRange(float range) noexcept {
-    return std::isfinite(range) ? std::clamp(range, 1.0f, 8.0f) : 3.2f;
+    return std::isfinite(range) ? std::clamp(range, 1.0f, 6.0f) : 3.2f;
 }
 
 inline float normalizeNormalCps(float cps) noexcept {
