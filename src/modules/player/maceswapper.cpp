@@ -442,7 +442,6 @@ void MaceSwapperModule::onEnable() {
     m_hasLastPlayerY = false;
     m_peakY = 0.0f;
     m_hasPeakY = false;
-    m_nextAttack = {};
     m_nextUnglideAttempt = {};
     m_unglideBurstRemaining = 0;
     m_nextUnglideDiagnostic = {};
@@ -605,17 +604,12 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             std::clamp(eye.y, targetBounds.min.y, targetBounds.max.y),
             std::clamp(eye.z, targetBounds.min.z, targetBounds.max.z)
         };
-        const float intervalMs = std::clamp(m_attackIntervalMs, 80.0f, 1000.0f);
         const bool attacked = bedrocktools::core::gamehooks::attack(gameMode, currentTarget, true, &hitPoint);
         bedrocktools::diagnostics::probe(attacked ? bedrocktools::diagnostics::Level::Info :
                 bedrocktools::diagnostics::Level::Warning,
             "MaceSwapper", "attack_result", attacked ? "accepted" : "rejected",
             "native attack wrapper result after deferred mace selection");
         restoreIfStillSwapped();
-        if (attacked) {
-            m_nextAttack = std::chrono::steady_clock::now() +
-                std::chrono::milliseconds(static_cast<int>(intervalMs));
-        }
         return;
     }
 
@@ -773,7 +767,6 @@ void MaceSwapperModule::loadConfig(const nlohmann::json& j) {
     m_enableMaceSwapper = j.value("m_enableMaceSwapper", m_enableMaceSwapper);
     m_attackRange = std::clamp(j.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
     m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(j.value("m_minimumFallDistance", m_minimumFallDistance));
-    m_attackIntervalMs = std::clamp(j.value("m_attackIntervalMs", m_attackIntervalMs), 80.0f, 1000.0f);
     m_restoreSlot = j.value("m_restoreSlot", m_restoreSlot);
     m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
     m_unglideTargetDistance = std::clamp(
@@ -788,7 +781,6 @@ void MaceSwapperModule::saveConfig(nlohmann::json& j) {
     j["m_enableMaceSwapper"] = m_enableMaceSwapper;
     j["m_attackRange"] = m_attackRange;
     j["m_minimumFallDistance"] = bedaim::macefall::normalizeMinimumFallDistance(m_minimumFallDistance);
-    j["m_attackIntervalMs"] = m_attackIntervalMs;
     j["m_restoreSlot"] = m_restoreSlot;
     j["m_unglideEnabled"] = m_unglideEnabled;
     j["m_unglideTargetDistance"] = m_unglideTargetDistance;
@@ -844,7 +836,6 @@ void MaceSwapperModule::onMenuRegistered() {
 
     slider("m_attackRange", "Target range", "2", "6", "0.1", " blocks", "combat", "3.0");
     slider("m_minimumFallDistance", "Minimum fall distance", "0.30", "10.0", "0.10", " blocks", "combat", "1.55");
-    slider("m_attackIntervalMs", "Attack interval", "80", "1000", "10", " ms", "combat", "180.0");
 
     ConfigNodeV2 unglideEnabledNode;
     unglideEnabledNode.id = "m_unglideEnabled";
@@ -904,7 +895,6 @@ bool MaceSwapperModule::onMenuConfigChanged(std::string_view key, std::string_vi
         if (key == "m_attackRange") m_attackRange = std::clamp(number, 2.0f, 6.0f);
         else if (key == "m_minimumFallDistance")
             m_minimumFallDistance = bedaim::macefall::normalizeMinimumFallDistance(number);
-        else if (key == "m_attackIntervalMs") m_attackIntervalMs = std::clamp(number, 80.0f, 1000.0f);
         else if (key == "m_unglideTargetDistance")
             m_unglideTargetDistance = std::clamp(number, 1.0f, 32.0f);
         else if (key == "m_unglideMaxVerticalDifference")
