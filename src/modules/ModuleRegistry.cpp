@@ -132,9 +132,11 @@ void registerAllModules() {
     registry.emplace<AimAssistModule>();
     registry.emplace<AutoHitModule>();
     registry.emplace<HitboxExpanderModule>();
+    // Subscription order is intentional: ShiftBlade publishes its same-tick
+    // sword priority before MaceFall evaluates whether it may swap hotbar slots.
+    registry.emplace<SwordSwapperModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<UnglideModule>();
-    registry.emplace<SwordSwapperModule>();
     registry.emplace<WeatherChangerModule>();
     registry.emplace<NickModule>();
     registry.emplace<NoDisconnectModule>();
