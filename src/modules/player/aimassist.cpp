@@ -1583,12 +1583,14 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
             migratedHitboxGrowth = 5.0f;
     }
-    m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
-        migratedHitboxGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
-    m_hitboxDistanceMinLimit = std::clamp(j.value("m_hitboxDistanceMinLimit", m_hitboxDistanceMinLimit), 0.1f, 500.0f);
-    m_hitboxDistanceMaxLimit = std::clamp(j.value("m_hitboxDistanceMaxLimit", m_hitboxDistanceMaxLimit), 0.1f, 500.0f);
+    m_hitboxDistanceMinLimit = std::clamp(
+        j.value("m_hitboxDistanceMinLimit", m_hitboxDistanceMinLimit), 0.1f, 500.0f);
+    m_hitboxDistanceMaxLimit = std::clamp(
+        j.value("m_hitboxDistanceMaxLimit", m_hitboxDistanceMaxLimit), 0.1f, 500.0f);
     if (m_hitboxDistanceMinLimit > m_hitboxDistanceMaxLimit)
         m_hitboxDistanceMaxLimit = m_hitboxDistanceMinLimit;
+    m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+        migratedHitboxGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
     m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
