@@ -2,6 +2,7 @@
 
 #include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
+#include "../visual/fpsunlocker.hpp"
 
 #include <bedrocktools/events/AttackEvent.hpp>
 #include <bedrocktools/events/AttackResultEvent.hpp>
@@ -84,6 +85,26 @@ std::uint32_t withAlpha(std::uint32_t rgb, int alpha) {
     const auto a = static_cast<std::uint32_t>(std::clamp(alpha, 0, 255));
     return (a << 24) | (rgb & 0x00FFFFFFu);
 }
+
+bool parseSettingBool(std::string_view value, bool& out) {
+    if (value == "true" || value == "1" || value == "on") { out = true; return true; }
+    if (value == "false" || value == "0" || value == "off") { out = false; return true; }
+    return false;
+}
+
+bool parseSettingFloat(std::string_view value, float& out) {
+    try {
+        const std::string text(value);
+        std::size_t used = 0;
+        const float parsed = std::stof(text, &used);
+        while (used < text.size() && std::isspace(static_cast<unsigned char>(text[used]))) ++used;
+        if (used != text.size() || !std::isfinite(parsed)) return false;
+        out = parsed;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
 } // namespace
 
 UltrakillHudModule::UltrakillHudModule()
@@ -98,31 +119,15 @@ bool UltrakillHudModule::isMaceEquipped(Player* player) const {
 }
 
 void UltrakillHudModule::onInit() {
+    static const std::vector<unsigned char> flashPixel{255,255,255,255};
+    pl::modmenu::registerImage("bedaim.ultrakill.white_flash", flashPixel, 1, 1);
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onLocalPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
-    // Runtime calls ModuleRegistry::onFrame() before this last-priority listener.
-    // The impact frame itself is presented, then the next two swaps are held.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
-        [this](auto& event) {
-            if (!enabled) return;
-            std::lock_guard lock(m_stateMutex);
-            if (!m_enableHitStop) {
-                m_hitStopPending = false;
-                m_hitStopFrames = 0;
-                return;
-            }
-            if (m_hitStopPending) {
-                m_hitStopPending = false;
-                return;
-            }
-            if (m_hitStopFrames > 0) {
-                --m_hitStopFrames;
-                event.cancel();
-            }
-        }, bedrocktools::events::EventPriority::Last);
+    // Hit-stop is driven by the temporary FPS limiter, not FrameEvent cancellation,
+    // so the flash has a chance to be submitted and displayed.
 }
 
 void UltrakillHudModule::onLocalPlayerTick(Player* player) {
@@ -172,12 +177,13 @@ void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
         0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
     m_flashActive = true;
 
-    // Present one flash frame, then hold it briefly for the visual hit-stop.
-    if (m_enableHitStop) {
-        m_hitStopFrames = 4;
+    // Preserve one impact frame before applying the bounded visual hit-stop.
+    if (m_enableHitStop && m_hitStopDurationMs > 0) {
+        m_hitStopUntil = now + std::chrono::milliseconds(m_hitStopDurationMs);
         m_hitStopPending = true;
+        if (auto* fps = static_cast<FPSUnlockerModule*>(ModuleRegistry::get().find("bedrocktools.FPS Unlocker"))) fps->requestTemporaryTargetFPS(1, m_hitStopDurationMs);
     } else {
-        m_hitStopFrames = 0;
+        m_hitStopUntil = {};
         m_hitStopPending = false;
     }
 }
@@ -190,7 +196,7 @@ void UltrakillHudModule::onEnable() {
     m_flashStarted = {};
     m_impactFallSpeedBps = 0.0f;
     m_flashActive = false;
-    m_hitStopFrames = 0;
+    m_hitStopUntil = {};
     m_hitStopPending = false;
     m_hasLastY = false;
     m_fallSpeedBps.store(0.0f, std::memory_order_relaxed);
@@ -200,7 +206,7 @@ void UltrakillHudModule::onDisable() {
     {
         std::lock_guard lock(m_stateMutex);
         m_flashActive = false;
-        m_hitStopFrames = 0;
+        m_hitStopUntil = {};
         m_hitStopPending = false;
     }
     const std::vector<PLModMenu_DrawCommand> empty;
@@ -217,13 +223,18 @@ void UltrakillHudModule::onFrame() {
     Clock::time_point flashStarted{};
     float impactFallSpeed = 0.0f;
     bool flashActive = false;
+    int flashOpacity = 235;
+    int flashDurationMs = 250;
+    bool enableParryFlash = true;
+    bool enableImpactShake = true;
+    bool showImpactText = true;
     std::string selectedItemId;
 
     {
         std::lock_guard lock(m_stateMutex);
         selectedItemId = m_selectedItemId;
 
-        if (m_flashActive && now - m_flashStarted >= std::chrono::milliseconds(250)) {
+        if (m_flashActive && now - m_flashStarted >= std::chrono::milliseconds(m_flashDurationMs)) {
             m_flashActive = false;
         }
         if (m_lastConfirmedHit.time_since_epoch().count() != 0 &&
@@ -237,6 +248,11 @@ void UltrakillHudModule::onFrame() {
         flashStarted = m_flashStarted;
         impactFallSpeed = m_impactFallSpeedBps;
         flashActive = m_flashActive;
+        flashOpacity = m_flashOpacity;
+        flashDurationMs = m_flashDurationMs;
+        enableParryFlash = m_enableParryFlash;
+        enableImpactShake = m_enableImpactShake;
+        showImpactText = m_showImpactText;
     }
 
     const auto surface = pl::modmenu::getHudSurfaceSize();
@@ -255,12 +271,14 @@ void UltrakillHudModule::onFrame() {
     const float hitAge = flashActive
         ? std::chrono::duration<float>(now - flashStarted).count()
         : 100.0f;
-    const bool impactVisible = flashActive && hitAge >= 0.0f && hitAge < 0.25f;
-    const float impactProgress = impactVisible ? clamp01(1.0f - hitAge / 0.25f) : 0.0f;
+    const float flashDurationSeconds = static_cast<float>(flashDurationMs) / 1000.0f;
+    const bool impactVisible = flashActive && hitAge >= 0.0f && hitAge < flashDurationSeconds;
+    const float impactProgress = impactVisible
+        ? clamp01(1.0f - hitAge / flashDurationSeconds) : 0.0f;
 
     float shakeX = 0.0f;
     float shakeY = 0.0f;
-    if (m_enableImpactShake && impactVisible) {
+    if (enableImpactShake && impactVisible) {
         shakeX = std::sin(hitAge * 520.0f) * 5.0f * scale * impactProgress;
         shakeY = std::cos(hitAge * 410.0f) * 3.0f * scale * impactProgress;
     }
@@ -318,11 +336,16 @@ void UltrakillHudModule::onFrame() {
 
     // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
     // the game simulation is not paused and no artificial frame drops are introduced.
-    if (m_enableParryFlash && impactVisible) {
-        const float fade = std::exp(-std::max(0.0f, hitAge) / 0.052f);
-        const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
-        const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
-        if (alpha >= 5) addRect(0.0f, 0.0f, screenW, screenH, withAlpha(kWhite, alpha));
+    if (enableParryFlash && impactVisible) {
+        const float fadeTau = std::max(0.01f, flashDurationSeconds * 0.208f);
+        const float fade = std::exp(-std::max(0.0f, hitAge) / fadeTau);
+        const int alpha = static_cast<int>(static_cast<float>(flashOpacity) * fade);
+        if (alpha >= 5) {
+            PLModMenu_DrawCommand flash = {};
+            flash.type = PL_DRAW_IMAGE; flash.x = 0.0f; flash.y = 0.0f; flash.w = screenW; flash.h = screenH;
+            flash.color = withAlpha(0xFFFFFFFFu, alpha); flash.imageId = "bedaim.ultrakill.white_flash";
+            cmds.push_back(std::move(flash));
+        }
 
         const float cx = screenW * 0.5f;
         const float cy = screenH * 0.5f;
@@ -471,7 +494,7 @@ void UltrakillHudModule::onFrame() {
         addCircle(cx, cy, 1.3f * scale, color);
     }
 
-    if (m_showImpactText && impactVisible) {
+    if (showImpactText && impactVisible) {
         const float cx = screenW * 0.5f;
         const float cy = screenH * 0.5f;
         const char* label = impactFallSpeed >= 4.0f ? "GROUND SLAM" : "MACE HIT";
@@ -487,6 +510,73 @@ void UltrakillHudModule::onFrame() {
     submitDrawCommands(moduleId, cmds);
 }
 
+void UltrakillHudModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    nlohmann::json config;
+    saveConfig(config);
+    schema.defaultCategory("impact")
+        .category("impact", "Mace impact", "Flash and visual hit-stop after a confirmed mace hit.");
+
+    auto toggle = [&](const char* key, const char* title, const char* description, bool fallback) {
+        ConfigNodeV2 node;
+        node.id = key; node.key = key; node.title = title; node.description = description;
+        node.category = "impact"; node.type = ConfigControlTypeV2::Toggle;
+        node.defaultValue = fallback ? "true" : "false";
+        node.currentValue = config.value(key, fallback) ? "true" : "false";
+        node.hasCurrentValue = true;
+        schema.node(std::move(node));
+    };
+    auto slider = [&](const char* key, const char* title, const char* description,
+                      int fallback, int minValue, int maxValue, int step, const char* unit) {
+        ConfigNodeV2 node;
+        node.id = key; node.key = key; node.title = title; node.description = description;
+        node.category = "impact"; node.type = ConfigControlTypeV2::SliderFloat;
+        node.defaultValue = std::to_string(fallback);
+        node.currentValue = std::to_string(config.value(key, fallback));
+        node.hasCurrentValue = true;
+        node.minValue = std::to_string(minValue); node.maxValue = std::to_string(maxValue);
+        node.step = std::to_string(step); node.unit = unit;
+        schema.node(std::move(node));
+    };
+
+    toggle("m_enableParryFlash", "White impact flash", "Show a translucent white full-screen flash on a confirmed mace hit.", true);
+    toggle("m_enableHitStop", "Visual hit-stop", "Briefly hold subsequent frame events after the impact; this does not change the FPS cap.", true);
+    toggle("m_enableImpactShake", "Impact shake", "Shake the HUD briefly after a confirmed impact.", true);
+    toggle("m_showImpactText", "Impact labels", "Show MACE HIT / GROUND SLAM text after a confirmed impact.", true);
+    slider("m_flashOpacity", "Flash opacity", "Maximum alpha of the white screen flash (0 = transparent, 255 = opaque).", m_flashOpacity, 0, 255, 5, " /255");
+    slider("m_flashDurationMs", "Flash duration", "How long the impact animation remains active.", m_flashDurationMs, 50, 500, 25, " ms");
+    slider("m_hitStopDurationMs", "Hit-stop duration", "Bounded visual pause duration. Set to 0 ms to disable the pause.", m_hitStopDurationMs, 0, 250, 10, " ms");
+    setConfigSchemaJson(moduleId, schema.toJson());
+}
+
+bool UltrakillHudModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    bool enabledValue = false;
+    if (key == "m_enableParryFlash" || key == "m_enableHitStop" ||
+        key == "m_enableImpactShake" || key == "m_showImpactText") {
+        if (!parseSettingBool(value, enabledValue)) return false;
+        std::lock_guard lock(m_stateMutex);
+        if (key == "m_enableParryFlash") m_enableParryFlash = enabledValue;
+        else if (key == "m_enableHitStop") {
+            m_enableHitStop = enabledValue;
+            if (!enabledValue) { m_hitStopPending = false; m_hitStopUntil = {}; }
+        } else if (key == "m_enableImpactShake") m_enableImpactShake = enabledValue;
+        else m_showImpactText = enabledValue;
+        return true;
+    }
+
+    float parsed = 0.0f;
+    if (!parseSettingFloat(value, parsed)) return false;
+    std::lock_guard lock(m_stateMutex);
+    if (key == "m_flashOpacity") m_flashOpacity = static_cast<int>(std::lround(std::clamp(parsed, 0.0f, 255.0f)));
+    else if (key == "m_flashDurationMs") m_flashDurationMs = static_cast<int>(std::lround(std::clamp(parsed, 50.0f, 500.0f)));
+    else if (key == "m_hitStopDurationMs") {
+        m_hitStopDurationMs = static_cast<int>(std::lround(std::clamp(parsed, 0.0f, 250.0f)));
+        if (m_hitStopDurationMs == 0) { m_hitStopPending = false; m_hitStopUntil = {}; }
+    } else return false;
+    return true;
+}
+
 void UltrakillHudModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     if (j.contains("hudPosX")) hudPosX = j["hudPosX"].get<float>();
@@ -499,6 +589,9 @@ void UltrakillHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_enableImpactShake")) m_enableImpactShake = j["m_enableImpactShake"].get<bool>();
     if (j.contains("m_enableHitStop")) m_enableHitStop = j["m_enableHitStop"].get<bool>();
     if (j.contains("m_showImpactText")) m_showImpactText = j["m_showImpactText"].get<bool>();
+    m_flashOpacity = std::clamp(j.value("m_flashOpacity", m_flashOpacity), 0, 255);
+    m_flashDurationMs = std::clamp(j.value("m_flashDurationMs", m_flashDurationMs), 50, 500);
+    m_hitStopDurationMs = std::clamp(j.value("m_hitStopDurationMs", m_hitStopDurationMs), 0, 250);
 }
 
 void UltrakillHudModule::saveConfig(nlohmann::json& j) {
@@ -513,4 +606,7 @@ void UltrakillHudModule::saveConfig(nlohmann::json& j) {
     j["m_enableImpactShake"] = m_enableImpactShake;
     j["m_enableHitStop"] = m_enableHitStop;
     j["m_showImpactText"] = m_showImpactText;
+    j["m_flashOpacity"] = std::clamp(m_flashOpacity, 0, 255);
+    j["m_flashDurationMs"] = std::clamp(m_flashDurationMs, 50, 500);
+    j["m_hitStopDurationMs"] = std::clamp(m_hitStopDurationMs, 0, 250);
 }

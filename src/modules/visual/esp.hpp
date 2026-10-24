@@ -30,16 +30,15 @@ public:
 
     bool showPlayers = true;
     bool showInvisible = false;
-    bool showLockInAim = true;
-    bool showOffscreenIndicators = true;
-    bool animatedIndicators = true;
+    bool showBoxes = true;
+    bool showTracers = true;
+    bool showLockInAim = false;
+    bool showOffscreenIndicators = false;
+    bool animatedIndicators = false;
     float indicatorSize = 48.0f;
     float range = 30.0f;
-    std::uint32_t survivalColor = 0xFFFFFFFF;
-    std::uint32_t creativeColor = 0xFFFF3030;
-    std::uint32_t spectatorColor = 0xFFB040FF;
-    std::uint32_t adventureColor = 0xFF40D8FF;
-    std::uint32_t unknownColor = 0xFFFFD040;
+    std::uint32_t outlineColor = 0xFFFFFFFF;
+    std::uint32_t tracerColor = 0xFFFF3348;
 
 private:
     mutable std::mutex m_hudTargetMutex;

@@ -9,6 +9,14 @@ FPSUnlockerModule::FPSUnlockerModule()
 
 void FPSUnlockerModule::onInit() {}
 
+void FPSUnlockerModule::requestTemporaryTargetFPS(int fps, int durationMs) {
+    if (!m_restoreTemporaryModuleState) { m_previousMasterEnabled = masterEnabled; m_previousKeybindActive = keybindActive; m_restoreTemporaryModuleState = true; }
+    if (!enabled) { setMasterEnabled(true); setKeybindActive(true); }
+    m_temporaryTargetFPS = std::clamp(fps, 1, 1000);
+    m_temporaryTargetUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::clamp(durationMs, 1, 250));
+    m_hasLastFrame = false;
+}
+
 void FPSUnlockerModule::onEnable() {
     m_appliedDisplay = EGL_NO_DISPLAY;
     m_appliedSurface = EGL_NO_SURFACE;
@@ -36,10 +44,17 @@ void FPSUnlockerModule::onFrame() {
         }
     }
 
-    if (targetFPS <= 0) {
-        m_hasLastFrame = false;
-        return;
+    const auto steadyNow = std::chrono::steady_clock::now();
+    int effectiveTargetFPS = targetFPS;
+    bool temporaryLimit = false;
+    if (m_temporaryTargetUntil.time_since_epoch().count() != 0) {
+        if (steadyNow < m_temporaryTargetUntil) { effectiveTargetFPS = m_temporaryTargetFPS; temporaryLimit = true; }
+        else {
+            m_temporaryTargetUntil = {}; m_temporaryTargetFPS = 0; m_hasLastFrame = false;
+            if (m_restoreTemporaryModuleState) { const bool oldMaster=m_previousMasterEnabled; const bool oldKey=m_previousKeybindActive; m_restoreTemporaryModuleState=false; setMasterEnabled(oldMaster); setKeybindActive(oldKey); }
+        }
     }
+    if (effectiveTargetFPS <= 0) { m_hasLastFrame = false; return; }
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -48,8 +63,12 @@ void FPSUnlockerModule::onFrame() {
         // Keep pacing stable without trying to "catch up" from a deadline that
         // is already in the past. Catch-up deadlines can cause several frames to
         // run back-to-back after a slow frame and produce uneven pacing.
-        const int safeTargetFPS = std::clamp(targetFPS, 1, 1000);
-        const long long frameDurationNs = 1000000000LL / safeTargetFPS;
+        const int safeTargetFPS = std::clamp(effectiveTargetFPS, 1, 1000);
+        long long frameDurationNs = 1000000000LL / safeTargetFPS;
+        if (temporaryLimit) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::nanoseconds>(m_temporaryTargetUntil - steadyNow).count();
+            frameDurationNs = std::min(frameDurationNs, std::max(1LL, remaining));
+        }
 
         struct timespec deadline = m_lastFrameTime;
         deadline.tv_nsec += frameDurationNs;
