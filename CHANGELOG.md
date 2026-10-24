@@ -1,3 +1,10 @@
+## 2026-10-24 — Standalone Bedaim package identity
+- Build the native library from this repository's source and package it as `Bedaim.levipack`; no prebuilt BedrockTools 1.5.7 `.so` is loaded or bundled.
+- Set the LeviLauncher manifest name to the Unicode escape `\\u200B` (zero-width space) so the display name is visually blank. The package filename and description remain identifiable outside the launcher.
+- Keep the existing native entry filename `libBedrockTools.so` for runtime compatibility while packaging the library built by this source tree; this is not a binary dependency on the upstream release.
+- Set the package version to `0.1.0` to distinguish this independent build from BedrockTools 1.5.7.
+- CI must verify the manifest and produce the artifact; launcher import and runtime loading still require device testing.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.
