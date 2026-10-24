@@ -1,6 +1,5 @@
 #include "hitbox.hpp"
 #include "esp.hpp"
-#include "core/GameHooks.hpp"
 #include "core/Diagnostics.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
@@ -499,12 +498,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
         if(wantsEsp){
-            std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
-            if(bedrocktools::core::gamehooks::tryGetPlayerGameType(ent,gameType)){
-                switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
-                 case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
-            }
-            drawBox(aabb,color);
+            drawBox(aabb,esp->outlineColor);
             if (esp->showLockInAim) drawTargetRing(aabb);
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
