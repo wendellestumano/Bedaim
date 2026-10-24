@@ -1,3 +1,11 @@
+## 2026-10-24 — Crash isolation: restore known-good ESP rendering baseline
+
+- Created a separate crash-fix branch from current `main`; `main` itself remains unchanged.
+- Restored `src/modules/visual/esp.cpp`, `esp.hpp`, `esp_assets.hpp`, and `hitbox.cpp` to the known-good Build #1284 baseline commit `cbdc298509874b74afc82d58b6d7e30348a48c01`.
+- This removes post-baseline off-screen projection and animated world-space ring changes as a controlled regression test; it does not yet prove which individual change caused the crash.
+- Uploaded `BedrockTools.levipack` is version 1.5.7, a prebuilt ARM64 Android native module (`libBedrockTools.so`), not SDK headers or source code. Do not replace Bedaim's SDK/dependency with this full module binary; source-level adaptation requires the matching 1.5.7 source/header package.
+- Validation pending: CI host tests, Android package build, and a device test entering a world.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.

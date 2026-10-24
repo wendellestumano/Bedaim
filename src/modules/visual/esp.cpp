@@ -89,18 +89,14 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float horizontal=std::sqrt(dx*dx+dz*dz);
     if(horizontal<0.001f)return;
     constexpr float kRadToDeg=57.29577951308232f;
-    constexpr float kMaxVerticalFov=110.0f;
     const float targetYaw=std::atan2(-dx,dz)*kRadToDeg;
     const float yawDelta=normalizeDegrees(targetYaw-m_hudLocalRotation.y);
     const float targetPitch=-std::atan2(dy,horizontal)*kRadToDeg;
     const float pitchDelta=targetPitch-m_hudLocalRotation.x;
 
-    // Use a high-end viewport bound, rather than the old 42°/28° thresholds,
-    // so the locator waits until the player's bearing is genuinely off-screen.
-    const float halfVertical=kMaxVerticalFov*0.5f+1.5f;
-    const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
-    const float halfHorizontal=std::atan(std::tan(kMaxVerticalFov*0.5f/kRadToDeg)*aspect)*kRadToDeg+2.0f;
-    if(std::fabs(yawDelta)<=halfHorizontal&&std::fabs(pitchDelta)<=halfVertical)return;
+    // Avoid cluttering the view with arrows for targets that are still comfortably
+    // inside a typical Bedrock viewport; retain players to the rear as off-screen.
+    if(std::fabs(yawDelta)<=42.0f&&std::fabs(pitchDelta)<=28.0f)return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
@@ -130,57 +126,50 @@ void EspModule::onFrame(){
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(m_hudTargetMutex);
-        m_hudViewportAspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
-    }
     std::vector<pl::modmenu::DrawCommand> commands;
-    commands.reserve(1);
+    commands.reserve(2);
     const float cx=surface.width*0.5f, cy=surface.height*0.5f;
     const auto now=std::chrono::steady_clock::now();
     const float seconds=std::chrono::duration<float>(now.time_since_epoch()).count();
 
-    // The player reticle is rendered around each player's world-space AABB by
-    // the existing RenderLevel hook. Never place a fixed reticle at screen center.
+    if(showLockInAim){
+        auto* aim=static_cast<AimAssistModule*>(ModuleRegistry::get().find("bedrocktools.Aim Assist"));
+        void* target=nullptr;bedrocktools::sdk::AABB bounds{};float targetRange=0.0f;
+        const bool locked=aim&&aim->currentTargetSnapshot(target,bounds,targetRange)&&
+            aim->currentTargetIsPlayerSnapshot(target);
+        if(locked){
+            const float pulse=animatedIndicators?1.0f+0.055f*std::sin(seconds*5.2f):1.0f;
+            const float width=std::clamp(indicatorSize*1.55f,32.0f,150.0f)*pulse;
+            const float height=width*(42.0f/48.0f);
+            pl::modmenu::DrawCommand lockIn{};
+            lockIn.type=pl::modmenu::DrawCommandType::Image;
+            lockIn.x=cx-width*0.5f;lockIn.y=cy-height*0.5f;
+            lockIn.w=width;lockIn.h=height;lockIn.color=0xFFFFFFFFu;
+            lockIn.imageId="bedaim.esp.lockin";
+            commands.push_back(std::move(lockIn));
+        }
+    }
 
     if(showOffscreenIndicators){
         bedrocktools::sdk::Vec3 target{},local{};
         bedrocktools::sdk::Vec2 rotation{};
         float distance=0.0f;
         if(offscreenTargetSnapshot(target,local,rotation,distance)){
-            float dx=target.x-local.x;
-            float dy=target.y-(local.y+1.62f);
-            float dz=target.z-local.z;
-            const float worldLength=std::sqrt(dx*dx+dy*dy+dz*dz);
-            if(worldLength>0.001f){
-                dx/=worldLength;dy/=worldLength;dz/=worldLength;
+            const float dx=target.x-local.x, dz=target.z-local.z;
+            const float dy=target.y-(local.y+1.62f);
+            const float horizontal=std::sqrt(dx*dx+dz*dz);
+            if(horizontal>0.001f){
                 constexpr float kRadToDeg=57.29577951308232f;
                 constexpr float kDegToRad=0.01745329251994329577f;
-                const float yaw=rotation.y*kDegToRad;
-                const float pitch=rotation.x*kDegToRad;
-
-                // Bedrock camera basis. The sign of the projected direction must be
-                // flipped for targets behind the camera to keep the edge arrow honest.
-                const float rightX=-std::cos(yaw);
-                const float rightZ=-std::sin(yaw);
-                const float upX=-std::sin(pitch)*std::sin(yaw);
-                const float upY=std::cos(pitch);
-                const float upZ=std::sin(pitch)*std::cos(yaw);
-                const float forwardX=-std::sin(yaw)*std::cos(pitch);
-                const float forwardY=-std::sin(pitch);
-                const float forwardZ=std::cos(yaw)*std::cos(pitch);
-                const float cameraDepth=dx*forwardX+dy*forwardY+dz*forwardZ;
-                float dirX=dx*rightX+dz*rightZ;
-                float dirY=-(dx*upX+dy*upY+dz*upZ);
-                const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
-                if(directionLength<0.0001f){
-                    dirX=0.0f;
-                    dirY=1.0f;
-                }else{
-                    if(cameraDepth<0.0f){dirX=-dirX;dirY=-dirY;}
-                    dirX/=directionLength;
-                    dirY/=directionLength;
-                }
+                const float targetYaw=std::atan2(-dx,dz)*kRadToDeg;
+                const float yawDelta=normalizeDegrees(targetYaw-rotation.y);
+                const float targetPitch=-std::atan2(dy,horizontal)*kRadToDeg;
+                const float pitchDelta=targetPitch-rotation.x;
+                const float yawRadians=yawDelta*kDegToRad;
+                const float pitchRadians=std::clamp(pitchDelta,-85.0f,85.0f)*kDegToRad;
+                float dirX=std::sin(yawRadians);
+                float dirY=-0.25f*std::cos(yawRadians)+std::tan(pitchRadians);
+                if(std::fabs(dirX)<0.05f&&std::fabs(dirY)<0.05f)dirY=(yawDelta>=0.0f)?1.0f:-1.0f;
 
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
@@ -221,11 +210,11 @@ void EspModule::onMenuRegistered(){
  };
  toggle("showPlayers","Show players","Draw outlines around other players.",true);
  toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
- toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
+ toggle("showLockInAim","Lock in Aim","Show the cyberpunk target reticle while Aim Assist has a player target.",true,"indicators");
  toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
- size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";
+ size.description="Size of the screen-edge arrow and lock reticle.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
  size.hasCurrentValue=true;size.minValue="24";size.maxValue="96";size.step="2";size.unit=" px";schema.node(std::move(size));
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
