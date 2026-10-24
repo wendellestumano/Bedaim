@@ -1,3 +1,10 @@
+## 2026-10-24 — Fix locator pitch, GameMode Checker, and Hitbox strength bounds
+- Replace the ESP edge arrow's camera-depth flip with normalized yaw/pitch deltas so looking near the zenith or nadir no longer reverses the vertical direction; add host tests for upward/downward views and yaw wraparound.
+- Rework GameMode Checker to use the same nearby-actor query as Hitbox/ESP, validate the returned actor vector, and report query diagnostics separately from game-mode availability.
+- Add a version-gated `Actor::isAttackableGamemode` fallback for the known Bedrock 1.26.52.3 image. When the runtime lacks an exact game-type API, display clearly marked inferred groups rather than claiming exact modes; spectator inference requires invisibility plus repeated solid-block overlap.
+- Add saved minimum/maximum limits for BedrockAim's Distance hitbox strength slider. Changing a limit normalizes the opposite boundary if needed, and the strength setting is clamped into the configured range.
+- Validation is pending CI and in-game checks; no runtime success is claimed before the #1304-based build is tested.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.
