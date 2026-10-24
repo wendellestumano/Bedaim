@@ -5,6 +5,7 @@
 - Add shared hotbar arbitration so ShiftBlade publishes sword priority before MaceFall's same-tick handler; pending mace swaps are cancelled/restored when the sword has priority. Register ShiftBlade before MaceFall to make this deterministic.
 - Remove Unglide's redundant internal `m_unglideEnabled` setting (the module's own enabled switch is now the only enable gate) and remove the exact camera-ray intersection gate, which could reject a valid target while Aim Assist was still smoothing toward it. Range, vertical difference, player target and gliding-state gates remain.
 - Make the locator follow the same player selected by Aim Assist. If that target leaves Aim Assist's FOV, revalidate its identity against the live actor snapshot and refresh retention while it remains present, instead of picking another nearby off-screen player.
+- Explicitly convert the SDK AABB returned by Aim Assist to the renderer's local AABB wrapper; this was caught by the Android compiler and corrected before the next build.
 - Persist min/max settings entered through the Aim Assist exact-value ModuleBuilder form. Strength is clamped to the configured interval when edited and when legacy config is loaded; the min/max settings do not silently cap the output scale.
 - Validation: fresh host regression tests and Android ARM64 package build are required for this revision. Runtime Unglide input delivery still depends on the installed Key Mapper keymap and must be verified in-game; successful compilation alone does not prove Space was consumed.
 
