@@ -29,6 +29,7 @@
 #include <atomic>
 #include <string_view>
 #include <unordered_set>
+#include <vector>
 #include <pl/Logger.hpp>
 #include <pl/ModMenu.hpp>
 
@@ -46,13 +47,11 @@ struct DistanceSortedActor {
     float padding;
 };
 
-struct ActorVector {
-    DistanceSortedActor* begin;
-    DistanceSortedActor* end;
-    DistanceSortedActor* capacity;
-};
-
-using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
+// Match the native return type used by the ESP renderer. This function returns
+// an engine-owned std::vector by value; a hand-written three-pointer aggregate has
+// the same apparent layout but skips the vector's lifetime/destructor semantics.
+using ActorFetchNearbyActorsSortedFn = std::vector<DistanceSortedActor> (*)(
+    void*, const bedrocktools::sdk::Vec3&, int);
 
 AimAssistModule* g_aimAssist = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
@@ -67,15 +66,11 @@ std::once_flag g_hitboxExpanderEventOnce;
 bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& out) {
     if (!origin || !g_fetchNearbyActors || !std::isfinite(radius) || radius <= 0.0f) return false;
     bedrocktools::sdk::Vec3 extent{radius, radius, radius};
-    ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
-        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 16384) return false;
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        if (entry->actor && reinterpret_cast<std::uintptr_t>(entry->actor) > 0x1000)
-            out.insert(entry->actor);
+    auto actors = g_fetchNearbyActors(origin, extent, 1);
+    if (actors.empty() || actors.size() > 16384) return false;
+    for (const auto& entry : actors) {
+        if (entry.actor && reinterpret_cast<std::uintptr_t>(entry.actor) > 0x1000)
+            out.insert(entry.actor);
     }
     return true;
 }
@@ -550,15 +545,11 @@ bool AimAssistModule::targetBoundsSnapshot(void* desiredTarget,
     // dereferencing it. This lets short multi-tick actions (such as a mace swap)
     // keep their original target without trusting a cached raw pointer.
     Vec3 extent{range, range, range};
-    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!actors.begin || !actors.end || endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) return false;
+    auto actors = g_fetchNearbyActors(player, extent, 1);
+    if (actors.empty() || actors.size() > 4096) return false;
 
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        if (entry->actor != desiredTarget) continue;
+    for (const auto& entry : actors) {
+        if (entry.actor != desiredTarget) continue;
         auto* actor = reinterpret_cast<Actor*>(desiredTarget);
         const Vec3 position = actor->position();
         const AABB candidateBounds = actor->bounds();
@@ -752,13 +743,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     Vec3 extent{scanRange, scanRange, scanRange};
     // The native nearby-actors function returns the actual candidate snapshot;
     // don't gate it on Level::mActorManager, an unused offset that can vary by build.
-    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto actorsBeginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto actorsEndAddress = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!actors.begin || !actors.end || actorsEndAddress < actorsBeginAddress ||
-        (actorsEndAddress - actorsBeginAddress) % sizeof(DistanceSortedActor) != 0 ||
-        (actorsEndAddress - actorsBeginAddress) / sizeof(DistanceSortedActor) > 4096) {
-        // Reject malformed native vector metadata before iterating it.
+    auto actors = g_fetchNearbyActors(player, extent, 1);
+    if (actors.size() > 4096) {
+        // Reject implausibly large native snapshots before iterating them.
         resetTrackingState();
         return;
     }
@@ -795,8 +782,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         std::cos(yawRadians) * cosPitch
     };
 
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        void* candidate = entry->actor;
+    for (const auto& entry : actors) {
+        void* candidate = entry.actor;
         if (!candidate || candidate == player) continue;
 
         const bool isPlayer = g_actorIsPlayer && g_actorIsPlayer(candidate);
@@ -1799,14 +1786,10 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     }
 
     Vec3 extent{32.0f, 32.0f, 32.0f};
-    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
-    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
-        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 8192) {
+    auto actors = g_fetchNearbyActors(player, extent, 1);
+    if (actors.size() > 8192) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "actor_snapshot", "malformed");
+            "HitboxExpander", "actor_snapshot", "oversized");
         return;
     }
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
@@ -1843,8 +1826,8 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     void* playerLevel = reinterpret_cast<Actor*>(player)->level();
     if (!playerLevel) return;
 
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        void* actor = entry->actor;
+    for (const auto& entry : actors) {
+        void* actor = entry.actor;
         if (!actor || actor == player || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000) continue;
 
         const bool isPlayer = g_actorIsPlayer(actor);
