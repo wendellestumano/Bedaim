@@ -32,7 +32,7 @@ int main() {
     using namespace bedrocktools::sdk;
     using namespace bedaim::esp_geometry;
 
-    const AABB box{{-1.0f, 0.0f, -1.0f}, {1.0f, 2.0f, 1.0f}};
+    const bedaim::esp_geometry::AABB box{{-1.0f, 0.0f, -1.0f}, {1.0f, 2.0f, 1.0f}};
     AabbEdges edges{};
     check(isValidBounds(box), "valid AABB accepted");
     check(buildAabbEdges(box, edges), "AABB edges generated");
