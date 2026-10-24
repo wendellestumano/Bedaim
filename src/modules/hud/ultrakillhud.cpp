@@ -242,6 +242,9 @@ void UltrakillHudModule::onFrame() {
     bool flashActive = false;
     int flashOpacity = 235;
     int flashDurationMs = 250;
+    bool enableParryFlash = true;
+    bool enableImpactShake = true;
+    bool showImpactText = true;
     std::string selectedItemId;
 
     {
@@ -264,6 +267,9 @@ void UltrakillHudModule::onFrame() {
         flashActive = m_flashActive;
         flashOpacity = m_flashOpacity;
         flashDurationMs = m_flashDurationMs;
+        enableParryFlash = m_enableParryFlash;
+        enableImpactShake = m_enableImpactShake;
+        showImpactText = m_showImpactText;
     }
 
     const auto surface = pl::modmenu::getHudSurfaceSize();
@@ -289,7 +295,7 @@ void UltrakillHudModule::onFrame() {
 
     float shakeX = 0.0f;
     float shakeY = 0.0f;
-    if (m_enableImpactShake && impactVisible) {
+    if (enableImpactShake && impactVisible) {
         shakeX = std::sin(hitAge * 520.0f) * 5.0f * scale * impactProgress;
         shakeY = std::cos(hitAge * 410.0f) * 3.0f * scale * impactProgress;
     }
@@ -347,7 +353,7 @@ void UltrakillHudModule::onFrame() {
 
     // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
     // the game simulation is not paused and no artificial frame drops are introduced.
-    if (m_enableParryFlash && impactVisible) {
+    if (enableParryFlash && impactVisible) {
         const float fadeTau = std::max(0.01f, flashDurationSeconds * 0.208f);
         const float fade = std::exp(-std::max(0.0f, hitAge) / fadeTau);
         const int alpha = static_cast<int>(static_cast<float>(flashOpacity) * fade);
@@ -500,7 +506,7 @@ void UltrakillHudModule::onFrame() {
         addCircle(cx, cy, 1.3f * scale, color);
     }
 
-    if (m_showImpactText && impactVisible) {
+    if (showImpactText && impactVisible) {
         const float cx = screenW * 0.5f;
         const float cy = screenH * 0.5f;
         const char* label = impactFallSpeed >= 4.0f ? "GROUND SLAM" : "MACE HIT";
