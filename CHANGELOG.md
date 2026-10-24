@@ -1,9 +1,10 @@
-## 2026-10-23 — ESP target-ring and off-screen arrow polish
-- Replace the fixed screen-center Lock in Aim sprite with a camera-facing segmented ring drawn in world space above every in-range player while ESP is enabled; it no longer depends on Aim Assist having a target.
-- Use a neon-green multi-ring silhouette with deliberate outer gaps and cardinal ticks, inspired by the supplied target-pack footage and angular arrow reference.
-- Delay off-screen arrows until the target is near/outside the expected viewport edge (yaw threshold 50°, pitch threshold 32°) and remove the previous constant vertical bias that tilted arrow directions.
-- Reuse the shared actor snapshot for world ESP and off-screen candidate selection to avoid duplicate per-frame actor enumeration.
-- Validation: host regression tests passed on the prior revision, but Android packaging and in-game verification remain pending for these latest rendering changes.
+## 2026-10-24 — Fix ESP player discovery, animated reference ring, and locator direction
+- Correct the actor enumeration filter for Bedrock 1.26.51: `ActorType::Player = 69`, while `Mob = 1`. Query player and mob vectors independently, so the ESP ring/boxes/locator use real player entries and entity hitboxes remain supported.
+- Match the native `std::vector<DistanceSortedActor>` return type rather than treating the return object as three raw pointers; this also restores normal vector lifetime/destruction.
+- Place a segmented, camera-facing ring above each in-range player based on that player's live AABB. Four inward-pointing chevrons and two counter-rotating rings follow the uploaded blue-violet pixel-art reference; the ring is independent of Aim Assist target state.
+- Use the user's pixel-art arrow crop for the off-screen indicator. Compute its edge direction from world-space target direction projected onto camera right/up axes, correcting the former reversed horizontal direction and rear-target vertical bias.
+- Only nominate targets outside a conservative viewport bound derived from the HUD aspect ratio and the maximum expected FOV, prioritizing no false arrows while the player remains visible.
+- Validation: previous host tests passed, but the latest Android build and in-game rendering still need verification. The new player enumeration and visuals are not claimed as runtime-verified until that build/test completes.
 
 ## 2026-10-23 — Integrate ESP Lock in Aim and off-screen indicators
 - Add transparent cyberpunk Lock in Aim and direction-arrow sprites based on the provided Bedaim ESP concepts; register a 16-direction arrow set for HUD rendering.
