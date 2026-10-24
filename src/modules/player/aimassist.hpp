@@ -59,6 +59,9 @@ public:
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
     float m_hitboxDistanceGrowth = 5.0f;
+    // Effective limits for the distance-grown virtual steering hitbox.
+    float m_hitboxDistanceStrengthMin = 0.25f;
+    float m_hitboxDistanceStrengthMax = 200.0f;
     bool m_hitboxGrowthScaleV2 = true;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;

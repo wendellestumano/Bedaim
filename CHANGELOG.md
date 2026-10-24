@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-23 — BedrockAim camera tracking and distance-hitbox limits
+
+- Fixed Smooth/Adaptive tracking stopping against the enlarged virtual steering bounds rather than the target's real bounds, which could produce a large dead zone when distance hitbox strength was high.
+- Corrected pitch-delta sign and recorded the actual resulting rotation after the native turn call, so manual-drag detection does not subtract an unscaled requested delta on the next frame.
+- Fixed duplicate config loading that overwrote the one-time legacy distance-strength migration and could restore values like 100 after converting them to the intended value.
+- Added minimum and maximum effective distance-hitbox scale controls to BedrockAim's **Hitbox** category, with config persistence and math regression tests.
+- Added diagnostic probes for native camera-turn calls that produce no observable rotation change. In-game validation is still required.
+
 ## 2026-10-17 — Downloads export and periodic diagnostics
 
 - Changed manual log export to create timestamped `.txt` or structured `.json` files in `/sdcard/Download/Bedaim/`.

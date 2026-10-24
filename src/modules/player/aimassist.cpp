@@ -491,8 +491,17 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "fov") m_fov = std::clamp(number, 1.0f, 360.0f);
     else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
-    else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
-    else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
+    else if (key == "hitboxScale" || key == "m_hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
+    else if (key == "hitboxDistanceGrowth" || key == "m_hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
+    else if (key == "hitboxDistanceStrengthMin" || key == "m_hitboxDistanceStrengthMin") {
+        m_hitboxDistanceStrengthMin = std::clamp(number, 0.25f, 200.0f);
+        if (m_hitboxDistanceStrengthMin > m_hitboxDistanceStrengthMax)
+            m_hitboxDistanceStrengthMax = m_hitboxDistanceStrengthMin;
+    } else if (key == "hitboxDistanceStrengthMax" || key == "m_hitboxDistanceStrengthMax") {
+        m_hitboxDistanceStrengthMax = std::clamp(number, 0.25f, 200.0f);
+        if (m_hitboxDistanceStrengthMax < m_hitboxDistanceStrengthMin)
+            m_hitboxDistanceStrengthMin = m_hitboxDistanceStrengthMax;
+    }
     else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "axeAimPointY" || key == "m_axeAimPointY") m_axeAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "maceAimPointY" || key == "m_maceAimPointY") m_maceAimPointY = std::clamp(number, 0.05f, 0.95f);
@@ -1240,7 +1249,8 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float hitboxScale = bedaim::aimmath::distanceHitboxScale(
         baseHitboxScale, hitboxDistance, m_range, m_hitboxDistanceGrowth,
-        m_distanceDependentHitbox);
+        m_distanceDependentHitbox, m_hitboxDistanceStrengthMin,
+        m_hitboxDistanceStrengthMax);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1266,8 +1276,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float verticalAimTolerance = std::max(0.05f, nativeTargetHeight * 0.08f);
     const bool viewIsAtSelectedAimHeight =
         std::abs(projectedPoint.y - centerAimPoint.y) <= verticalAimTolerance;
+    // Only stop steering when the ray has reached the real target bounds.
+    // Using scaledAimBounds here can create a large dead zone: once the ray enters
+    // the virtual volume, Smooth/Adaptive stop steering even outside the actual target.
     if (!stickyMode && viewIsAtSelectedAimHeight &&
-        rayIntersectsAABB(eyePosition, viewDirection, scaledAimBounds)) {
+        rayIntersectsAABB(eyePosition, viewDirection, targetAimBounds)) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = now;
         return;
@@ -1418,10 +1431,31 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(yawDelta) || !std::isfinite(pitchDelta)) return;
     if (yawDelta == 0.0f && pitchDelta == 0.0f) return;
 
-    Vec2 turnDelta{-pitchDelta, yawDelta};
+    // Pitch uses the same sign as RotationComponent pitch. Negating pitchDelta here
+    // reversed vertical corrections and moved the camera away from targets above/below.
+    Vec2 turnDelta{pitchDelta, yawDelta};
     g_applyLocalPlayerTurnDelta(player, &turnDelta);
-    m_lastAssistYawDelta = turnDelta.y;
-    m_lastAssistPitchDelta = turnDelta.x;
+
+    // Use the actual rotation change, not the requested native delta. Sensitivity and
+    // native turn processing may scale the request; subtracting the request from the
+    // observed delta misclassified the assist's own rotation as manual drag next frame.
+    const Vec2 appliedRotation = field<Vec2>(rotationComponent, 0);
+    if (std::isfinite(appliedRotation.x) && std::isfinite(appliedRotation.y)) {
+        m_lastAssistYawDelta = wrapDegrees(appliedRotation.y - currentRotation.y);
+        m_lastAssistPitchDelta = appliedRotation.x - currentRotation.x;
+        const bool rotationChanged = std::abs(m_lastAssistYawDelta) > 1.0e-4f ||
+            std::abs(m_lastAssistPitchDelta) > 1.0e-4f;
+        bedrocktools::diagnostics::probe(
+            rotationChanged ? bedrocktools::diagnostics::Level::Debug :
+                bedrocktools::diagnostics::Level::Warning,
+            "BedrockAim", "camera_turn",
+            rotationChanged ? "applied" : "native_call_no_rotation_change");
+    } else {
+        m_lastAssistYawDelta = 0.0f;
+        m_lastAssistPitchDelta = 0.0f;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "BedrockAim", "camera_turn", "invalid_rotation_after_turn");
+    }
 }
 
 void AimAssistModule::loadConfig(const nlohmann::json& j) {
@@ -1505,7 +1539,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
             migratedHitboxGrowth = 5.0f;
     }
-    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 200.0f);
+    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 500.0f);
     m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
@@ -1517,9 +1551,12 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     if (m_predictionMode != "Off" && m_predictionMode != "Ranged" && m_predictionMode != "All")
         m_predictionMode = "Ranged";
     m_predictionLeadMs = std::clamp(j.value("m_predictionLeadMs", m_predictionLeadMs), 0.0f, 300.0f);
-    m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.30f, 50.0f);
-    m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
-    m_hitboxDistanceGrowth = std::clamp(j.value("m_hitboxDistanceGrowth", m_hitboxDistanceGrowth), 0.1f, 500.0f);
+    m_hitboxDistanceStrengthMin = std::clamp(
+        j.value("m_hitboxDistanceStrengthMin", m_hitboxDistanceStrengthMin), 0.25f, 200.0f);
+    m_hitboxDistanceStrengthMax = std::clamp(
+        j.value("m_hitboxDistanceStrengthMax", m_hitboxDistanceStrengthMax), 0.25f, 200.0f);
+    if (m_hitboxDistanceStrengthMin > m_hitboxDistanceStrengthMax)
+        m_hitboxDistanceStrengthMin = m_hitboxDistanceStrengthMax;
     m_fourPointAiming = j.value("m_fourPointAiming", m_fourPointAiming);
     m_strength = std::clamp(j.value("m_strength", m_strength), 0.0f, 1.0f);
     m_aimSpeed = std::clamp(j.value("m_aimSpeed", m_aimSpeed), 0.1f, 10.0f);
@@ -1572,6 +1609,8 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_distanceDependentHitbox"] = m_distanceDependentHitbox;
     j["m_hitboxDistanceGrowth"] = m_hitboxDistanceGrowth;
+    j["m_hitboxDistanceStrengthMin"] = m_hitboxDistanceStrengthMin;
+    j["m_hitboxDistanceStrengthMax"] = m_hitboxDistanceStrengthMax;
     j["m_hitboxGrowthScaleV2"] = true;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;

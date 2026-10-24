@@ -107,10 +107,16 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
 }
 
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
-                          float strength, bool enabled) noexcept {
+                          float strength, bool enabled,
+                          float minScale, float maxScale) noexcept {
     const float safeBase = std::clamp(
-        std::isfinite(baseScale) ? baseScale : 1.0f, 1.0f, 200.0f);
+        std::isfinite(baseScale) ? baseScale : 1.0f, 0.30f, 200.0f);
     if (!enabled) return safeBase;
+
+    const float safeMinimum = std::clamp(
+        std::isfinite(minScale) ? minScale : 0.25f, 0.25f, 200.0f);
+    const float safeMaximum = std::clamp(
+        std::isfinite(maxScale) ? maxScale : 200.0f, safeMinimum, 200.0f);
 
     const float safeDistance = std::max(0.0f,
         std::isfinite(distance) ? distance : 0.0f);
@@ -139,7 +145,9 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
     const float strengthFactor = std::sqrt(safeStrength / 5.0f);
     const float farMultiplier = std::clamp(0.8f + 2.0f * strengthFactor, 1.1f, 40.0f);
     const float multiplier = 0.4f + (farMultiplier - 0.4f) * distanceBlendWithinRange;
-    return std::clamp(safeBase * multiplier, 0.25f, 200.0f);
+    // Clamp the result, not the strength slider: these controls cap the actual
+    // virtual hitbox scale produced by the distance curve. Native collision is unchanged.
+    return std::clamp(safeBase * multiplier, safeMinimum, safeMaximum);
 }
 
 } // namespace bedaim::aimmath

@@ -109,6 +109,18 @@ int main() {
           "distance hitbox strength accepts 500 and produces a larger bounded steering volume");
     check(bedaim::aimmath::distanceHitboxScale(1.0f, 80.0f, 80.0f, 500.0f, true) <= 40.0f,
           "far-range hitbox multiplier remains bounded at maximum strength");
+    const float distanceScaleMinBound =
+        bedaim::aimmath::distanceHitboxScale(1.0f, 0.5f, 30.0f, 5.0f, true, 2.0f, 5.0f);
+    check(std::abs(distanceScaleMinBound - 2.0f) < 1.0e-4f,
+          "minimum distance-strength setting clamps the near-range virtual hitbox scale upward");
+    const float distanceScaleMaxBound =
+        bedaim::aimmath::distanceHitboxScale(1.0f, 30.0f, 30.0f, 500.0f, true, 1.0f, 4.0f);
+    check(std::abs(distanceScaleMaxBound - 4.0f) < 1.0e-4f,
+          "maximum distance-strength setting caps the far-range virtual hitbox scale");
+    const float minimumBaseScale =
+        bedaim::aimmath::distanceHitboxScale(0.30f, 0.5f, 5.5f, 5.0f, false);
+    check(std::abs(minimumBaseScale - 0.30f) < 1.0e-4f,
+          "disabled distance curve preserves the configured base-scale minimum");
 
     std::cout << checks << " checks, " << failures << " failures\\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
