@@ -209,6 +209,10 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Tighten near targets and expand the virtual aim region with distance.");
     slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox", "0.1", "500",
            "0.1", "x", "Higher values expand the virtual steering volume more at long range; this does not alter server collision.");
+    slider("m_hitboxDistanceStrengthMin", "Min distance strength", "hitbox", "0.25", "200", "0.1", "x",
+           "Minimum effective virtual hitbox scale after distance-dependent growth.");
+    slider("m_hitboxDistanceStrengthMax", "Max distance strength", "hitbox", "0.25", "200", "0.1", "x",
+           "Maximum effective virtual hitbox scale after distance-dependent growth.");
     toggle("m_fourPointAiming", "Four-point hitbox aiming", "hitbox",
            "Select the closest of four stable hitbox anchors, then keep the existing slide behavior.");
 
