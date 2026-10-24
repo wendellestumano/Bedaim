@@ -21,3 +21,7 @@ These checks reduce common invalid-pointer failures but are not a proof of objec
 ## Tests and remaining verification
 
 `tests/launcher/esp_locator_math_test.cpp` now checks that (1) targets behind the camera are off-screen and (2) the result changes appropriately with the vertical FOV parameter. The Android NDK package build and in-game verification have not been represented as complete until they actually pass.
+
+## Equipment-selection crash
+
+The native `PlayerInventory::selectSlot(int, ContainerID)` symbol is not dynamically exported by the supplied stripped engine. The old fallback wrote the local selected-slot field and then called `PlayerSendInventory` through Player vtable slot 164. That slot/prototype had not been verified against this exact binary, so a changed vtable layout could dispatch an unrelated native routine during sword/mace selection. The fallback now validates the writable field and skips that unverified vtable call. This is intentionally fail-safer, not a claim of full server synchronization: until a version-matched native selection method or verified inventory-selection packet path is available, logs explicitly say that server-side selection synchronization is not guaranteed. The report bundle had no accessible Android crash tombstone or crash-buffer record, so the exact faulting PC still cannot be confirmed from current logs alone.

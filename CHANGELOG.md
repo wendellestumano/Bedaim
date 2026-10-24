@@ -1,3 +1,11 @@
+## 2026-10-24 — Diagnose equipment crash, ESP render gate and GameMode Checker
+- Replace the stale `TessellatorVertex` pattern (zero matches in the supplied engine) with a unique 44-byte ARM64 prefix validated at RVA `0xA76EFF4`; keep the start/color/vertex/mesh signatures independently checked against the exact `libminecraftpe.so`.
+- Tighten `Actor::getNameTag` to the unique function entry at RVA `0xF5835B4`. The previous signature matched three functions, and the GameMode Checker/AimAssist return typedefs now match the observed `std::string`-by-value AArch64 hidden-result convention.
+- Stop calling the unverified `PlayerSendInventory` vtable slot 164 when `PlayerInventory::selectSlot` is not exported by this build. Validate inventory reads/writes and fail closed on invalid mappings; the local selected-slot fallback explicitly warns that server-side selection synchronization is not guaranteed.
+- Make nearby-actor query results own/release their returned allocation, validate the complete vector range and distance entries, and add guards around Hitbox Expander native AABB access/writes. Add readable/writable/executable mapping checks.
+- Add periodic ESP pipeline and GameMode Checker summary diagnostics so future logs distinguish missing query data, invalid bounds, off-screen candidates, empty HUD commands, mode lookups and name retrieval.
+- Host regression suite passes. Termux full-project build remains unavailable because `pl/memory/Signature.hpp` is not present in that local build environment; GitHub Actions and live Android testing are required before calling this resolved.
+
 ## 2026-10-24 — Port Apollon ESP projection concepts and harden mode-check snapshots
 - Replace the single nearest-player locator snapshot with a sorted, capped collection of up to 24 distinct off-screen player targets per frame. The HUD draws one arrow per player, spreads arrows that land on the same screen edge, and stores copied coordinates plus opaque frame identity tokens rather than retaining actor pointers.
 - Change the off-screen gate to use camera-space right/up/forward components, matching the projection principle used in Apollon. Targets behind the camera are always treated as off-screen; the FOV calculation is parameterized and has a conservative 110-degree fallback because Bedaim does not yet have a verified live HUD-view matrix/FOV accessor.
