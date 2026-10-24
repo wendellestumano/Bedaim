@@ -1,5 +1,6 @@
 #include "hitbox.hpp"
 #include "esp.hpp"
+#include "esp_geometry.hpp"
 #include "core/Diagnostics.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
@@ -142,14 +143,9 @@ static void (*_renderLevel_orig)(void* _this, void* screenContext, void* a3);
 static bedrocktools::sdk::Vec3 g_playerPos = {0.f, 0.f, 0.f};
 static void* g_localPlayerPtr = nullptr;
 
-struct AABB {
-    bedrocktools::sdk::Vec3 min;
-    bedrocktools::sdk::Vec3 max;
-};
+using AABB = bedrocktools::sdk::AABB;
 static bool validRenderBounds(const AABB& b) {
- return std::isfinite(b.min.x)&&std::isfinite(b.min.y)&&std::isfinite(b.min.z)&&
-        std::isfinite(b.max.x)&&std::isfinite(b.max.y)&&std::isfinite(b.max.z)&&
-        b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
+    return bedaim::esp_geometry::isValidBounds(b);
 }
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
  espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
@@ -328,7 +324,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     colorHolder[2] = 1.0f;
     colorHolder[3] = 1.0f;
 
-    auto drawLines = [&](const std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>>& lines, uint32_t color) {
+    auto drawLines = [&](const auto& lines, uint32_t color) {
         if (lines.empty()) return;
         float r = ((color >> 16) & 0xFF) / 255.0f;
         float g = ((color >>  8) & 0xFF) / 255.0f;
@@ -354,119 +350,22 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     };
 
     auto drawBox = [&](const AABB& aabb, uint32_t color) {
-        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> lines;
-        bedrocktools::sdk::Vec3 mn = aabb.min;
-        bedrocktools::sdk::Vec3 mx = aabb.max;
-
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mn.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mn.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mn.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mn.y, mn.z}});
-
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mx.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mx.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mx.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mx.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mn.z}});
-
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mx.z}});
-
+        bedaim::esp_geometry::AabbEdges lines{};
+        if (!bedaim::esp_geometry::buildAabbEdges(aabb, lines)) return;
         drawLines(lines, color);
     };
-
-    // Reference-style reticle above each ESP player. It lives in world space and
-    // uses only that actor's current AABB, so Aim Assist never gates the ring.
+    // ESP reticle geometry is produced by the pure visual helper; native rendering stays here.
     auto drawTargetRing = [&](const AABB& aabb) {
-        const float width = aabb.max.x - aabb.min.x;
-        const float height = aabb.max.y - aabb.min.y;
-        const bedrocktools::sdk::Vec3 center{
-            (aabb.min.x + aabb.max.x) * 0.5f,
-            aabb.max.y + std::max(0.18f, height * 0.14f),
-            (aabb.min.z + aabb.max.z) * 0.5f
-        };
-
-        float nx = camX - center.x;
-        float ny = camY - center.y;
-        float nz = camZ - center.z;
-        const float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
-        if (!std::isfinite(nLen) || nLen < 0.001f) return;
-        nx /= nLen; ny /= nLen; nz /= nLen;
-
-        float rx = nz, ry = 0.0f, rz = -nx;
-        const float rLen = std::sqrt(rx*rx + ry*ry + rz*rz);
-        if (rLen < 0.001f) { rx = 1.0f; ry = 0.0f; rz = 0.0f; }
-        else { rx /= rLen; ry /= rLen; rz /= rLen; }
-        const float ux = ny*rz - nz*ry;
-        const float uy = nz*rx - nx*rz;
-        const float uz = nx*ry - ny*rx;
-
-        constexpr double tau = 6.2831853071795864769;
+        bedaim::esp_geometry::TargetRingGeometry geometry{};
         const double seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        const double animationEnabled = (esp && esp->animatedIndicators) ? 1.0 : 0.0;
-        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled, tau));
-        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled, tau));
-        const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
-        const float radius = std::clamp(std::max(width * 1.02f, 0.42f) * sizeScale, 0.22f, 1.20f);
-        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> outerLines;
-        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> innerLines;
-        outerLines.reserve(88);
-        innerLines.reserve(76);
-        auto pointAt = [&](float r, float angle) {
-            return bedrocktools::sdk::Vec3{
-                center.x + rx * std::cos(angle) * r + ux * std::sin(angle) * r,
-                center.y + ry * std::cos(angle) * r + uy * std::sin(angle) * r,
-                center.z + rz * std::cos(angle) * r + uz * std::sin(angle) * r
-            };
-        };
-
-        // Four rotating breaks make the outer ring read as a sharp reticle, not a halo.
-        constexpr int outerSegments = 64;
-        for (int i = 0; i < outerSegments; ++i) {
-            if ((i % 16) >= 12) continue;
-            const float a0 = static_cast<float>(tau * i / outerSegments) + outerPhase;
-            const float a1 = static_cast<float>(tau * (i + 1) / outerSegments) + outerPhase;
-            outerLines.push_back({pointAt(radius, a0), pointAt(radius, a1)});
-        }
-
-        // Four angular arrowheads rotate with the outer segments and match the user's PNG.
-        for (int i = 0; i < 4; ++i) {
-            const float angle = static_cast<float>(tau * i / 4.0) + outerPhase;
-            const auto tip = pointAt(radius * 0.78f, angle);
-            const auto base = pointAt(radius * 1.18f, angle);
-            const float wing = radius * 0.18f;
-            const float tangentX = -rx * std::sin(angle) + ux * std::cos(angle);
-            const float tangentY = -ry * std::sin(angle) + uy * std::cos(angle);
-            const float tangentZ = -rz * std::sin(angle) + uz * std::cos(angle);
-            const bedrocktools::sdk::Vec3 wingA{
-                base.x + tangentX * wing, base.y + tangentY * wing, base.z + tangentZ * wing};
-            const bedrocktools::sdk::Vec3 wingB{
-                base.x - tangentX * wing, base.y - tangentY * wing, base.z - tangentZ * wing};
-            outerLines.push_back({tip, wingA});
-            outerLines.push_back({wingA, wingB});
-            outerLines.push_back({wingB, tip});
-        }
-
-        // Inner segmented arcs counter-rotate slowly, creating motion without flashing.
-        constexpr int middleSegments = 48;
-        for (int i = 0; i < middleSegments; ++i) {
-            if ((i % 12) >= 10) continue;
-            const float a0 = static_cast<float>(tau * i / middleSegments) + innerPhase;
-            const float a1 = static_cast<float>(tau * (i + 1) / middleSegments) + innerPhase;
-            innerLines.push_back({pointAt(radius * 0.70f, a0), pointAt(radius * 0.70f, a1)});
-        }
-        constexpr int innerSegments = 32;
-        for (int i = 0; i < innerSegments; ++i) {
-            if ((i % 8) == 7) continue;
-            const float a0 = static_cast<float>(tau * i / innerSegments) - outerPhase * 0.45f;
-            const float a1 = static_cast<float>(tau * (i + 1) / innerSegments) - outerPhase * 0.45f;
-            innerLines.push_back({pointAt(radius * 0.39f, a0), pointAt(radius * 0.39f, a1)});
-        }
-
-        drawLines(outerLines, 0xFF7247FFu); // violet
-        drawLines(innerLines, 0xFF405DFFu); // electric blue
+        const bedrocktools::sdk::Vec3 camera{camX, camY, camZ};
+        const bool animated = esp && esp->animatedIndicators;
+        const float size = esp ? esp->indicatorSize : 48.0f;
+        if (!bedaim::esp_geometry::buildTargetRing(
+                aabb, camera, animated, size, seconds, geometry)) return;
+        drawLines(geometry.outer, 0xFF7247FFu); // violet
+        drawLines(geometry.inner, 0xFF405DFFu); // electric blue
     };
 
     void* selectedEntity = nullptr;
