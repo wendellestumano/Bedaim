@@ -89,14 +89,19 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float horizontal=std::sqrt(dx*dx+dz*dz);
     if(horizontal<0.001f)return;
     constexpr float kRadToDeg=57.29577951308232f;
+    constexpr float kMaxVerticalFov=110.0f;
     const float targetYaw=std::atan2(-dx,dz)*kRadToDeg;
     const float yawDelta=normalizeDegrees(targetYaw-m_hudLocalRotation.y);
     const float targetPitch=-std::atan2(dy,horizontal)*kRadToDeg;
     const float pitchDelta=targetPitch-m_hudLocalRotation.x;
 
-    // Avoid cluttering the view with arrows for targets that are still comfortably
-    // inside a typical Bedrock viewport; retain players to the rear as off-screen.
-    // These thresholds are intentionally close to the viewport edge; the old 42°/28°\n    // gate showed arrows while players were still clearly visible.\n    if(std::fabs(yawDelta)<=50.0f&&std::fabs(pitchDelta)<=32.0f)return;
+    // Use a conservative full-viewport limit (110-degree vertical FOV ceiling),
+    // scaled by the real HUD aspect ratio. This deliberately errs toward showing
+    // an indicator late rather than while a player is still visible.
+    const float halfVertical=kMaxVerticalFov*0.5f+1.5f;
+    const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
+    const float halfHorizontal=std::atan(std::tan(kMaxVerticalFov*0.5f/kRadToDeg)*aspect)*kRadToDeg+2.0f;
+    if(std::fabs(yawDelta)<=halfHorizontal&&std::fabs(pitchDelta)<=halfVertical)return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
@@ -126,6 +131,10 @@ void EspModule::onFrame(){
         return;
     }
 
+    {
+        std::lock_guard<std::mutex> lock(m_hudTargetMutex);
+        m_hudViewportAspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
+    }
     std::vector<pl::modmenu::DrawCommand> commands;
     commands.reserve(2);
     const float cx=surface.width*0.5f, cy=surface.height*0.5f;
@@ -140,28 +149,29 @@ void EspModule::onFrame(){
         bedrocktools::sdk::Vec2 rotation{};
         float distance=0.0f;
         if(offscreenTargetSnapshot(target,local,rotation,distance)){
-            const float dx=target.x-local.x, dz=target.z-local.z;
-            const float dy=target.y-(local.y+1.62f);
-            const float horizontal=std::sqrt(dx*dx+dz*dz);
-            if(horizontal>0.001f){
-                constexpr float kRadToDeg=57.29577951308232f;
+            float dx=target.x-local.x;
+            float dy=target.y-(local.y+1.62f);
+            float dz=target.z-local.z;
+            const float worldLength=std::sqrt(dx*dx+dy*dy+dz*dz);
+            if(worldLength>0.001f){
+                dx/=worldLength;dy/=worldLength;dz/=worldLength;
                 constexpr float kDegToRad=0.01745329251994329577f;
-                const float targetYaw=std::atan2(-dx,dz)*kRadToDeg;
-                const float yawDelta=normalizeDegrees(targetYaw-rotation.y);
-                const float targetPitch=-std::atan2(dy,horizontal)*kRadToDeg;
-                const float pitchDelta=targetPitch-rotation.x;
-                const float yawRadians=yawDelta*kDegToRad;
-                const float pitchRadians=std::clamp(pitchDelta,-85.0f,85.0f)*kDegToRad;
-                float dirX=std::sin(yawRadians);
-                // Pitch already uses negative angles for targets above the view; use it
-                // directly instead of the old constant vertical bias that tilted every arrow.
-                float dirY=std::tan(pitchRadians);
-                if(std::cos(yawRadians)<0.0f) {
-                    // A target behind the camera belongs on the lower edge unless its
-                    // vertical separation clearly points toward the upper/lower corners.
-                    dirY += (dirY < -0.35f) ? 0.0f : 0.65f;
-                }
-                if(std::fabs(dirX)<0.05f&&std::fabs(dirY)<0.05f)dirY=1.0f;
+                const float yaw=rotation.y*kDegToRad;
+                const float pitch=rotation.x*kDegToRad;
+
+                // Project the world-space target direction onto camera right/up axes.
+                // The old formula had the horizontal sign reversed and added a fixed
+                // downward bias to rear targets, making the arrow point away from players.
+                const float rightX=std::cos(yaw);
+                const float rightZ=std::sin(yaw);
+                const float upX=-std::sin(pitch)*std::sin(yaw);
+                const float upY=std::cos(pitch);
+                const float upZ=std::sin(pitch)*std::cos(yaw);
+                float dirX=dx*rightX+dz*rightZ;
+                float dirY=-(dx*upX+dy*upY+dz*upZ);
+                const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
+                if(directionLength<0.0001f){dirX=0.0f;dirY=1.0f;}
+                else{dirX/=directionLength;dirY/=directionLength;}
 
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
@@ -176,6 +186,7 @@ void EspModule::onFrame(){
                 px=std::clamp(px,12.0f,std::max(12.0f,surface.width-size-12.0f));
                 py=std::clamp(py,12.0f,std::max(12.0f,surface.height-size-12.0f));
 
+                constexpr float kRadToDeg=57.29577951308232f;
                 float angle=std::atan2(dirY,dirX)*kRadToDeg;
                 if(angle<0.0f)angle+=360.0f;
                 int sprite=static_cast<int>(std::lround(angle/22.5f))%16;
