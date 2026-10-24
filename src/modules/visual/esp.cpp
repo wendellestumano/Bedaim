@@ -1,6 +1,6 @@
 #include "esp.hpp"
 #include "esp_assets.hpp"
-#include "hitbox.hpp"
+#include "renderbridge.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
 #include "core/Diagnostics.hpp"
@@ -51,13 +51,7 @@ void EspModule::onInit(){
 }
 
 void EspModule::onEnable() {
-    auto* hitbox = static_cast<HitboxModule*>(ModuleRegistry::get().find("bedrocktools.Hitbox"));
-    if (hitbox) {
-        hitbox->ensureRenderHook();
-    } else {
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "ESP",
-            "renderlevel_hook=unavailable; Hitbox renderer module was not registered");
-    }
+    ensureSharedRenderHook();
 }
 
 void EspModule::onDisable(){

@@ -1,3 +1,12 @@
+## 2026-10-24 — Bedaim module extraction and Connected Glass research
+
+- Removed bundled BedrockTools feature modules from Bedaim's public module registry and source tree; kept Bedaim-owned combat/HUD/ESP modules and Connected Glass.
+- Extracted the shared RenderLevel bridge from the old Hitbox feature into `visual/renderbridge.cpp`. ESP and Hitbox Expander now use the bridge without exposing the legacy Hitbox module.
+- Removed Gamemode Checker as previously requested.
+- Rebranded the output as `Bedaim` (`libBedaim.so`, `Bedaim.levipack`, manifest id `bedaim`) rather than packaging it as BedrockTools.
+- Added `docs/CONNECTED_GLASS_XRAY_ANALYSIS.md` describing its UV-cropping/render-hook design and limits as an XRAY reference.
+- Shared BedrockTools-compatible SDK, signatures, event-bus and hook infrastructure remain in the source tree; this removes bundled feature modules, not every upstream-derived infrastructure component.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.

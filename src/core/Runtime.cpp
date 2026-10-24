@@ -4,6 +4,7 @@
 #include "config/ConfigManager.hpp"
 #include "launcher/ModuleMenu.hpp"
 #include "modules/ModuleRegistry.hpp"
+#include "modules/visual/renderbridge.hpp"
 #include "core/memory/Hooks.hpp"
 #include "core/Diagnostics.hpp"
 #include <bedrocktools/events/EventBus.hpp>
@@ -110,6 +111,7 @@ bool Runtime::install() {
         return false;
     }
     registerAllModules();
+    initializeSharedRenderBridge();
     wireEvents();
     ModuleRegistry::get().initialize();
     bedrocktools::config::ConfigManager::get().load();
