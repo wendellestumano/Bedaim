@@ -251,37 +251,56 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
              (end - begin) % sizeof(DistanceSortedActor) == 0 &&
              (end - begin) / sizeof(DistanceSortedActor) <= 8192);
     }
-    if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
-    if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
+    const bool screenContextValid = screenContext && reinterpret_cast<std::uintptr_t>(screenContext) >= 0x1000;
+    uintptr_t tessellatorPtr = screenContextValid
+        ? *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mTessellator) : 0;
+    uintptr_t lrpPtr = (_this && reinterpret_cast<std::uintptr_t>(_this) >= 0x1000)
+        ? *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer) : 0;
+    const bool lrpValid = lrpPtr >= 0x1000;
+    const bool nativeRendererReady = s_tessBegin && s_tessColor && s_tessVertex && s_renderMesh &&
+        screenContextValid && tessellatorPtr >= 0x1000 && lrpValid;
+    if (!nativeRendererReady && espEnabled) {
+        espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,
+                   "native_renderer=unavailable; continuing with HUD-projected ESP boxes");
+    }
+    if (!screenContextValid && espEnabled)
+        espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"screen_context=unavailable; using local-player eye position for projection");
+    void* tessellator = nativeRendererReady ? (void*)tessellatorPtr : nullptr;
 
-    uintptr_t tessellatorPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mTessellator);
-    if (!tessellatorPtr || tessellatorPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=tessellator_unavailable"); return; }
-    void* tessellator = (void*)tessellatorPtr;
+    float camX = g_playerPos.x;
+    float camY = g_playerPos.y + 1.62f;
+    float camZ = g_playerPos.z;
+    if (lrpValid) {
+        camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
+        camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
+        camZ = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 8);
+    }
 
-    uintptr_t lrpPtr = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer);
-    if (!lrpPtr || lrpPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=level_renderer_player_unavailable"); return; }
+    if (nativeRendererReady) ensureMaterials();
 
-    float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
-    float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
-    float camZ = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 8);
+    void* matInner = nativeRendererReady
+        ? (s_matSelection ? (void*)&s_matSelection
+                          : (void*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mSelectionOverlayMaterial))
+        : nullptr;
 
-    ensureMaterials();
-
-    void* matInner = s_matSelection ? (void*)&s_matSelection
-                                    : (void*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mSelectionOverlayMaterial);
-
-    uintptr_t colorHolderPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mColorHolder);
-    if (!colorHolderPtr || colorHolderPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedColor,bedrocktools::diagnostics::Level::Warning,"render_gate=color_holder_unavailable"); return; }
-    float* colorHolder = (float*)colorHolderPtr;
+    uintptr_t colorHolderPtr = screenContextValid
+        ? *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mColorHolder) : 0;
+    const bool colorHolderValid = colorHolderPtr >= 0x1000;
+    if (!colorHolderValid && espEnabled)
+        espLogOnce(espLoggedColor,bedrocktools::diagnostics::Level::Warning,"color_holder=unavailable; HUD ESP remains enabled");
+    float fallbackColor[4] = {1.0f,1.0f,1.0f,1.0f};
+    float* colorHolder = colorHolderValid ? (float*)colorHolderPtr : fallbackColor;
 
     float savedColor[4] = { colorHolder[0], colorHolder[1], colorHolder[2], colorHolder[3] };
-    colorHolder[0] = 1.0f;
-    colorHolder[1] = 1.0f;
-    colorHolder[2] = 1.0f;
-    colorHolder[3] = 1.0f;
+    if (colorHolderValid) {
+        colorHolder[0] = 1.0f;
+        colorHolder[1] = 1.0f;
+        colorHolder[2] = 1.0f;
+        colorHolder[3] = 1.0f;
+    }
 
     auto drawLines = [&](const std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>>& lines, uint32_t color) {
-        if (lines.empty()) return;
+        if (lines.empty() || !nativeRendererReady) return;
         float r = ((color >> 16) & 0xFF) / 255.0f;
         float g = ((color >>  8) & 0xFF) / 255.0f;
         float b = ((color      ) & 0xFF) / 255.0f;
@@ -583,10 +602,12 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     if (esp) esp->publishProjectedBoxes(espEnabled ? std::move(projectedEspBoxes) : std::vector<EspModule::ProjectedBox>{});
 
-    colorHolder[0] = savedColor[0];
-    colorHolder[1] = savedColor[1];
-    colorHolder[2] = savedColor[2];
-    colorHolder[3] = savedColor[3];
+    if (colorHolderValid) {
+        colorHolder[0] = savedColor[0];
+        colorHolder[1] = savedColor[1];
+        colorHolder[2] = savedColor[2];
+        colorHolder[3] = savedColor[3];
+    }
 }
 
 HitboxModule::HitboxModule()
