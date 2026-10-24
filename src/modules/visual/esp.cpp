@@ -162,8 +162,9 @@ void EspModule::onFrame(){
                 // Project the world-space target direction onto camera right/up axes.
                 // The old formula had the horizontal sign reversed and added a fixed
                 // downward bias to rear targets, making the arrow point away from players.
-                const float rightX=std::cos(yaw);
-                const float rightZ=std::sin(yaw);
+                // Bedrock forward is (-sin(yaw), 0, cos(yaw)); camera-right is forward x world-up, hence the negative X/Z signs.
+                const float rightX=-std::cos(yaw);
+                const float rightZ=-std::sin(yaw);
                 const float upX=-std::sin(pitch)*std::sin(yaw);
                 const float upY=std::cos(pitch);
                 const float upZ=std::sin(pitch)*std::cos(yaw);
