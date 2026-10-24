@@ -2,6 +2,7 @@
 #include "AimAssistMath.hpp"
 #include "AimAssistPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
+#include "../../config/ConfigManager.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
@@ -357,6 +358,9 @@ void AimAssistModule::resetTrackingState() {
     m_lastTargetBounds = {};
     m_lastAimPoint = {};
     m_hasAimPoint = false;
+    m_smoothedHitboxScale = 1.0f;
+    m_hasSmoothedHitboxScale = false;
+    m_lastHitboxScaleUpdate = {};
     m_localPlayerGliding = false;
     m_lastPlayerY = 0.0f;
     m_hasLastPlayerY = false;
@@ -449,9 +453,15 @@ void AimAssistModule::onMenuRegistered() {
             .config("strength", "Strength (exact)", ConfigType::Text, "0.25")
             .config("hitboxScale", "Hitbox Area (exact)", ConfigType::Text, "1.00")
             .config("hitboxDistanceGrowth", "Hitbox Growth (exact)", ConfigType::Text, "5.00")
+            .config("hitboxDistanceMinLimit", "Hitbox Distance Strength Min Limit", ConfigType::Text, "0.10")
+            .config("hitboxDistanceMaxLimit", "Hitbox Distance Strength Max Limit", ConfigType::Text, "500.00")
             .config("predictionLeadMs", "Prediction Lead ms (exact)", ConfigType::Text, "120.00")
             .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-                onMenuConfigChanged(key, value);
+                if (onMenuConfigChanged(key, value)) {
+                    // The dedicated exact-value ModuleBuilder bypasses normal
+                    // ModuleMenu persistence; save values like min/max hitbox limits.
+                    bedrocktools::config::ConfigManager::get().save();
+                }
             });
         if (!settings.registerModule()) m_numericSettingsRegistered.store(false, std::memory_order_release);
     }
@@ -479,7 +489,23 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
-    else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
+    else if (key == "hitboxDistanceGrowth")
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            number, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
+    else if (key == "hitboxDistanceMinLimit" || key == "m_hitboxDistanceMinLimit") {
+        m_hitboxDistanceMinLimit = std::clamp(number, 0.1f, 500.0f);
+        if (m_hitboxDistanceMaxLimit < m_hitboxDistanceMinLimit)
+            m_hitboxDistanceMaxLimit = m_hitboxDistanceMinLimit;
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            m_hitboxDistanceGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
+    }
+    else if (key == "hitboxDistanceMaxLimit" || key == "m_hitboxDistanceMaxLimit") {
+        m_hitboxDistanceMaxLimit = std::clamp(number, 0.1f, 500.0f);
+        if (m_hitboxDistanceMinLimit > m_hitboxDistanceMaxLimit)
+            m_hitboxDistanceMinLimit = m_hitboxDistanceMaxLimit;
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            m_hitboxDistanceGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
+    }
     else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "axeAimPointY" || key == "m_axeAimPointY") m_axeAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "maceAimPointY" || key == "m_maceAimPointY") m_maceAimPointY = std::clamp(number, 0.05f, 0.95f);
@@ -1043,6 +1069,8 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (targetChanged) {
         m_hasAimPoint = false;
         m_lastRotationUpdate = {};
+        m_hasSmoothedHitboxScale = false;
+        m_lastHitboxScaleUpdate = {};
     }
     if (targetChanged) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
@@ -1259,9 +1287,31 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     // far the volume expands. Native Bedrock collision bounds are never changed.
     const float baseHitboxScale = std::clamp(m_hitboxScale, 0.30f, 50.0f);
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
-    const float hitboxScale = bedaim::aimmath::distanceHitboxScale(
+    const float requestedHitboxScale = bedaim::aimmath::distanceHitboxScale(
         baseHitboxScale, hitboxDistance, m_range, m_hitboxDistanceGrowth,
         m_distanceDependentHitbox);
+
+    // Distance changes can make the virtual steering box jump between ticks.
+    // Smooth the scalar itself before building its AABB, independently of the
+    // camera-turn timing, so movement near the strength curve doesn't cause a
+    // hard enter/exit transition in the soft-lock region.
+    float scaleDeltaSeconds = 1.0f / 60.0f;
+    if (m_lastHitboxScaleUpdate.time_since_epoch().count() != 0 &&
+        now >= m_lastHitboxScaleUpdate) {
+        scaleDeltaSeconds = std::clamp(
+            std::chrono::duration<float>(now - m_lastHitboxScaleUpdate).count(),
+            0.002f, 0.05f);
+    }
+    m_lastHitboxScaleUpdate = now;
+    if (!m_hasSmoothedHitboxScale || !std::isfinite(m_smoothedHitboxScale)) {
+        m_smoothedHitboxScale = requestedHitboxScale;
+        m_hasSmoothedHitboxScale = true;
+    } else {
+        const float scaleAlpha = 1.0f - std::exp(-14.0f * scaleDeltaSeconds);
+        m_smoothedHitboxScale +=
+            (requestedHitboxScale - m_smoothedHitboxScale) * scaleAlpha;
+    }
+    const float hitboxScale = std::clamp(m_smoothedHitboxScale, 0.25f, 200.0f);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1286,11 +1336,21 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float verticalAimTolerance = std::max(0.05f, nativeTargetHeight * 0.08f);
     const bool viewIsAtSelectedAimHeight =
         std::abs(projectedPoint.y - centerAimPoint.y) <= verticalAimTolerance;
+    // Replace the binary inside/outside switch with a soft steering dead-zone.
+    // The old early return stopped all camera motion on one frame, then resumed
+    // at full strength on the next edge crossing. Blend assistance continuously
+    // from a small center pull toward full correction near/outside the virtual box.
+    float hitboxSteeringAttenuation = 1.0f;
     if (!stickyMode && viewIsAtSelectedAimHeight &&
         rayIntersectsAABB(eyePosition, viewDirection, scaledAimBounds)) {
-        m_hasAimPoint = false;
-        m_lastRotationUpdate = now;
-        return;
+        const float normalizedX = std::fabs(projectedPoint.x - boundsCenter.x) /
+            std::max(halfExtents.x, 0.001f);
+        const float normalizedZ = std::fabs(projectedPoint.z - boundsCenter.z) /
+            std::max(halfExtents.z, 0.001f);
+        const float normalizedEdge = std::max(normalizedX, normalizedZ);
+        const float blend = std::clamp((normalizedEdge - 0.20f) / 0.80f, 0.0f, 1.0f);
+        const float smoothBlend = blend * blend * (3.0f - 2.0f * blend);
+        hitboxSteeringAttenuation = 0.12f + 0.88f * smoothBlend;
     }
 
     const Vec3 clampedSlidePoint{
@@ -1327,11 +1387,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         m_hasAimPoint = true;
     }
     const float slideAlpha = stickyMode ? 1.0f : (1.0f - std::exp(-12.0f * deltaSeconds));
-    // Preserve the established Grudado behavior. The configured virtual hitbox
-    // selects the sliding point when distance-dependent hitbox is enabled; disabling
-    // it restores center-lock. Smooth/Adaptativo keep their existing interpolation.
+    // Sticky always follows a stable center/four-point anchor. Distance-based
+    // hitbox scaling affects the steering region, not the lock point. Smooth and
+    // Adaptive retain the sliding point.
     const Vec3 effectiveAimPoint =
-        (stickyMode && !m_distanceDependentHitbox) ? centerAimPoint : slidePoint;
+        bedaim::aimpolicy::shouldUseStableAimAnchor(stickyMode) ? centerAimPoint : slidePoint;
     m_lastAimPoint.x += (effectiveAimPoint.x - m_lastAimPoint.x) * slideAlpha;
     m_lastAimPoint.y += (effectiveAimPoint.y - m_lastAimPoint.y) * slideAlpha;
     m_lastAimPoint.z += (effectiveAimPoint.z - m_lastAimPoint.z) * slideAlpha;
@@ -1399,6 +1459,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         const float alpha = 1.0f - std::exp(-response * deltaSeconds);
         yawDelta = bedaim::aimmath::boundedTurnStep(yawError * alpha, maxTurnRate, deltaSeconds);
         pitchDelta = bedaim::aimmath::boundedTurnStep(pitchError * alpha, maxTurnRate, deltaSeconds);
+    }
+
+    if (!stickyMode) {
+        yawDelta *= hitboxSteeringAttenuation;
+        pitchDelta *= hitboxSteeringAttenuation;
     }
 
     // Strongness is not aim speed: it controls how much the assist resists an
@@ -1518,7 +1583,14 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
             migratedHitboxGrowth = 5.0f;
     }
-    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 500.0f);
+    m_hitboxDistanceMinLimit = std::clamp(
+        j.value("m_hitboxDistanceMinLimit", m_hitboxDistanceMinLimit), 0.1f, 500.0f);
+    m_hitboxDistanceMaxLimit = std::clamp(
+        j.value("m_hitboxDistanceMaxLimit", m_hitboxDistanceMaxLimit), 0.1f, 500.0f);
+    if (m_hitboxDistanceMinLimit > m_hitboxDistanceMaxLimit)
+        m_hitboxDistanceMaxLimit = m_hitboxDistanceMinLimit;
+    m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+        migratedHitboxGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
     m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
@@ -1581,6 +1653,8 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_distanceDependentHitbox"] = m_distanceDependentHitbox;
     j["m_hitboxDistanceGrowth"] = m_hitboxDistanceGrowth;
+    j["m_hitboxDistanceMinLimit"] = m_hitboxDistanceMinLimit;
+    j["m_hitboxDistanceMaxLimit"] = m_hitboxDistanceMaxLimit;
     j["m_hitboxGrowthScaleV2"] = true;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;

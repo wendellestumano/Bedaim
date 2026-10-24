@@ -142,4 +142,18 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
     return std::clamp(safeBase * multiplier, 0.25f, 200.0f);
 }
 
+DistanceStrengthLimits normalizeDistanceStrengthLimits(float minimum, float maximum) noexcept {
+    const float safeMinimum = std::clamp(
+        std::isfinite(minimum) ? minimum : 0.1f, 0.1f, 500.0f);
+    const float safeMaximumInput = std::clamp(
+        std::isfinite(maximum) ? maximum : 500.0f, 0.1f, 500.0f);
+    return {safeMinimum, std::max(safeMinimum, safeMaximumInput)};
+}
+
+float clampDistanceHitboxStrength(float value, float minimum, float maximum) noexcept {
+    const auto limits = normalizeDistanceStrengthLimits(minimum, maximum);
+    const float safeValue = std::isfinite(value) ? value : 5.0f;
+    return std::clamp(safeValue, limits.minimum, limits.maximum);
+}
+
 } // namespace bedaim::aimmath

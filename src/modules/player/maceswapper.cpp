@@ -216,6 +216,9 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             m_pendingPlayer = nullptr;
         };
 
+        if (swapperstate::swordSwapPriority.load(std::memory_order_acquire)) {
+            m_cancelPendingAttack = true;
+        }
         if (m_cancelPendingAttack || !enabled || !m_enableMaceSwapper) {
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
                 "MaceSwapper", "pending_attack", "cancelled_or_disabled");
@@ -283,6 +286,13 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             "MaceSwapper", "attack_result", attacked ? "accepted" : "rejected",
             "native attack wrapper result after deferred mace selection");
         restoreIfStillSwapped();
+        return;
+    }
+
+    if (enabled && m_enableMaceSwapper &&
+        swapperstate::swordSwapPriority.load(std::memory_order_acquire)) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "MaceSwapper", "priority_gate", "yield_to_sword_swapper");
         return;
     }
 

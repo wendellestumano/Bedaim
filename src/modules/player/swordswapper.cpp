@@ -114,6 +114,9 @@ void SwordSwapperModule::onDisable() {
 void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     std::lock_guard<std::mutex> lock(m_stateMutex);
+    // Recompute the claim each player tick. MaceFall reads this atomic later in
+    // the same event dispatch, after ShiftBlade's subscriber has run.
+    swapperstate::swordSwapPriority.store(false, std::memory_order_release);
     auto& inventory = bedrocktools::core::InventoryAccess::get();
     auto reportStatus = [this](std::string status, bedrocktools::diagnostics::Level level = bedrocktools::diagnostics::Level::Debug) {
         if (status == m_lastStatus) return;
@@ -293,6 +296,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
         return;
     }
+    swapperstate::swordSwapPriority.store(true, std::memory_order_release);
     if (selected == swordSlot) {
         m_nextSwordAttempt = now + std::chrono::seconds(1);
         return;

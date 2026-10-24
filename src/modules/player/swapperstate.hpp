@@ -2,8 +2,10 @@
 
 #include <atomic>
 
-// Shared arbitration state: the mace has priority during a confirmed high fall.
-// Inline storage makes the same atomic visible to both header-only module users.
+// Shared arbitration state for hotbar automation. SwordSwap wins while its
+// grounded-target condition is valid; MaceFall may take the slot only after
+// ShiftBlade has yielded (normally as the player begins falling).
 namespace swapperstate {
+inline std::atomic<bool> swordSwapPriority{false};
 inline std::atomic<bool> maceFallPriority{false};
 }

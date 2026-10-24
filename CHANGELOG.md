@@ -1,3 +1,30 @@
+## 2026-10-24 — Stable-base AimAssist/weapon arbitration/Unglide/ESP improvements
+- Continue from the exact Build #1284 source commit `cbdc298509874b74afc82d58b6d7e30348a48c01`; leave the Build #1284 AimAssist actor-query ABI untouched (no manual-vector to std::vector return conversion).
+- Add `Hitbox Distance Strength Min Limit` and `Hitbox Distance Strength Max Limit` exact-value settings that bound the strength control itself (defaults preserve the previous 0.1–500 range), persist them, and add host math tests. The final steering-box scale retains its pre-existing formula/range.
+- Smooth the dynamic hitbox scale with time-based exponential interpolation and replace Smooth/Adaptive's binary inside-box early return with continuous steering attenuation to avoid stutter at the virtual hitbox boundary.
+- Add shared hotbar arbitration so ShiftBlade publishes sword priority before MaceFall's same-tick handler; pending mace swaps are cancelled/restored when the sword has priority. Register ShiftBlade before MaceFall to make this deterministic.
+- Remove Unglide's redundant internal `m_unglideEnabled` setting (the module's own enabled switch is now the only enable gate) and remove the exact camera-ray intersection gate, which could reject a valid target while Aim Assist was still smoothing toward it. Range, vertical difference, player target and gliding-state gates remain.
+- Make the locator follow the same player selected by Aim Assist. If that target leaves Aim Assist's FOV, revalidate its identity against the live actor snapshot and refresh retention while it remains present, instead of picking another nearby off-screen player.
+- Explicitly convert the SDK AABB returned by Aim Assist to the renderer's local AABB wrapper; this was caught by the Android compiler and corrected before the next build.
+- Persist min/max settings entered through the Aim Assist exact-value ModuleBuilder form. Strength is clamped to the configured interval when edited and when legacy config is loaded; the min/max settings do not silently cap the output scale.
+- Validation: fresh host regression tests and Android ARM64 package build are required for this revision. Runtime Unglide input delivery still depends on the installed Key Mapper keymap and must be verified in-game; successful compilation alone does not prove Space was consumed.
+
+## 2026-10-24 — Continue ESP work from stable Build #1284
+- Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
+- Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.
+- Replace the fixed center-screen lock icon with a world-space segmented ring positioned above each ESP player AABB, with four angular arrowheads and counter-rotating inner/outer ring segments.
+- Keep the ring independent of Aim Assist state; expose the existing ring toggle as “Target ring” and make indicator size/animation settings affect both the ring and the edge arrow.
+- Replace the locator sprite with the exact cropped user-provided pixel arrow. Correct its screen-space direction with camera right/up/forward projection and a high-FOV/aspect-aware off-screen gate to prevent early indicators.
+- Validation: Android build and in-game checks are pending for this stable-baseline follow-up; no new package is claimed working until CI and device validation complete.
+
+## 2026-10-23 — Integrate ESP Lock in Aim and off-screen indicators
+- Add transparent cyberpunk Lock in Aim and direction-arrow sprites based on the provided Bedaim ESP concepts; register a 16-direction arrow set for HUD rendering.
+- Add ESP HUD controls for Lock in Aim, off-screen player indicators, subtle animation, indicator size, player visibility, invisibility, range, and game-mode outline colors.
+- Draw Lock in Aim while Aim Assist has a current player target; collect a nearby off-screen player candidate for the HUD arrow without storing actor pointers in the HUD snapshot.
+- Keep off-screen target collection separate from 3D render dependency checks and add rate-limited diagnostics for empty/malformed actor snapshots.
+- Preserve Bedrock `mce::PrimitiveMode::LineList = 4` for world-space outline vertices.
+- Validation: host regression tests passed in workflow run #1277, but that run was canceled during NDK setup before Android compilation/package creation. Latest ESP code still needs a completed Android build and in-game/device validation.
+
 ## 2026-10-23 — Run Unglide JNI dispatch outside the state mutex
 - Reserve a single in-flight keymap dispatch under the mutex, then release the lock before JNI object creation and `sendBroadcast`.
 - Suppress concurrent ticks while a dispatch is in flight and prevent a late completion from overwriting a disabled/reset module state.
@@ -102,6 +129,14 @@
 - ShadowHook experiment PR was closed; current builds remain on the Preloader hook backend.
 
 # Changelog
+
+## 2026-10-23 — Restore AutoHit/Unglide, Sticky lock, and ESP controls
+- Keep ESP work on the feature branch that already includes AutoHit and standalone Unglide; the prior ESP branch was based on main and omitted both registrations.
+- Sticky now tracks the stable center/four-point anchor while Smooth/Adaptive retain hitbox sliding.
+- ESP exposes player visibility, invisible players, range, and per-game-mode hexadecimal colors in the settings interface.
+- Added render-hook, dependency, actor-query and bounds diagnostics rather than silently returning when an outline cannot be drawn.
+- Android CI checks compilation; graphics output and Key Mapper behavior still require in-game testing.
+
 
 ## 2026-10-22 — Testable Aim Assist held-weapon classification
 

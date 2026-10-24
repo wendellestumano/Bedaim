@@ -60,6 +60,8 @@ public:
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
     float m_hitboxDistanceGrowth = 5.0f;
+    float m_hitboxDistanceMinLimit = 0.1f;
+    float m_hitboxDistanceMaxLimit = 500.0f;
     bool m_hitboxGrowthScaleV2 = true;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
@@ -104,6 +106,9 @@ private:
     bedrocktools::sdk::AABB m_lastTargetBounds{};
     bedrocktools::sdk::Vec3 m_lastAimPoint{};
     bool m_hasAimPoint = false;
+    float m_smoothedHitboxScale = 1.0f;
+    bool m_hasSmoothedHitboxScale = false;
+    std::chrono::steady_clock::time_point m_lastHitboxScaleUpdate{};
     bool m_localPlayerGliding = false;
     float m_lastPlayerY = 0.0f;
     bool m_hasLastPlayerY = false;

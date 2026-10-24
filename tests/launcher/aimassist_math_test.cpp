@@ -32,6 +32,10 @@ int main() {
     using bedaim::aimmath::nearestAnchorToRay;
     using bedaim::aimpolicy::HeldWeapon;
     using bedaim::aimpolicy::isRangedPredictionWeapon;
+    check(bedaim::aimpolicy::shouldUseStableAimAnchor(true),
+          "Sticky tracking uses the stable hitbox anchor");
+    check(!bedaim::aimpolicy::shouldUseStableAimAnchor(false),
+          "Smooth and Adaptive tracking retain the sliding hitbox point");
 
     const float wrapAcrossBoundary = wrapDegrees(-179.0f - 179.0f);
     check(std::abs(wrapAcrossBoundary - 2.0f) < 1.0e-4f,
@@ -143,6 +147,20 @@ int main() {
           "distance hitbox strength accepts 500 and produces a larger bounded steering volume");
     check(bedaim::aimmath::distanceHitboxScale(1.0f, 80.0f, 80.0f, 500.0f, true) <= 40.0f,
           "far-range hitbox multiplier remains bounded at maximum strength");
+    const auto strengthLimits = bedaim::aimmath::normalizeDistanceStrengthLimits(2.0f, 20.0f);
+    check(std::abs(strengthLimits.minimum - 2.0f) < 1.0e-4f &&
+          std::abs(strengthLimits.maximum - 20.0f) < 1.0e-4f,
+          "strength limits preserve a valid configured interval");
+    const auto repairedLimits = bedaim::aimmath::normalizeDistanceStrengthLimits(25.0f, 10.0f);
+    check(std::abs(repairedLimits.minimum - 25.0f) < 1.0e-4f &&
+          std::abs(repairedLimits.maximum - 25.0f) < 1.0e-4f,
+          "strength limits repair an inverted interval without leaving min above max");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(1.0f, 2.0f, 20.0f) - 2.0f) < 1.0e-4f,
+          "distance strength respects the configured minimum");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(30.0f, 2.0f, 20.0f) - 20.0f) < 1.0e-4f,
+          "distance strength respects the configured maximum");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(10.0f, 2.0f, 20.0f) - 10.0f) < 1.0e-4f,
+          "distance strength stays unchanged inside configured limits");
 
     std::cout << checks << " checks, " << failures << " failures\\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

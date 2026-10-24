@@ -56,6 +56,7 @@
 #include "misc/hiveutils.hpp"
 #include "misc/modulediagnostics.hpp"
 #include "visual/swingmodifier.hpp"
+#include "visual/esp.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
     static ModuleRegistry registry;
@@ -131,9 +132,11 @@ void registerAllModules() {
     registry.emplace<AimAssistModule>();
     registry.emplace<AutoHitModule>();
     registry.emplace<HitboxExpanderModule>();
+    // Subscription order is intentional: ShiftBlade publishes its same-tick
+    // sword priority before MaceFall evaluates whether it may swap hotbar slots.
+    registry.emplace<SwordSwapperModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<UnglideModule>();
-    registry.emplace<SwordSwapperModule>();
     registry.emplace<WeatherChangerModule>();
     registry.emplace<NickModule>();
     registry.emplace<NoDisconnectModule>();
@@ -163,4 +166,5 @@ void registerAllModules() {
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
     registry.emplace<ForceGlobalRPModule>();
+    registry.emplace<EspModule>();
 }
