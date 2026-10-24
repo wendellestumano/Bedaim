@@ -107,16 +107,10 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
 }
 
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
-                          float strength, bool enabled,
-                          float minimumScale, float maximumScale) noexcept {
-    const float safeMinimum = std::clamp(
-        std::isfinite(minimumScale) ? minimumScale : 0.25f, 0.25f, 200.0f);
-    const float requestedMaximum = std::clamp(
-        std::isfinite(maximumScale) ? maximumScale : 200.0f, 0.25f, 200.0f);
-    const float safeMaximum = std::max(safeMinimum, requestedMaximum);
+                          float strength, bool enabled) noexcept {
     const float safeBase = std::clamp(
-        std::isfinite(baseScale) ? baseScale : 1.0f, 0.25f, 200.0f);
-    if (!enabled) return std::clamp(safeBase, safeMinimum, safeMaximum);
+        std::isfinite(baseScale) ? baseScale : 1.0f, 1.0f, 200.0f);
+    if (!enabled) return safeBase;
 
     const float safeDistance = std::max(0.0f,
         std::isfinite(distance) ? distance : 0.0f);
@@ -145,7 +139,21 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
     const float strengthFactor = std::sqrt(safeStrength / 5.0f);
     const float farMultiplier = std::clamp(0.8f + 2.0f * strengthFactor, 1.1f, 40.0f);
     const float multiplier = 0.4f + (farMultiplier - 0.4f) * distanceBlendWithinRange;
-    return std::clamp(safeBase * multiplier, safeMinimum, safeMaximum);
+    return std::clamp(safeBase * multiplier, 0.25f, 200.0f);
+}
+
+DistanceStrengthLimits normalizeDistanceStrengthLimits(float minimum, float maximum) noexcept {
+    const float safeMinimum = std::clamp(
+        std::isfinite(minimum) ? minimum : 0.1f, 0.1f, 500.0f);
+    const float safeMaximumInput = std::clamp(
+        std::isfinite(maximum) ? maximum : 500.0f, 0.1f, 500.0f);
+    return {safeMinimum, std::max(safeMinimum, safeMaximumInput)};
+}
+
+float clampDistanceHitboxStrength(float value, float minimum, float maximum) noexcept {
+    const auto limits = normalizeDistanceStrengthLimits(minimum, maximum);
+    const float safeValue = std::isfinite(value) ? value : 5.0f;
+    return std::clamp(safeValue, limits.minimum, limits.maximum);
 }
 
 } // namespace bedaim::aimmath
