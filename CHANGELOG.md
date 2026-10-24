@@ -1,3 +1,9 @@
+## 2026-10-24 — XRAY crash containment and world-ready gating
+- Removed XRAY's write to offset zero in BlockOccluderUpdateRenderFace; the XRAY branch now returns the augmented mask instead of writing to an unverified object field.
+- Added a live-LocalPlayer gate before XRAY face filtering and chunk-rebuild traversal. ClientInstance updates in the main menu no longer trigger chunk-list traversal.
+- Fail open for null-region/synthetic tessellation instead of filtering menu or inventory-preview meshes.
+- This reduces known crash paths but is not in-game confirmation. Keep PR #101 in draft until menu launch, world entry/exit, ore visibility, Connected Glass and Android CI are verified.
+
 ## 2026-10-24 — Add experimental native X-Ray module
 - Add a dedicated XRay module that reuses the already-installed Connected Glass block-face and occlusion hooks rather than installing duplicate native hooks.
 - While enabled, non-ore world block faces are omitted from chunk tessellation and ore/ancient-debris faces are forced into the visible face mask. Toggling the module requests a render-chunk rebuild through the existing client-instance update path.
