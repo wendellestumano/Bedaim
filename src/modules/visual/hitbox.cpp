@@ -31,13 +31,13 @@ struct DistanceSortedActor {
     float _pad;
 };
 
-struct ActorVec {
-    DistanceSortedActor* begin;
-    DistanceSortedActor* end;
-    DistanceSortedActor* cap;
-};
+// Bedrock 1.26.51 ActorType values: Mob=1, Player=69.
+static constexpr int kActorTypeMob_1_26_51 = 1;
+static constexpr int kActorTypePlayer_1_26_51 = 69;
 
-typedef ActorVec (*Actor_fetchNearbyActorsSorted_t)(void* actor, void* extent, int actorType);
+// Match the actual native return type so libc++ destroys each returned vector correctly.
+typedef std::vector<DistanceSortedActor> (*Actor_fetchNearbyActorsSorted_t)(
+    void* actor, const bedrocktools::sdk::Vec3& extent, int actorType);
 
 struct HashedString {
     uint64_t mStrHash;
@@ -240,11 +240,11 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
     }
 
     bool foundPlayer = false;
-    for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
-        void* actor = it->mActor;
+    for (const DistanceSortedActor& entry : actors) {
+        void* actor = entry.mActor;
         if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000 ||
-            actor == localPlayer || !std::isfinite(it->mDistance) ||
-            it->mDistance < 0.0f || it->mDistance > targetRange ||
+            actor == localPlayer || !std::isfinite(entry.mDistance) ||
+            entry.mDistance < 0.0f || entry.mDistance > targetRange ||
             !s_actorIsPlayer(actor)) continue;
         foundPlayer = true;
         if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
@@ -255,7 +255,7 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
             (bounds.min.y + bounds.max.y) * 0.5f,
             (bounds.min.z + bounds.max.z) * 0.5f
         };
-        esp->considerOffscreenCandidate(center, it->mDistance);
+        esp->considerOffscreenCandidate(center, entry.mDistance);
     }
     if (!foundPlayer) {
         espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Info,
@@ -277,27 +277,46 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
     if (!g_localPlayerPtr) { if(espEnabled)espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
 
-    // Fetch the native actor vector once per RenderLevel call and reuse it for both
-    // off-screen HUD targeting and 3D ESP/Hitbox rendering.
     const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
     const float queryRange = std::max(30.0f, espRange);
-    ActorVec actors{};
-    bool actorSnapshotValid = false;
-    bool actorSnapshotEmpty = true;
-    if (s_actorFetchNearby) {
+    const bool needPlayerActors =
+        (espEnabled && (esp->showPlayers || esp->showOffscreenIndicators)) ||
+        (nativeHitboxesEnabled && g_hitboxMod->showPlayers) ||
+        (showExpandedHitboxes && expander && expander->expandsType(true));
+    const bool needMobActors =
+        (nativeHitboxesEnabled && g_hitboxMod->showEntities) ||
+        (showExpandedHitboxes && expander && expander->expandsType(false));
+
+    std::vector<DistanceSortedActor> playerActors;
+    std::vector<DistanceSortedActor> mobActors;
+    bool playerSnapshotValid = true, playerSnapshotEmpty = true;
+    bool mobSnapshotValid = true, mobSnapshotEmpty = true;
+    auto fetchActorSnapshot = [&](int actorType, std::vector<DistanceSortedActor>& out,
+                                  bool& valid, bool& empty) {
         bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
-        actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
-        const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
-        const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-        actorSnapshotEmpty = begin == 0 && end == 0;
-        actorSnapshotValid = actorSnapshotEmpty ||
-            (begin > 0x1000 && end >= begin &&
-             (end - begin) % sizeof(DistanceSortedActor) == 0 &&
-             (end - begin) / sizeof(DistanceSortedActor) <= 8192);
+        out = s_actorFetchNearby(g_localPlayerPtr, extent, actorType);
+        empty = out.empty();
+        valid = out.size() <= 8192;
+    };
+
+    if (s_actorFetchNearby) {
+        // ActorType::Player and ActorType::Mob are different filters; never use
+        // the Mob vector as the source for ESP/target-ring player candidates.
+        if (needPlayerActors) {
+            fetchActorSnapshot(kActorTypePlayer_1_26_51, playerActors,
+                               playerSnapshotValid, playerSnapshotEmpty);
+        }
+        if (needMobActors) {
+            fetchActorSnapshot(kActorTypeMob_1_26_51, mobActors,
+                               mobSnapshotValid, mobSnapshotEmpty);
+        }
+    } else {
+        playerSnapshotValid = false;
+        mobSnapshotValid = false;
     }
     if (espEnabled) {
         updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
-                                  actors, actorSnapshotValid, actorSnapshotEmpty, espRange);
+                                  playerActors, playerSnapshotValid, playerSnapshotEmpty, espRange);
     }
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
     if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
