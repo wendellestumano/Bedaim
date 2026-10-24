@@ -563,24 +563,54 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         renderActor(g_localPlayerPtr, false);
     }
 
-    if(s_actorFetchNearby){
-        if(!actorSnapshotValid){if(espEnabled)espLogOnce(espLoggedSnapshot,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=malformed; skipped nearby actor list");}
-        else if(actorSnapshotEmpty){if(espEnabled)espLogOnce(espLoggedEmptyActors,bedrocktools::diagnostics::Level::Warning,"actor_snapshot=empty; no nearby actors returned by ActorFetchNearbyActorsSorted");}
-        else for(DistanceSortedActor* it=actors.begin;it<actors.end;++it){
-            void* ent=it->mActor;
-            if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
-               !std::isfinite(it->mDistance)||it->mDistance<0||it->mDistance>queryRange)continue;
-            const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
-            const bool wantsEsp=espEnabled&&esp->showPlayers&&isPlayer&&it->mDistance<=espRange;
-            const bool isEntityCategory=isPlayer||hasCategory(ent,2);
-            const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(isPlayer)&&isEntityCategory;
-            const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_hitboxMod->showPlayers:(hasCategory(ent,2)&&g_hitboxMod->showEntities));
-            if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
-            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
-            renderActor(ent,wantsEsp);
+    if(!s_actorFetchNearby) {
+        if(espEnabled)espLogOnce(espLoggedQuery,bedrocktools::diagnostics::Level::Warning,
+            "actor_query=signature_unavailable; ESP cannot enumerate nearby players");
+    } else {
+        // Player-only pass (ActorType::Player=69). This drives ESP boxes, target rings,
+        // vanilla player hitboxes, and the off-screen locator candidate list.
+        if(needPlayerActors) {
+            if(!playerSnapshotValid) {
+                if(espEnabled)espLogOnce(espLoggedSnapshot,bedrocktools::diagnostics::Level::Warning,
+                    "player_actor_snapshot=oversized; skipped player ESP");
+            } else {
+                for(const DistanceSortedActor& entry : playerActors) {
+                    void* ent=entry.mActor;
+                    if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
+                       !std::isfinite(entry.mDistance)||entry.mDistance<0||entry.mDistance>queryRange)continue;
+                    if(!s_actorIsPlayer||!s_actorIsPlayer(ent))continue;
+                    const bool wantsEsp=espEnabled&&esp->showPlayers&&entry.mDistance<=espRange;
+                    const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(true);
+                    const bool wantsNative=nativeHitboxesEnabled&&g_hitboxMod->showPlayers;
+                    if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
+                    if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
+                    renderActor(ent,wantsEsp);
+                }
+            }
         }
-    }else if(espEnabled){
-        espLogOnce(espLoggedQuery,bedrocktools::diagnostics::Level::Warning,"actor_query=signature_unavailable; ESP cannot enumerate nearby players");
+
+        // Mob pass (ActorType::Mob=1) remains separate so Hitbox/Bedrock Bounds
+        // still work on entities without accidentally replacing the player list.
+        if(needMobActors) {
+            if(!mobSnapshotValid) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,"ESP",
+                    "mob_actor_snapshot=oversized; skipped entity hitboxes");
+            } else {
+                for(const DistanceSortedActor& entry : mobActors) {
+                    void* ent=entry.mActor;
+                    if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
+                       !std::isfinite(entry.mDistance)||entry.mDistance<0||entry.mDistance>queryRange)continue;
+                    const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
+                    if(isPlayer)continue; // players are handled by the dedicated Player-type pass
+                    const bool isEntityCategory=hasCategory(ent,2);
+                    const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(false)&&isEntityCategory;
+                    const bool wantsNative=nativeHitboxesEnabled&&isEntityCategory&&g_hitboxMod->showEntities;
+                    if(!wantsExpanded&&!wantsNative)continue;
+                    if(s_actorIsInvisible&&s_actorIsInvisible(ent))continue;
+                    renderActor(ent,false);
+                }
+            }
+        }
     }
 
     colorHolder[0] = savedColor[0];
