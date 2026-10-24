@@ -214,7 +214,7 @@ void EspModule::onMenuRegistered(){
  using namespace pl::modmenu;ConfigSchemaBuilder schema;nlohmann::json config;saveConfig(config);
  schema.defaultCategory("players").category("players","Players","Player outline visibility and distance")
   .category("indicators","HUD indicators","Lock in Aim and off-screen player direction")
-  .category("colors","Game-mode colors","Hexadecimal ARGB outline colors");
+  .category("appearance","Appearance","One outline color for every player.");
  auto toggle=[&](const char* key,const char* title,const char* desc,bool d,const char* category="players"){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;n.type=ConfigControlTypeV2::Toggle;
   n.defaultValue=d?"true":"false";n.currentValue=cfgText(config,key,n.defaultValue.c_str());n.hasCurrentValue=true;schema.node(std::move(n));
@@ -233,11 +233,11 @@ void EspModule::onMenuRegistered(){
  r.hasCurrentValue=true;r.minValue="8";r.maxValue="80";r.step="1";r.unit=" blocks";schema.node(std::move(r));
  auto color=[&](const char* key,const char* title){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description="HEX color: #AARRGGBB (or #RRGGBB).";
-  n.category="colors";n.type=ConfigControlTypeV2::Text;n.defaultValue="";n.currentValue=cfgText(config,key,"");
-  n.hasCurrentValue=true;n.placeholder="#AARRGGBB";n.maxLength=9;schema.node(std::move(n));
+  n.category="appearance";n.type=ConfigControlTypeV2::Text;n.defaultValue="#FFFFFFFF";
+  n.currentValue=cfgText(config,key,"#FFFFFFFF");n.hasCurrentValue=true;
+  n.placeholder="#AARRGGBB";n.maxLength=9;schema.node(std::move(n));
  };
- color("survivalColor","Survival color");color("creativeColor","Creative color");color("spectatorColor","Spectator color");
- color("adventureColor","Adventure color");color("unknownColor","Unknown-mode color");
+ color("outlineColor","Outline color");
  setConfigSchemaJson(moduleId,schema.toJson());
 }
 bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value){
@@ -253,10 +253,10 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  }
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,96.0f);return true;}
- std::uint32_t c=0;if(!parseColor(value,c))return false;
- if(key=="survivalColor")survivalColor=c;else if(key=="creativeColor")creativeColor=c;
- else if(key=="spectatorColor")spectatorColor=c;else if(key=="adventureColor")adventureColor=c;
- else if(key=="unknownColor")unknownColor=c;else return false;return true;
+ std::uint32_t c=0;
+ if(key!="outlineColor"||!parseColor(value,c))return false;
+ outlineColor=c;
+ return true;
 }
 void EspModule::loadConfig(const nlohmann::json& j){
  Module::loadConfig(j);showPlayers=j.value("showPlayers",showPlayers);showInvisible=j.value("showInvisible",showInvisible);
@@ -265,15 +265,15 @@ void EspModule::loadConfig(const nlohmann::json& j){
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,96.0f);
  range=std::clamp(j.value("range",range),8.0f,80.0f);
- loadColor(j,"survivalColor",survivalColor);loadColor(j,"creativeColor",creativeColor);
- loadColor(j,"spectatorColor",spectatorColor);loadColor(j,"adventureColor",adventureColor);loadColor(j,"unknownColor",unknownColor);
+ // Migrate old per-mode config to its previous Survival color, without querying game modes.
+ if(j.contains("outlineColor"))loadColor(j,"outlineColor",outlineColor);
+ else loadColor(j,"survivalColor",outlineColor);
 }
 void EspModule::saveConfig(nlohmann::json& j){
  Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
  j["range"]=std::clamp(range,8.0f,80.0f);
- char color[12];auto save=[&](const char* key,std::uint32_t v){std::snprintf(color,sizeof(color),"#%08X",v);j[key]=std::string(color);};
- save("survivalColor",survivalColor);save("creativeColor",creativeColor);save("spectatorColor",spectatorColor);
- save("adventureColor",adventureColor);save("unknownColor",unknownColor);
+ char color[12];std::snprintf(color,sizeof(color),"#%08X",outlineColor);
+ j["outlineColor"]=std::string(color);
 }
