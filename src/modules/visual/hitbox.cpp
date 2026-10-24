@@ -282,6 +282,9 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
         if (s_actorIsInvisible && s_actorIsInvisible(entry->mActor) && !esp->showInvisible) return;
         const AABB bounds = getActorAABB(entry->mActor);
         if (!validRenderBounds(bounds)) return;
+        // It is present in this fresh engine-owned snapshot; refresh retention
+        // so the same out-of-FOV player remains tracked as long as it stays nearby.
+        s_locatorPreferredTargetSeen = now;
         const bedrocktools::sdk::Vec3 center{
             (bounds.min.x + bounds.max.x) * 0.5f,
             (bounds.min.y + bounds.max.y) * 0.5f,
