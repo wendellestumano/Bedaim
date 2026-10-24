@@ -1,3 +1,11 @@
+## 2026-10-24 — Continue ESP work from stable Build #1284
+- Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
+- Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.
+- Replace the fixed center-screen lock icon with a world-space segmented ring positioned above each ESP player AABB, with four angular arrowheads and counter-rotating inner/outer ring segments.
+- Keep the ring independent of Aim Assist state; expose the existing ring toggle as “Target ring” and make indicator size/animation settings affect both the ring and the edge arrow.
+- Replace the locator sprite with the exact cropped user-provided pixel arrow. Correct its screen-space direction with camera right/up/forward projection and a high-FOV/aspect-aware off-screen gate to prevent early indicators.
+- Validation: Android build and in-game checks are pending for this stable-baseline follow-up; no new package is claimed working until CI and device validation complete.
+
 ## 2026-10-23 — Integrate ESP Lock in Aim and off-screen indicators
 - Add transparent cyberpunk Lock in Aim and direction-arrow sprites based on the provided Bedaim ESP concepts; register a 16-direction arrow set for HUD rendering.
 - Add ESP HUD controls for Lock in Aim, off-screen player indicators, subtle animation, indicator size, player visibility, invisibility, range, and game-mode outline colors.
