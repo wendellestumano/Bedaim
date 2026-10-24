@@ -1,3 +1,10 @@
+## 2026-10-24 — Add experimental native X-Ray module
+- Add a dedicated XRay module that reuses the already-installed Connected Glass block-face and occlusion hooks rather than installing duplicate native hooks.
+- While enabled, non-ore world block faces are omitted from chunk tessellation and ore/ancient-debris faces are forced into the visible face mask. Toggling the module requests a render-chunk rebuild through the existing client-instance update path.
+- Keep XRAY fail-closed when its required face/occlusion hooks or chunk-dirtying entry point are unavailable. The independent Connected Glass path is unchanged when XRAY is off.
+- Add host regression tests for namespace handling and ore-name targeting. BetterResourcePackManager 2.2.1 is documented as an in-game resource-pack changer, but its public release repository exposes no source/API; this implementation does not guess an unsupported integration.
+- Validation status: CI and in-world behavior still require confirmation. This is an experimental mesh-filtering approach, not proof that all block types/render layers are covered.
+
 ## 2026-10-24 — Audit X-Ray / AlphaDepth pack integration
 - Inspected Connected Glass: its hooks only crop texture UVs for glass blocks/panes and do not switch block visibility or load AlphaDepth materials; it must not be repurposed as the X-Ray renderer.
 - Audited the supplied Outline X-Ray 1.0.6 pack: 54 alpha-enabled block textures, a compiled `RenderChunk.material.bin` containing `DepthOnlyOpaque`, 22 ore/ancient-debris block-shape mappings, and a declared patched Minecraft/BetterRenderDragon 1.26.51+ requirement.

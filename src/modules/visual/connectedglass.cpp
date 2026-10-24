@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include "xray_block_policy.hpp"
 
 namespace {
 
@@ -71,6 +72,8 @@ using SetAllDirtyFn = void (*)(void*, bool, bool);
 
 std::atomic_bool g_enabled{false};
 std::atomic_bool g_rebuildPending{false};
+std::atomic_bool g_xrayEnabled{false};
+std::atomic_bool g_xrayHooksReady{false};
 std::atomic_bool g_connectGlassBlocks{true};
 std::atomic_bool g_connectGlassPanes{true};
 std::atomic_bool g_connectDifferentColors{true};
@@ -140,6 +143,15 @@ GlassInfo classifyGlass(const void* block) {
     if (!fullName || fullName->size() > 256
         || (!fullName->empty() && fullName->data() == nullptr)) return {};
     return classifyGlassName({fullName->data(), fullName->size()}, block);
+}
+
+bool isXrayTarget(const void* block) {
+    if (!block) return false;
+    const auto* blockObj = static_cast<const bedrocktools::sdk::Block*>(block);
+    const std::string* fullName = blockObj->fullName();
+    if (!fullName || fullName->size() > 256
+        || (!fullName->empty() && fullName->data() == nullptr)) return false;
+    return bedaim::xray::isTargetBlockName(*fullName);
 }
 
 std::string_view shapeIndependentName(const GlassInfo& info) {
@@ -347,6 +359,15 @@ void renderFace(
 ) {
     if (!original) return;
 
+    // XRAY shares the existing Connected Glass tessellation detours. Suppress
+    // terrain faces only for world tessellation; inventory/previews may use a
+    // null or synthetic region and must continue through the original path.
+    if (g_xrayEnabled.load(std::memory_order_relaxed) && tessellator && block) {
+        void* region = field<void*>(
+            tessellator, bedrocktools::sdk::offsets::BlockTessellator::mRegion);
+        if (region && !isXrayTarget(block)) return;
+    }
+
     std::optional<TextureCopy> texture;
     do {
         if (!g_enabled.load(std::memory_order_relaxed)
@@ -477,6 +498,17 @@ uint64_t boUpdateRenderFaceDetour(
 ) {
     if (!g_boUpdateRenderFaceOriginal) return 0;
     const uint64_t result = g_boUpdateRenderFaceOriginal(self, block, pos, aabb, face);
+
+    // Expose every face of ores/ancient debris even when the terrain next to
+    // them would normally occlude it. The same native face-mask operation is
+    // already used by Connected Glass for connected pane faces.
+    if (g_xrayEnabled.load(std::memory_order_relaxed)
+        && self && block && face < 6 && isXrayTarget(block)) {
+        const uint64_t bit = uint64_t{1} << face;
+        field<uint64_t>(self, 0) |= bit;
+        return result | bit;
+    }
+
     if (!g_enabled.load(std::memory_order_relaxed) || !g_paneRc.active || !pos) return result;
     if (face != static_cast<uint8_t>(GlassFace::Up) && face != static_cast<uint8_t>(GlassFace::Down)) return result;
 
@@ -528,6 +560,13 @@ bool rebuildRenderChunks(void* clientInstance) {
     return rebuilt;
 }
 
+}
+
+bool ConnectedGlassSetXRayMode(bool enabled) {
+    if (enabled && !g_xrayHooksReady.load(std::memory_order_acquire)) return false;
+    const bool previous = g_xrayEnabled.exchange(enabled, std::memory_order_acq_rel);
+    if (previous != enabled) g_rebuildPending.store(true, std::memory_order_release);
+    return true;
 }
 
 void ConnectedGlassHandleClientInstanceUpdate(void* clientInstance) {
@@ -608,6 +647,12 @@ void ConnectedGlassModule::installHooks() {
     m_hooked = g_getBlock && g_isSolidBlockingBlock && g_textureCopyCtor && g_textureDtor && g_setAllDirty;
     for (const auto& h : g_faceHooks) m_hooked = m_hooked && h.handle;
     m_hooked = m_hooked && g_paneTessHook && g_bgGetTextureHook && g_tessVertexHook && g_boUpdateRenderFaceHook;
+
+    // XRAY only needs all six face hooks, the occlusion-mask detour and the
+    // chunk dirtying entry point; optional pane/texture hooks are not required.
+    bool xrayReady = g_setAllDirty && g_boUpdateRenderFaceHook;
+    for (const auto& h : g_faceHooks) xrayReady = xrayReady && h.handle;
+    g_xrayHooksReady.store(xrayReady, std::memory_order_release);
 }
 
 void ConnectedGlassModule::onInit() {
