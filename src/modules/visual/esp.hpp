@@ -35,11 +35,7 @@ public:
     bool animatedIndicators = true;
     float indicatorSize = 48.0f;
     float range = 30.0f;
-    std::uint32_t survivalColor = 0xFFFFFFFF;
-    std::uint32_t creativeColor = 0xFFFF3030;
-    std::uint32_t spectatorColor = 0xFFB040FF;
-    std::uint32_t adventureColor = 0xFF40D8FF;
-    std::uint32_t unknownColor = 0xFFFFD040;
+    std::uint32_t outlineColor = 0xFFFFFFFF;
 
 private:
     mutable std::mutex m_hudTargetMutex;
