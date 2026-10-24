@@ -514,8 +514,8 @@ uint64_t boUpdateRenderFaceDetour(
         && g_worldReady.load(std::memory_order_acquire)
         && self && block && face < 6 && isXrayTarget(block)) {
         const uint64_t bit = uint64_t{1} << face;
-        // Return the augmented mask; offset zero is not a verified mask field.
-        // The original Connected Glass pane path is left unchanged below.
+        // Keep the same face-mask update convention as the original Connected Glass path.
+        field<uint64_t>(self, 0) |= bit;
         return result | bit;
     }
 
