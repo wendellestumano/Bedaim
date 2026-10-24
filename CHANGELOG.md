@@ -1,3 +1,8 @@
+## 2026-10-24 — Stabilize AimAssist native actor snapshots after crash report
+- Align every AimAssist and HitboxExpander call site for `ActorFetchNearbyActorsSorted` with the same `std::vector<DistanceSortedActor>` return declaration used by the ESP render path, instead of manually modeling the returned vector as three pointers.
+- Use bounded vector sizes and range-based iteration for AimAssist candidate scans, target revalidation, nearby actor snapshots, and native hitbox expansion. This keeps return-value lifetime/destruction consistent across the modules.
+- Validation: the prior ESP build passed host regression tests and Android packaging, but the user reported a runtime crash when AimAssist is enabled. This follow-up is a crash-mitigation attempt; it requires a fresh Android build and in-game verification and is not yet claimed fixed.
+
 ## 2026-10-24 — Fix ESP player discovery, animated reference ring, and locator direction
 - Correct the actor enumeration filter for Bedrock 1.26.51: `ActorType::Player = 69`, while `Mob = 1`. Query player and mob vectors independently, so the ESP ring/boxes/locator use real player entries and entity hitboxes remain supported.
 - Match the native `std::vector<DistanceSortedActor>` return type rather than treating the return object as three raw pointers; this also restores normal vector lifetime/destruction.
