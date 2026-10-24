@@ -1,3 +1,9 @@
+## 2026-10-24 — Audit X-Ray / AlphaDepth pack integration
+- Inspected Connected Glass: its hooks only crop texture UVs for glass blocks/panes and do not switch block visibility or load AlphaDepth materials; it must not be repurposed as the X-Ray renderer.
+- Audited the supplied Outline X-Ray 1.0.6 pack: 54 alpha-enabled block textures, a compiled `RenderChunk.material.bin` containing `DepthOnlyOpaque`, 22 ore/ancient-debris block-shape mappings, and a declared patched Minecraft/BetterRenderDragon 1.26.51+ requirement.
+- Added `scripts/validate_xray_pack.py` to verify archive integrity, required material markers, ore mappings, and PNG alpha channels. It passed against the supplied pack; this verifies archive structure, not runtime rendering.
+- No unsafe native render hooks or speculative resource-pack hot-toggle were added. A real integrated X-Ray module still needs a proven pack/material reload route or a separate validated render implementation, plus in-game testing on the patched target runtime.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.
