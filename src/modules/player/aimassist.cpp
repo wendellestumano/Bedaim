@@ -2,6 +2,7 @@
 #include "AimAssistMath.hpp"
 #include "AimAssistPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
+#include "../../config/ConfigManager.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
@@ -456,7 +457,11 @@ void AimAssistModule::onMenuRegistered() {
             .config("hitboxDistanceMaxLimit", "Hitbox Distance Strength Max Limit", ConfigType::Text, "4.00")
             .config("predictionLeadMs", "Prediction Lead ms (exact)", ConfigType::Text, "120.00")
             .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-                onMenuConfigChanged(key, value);
+                if (onMenuConfigChanged(key, value)) {
+                    // The dedicated exact-value ModuleBuilder bypasses normal
+                    // ModuleMenu persistence; save values like min/max hitbox limits.
+                    bedrocktools::config::ConfigManager::get().save();
+                }
             });
         if (!settings.registerModule()) m_numericSettingsRegistered.store(false, std::memory_order_release);
     }
