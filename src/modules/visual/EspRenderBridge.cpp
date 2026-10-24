@@ -1,4 +1,5 @@
-#include "hitbox.hpp"
+#include "EspRenderBridge.hpp"
+#include <mutex>
 #include "esp.hpp"
 #include "core/GameHooks.hpp"
 #include "core/Diagnostics.hpp"
@@ -123,7 +124,7 @@ static uintptr_t resolveADRP(uint32_t* insns, size_t count, uint32_t targetReg) 
     return 0;
 }
 
-static HitboxModule* g_hitboxMod = nullptr;
+static EspRenderBridge* g_renderBridge = nullptr;
 
 static Tessellator_begin_t                s_tessBegin = nullptr;
 static Tessellator_color_t                s_tessColor = nullptr;
@@ -273,7 +274,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
     const bool espEnabled = esp && esp->enabled;
-    const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
+    const bool nativeHitboxesEnabled = g_renderBridge && g_renderBridge->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
     if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
     if (!g_localPlayerPtr) { if(espEnabled)espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
@@ -514,13 +515,13 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             const auto expanded = expander->expandedTargetBounds(isPlayer, nativeBounds);
             aabb = {expanded.min, expanded.max};
         }
-        const uint32_t boxColor = g_hitboxMod ? g_hitboxMod->hitboxColor : 0xFF00FFFF;
+        const uint32_t boxColor = g_renderBridge ? g_renderBridge->hitboxColor : 0xFF00FFFF;
         // Do not repaint the same native player bounds over an ESP game-mode color.
         // Expanded bounds remain separately visible when Bedrock Bounds is enabled.
         if (!wantsEsp || isExpandedTarget) drawBox(aabb, boxColor);
 
         if (!nativeHitboxesEnabled) return;
-        if (g_hitboxMod->showEyeLine) {
+        if (g_renderBridge->showEyeLine) {
             float minX = aabb.min.x;
             float maxX = aabb.max.x;
             float minZ = aabb.min.z;
@@ -534,10 +535,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             eyeLines.push_back({bedrocktools::sdk::Vec3{maxX, eyeHeight, minZ}, bedrocktools::sdk::Vec3{maxX, eyeHeight, maxZ}});
             eyeLines.push_back({bedrocktools::sdk::Vec3{maxX, eyeHeight, maxZ}, bedrocktools::sdk::Vec3{minX, eyeHeight, maxZ}});
             eyeLines.push_back({bedrocktools::sdk::Vec3{minX, eyeHeight, maxZ}, bedrocktools::sdk::Vec3{minX, eyeHeight, minZ}});
-            drawLines(eyeLines, g_hitboxMod->eyeLineColor);
+            drawLines(eyeLines, g_renderBridge->eyeLineColor);
         }
 
-        if (g_hitboxMod->showLookLine) {
+        if (g_renderBridge->showLookLine) {
             bedrocktools::sdk::Vec2 rot = getActorRotation(ent);
             static constexpr float PI = 3.14159265f;
             static constexpr float DEG_TO_RAD = PI / 180.0f;
@@ -554,16 +555,16 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             float centerZ = (aabb.min.z + aabb.max.z) * 0.5f;
 
             bedrocktools::sdk::Vec3 start = {centerX, eyeHeight, centerZ};
-            float lineLen = g_hitboxMod->lookLineLength;
+            float lineLen = g_renderBridge->lookLineLength;
             bedrocktools::sdk::Vec3 end = {start.x + dirX * lineLen, start.y + dirY * lineLen, start.z + dirZ * lineLen};
 
             std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> lookLines;
             lookLines.push_back({start, end});
-            drawLines(lookLines, g_hitboxMod->lookLineColor);
+            drawLines(lookLines, g_renderBridge->lookLineColor);
         }
     };
 
-    if (nativeHitboxesEnabled && g_hitboxMod->showSelf && isThirdPerson) {
+    if (nativeHitboxesEnabled && g_renderBridge->showSelf && isThirdPerson) {
         renderActor(g_localPlayerPtr, false);
     }
 
@@ -578,7 +579,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             const bool wantsEsp=espEnabled&&esp->showPlayers&&isPlayer&&it->mDistance<=espRange;
             const bool isEntityCategory=isPlayer||hasCategory(ent,2);
             const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(isPlayer)&&isEntityCategory;
-            const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_hitboxMod->showPlayers:(hasCategory(ent,2)&&g_hitboxMod->showEntities));
+            const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_renderBridge->showPlayers:(hasCategory(ent,2)&&g_renderBridge->showEntities));
             if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
             if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
             renderActor(ent,wantsEsp);
@@ -593,10 +594,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     colorHolder[3] = savedColor[3];
 }
 
-HitboxModule::HitboxModule()
-    : Module("Hitbox", "Displays hitboxes of entities.") {
+EspRenderBridge::EspRenderBridge()
+    : Module("ESP Render Bridge", "Internal render-hook backend used by Bedaim ESP.", "EspRenderBridge") {
 
-    showInMenu = true;
+    showInMenu = false;
 
     m_patched = false;
     m_patchTarget = nullptr;
@@ -604,14 +605,14 @@ HitboxModule::HitboxModule()
     m_tessColorAddr = nullptr;
     m_tessVertexAddr = nullptr;
     m_renderMaterialGroupAddr = nullptr;
-    g_hitboxMod = this;
+    g_renderBridge = this;
 }
 
-HitboxModule::~HitboxModule() {
-    if (g_hitboxMod == this) g_hitboxMod = nullptr;
+EspRenderBridge::~EspRenderBridge() {
+    if (g_renderBridge == this) g_renderBridge = nullptr;
 }
 
-void HitboxModule::onInit() {
+void EspRenderBridge::onInit() {
     uintptr_t addr = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderLevel);
     if (addr != 0) {
         m_patchTarget = (void*)addr;
@@ -669,7 +670,7 @@ void HitboxModule::onInit() {
     applyPatch();
 }
 
-void HitboxModule::applyPatch() {
+void EspRenderBridge::applyPatch() {
     if(m_patched||!m_patchTarget)return;
     const auto hook=bedrocktools::hooks::install(m_patchTarget,reinterpret_cast<void*>(_renderLevel_hook),
                                                  reinterpret_cast<void**>(&_renderLevel_orig));
@@ -678,7 +679,7 @@ void HitboxModule::applyPatch() {
       "ESP",m_patched?"renderlevel_hook=installed":"renderlevel_hook=installation_failed");
 }
 
-void HitboxModule::ensureRenderHook() {
+void EspRenderBridge::ensureRenderHook() {
     if (!m_patchTarget) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "ESP",
             "renderlevel_hook=unavailable; RenderLevel signature was not resolved");
@@ -687,14 +688,21 @@ void HitboxModule::ensureRenderHook() {
     applyPatch();
 }
 
-void HitboxModule::onEnable() {
+void ensureEspRenderHook() {
+    static EspRenderBridge bridge;
+    static std::once_flag initialized;
+    std::call_once(initialized, [] { bridge.onInit(); });
+    bridge.ensureRenderHook();
+}
+
+void EspRenderBridge::onEnable() {
     ensureRenderHook();
 }
 
-void HitboxModule::onDisable() {
+void EspRenderBridge::onDisable() {
 }
 
-void HitboxModule::loadConfig(const nlohmann::json& j) {
+void EspRenderBridge::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     showEntities = j.value("showEntities", showEntities);
     showPlayers = j.value("showPlayers", showPlayers);
@@ -717,7 +725,7 @@ void HitboxModule::loadConfig(const nlohmann::json& j) {
     parseColor("lookLineColor", lookLineColor);
 }
 
-void HitboxModule::saveConfig(nlohmann::json& j) {
+void EspRenderBridge::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     j["showEntities"] = showEntities;
     j["showPlayers"] = showPlayers;

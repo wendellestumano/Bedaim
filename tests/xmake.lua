@@ -43,11 +43,6 @@ target("autohit_weapon_profile_test")
 target_end()
 
 
-target("autototem_policy_test")
-    set_kind("binary")
-    add_files("launcher/autototem_policy_test.cpp", "../src/modules/player/AutoTotemPolicy.cpp")
-    add_includedirs("../src")
-target_end()
 
 target("mace_unglide_policy_test")
     set_kind("binary")

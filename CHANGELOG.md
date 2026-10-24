@@ -1,3 +1,13 @@
+## 2026-10-24 — Make Bedaim an independent package and remove inherited feature modules
+
+- Rebranded the native Preloader target, exported API lookup, package manifest entry and archive to `Bedaim` / `libBedaim.so` / `Bedaim.levipack`; it no longer loads or expects an installed BedrockTools module.
+- Replaced the mixed registry with only Bedaim-owned feature modules: Aim Assist, AutoHit, Hitbox Expander, Mace Swapper, Sword Swapper, Unglide, ULTRAKILL HUD, ESP and Module Diagnostics.
+- Removed upstream BedrockTools feature-module source files from the tree. Kept the shared compatible SDK/runtime infrastructure and MIT license needed to compile Bedaim.
+- Replaced the original Hitbox feature implementation's role in ESP with a hidden internal RenderLevel bridge; ESP no longer requires a registered Hitbox module.
+- Extracted the conservative spectator heuristic into an internal Aim Assist helper and removed the GameMode Checker UI/module. Retired AutoTotem and its host test were removed from build/test registration.
+- Existing `bedrocktools.*` module/config IDs are preserved to avoid invalidating old settings files.
+- CI must confirm host tests and ARM64 packaging. In-game module behavior remains subject to device testing.
+
 ## 2026-10-24 — Audit X-Ray / AlphaDepth pack integration
 - Inspected Connected Glass: its hooks only crop texture UVs for glass blocks/panes and do not switch block visibility or load AlphaDepth materials; it must not be repurposed as the X-Ray renderer.
 - Audited the supplied Outline X-Ray 1.0.6 pack: 54 alpha-enabled block textures, a compiled `RenderChunk.material.bin` containing `DepthOnlyOpaque`, 22 ore/ancient-debris block-shape mappings, and a declared patched Minecraft/BetterRenderDragon 1.26.51+ requirement.
