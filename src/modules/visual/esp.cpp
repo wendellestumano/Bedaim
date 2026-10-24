@@ -168,11 +168,23 @@ void EspModule::onFrame(){
                 const float upX=-std::sin(pitch)*std::sin(yaw);
                 const float upY=std::cos(pitch);
                 const float upZ=std::sin(pitch)*std::cos(yaw);
+                const float forwardX=-std::sin(yaw)*std::cos(pitch);
+                const float forwardY=-std::sin(pitch);
+                const float forwardZ=std::cos(yaw)*std::cos(pitch);
+                const float cameraDepth=dx*forwardX+dy*forwardY+dz*forwardZ;
                 float dirX=dx*rightX+dz*rightZ;
                 float dirY=-(dx*upX+dy*upY+dz*upZ);
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
-                if(directionLength<0.0001f){dirX=0.0f;dirY=1.0f;}
-                else{dirX/=directionLength;dirY/=directionLength;}
+                if(directionLength<0.0001f){
+                    // A player exactly behind the camera has no unique projected
+                    // horizontal angle; put the indicator at the bottom-center edge.
+                    dirX=0.0f;dirY=1.0f;
+                }else{
+                    // Perspective projection reverses screen-side signs for targets
+                    // behind the camera. Without this flip, rear arrows point opposite.
+                    if(cameraDepth<0.0f){dirX=-dirX;dirY=-dirY;}
+                    dirX/=directionLength;dirY/=directionLength;
+                }
 
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
