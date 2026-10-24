@@ -14,15 +14,14 @@ bool finite(const Vec3& v) {
 Vec3 pointAt(const Vec3& center,
              const Vec3& right,
              const Vec3& up,
-             const Vec3& normal,
              float radius,
              float angle) {
     const float c = std::cos(angle) * radius;
     const float s = std::sin(angle) * radius;
     return {
-        center.x + normal.x * c + up.x * s,
-        center.y + normal.y * c + up.y * s,
-        center.z + normal.z * c + up.z * s
+        center.x + right.x * c + up.x * s,
+        center.y + right.y * c + up.y * s,
+        center.z + right.z * c + up.z * s
     };
 }
 } // namespace
@@ -116,15 +115,15 @@ bool buildTargetRing(const AABB& b,
         const float a0 = static_cast<float>(kTau * i / kOuterArcSteps) + outerPhase;
         const float a1 = static_cast<float>(kTau * (i + 1) / kOuterArcSteps) + outerPhase;
         output.outer[outerIndex++] = {
-            pointAt(center, right, up, normal, radius, a0),
-            pointAt(center, right, up, normal, radius, a1)
+            pointAt(center, right, up, radius, a0),
+            pointAt(center, right, up, radius, a1)
         };
     }
 
     for (int i = 0; i < 4; ++i) {
         const float angle = static_cast<float>(kTau * i / 4.0) + outerPhase;
-        const Vec3 tip = pointAt(center, right, up, normal, radius * 0.78f, angle);
-        const Vec3 base = pointAt(center, right, up, normal, radius * 1.18f, angle);
+        const Vec3 tip = pointAt(center, right, up, radius * 0.78f, angle);
+        const Vec3 base = pointAt(center, right, up, radius * 1.18f, angle);
         const float wing = radius * 0.18f;
         const Vec3 tangent{
             -right.x * std::sin(angle) + up.x * std::cos(angle),
@@ -145,8 +144,8 @@ bool buildTargetRing(const AABB& b,
         const float a0 = static_cast<float>(kTau * i / kMiddleArcSteps) + innerPhase;
         const float a1 = static_cast<float>(kTau * (i + 1) / kMiddleArcSteps) + innerPhase;
         output.inner[innerIndex++] = {
-            pointAt(center, right, up, normal, radius * 0.70f, a0),
-            pointAt(center, right, up, normal, radius * 0.70f, a1)
+            pointAt(center, right, up, radius * 0.70f, a0),
+            pointAt(center, right, up, radius * 0.70f, a1)
         };
     }
 
@@ -156,8 +155,8 @@ bool buildTargetRing(const AABB& b,
         const float a0 = static_cast<float>(kTau * i / kInnerArcSteps) - outerPhase * 0.45f;
         const float a1 = static_cast<float>(kTau * (i + 1) / kInnerArcSteps) - outerPhase * 0.45f;
         output.inner[innerIndex++] = {
-            pointAt(center, right, up, normal, radius * 0.39f, a0),
-            pointAt(center, right, up, normal, radius * 0.39f, a1)
+            pointAt(center, right, up, radius * 0.39f, a0),
+            pointAt(center, right, up, radius * 0.39f, a1)
         };
     }
 
