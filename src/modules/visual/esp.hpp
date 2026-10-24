@@ -45,7 +45,6 @@ private:
     mutable std::mutex m_hudTargetMutex;
     bedrocktools::sdk::Vec3 m_hudLocalPosition{};
     bedrocktools::sdk::Vec2 m_hudLocalRotation{};
-    float m_hudViewportAspect = 16.0f / 9.0f;
     bedrocktools::sdk::Vec3 m_offscreenTargetCenter{};
     float m_offscreenTargetDistance = 0.0f;
     bool m_offscreenTargetValid = false;
