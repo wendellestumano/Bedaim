@@ -453,8 +453,8 @@ void AimAssistModule::onMenuRegistered() {
             .config("strength", "Strength (exact)", ConfigType::Text, "0.25")
             .config("hitboxScale", "Hitbox Area (exact)", ConfigType::Text, "1.00")
             .config("hitboxDistanceGrowth", "Hitbox Growth (exact)", ConfigType::Text, "5.00")
-            .config("hitboxDistanceMinLimit", "Hitbox Distance Strength Min Limit", ConfigType::Text, "0.40")
-            .config("hitboxDistanceMaxLimit", "Hitbox Distance Strength Max Limit", ConfigType::Text, "4.00")
+            .config("hitboxDistanceMinLimit", "Hitbox Distance Strength Min Limit", ConfigType::Text, "0.10")
+            .config("hitboxDistanceMaxLimit", "Hitbox Distance Strength Max Limit", ConfigType::Text, "500.00")
             .config("predictionLeadMs", "Prediction Lead ms (exact)", ConfigType::Text, "120.00")
             .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
                 if (onMenuConfigChanged(key, value)) {
@@ -489,16 +489,22 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
-    else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
+    else if (key == "hitboxDistanceGrowth")
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            number, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
     else if (key == "hitboxDistanceMinLimit" || key == "m_hitboxDistanceMinLimit") {
-        m_hitboxDistanceMinLimit = std::clamp(number, 0.25f, 20.0f);
+        m_hitboxDistanceMinLimit = std::clamp(number, 0.1f, 500.0f);
         if (m_hitboxDistanceMaxLimit < m_hitboxDistanceMinLimit)
             m_hitboxDistanceMaxLimit = m_hitboxDistanceMinLimit;
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            m_hitboxDistanceGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
     }
     else if (key == "hitboxDistanceMaxLimit" || key == "m_hitboxDistanceMaxLimit") {
-        m_hitboxDistanceMaxLimit = std::clamp(number, 0.25f, 200.0f);
+        m_hitboxDistanceMaxLimit = std::clamp(number, 0.1f, 500.0f);
         if (m_hitboxDistanceMinLimit > m_hitboxDistanceMaxLimit)
             m_hitboxDistanceMinLimit = m_hitboxDistanceMaxLimit;
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            m_hitboxDistanceGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
     }
     else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "axeAimPointY" || key == "m_axeAimPointY") m_axeAimPointY = std::clamp(number, 0.05f, 0.95f);
@@ -1283,7 +1289,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float requestedHitboxScale = bedaim::aimmath::distanceHitboxScale(
         baseHitboxScale, hitboxDistance, m_range, m_hitboxDistanceGrowth,
-        m_distanceDependentHitbox, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
+        m_distanceDependentHitbox);
 
     // Distance changes can make the virtual steering box jump between ticks.
     // Smooth the scalar itself before building its AABB, independently of the
@@ -1305,8 +1311,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         m_smoothedHitboxScale +=
             (requestedHitboxScale - m_smoothedHitboxScale) * scaleAlpha;
     }
-    const float hitboxScale = std::clamp(
-        m_smoothedHitboxScale, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
+    const float hitboxScale = std::clamp(m_smoothedHitboxScale, 0.25f, 200.0f);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1578,11 +1583,12 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
             migratedHitboxGrowth = 5.0f;
     }
-    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 500.0f);
-    m_hitboxDistanceMinLimit = std::clamp(j.value("m_hitboxDistanceMinLimit", m_hitboxDistanceMinLimit), 0.25f, 20.0f);
-    m_hitboxDistanceMaxLimit = std::clamp(j.value("m_hitboxDistanceMaxLimit", m_hitboxDistanceMaxLimit), 0.25f, 200.0f);
+    m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+        migratedHitboxGrowth, m_hitboxDistanceMinLimit, m_hitboxDistanceMaxLimit);
+    m_hitboxDistanceMinLimit = std::clamp(j.value("m_hitboxDistanceMinLimit", m_hitboxDistanceMinLimit), 0.1f, 500.0f);
+    m_hitboxDistanceMaxLimit = std::clamp(j.value("m_hitboxDistanceMaxLimit", m_hitboxDistanceMaxLimit), 0.1f, 500.0f);
     if (m_hitboxDistanceMinLimit > m_hitboxDistanceMaxLimit)
-        m_hitboxDistanceMinLimit = m_hitboxDistanceMaxLimit;
+        m_hitboxDistanceMaxLimit = m_hitboxDistanceMinLimit;
     m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
