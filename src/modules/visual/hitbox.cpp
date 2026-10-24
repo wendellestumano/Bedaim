@@ -10,6 +10,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
+#include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <string>
@@ -376,6 +377,97 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         drawLines(lines, color);
     };
 
+    // Reference-style reticle above each ESP player. It lives in world space and
+    // uses only that actor's current AABB, so Aim Assist never gates the ring.
+    auto drawTargetRing = [&](const AABB& aabb) {
+        const float width = aabb.max.x - aabb.min.x;
+        const float height = aabb.max.y - aabb.min.y;
+        const bedrocktools::sdk::Vec3 center{
+            (aabb.min.x + aabb.max.x) * 0.5f,
+            aabb.max.y + std::max(0.18f, height * 0.14f),
+            (aabb.min.z + aabb.max.z) * 0.5f
+        };
+
+        float nx = camX - center.x;
+        float ny = camY - center.y;
+        float nz = camZ - center.z;
+        const float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
+        if (!std::isfinite(nLen) || nLen < 0.001f) return;
+        nx /= nLen; ny /= nLen; nz /= nLen;
+
+        float rx = nz, ry = 0.0f, rz = -nx;
+        const float rLen = std::sqrt(rx*rx + ry*ry + rz*rz);
+        if (rLen < 0.001f) { rx = 1.0f; ry = 0.0f; rz = 0.0f; }
+        else { rx /= rLen; ry /= rLen; rz /= rLen; }
+        const float ux = ny*rz - nz*ry;
+        const float uy = nz*rx - nx*rz;
+        const float uz = nx*ry - ny*rx;
+
+        constexpr double tau = 6.2831853071795864769;
+        const double seconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78, tau));
+        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12, tau));
+        const float radius = std::clamp(std::max(width * 1.02f, 0.42f), 0.38f, 0.72f);
+        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> outerLines;
+        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> innerLines;
+        outerLines.reserve(88);
+        innerLines.reserve(76);
+        auto pointAt = [&](float r, float angle) {
+            return bedrocktools::sdk::Vec3{
+                center.x + rx * std::cos(angle) * r + ux * std::sin(angle) * r,
+                center.y + ry * std::cos(angle) * r + uy * std::sin(angle) * r,
+                center.z + rz * std::cos(angle) * r + uz * std::sin(angle) * r
+            };
+        };
+
+        // Four rotating breaks make the outer ring read as a sharp reticle, not a halo.
+        constexpr int outerSegments = 64;
+        for (int i = 0; i < outerSegments; ++i) {
+            if ((i % 16) >= 12) continue;
+            const float a0 = static_cast<float>(tau * i / outerSegments) + outerPhase;
+            const float a1 = static_cast<float>(tau * (i + 1) / outerSegments) + outerPhase;
+            outerLines.push_back({pointAt(radius, a0), pointAt(radius, a1)});
+        }
+
+        // Four angular arrowheads rotate with the outer segments and match the user's PNG.
+        for (int i = 0; i < 4; ++i) {
+            const float angle = static_cast<float>(tau * i / 4.0) + outerPhase;
+            const auto tip = pointAt(radius * 0.78f, angle);
+            const auto base = pointAt(radius * 1.18f, angle);
+            const float wing = radius * 0.18f;
+            const float tangentX = -rx * std::sin(angle) + ux * std::cos(angle);
+            const float tangentY = -ry * std::sin(angle) + uy * std::cos(angle);
+            const float tangentZ = -rz * std::sin(angle) + uz * std::cos(angle);
+            const bedrocktools::sdk::Vec3 wingA{
+                base.x + tangentX * wing, base.y + tangentY * wing, base.z + tangentZ * wing};
+            const bedrocktools::sdk::Vec3 wingB{
+                base.x - tangentX * wing, base.y - tangentY * wing, base.z - tangentZ * wing};
+            outerLines.push_back({tip, wingA});
+            outerLines.push_back({wingA, wingB});
+            outerLines.push_back({wingB, tip});
+        }
+
+        // Inner segmented arcs counter-rotate slowly, creating motion without flashing.
+        constexpr int middleSegments = 48;
+        for (int i = 0; i < middleSegments; ++i) {
+            if ((i % 12) >= 10) continue;
+            const float a0 = static_cast<float>(tau * i / middleSegments) + innerPhase;
+            const float a1 = static_cast<float>(tau * (i + 1) / middleSegments) + innerPhase;
+            innerLines.push_back({pointAt(radius * 0.70f, a0), pointAt(radius * 0.70f, a1)});
+        }
+        constexpr int innerSegments = 32;
+        for (int i = 0; i < innerSegments; ++i) {
+            if ((i % 8) == 7) continue;
+            const float a0 = static_cast<float>(tau * i / innerSegments) - outerPhase * 0.45f;
+            const float a1 = static_cast<float>(tau * (i + 1) / innerSegments) - outerPhase * 0.45f;
+            innerLines.push_back({pointAt(radius * 0.39f, a0), pointAt(radius * 0.39f, a1)});
+        }
+
+        drawLines(outerLines, 0xFF7247FFu); // violet
+        drawLines(innerLines, 0xFF405DFFu); // electric blue
+    };
+
     void* selectedEntity = nullptr;
     uintptr_t levelPtr = *(uintptr_t*)((uintptr_t)g_localPlayerPtr + bedrocktools::sdk::offsets::Actor::mLevel);
     if (levelPtr && s_hitResultGetEntity) {
@@ -411,7 +503,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
             drawBox(aabb,color);
-            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry");
+            if (esp->showLockInAim) drawTargetRing(aabb);
+            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
