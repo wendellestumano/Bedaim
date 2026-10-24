@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "id": "bedrocktools",
-  "version": "1.5.7",
+  "id": "bedaim",
+  "version": "0.1.0",
   "minecraft_versions": [
     "1.26.5X.X"
   ],
   "info": {
-    "name": "BedrockTools",
-    "author": "MrPokeG",
-    "description": "A collection of utility, HUD, player, training, and visual modules for Minecraft Bedrock.",
-    "homepage_url": "https://github.com/QYCottage/BedrockTools",
+    "name": "Bedaim",
+    "author": "Bedaim Contributors",
+    "description": "Bedaim-owned combat and visual modules for Minecraft Bedrock on Android.",
+    "homepage_url": "https://github.com/wendellestumano/Bedaim",
     "icon": "assets/bedrocktools.png",
     "tags": [
       "Utility",
@@ -23,8 +23,8 @@
       "*.so"
     ],
     "labels": {
-      "BedrockTools.levipack": "LeviPack",
-      "libBedrockTools.so": "Native library"
+      "Bedaim.levipack": "LeviPack",
+      "libBedaim.so": "Native library"
     }
   }
 }

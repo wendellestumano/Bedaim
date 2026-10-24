@@ -1,15 +1,16 @@
-# BedrockTools
+# Bedaim
 
 ## Introduction
 
-BedrockTools is an open-source native mod for Minecraft Bedrock on Android, made for [LeviLauncher](https://github.com/LiteLDev/LeviLaunchroid). It adds a collection of visual, HUD, player, and utility modules while also providing a small C++ SDK and event system for native mod development.
+Bedaim is an independent native C++20 module for Minecraft Bedrock on Android, built for LeviLauncher and Preloader. It focuses on Bedaim-owned combat and visual features. The shared SDK, signatures, hooks, and event infrastructure remain compatible with the BedrockTools-derived source layer.
 
-The source is public so people can study how a real LeviLauncher mod is structured, learn how BedrockTools works, and use it as a starting point for their own mods.
+The source is public so Bedaim features and native rendering behavior can be studied, tested, and extended.
 
 ## Features
 
 - Native C++20 mod built for LeviLauncher and Preloader
-- Configurable visual, HUD, player, and utility modules
+- Bedaim-owned combat, HUD, and visual modules
+- Connected Glass retained as a native-rendering research module
 - Public headers for Minecraft wrappers, offsets, signatures, and utilities
 - Typed event system with runtime subscriptions for other native mods
 - LeviLauncher mod-menu integration and persistent configuration
@@ -17,25 +18,25 @@ The source is public so people can study how a real LeviLauncher mod is structur
 
 ## Modules
 
-**Visual:** Fullbright, Motion Blur, Fog Color, Glint Color, TNT Timer, NoFog, View Model, Third Person Nametag, Chunk Border, Hitbox, Zoom, Breadcrumbs, FPS Unlocker, Light Overlay, ShulkerPreview, Connected Glass
+**Visual:** ESP (player outlines and off-screen indicators), Connected Glass
 
-**HUD:** Ping Counter, Reach Counter, Combo Display, Break Indicator, Player Coords, Compass, Speed Display, Session Timer, Frame Stats, Distance Tracker, World Time, Debug Menu, Keystrokes, Tablist
+**HUD:** ULTRAKILL HUD
 
-**Player:** Time Changer, Weather Changer, Nick, Skin Stealer, AutoGG, AutoReQ, BedrockAim (private training worlds), BedrockBounds (Hitbox Expander), ShiftBlade, Mace Swapper
+**Combat:** Aim Assist, AutoHit, Mace Swapper, Sword Swapper, Unglide, Hitbox Expander
 
-**Misc:** No Disconnect, Chat Timestamps, No Touch Border, CPS Limiter
+**Diagnostics:** Module Diagnostics
 
 ## System Requirements
 
 - Android 9 or newer
 - 64-bit ARM device (`arm64-v8a`)
 - [LeviLauncher](https://github.com/LiteLDev/LeviLaunchroid)
-- A Minecraft Bedrock version supported by the BedrockTools release you are using
+- A Minecraft Bedrock version supported by the Bedaim build you are using
 
 ## Installation
 
 1. Install LeviLauncher.
-2. Download the latest `BedrockTools.levipack` release.
+2. Download the latest `Bedaim.levipack` release.
 3. Import the package from LeviLauncher's mod manager and enable it.
 4. Launch Minecraft through LeviLauncher.
 
@@ -54,7 +55,7 @@ xmake f -y -p android -a arm64-v8a -m release --ndk=/path/to/android-ndk-r28c
 xmake -y
 ```
 
-The release build produces `libBedrockTools.so` and `BedrockTools.levipack` in the xmake target directory.
+The release build produces `libBedaim.so` and `Bedaim.levipack` in the xmake target directory.
 
 Public SDK headers are under `include/bedrocktools`. Shared runtime code lives under `src/core`, while features are kept under `src/modules` by category. Minecraft signatures and offsets are version-specific, so those are the main pieces that normally need updating for a new game build.
 
