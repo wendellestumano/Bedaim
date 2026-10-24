@@ -237,11 +237,16 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
     auto* aim = (aimBase && aimBase->enabled)
         ? static_cast<AimAssistModule*>(aimBase) : nullptr;
     void* currentTarget = nullptr;
-    AABB currentBounds{};
+    bedrocktools::sdk::AABB currentTargetBounds{};
     float aimRange = 0.0f;
+    const bool hasAimSnapshot =
+        aim && aim->currentTargetSnapshot(currentTarget, currentTargetBounds, aimRange);
+    // Aim Assist's public API uses the SDK AABB type; the RenderLevel hook has
+    // a local AABB wrapper with the same min/max layout. Convert explicitly.
+    const AABB currentBounds{currentTargetBounds.min, currentTargetBounds.max};
     const bool hasCurrentPlayerTarget =
-        aim && aim->currentTargetSnapshot(currentTarget, currentBounds, aimRange) &&
-        currentTarget && aim->currentTargetIsPlayerSnapshot(currentTarget) &&
+        hasAimSnapshot && currentTarget &&
+        aim->currentTargetIsPlayerSnapshot(currentTarget) &&
         validRenderBounds(currentBounds);
 
     const auto now = std::chrono::steady_clock::now();
