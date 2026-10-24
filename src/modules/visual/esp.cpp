@@ -139,7 +139,7 @@ void EspModule::onFrame(){
     commands.reserve(2);
     const float cx=surface.width*0.5f, cy=surface.height*0.5f;
     const auto now=std::chrono::steady_clock::now();
-    const float seconds=std::chrono::duration<float>(now.time_since_epoch()).count();
+    const double seconds=std::chrono::duration<double>(now.time_since_epoch()).count();
 
     // Target rings are rendered in world space above each player by the shared RenderLevel hook.
     // Do not draw a fixed screen-center reticle here: it is misleading when Aim Assist is idle.
