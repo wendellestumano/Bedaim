@@ -96,7 +96,7 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
 
     // Avoid cluttering the view with arrows for targets that are still comfortably
     // inside a typical Bedrock viewport; retain players to the rear as off-screen.
-    if(std::fabs(yawDelta)<=42.0f&&std::fabs(pitchDelta)<=28.0f)return;
+    // These thresholds are intentionally close to the viewport edge; the old 42°/28°\n    // gate showed arrows while players were still clearly visible.\n    if(std::fabs(yawDelta)<=50.0f&&std::fabs(pitchDelta)<=32.0f)return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
@@ -132,23 +132,8 @@ void EspModule::onFrame(){
     const auto now=std::chrono::steady_clock::now();
     const float seconds=std::chrono::duration<float>(now.time_since_epoch()).count();
 
-    if(showLockInAim){
-        auto* aim=static_cast<AimAssistModule*>(ModuleRegistry::get().find("bedrocktools.Aim Assist"));
-        void* target=nullptr;bedrocktools::sdk::AABB bounds{};float targetRange=0.0f;
-        const bool locked=aim&&aim->currentTargetSnapshot(target,bounds,targetRange)&&
-            aim->currentTargetIsPlayerSnapshot(target);
-        if(locked){
-            const float pulse=animatedIndicators?1.0f+0.055f*std::sin(seconds*5.2f):1.0f;
-            const float width=std::clamp(indicatorSize*1.55f,32.0f,150.0f)*pulse;
-            const float height=width*(42.0f/48.0f);
-            pl::modmenu::DrawCommand lockIn{};
-            lockIn.type=pl::modmenu::DrawCommandType::Image;
-            lockIn.x=cx-width*0.5f;lockIn.y=cy-height*0.5f;
-            lockIn.w=width;lockIn.h=height;lockIn.color=0xFFFFFFFFu;
-            lockIn.imageId="bedaim.esp.lockin";
-            commands.push_back(std::move(lockIn));
-        }
-    }
+    // Target rings are rendered in world space above each player by the shared RenderLevel hook.
+    // Do not draw a fixed screen-center reticle here: it is misleading when Aim Assist is idle.
 
     if(showOffscreenIndicators){
         bedrocktools::sdk::Vec3 target{},local{};
@@ -168,8 +153,15 @@ void EspModule::onFrame(){
                 const float yawRadians=yawDelta*kDegToRad;
                 const float pitchRadians=std::clamp(pitchDelta,-85.0f,85.0f)*kDegToRad;
                 float dirX=std::sin(yawRadians);
-                float dirY=-0.25f*std::cos(yawRadians)+std::tan(pitchRadians);
-                if(std::fabs(dirX)<0.05f&&std::fabs(dirY)<0.05f)dirY=(yawDelta>=0.0f)?1.0f:-1.0f;
+                // Pitch already uses negative angles for targets above the view; use it
+                // directly instead of the old constant vertical bias that tilted every arrow.
+                float dirY=std::tan(pitchRadians);
+                if(std::cos(yawRadians)<0.0f) {
+                    // A target behind the camera belongs on the lower edge unless its
+                    // vertical separation clearly points toward the upper/lower corners.
+                    dirY += (dirY < -0.35f) ? 0.0f : 0.65f;
+                }
+                if(std::fabs(dirX)<0.05f&&std::fabs(dirY)<0.05f)dirY=1.0f;
 
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
@@ -210,11 +202,11 @@ void EspModule::onMenuRegistered(){
  };
  toggle("showPlayers","Show players","Draw outlines around other players.",true);
  toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
- toggle("showLockInAim","Lock in Aim","Show the cyberpunk target reticle while Aim Assist has a player target.",true,"indicators");
+ toggle("showLockInAim","Target ring","Draw a ring above every visible player while ESP is enabled, independent of Aim Assist.",true,"indicators");
  toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
- size.description="Size of the screen-edge arrow and lock reticle.";size.category="indicators";
+ size.description="Size of the screen-edge arrow and the player target ring." ;size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
  size.hasCurrentValue=true;size.minValue="24";size.maxValue="96";size.step="2";size.unit=" px";schema.node(std::move(size));
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
