@@ -31,5 +31,3 @@ private:
     EGLDisplay m_appliedDisplay = EGL_NO_DISPLAY;
     EGLSurface m_appliedSurface = EGL_NO_SURFACE;
 };
-
-[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

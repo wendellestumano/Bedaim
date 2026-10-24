@@ -610,5 +610,3 @@ void UltrakillHudModule::saveConfig(nlohmann::json& j) {
     j["m_flashDurationMs"] = std::clamp(m_flashDurationMs, 50, 500);
     j["m_hitStopDurationMs"] = std::clamp(m_hitStopDurationMs, 0, 250);
 }
-
-[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

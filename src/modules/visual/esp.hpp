@@ -50,5 +50,3 @@ private:
     bool m_offscreenTargetValid = false;
     std::chrono::steady_clock::time_point m_offscreenFrameTime{};
 };
-
-[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

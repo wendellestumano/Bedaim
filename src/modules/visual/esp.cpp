@@ -187,5 +187,3 @@ void EspModule::saveConfig(nlohmann::json& j){
  j["outlineColor"]=std::string(color);
  std::snprintf(color,sizeof(color),"#%08X",tracerColor);j["tracerColor"]=std::string(color);
 }
-
-[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

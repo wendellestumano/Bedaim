@@ -171,5 +171,3 @@ private:
     bool m_lastAppliedExpandMobs = false;
     std::unordered_map<void*, NativeBoundsSnapshot> m_nativeBoundsOriginal;
 };
-
-[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

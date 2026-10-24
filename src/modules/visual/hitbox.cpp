@@ -634,5 +634,3 @@ void HitboxModule::saveConfig(nlohmann::json& j) {
     j["eyeLineColor"] = std::string(hexE);
     j["lookLineColor"] = std::string(hexL);
 }
-
-[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]
