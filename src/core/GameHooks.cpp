@@ -372,6 +372,7 @@ void* resolvePinnedActorAttackability() {
 #elif defined(__x86_64__)
     constexpr std::uintptr_t rva = 0xD5891A0;
 #else
+    constexpr std::uintptr_t rva = 0;
     return nullptr;
 #endif
 
@@ -1272,7 +1273,8 @@ bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
             // Apollon calls Actor::isAttackableGamemode() directly. Prefer the
             // exported native method over inferring attackability from GameType IDs.
             // resolveMinecraftFunction accepts only addresses owned by libminecraftpe.so.
-            // Never fall back to unverified version-specific offsets.
+            // If stripped, the separate fallback is gated to the exact documented build and
+            // verifies the candidate belongs to that same loaded image.
             const char* symbols[] = {
                 "_ZN5Actor20isAttackableGamemodeEv",
                 "_ZNK5Actor20isAttackableGamemodeEv"
