@@ -1,14 +1,9 @@
 ## 2026-10-24 — XRAY crash containment and world-ready gating
 - Added a live-LocalPlayer gate before XRAY face filtering, face-mask overrides, and chunk-rebuild traversal. ClientInstance updates in the main menu no longer trigger chunk-list traversal.
 - Fail open for null-region/synthetic tessellation instead of filtering menu or inventory-preview meshes.
+- Resolve LocalPlayer only while XRAY is enabled or a chunk rebuild is pending; the ordinary Connected Glass-off frame path does not gain a per-frame native lookup.
 - Preserved the existing Connected Glass face-mask update convention; no unverified change to that native operation is being used as a crash fix.
-- This narrows the crash path but is not in-game confirmation. Keep PR #101 in draft until menu launch, world entry/exit, ore visibility, Connected Glass, and Android CI are verified.
-## 2026-10-24 — Add experimental native X-Ray module
-- Add a dedicated XRay module that reuses the already-installed Connected Glass block-face and occlusion hooks rather than installing duplicate native hooks.
-- While enabled, non-ore world block faces are omitted from chunk tessellation and ore/ancient-debris faces are forced into the visible face mask. Toggling the module requests a render-chunk rebuild through the existing client-instance update path.
-- Keep XRAY fail-closed when its required face/occlusion hooks or chunk-dirtying entry point are unavailable. The independent Connected Glass path is unchanged when XRAY is off.
-- Add host regression tests for namespace handling and ore-name targeting. BetterResourcePackManager 2.2.1 is documented as an in-game resource-pack changer, but its public release repository exposes no source/API; this implementation does not guess an unsupported integration.
-- Validation status: CI and in-world behavior still require confirmation. This is an experimental mesh-filtering approach, not proof that all block types/render layers are covered.
+- Crash containment is not in-game confirmation. Keep PR #101 in draft until menu launch, world entry/exit, ore visibility, Connected Glass, and Android CI are verified.
 
 ## 2026-10-24 — Audit X-Ray / AlphaDepth pack integration
 - Inspected Connected Glass: its hooks only crop texture UVs for glass blocks/panes and do not switch block visibility or load AlphaDepth materials; it must not be repurposed as the X-Ray renderer.

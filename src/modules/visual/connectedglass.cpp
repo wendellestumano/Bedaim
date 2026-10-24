@@ -586,12 +586,21 @@ void ConnectedGlassHandleClientInstanceUpdate(void* clientInstance) {
         return;
     }
 
-    // This event also fires while the main menu is open. Do not inspect render
-    // chunk internals until the native client exposes a live local player.
+    const bool rebuildPending = g_rebuildPending.load(std::memory_order_acquire);
+    const bool xrayEnabled = g_xrayEnabled.load(std::memory_order_acquire);
+    if (!rebuildPending && !xrayEnabled) {
+        // Do not add a LocalPlayer native call to the normal Connected Glass-off
+        // frame path. XRAY state is only tracked while XRAY or a rebuild is pending.
+        g_worldReady.store(false, std::memory_order_release);
+        return;
+    }
+
+    // ClientInstanceUpdate also fires in the main menu. The native render-chunk
+    // list is touched only after the client exposes a live local player.
     auto* client = static_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
     const bool worldReady = client->localPlayer() != nullptr;
     g_worldReady.store(worldReady, std::memory_order_release);
-    if (!worldReady || !g_rebuildPending.load(std::memory_order_acquire)) return;
+    if (!worldReady || !rebuildPending) return;
 
     if (rebuildRenderChunks(clientInstance)) {
         g_rebuildPending.store(false, std::memory_order_release);
