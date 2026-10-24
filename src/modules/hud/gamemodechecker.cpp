@@ -382,6 +382,15 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(actor, attackable);
         const bool inferredSpectator = !hasExactGameType && !hasPredicateMode &&
             !hasCombatCreativeHint && hasSpectatorNoclipEvidence(actor);
+        bool visiblyNonAttackable = false;
+        if (!hasExactGameType && !hasPredicateMode && !hasCombatCreativeHint &&
+            hasAttackability && !attackable && g_actorIsInvisible) {
+            try {
+                visiblyNonAttackable = !g_actorIsInvisible(actor);
+            } catch (...) {
+                visiblyNonAttackable = false;
+            }
+        }
 
         std::string mode;
         bool inferred = false;
@@ -392,7 +401,10 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         } else if (inferredSpectator) {
             mode = "Spectator*";
             inferred = true;
-        } else if (hasCombatCreativeHint) {
+        } else if (hasCombatCreativeHint || visiblyNonAttackable) {
+            // Creative remains visible in the default game, unlike Spectator.
+            // Keep the marker because invisibility and attackability are heuristics,
+            // not an exact GameType getter.
             mode = "Creative*";
             inferred = true;
         } else if (hasAttackability) {
