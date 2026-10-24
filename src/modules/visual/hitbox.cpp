@@ -397,9 +397,15 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
         if(wantsEsp){
-            drawBox(aabb,esp->outlineColor);
+            if (esp->showBoxes) drawBox(aabb,esp->outlineColor);
+            if (esp->showTracers) {
+                const bedrocktools::sdk::Vec3 center{(aabb.min.x+aabb.max.x)*0.5f,aabb.min.y,(aabb.min.z+aabb.max.z)*0.5f};
+                std::vector<std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>> tracer;
+                tracer.push_back({bedrocktools::sdk::Vec3{camX,camY,camZ},center});
+                drawLines(tracer,esp->tracerColor);
+            }
             if (esp->showLockInAim) drawTargetRing(aabb);
-            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
+            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"standard_esp=box/tracer geometry submitted for first player");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
@@ -628,3 +634,5 @@ void HitboxModule::saveConfig(nlohmann::json& j) {
     j["eyeLineColor"] = std::string(hexE);
     j["lookLineColor"] = std::string(hexL);
 }
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

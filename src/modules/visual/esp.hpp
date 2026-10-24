@@ -30,12 +30,15 @@ public:
 
     bool showPlayers = true;
     bool showInvisible = false;
-    bool showLockInAim = true;
-    bool showOffscreenIndicators = true;
-    bool animatedIndicators = true;
+    bool showBoxes = true;
+    bool showTracers = true;
+    bool showLockInAim = false;
+    bool showOffscreenIndicators = false;
+    bool animatedIndicators = false;
     float indicatorSize = 48.0f;
     float range = 30.0f;
     std::uint32_t outlineColor = 0xFFFFFFFF;
+    std::uint32_t tracerColor = 0xFFFF3348;
 
 private:
     mutable std::mutex m_hudTargetMutex;
@@ -47,3 +50,5 @@ private:
     bool m_offscreenTargetValid = false;
     std::chrono::steady_clock::time_point m_offscreenFrameTime{};
 };
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

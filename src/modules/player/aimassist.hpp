@@ -60,6 +60,8 @@ public:
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
     float m_hitboxDistanceGrowth = 5.0f;
+    float m_hitboxDistanceStrengthMin = 0.4f;
+    float m_hitboxDistanceStrengthMax = 40.0f;
     bool m_hitboxGrowthScaleV2 = true;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
@@ -169,3 +171,5 @@ private:
     bool m_lastAppliedExpandMobs = false;
     std::unordered_map<void*, NativeBoundsSnapshot> m_nativeBoundsOriginal;
 };
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

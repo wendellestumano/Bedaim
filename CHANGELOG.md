@@ -1,3 +1,12 @@
+## 2026-10-24 — Standard ESP, bounded hit-stop, and Hitbox strength controls
+
+- Retired the ESP off-screen locator. The ESP now exposes independent player-box and tracer toggles with separate configurable colors, rendered through the existing world-space RenderLevel hook.
+- Added a PNG asset for the ULTRAKILL white impact overlay and registered a white RGBA image for full-screen alpha compositing. The overlay still depends on a confirmed mace AttackResultEvent; runtime event delivery requires in-game verification.
+- Connected hit-stop to FPS Unlocker temporary 1-FPS pacing, bounded to the configured duration (0–250 ms) and automatically restored without changing the saved target.
+- Added Aim Assist Hitbox Distance Strength Min/Max numeric controls and persisted/clamped both values.
+- Gamemode Checker work is intentionally excluded from this change.
+- Validation pending: host regression tests, Android ARM64 packaging, and in-game confirmation of ESP rendering, flash timing, and FPS restoration.
+
 ## 2026-10-24 — Stable-main ESP and configurable mace impact effects
 - Start from the current `main` commit `4cd96223548dc03efd3b670c0eba53c785be5710`; this pass does not merge or port the closed experimental PR #94.
 - Remove game-mode queries from the ESP outline path. All players use one configurable ARGB outline color; legacy per-mode config migrates to the prior Survival color.
@@ -274,3 +283,5 @@
 - Extended BedrockAim diagnostics for missing native dependencies, target selection, and stale target snapshots; InventoryAccess reports offhand reader availability and transfer results.
 - Added Mace Swapper reason-coded probes for fall thresholds, cooldown, target/crosshair/range gates, slot selection, pending attacks, and native attack results.
 - Added `docs/MODULE_DIAGNOSTICS.md` with export instructions, log interpretation, and runtime-validation limits.
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

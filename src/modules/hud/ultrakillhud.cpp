@@ -2,6 +2,7 @@
 
 #include "core/InventoryAccess.hpp"
 #include "modules/ModuleRegistry.hpp"
+#include "../visual/fpsunlocker.hpp"
 
 #include <bedrocktools/events/AttackEvent.hpp>
 #include <bedrocktools/events/AttackResultEvent.hpp>
@@ -118,34 +119,15 @@ bool UltrakillHudModule::isMaceEquipped(Player* player) const {
 }
 
 void UltrakillHudModule::onInit() {
+    static const std::vector<unsigned char> flashPixel{255,255,255,255};
+    pl::modmenu::registerImage("bedaim.ultrakill.white_flash", flashPixel, 1, 1);
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onLocalPlayerTick(event.player); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
-    // Keep the impact frame visible, then cancel subsequent frame events for a
-    // configurable, strictly bounded interval. This does not alter the game's FPS limit.
-    bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
-        [this](auto& event) {
-            if (!enabled) return;
-            std::lock_guard lock(m_stateMutex);
-            if (!m_enableHitStop || m_hitStopDurationMs <= 0) {
-                m_hitStopPending = false;
-                m_hitStopUntil = {};
-                return;
-            }
-            if (m_hitStopPending) {
-                m_hitStopPending = false;
-                return;
-            }
-            if (m_hitStopUntil.time_since_epoch().count() != 0) {
-                if (Clock::now() < m_hitStopUntil) {
-                    event.cancel();
-                } else {
-                    m_hitStopUntil = {};
-                }
-            }
-        }, bedrocktools::events::EventPriority::Last);
+    // Hit-stop is driven by the temporary FPS limiter, not FrameEvent cancellation,
+    // so the flash has a chance to be submitted and displayed.
 }
 
 void UltrakillHudModule::onLocalPlayerTick(Player* player) {
@@ -199,6 +181,7 @@ void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
     if (m_enableHitStop && m_hitStopDurationMs > 0) {
         m_hitStopUntil = now + std::chrono::milliseconds(m_hitStopDurationMs);
         m_hitStopPending = true;
+        if (auto* fps = static_cast<FPSUnlockerModule*>(ModuleRegistry::get().find("bedrocktools.FPS Unlocker"))) fps->requestTemporaryTargetFPS(1, m_hitStopDurationMs);
     } else {
         m_hitStopUntil = {};
         m_hitStopPending = false;
@@ -357,7 +340,12 @@ void UltrakillHudModule::onFrame() {
         const float fadeTau = std::max(0.01f, flashDurationSeconds * 0.208f);
         const float fade = std::exp(-std::max(0.0f, hitAge) / fadeTau);
         const int alpha = static_cast<int>(static_cast<float>(flashOpacity) * fade);
-        if (alpha >= 5) addRect(0.0f, 0.0f, screenW, screenH, withAlpha(kWhite, alpha));
+        if (alpha >= 5) {
+            PLModMenu_DrawCommand flash = {};
+            flash.type = PL_DRAW_IMAGE; flash.x = 0.0f; flash.y = 0.0f; flash.w = screenW; flash.h = screenH;
+            flash.color = withAlpha(0xFFFFFFFFu, alpha); flash.imageId = "bedaim.ultrakill.white_flash";
+            cmds.push_back(std::move(flash));
+        }
 
         const float cx = screenW * 0.5f;
         const float cy = screenH * 0.5f;
@@ -622,3 +610,5 @@ void UltrakillHudModule::saveConfig(nlohmann::json& j) {
     j["m_flashDurationMs"] = std::clamp(m_flashDurationMs, 50, 500);
     j["m_hitStopDurationMs"] = std::clamp(m_hitStopDurationMs, 0, 250);
 }
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

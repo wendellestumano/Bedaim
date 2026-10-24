@@ -449,6 +449,8 @@ void AimAssistModule::onMenuRegistered() {
             .config("strength", "Strength (exact)", ConfigType::Text, "0.25")
             .config("hitboxScale", "Hitbox Area (exact)", ConfigType::Text, "1.00")
             .config("hitboxDistanceGrowth", "Hitbox Growth (exact)", ConfigType::Text, "5.00")
+            .config("hitboxDistanceStrengthMin", "Hitbox Distance Strength Min", ConfigType::Text, "0.40")
+            .config("hitboxDistanceStrengthMax", "Hitbox Distance Strength Max", ConfigType::Text, "40.00")
             .config("predictionLeadMs", "Prediction Lead ms (exact)", ConfigType::Text, "120.00")
             .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
                 onMenuConfigChanged(key, value);
@@ -480,6 +482,8 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
     else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
+    else if (key == "hitboxDistanceStrengthMin") { m_hitboxDistanceStrengthMin = std::clamp(number, 0.05f, 40.0f); m_hitboxDistanceStrengthMax = std::max(m_hitboxDistanceStrengthMax, m_hitboxDistanceStrengthMin); }
+    else if (key == "hitboxDistanceStrengthMax") { m_hitboxDistanceStrengthMax = std::clamp(number, 0.05f, 40.0f); m_hitboxDistanceStrengthMin = std::min(m_hitboxDistanceStrengthMin, m_hitboxDistanceStrengthMax); }
     else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "axeAimPointY" || key == "m_axeAimPointY") m_axeAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "maceAimPointY" || key == "m_maceAimPointY") m_maceAimPointY = std::clamp(number, 0.05f, 0.95f);
@@ -1261,7 +1265,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const float hitboxDistance = std::sqrt(std::max(0.0f, distanceSquared(eyePosition, boundsCenter)));
     const float hitboxScale = bedaim::aimmath::distanceHitboxScale(
         baseHitboxScale, hitboxDistance, m_range, m_hitboxDistanceGrowth,
-        m_distanceDependentHitbox);
+        m_hitboxDistanceStrengthMin, m_hitboxDistanceStrengthMax, m_distanceDependentHitbox);
     const Vec3 halfExtents{
         (bounds.max.x - bounds.min.x) * 0.5f * hitboxScale,
         (bounds.max.y - bounds.min.y) * 0.5f * hitboxScale,
@@ -1519,6 +1523,8 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
             migratedHitboxGrowth = 5.0f;
     }
     m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 500.0f);
+    m_hitboxDistanceStrengthMin = std::clamp(j.value("m_hitboxDistanceStrengthMin", m_hitboxDistanceStrengthMin), 0.05f, 40.0f);
+    m_hitboxDistanceStrengthMax = std::clamp(j.value("m_hitboxDistanceStrengthMax", m_hitboxDistanceStrengthMax), m_hitboxDistanceStrengthMin, 40.0f);
     m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
@@ -1581,6 +1587,8 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_distanceDependentHitbox"] = m_distanceDependentHitbox;
     j["m_hitboxDistanceGrowth"] = m_hitboxDistanceGrowth;
+    j["m_hitboxDistanceStrengthMin"] = m_hitboxDistanceStrengthMin;
+    j["m_hitboxDistanceStrengthMax"] = m_hitboxDistanceStrengthMax;
     j["m_hitboxGrowthScaleV2"] = true;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;
@@ -2019,3 +2027,5 @@ void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
     j["m_requireLineOfSight"] = m_requireLineOfSight;
     j["m_showHitbox"] = m_showHitbox;
 }
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

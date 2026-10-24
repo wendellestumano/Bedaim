@@ -36,4 +36,9 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
 // then progressively larger with distance. This does not modify native collision.
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
                           float strength, bool enabled) noexcept;
+float distanceHitboxScale(float baseScale, float distance, float configuredRange,
+                          float strength, float minimumMultiplier,
+                          float maximumMultiplier, bool enabled) noexcept;
 } // namespace bedaim::aimmath
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]

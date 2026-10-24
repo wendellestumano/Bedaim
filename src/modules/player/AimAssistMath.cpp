@@ -107,7 +107,7 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
 }
 
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
-                          float strength, bool enabled) noexcept {
+                          float strength, float minimumMultiplier, float maximumMultiplier, bool enabled) noexcept {
     const float safeBase = std::clamp(
         std::isfinite(baseScale) ? baseScale : 1.0f, 1.0f, 200.0f);
     if (!enabled) return safeBase;
@@ -138,8 +138,17 @@ float distanceHitboxScale(float baseScale, float distance, float configuredRange
     // still bounded; the close-range multiplier is deliberately below one.
     const float strengthFactor = std::sqrt(safeStrength / 5.0f);
     const float farMultiplier = std::clamp(0.8f + 2.0f * strengthFactor, 1.1f, 40.0f);
-    const float multiplier = 0.4f + (farMultiplier - 0.4f) * distanceBlendWithinRange;
+    const float safeMin = std::clamp(std::isfinite(minimumMultiplier) ? minimumMultiplier : 0.4f, 0.05f, 40.0f);
+    const float safeMax = std::clamp(std::isfinite(maximumMultiplier) ? maximumMultiplier : 6.0f, safeMin, 40.0f);
+    const float multiplier = std::clamp(safeMin + (farMultiplier - safeMin) * distanceBlendWithinRange, safeMin, safeMax);
     return std::clamp(safeBase * multiplier, 0.25f, 200.0f);
 }
 
+float distanceHitboxScale(float baseScale, float distance, float configuredRange,
+                          float strength, bool enabled) noexcept {
+    return distanceHitboxScale(baseScale, distance, configuredRange, strength, 0.4f, 40.0f, enabled);
+}
+
 } // namespace bedaim::aimmath
+
+[executed on device: localhost (e1d4d221-df7a-4b7f-8115-0ecb8c62d73c)]
