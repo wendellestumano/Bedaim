@@ -201,12 +201,57 @@ static AABB getActorAABB(void* actor) {
 }
 
 static bedrocktools::sdk::Vec2 getActorRotation(void* actor) {
+    using bedrocktools::sdk::Vec2;
     if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000)
         return {0.0f, 0.0f};
-    const auto rotation = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor)->rotation();
-    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y))
-        return {0.0f, 0.0f};
-    return rotation;
+
+    // Actor::rotation() can describe actor/body rotation, not necessarily the
+    // current first-person camera pitch. Use the same component as AimAssist,
+    // whose Vec2 layout is {pitch, yaw}.
+    static std::atomic_bool cameraSourceLogged{false};
+    static std::atomic_bool upwardPitchLogged{false};
+    static std::atomic_bool downwardPitchLogged{false};
+    auto* player = reinterpret_cast<bedrocktools::sdk::Player*>(actor);
+    if (auto* component = player->rotationComponent();
+        component && reinterpret_cast<std::uintptr_t>(component) > 0x1000) {
+        Vec2 viewRotation{};
+        std::memcpy(&viewRotation, component, sizeof(viewRotation));
+        if (std::isfinite(viewRotation.x) && std::isfinite(viewRotation.y) &&
+            std::fabs(viewRotation.x) <= 180.0f) {
+            viewRotation.x = std::clamp(viewRotation.x, -89.0f, 89.0f);
+            viewRotation.y = std::remainder(viewRotation.y, 360.0f);
+            if (!cameraSourceLogged.exchange(true, std::memory_order_acq_rel)) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+                    "ESP", "locator_rotation_source=player_rotation_component (pitch,yaw)");
+            }
+            if (viewRotation.x < -25.0f &&
+                !upwardPitchLogged.exchange(true, std::memory_order_acq_rel)) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+                    "ESP", "locator_camera_pitch_sample=looking_up pitch=" +
+                    std::to_string(viewRotation.x) + " yaw=" + std::to_string(viewRotation.y));
+            }
+            if (viewRotation.x > 25.0f &&
+                !downwardPitchLogged.exchange(true, std::memory_order_acq_rel)) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+                    "ESP", "locator_camera_pitch_sample=looking_down pitch=" +
+                    std::to_string(viewRotation.x) + " yaw=" + std::to_string(viewRotation.y));
+            }
+            return viewRotation;
+        }
+    }
+
+    // Keep a bounded fallback for unusual runtime/player implementations, but
+    // record it explicitly: body rotation may not track the camera pitch.
+    const auto rotation =
+        reinterpret_cast<const bedrocktools::sdk::Actor*>(actor)->rotation();
+    static std::atomic_bool fallbackLogged{false};
+    if (!fallbackLogged.exchange(true, std::memory_order_acq_rel)) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "ESP", "locator_rotation_source=Actor::rotation fallback; camera component unavailable");
+    }
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y) ||
+        std::fabs(rotation.x) > 180.0f) return {0.0f, 0.0f};
+    return {std::clamp(rotation.x, -89.0f, 89.0f), std::remainder(rotation.y, 360.0f)};
 }
 
 static bool hasCategory(void* actor, uint32_t categoryBit) {

@@ -6,7 +6,6 @@
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include "core/GameHooks.hpp"
-#include "core/memory/SafeRead.hpp"
 #include "core/Diagnostics.hpp"
 
 #include <algorithm>
@@ -261,36 +260,24 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             std::to_string(actorCount));
     }
 
-    // Copy entries through /proc/self/mem so an invalid/stale native vector
-    // fails closed rather than directly faulting this module's reader.
+    // The returned vector belongs to the live engine query and is consumed
+    // synchronously by AimAssist and Hitbox using direct iteration as well.
+    // Reading its entries through /proc/self/mem fails in some Android game
+    // processes even when this native vector is valid, incorrectly leaving the
+    // checker at query:OFF. Validate the vector header above, then copy only
+    // actor pointers directly before calling any per-actor native methods.
+    static std::atomic_bool directSnapshotLogged{false};
+    if (!directSnapshotLogged.exchange(true, std::memory_order_acq_rel)) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+            "GameModeChecker", "actor_snapshot_reader=direct_validated_native_vector");
+    }
     std::vector<void*> actors;
     actors.reserve(actorCount);
     for (std::size_t i = 0; i < actorCount; ++i) {
-        DistanceSortedActor entry{};
-        const auto entryAddress = begin + i * sizeof(DistanceSortedActor);
-        if (!bedrocktools::core::memory::readSelfMemory(entryAddress, &entry, sizeof(entry))) {
-            diag.actorSnapshotReady = false;
-            static std::atomic_bool unreadableEntryLogged{false};
-            if (!unreadableEntryLogged.exchange(true, std::memory_order_acq_rel)) {
-                bedrocktools::diagnostics::log(
-                    bedrocktools::diagnostics::Level::Warning, "GameModeChecker",
-                    "nearby_actor_query contained an unreadable entry; skipping remaining snapshot");
-            }
-            publishDiagnosticsOnly();
-            return;
-        }
-        if (!entry.actor || entry.actor == localPlayer ||
-            reinterpret_cast<std::uintptr_t>(entry.actor) <= 0x1000) continue;
-        // Confirm the actor header and vtable pointer are readable before passing
-        // the pointer into native Actor/Player APIs.
-        void* vtable = nullptr;
-        if (!bedrocktools::core::memory::readSelfMemory(
-                reinterpret_cast<std::uintptr_t>(entry.actor), &vtable, sizeof(vtable)) ||
-            !vtable || reinterpret_cast<std::uintptr_t>(vtable) <= 0x1000) continue;
-        void* firstVtableEntry = nullptr;
-        if (!bedrocktools::core::memory::readSelfMemory(
-                reinterpret_cast<std::uintptr_t>(vtable), &firstVtableEntry,
-                sizeof(firstVtableEntry)) || !firstVtableEntry) continue;
+        const DistanceSortedActor& entry = actorVector.begin[i];
+        const auto actorAddress = reinterpret_cast<std::uintptr_t>(entry.actor);
+        if (!entry.actor || entry.actor == localPlayer || actorAddress <= 0x1000 ||
+            actorAddress % alignof(void*) != 0) continue;
         actors.push_back(entry.actor);
     }
 

@@ -1,3 +1,8 @@
+## 2026-10-24 — Use live camera rotation and repair GameMode Checker actor snapshots
+- Locator now reads the local player's `rotationComponent()` (the same pitch/yaw source used by AimAssist) rather than relying on `Actor::rotation()`, which may reflect body rotation instead of the live view. Added one-time source and steep-pitch diagnostic samples.
+- GameMode Checker now consumes the already-validated native actor vector directly, matching the working enumeration pattern used by AimAssist/Hitbox. Removed the `/proc/self/mem` read path that logged valid snapshots as unreadable before player classification could run.
+- Extended locator math regression coverage for camera-aligned targets at nonzero yaw and both steep pitch signs. Runtime mode classification still requires checking the new diagnostics in-game after installing the resulting package.
+
 ## 2026-10-24 — Harden keybind edges, ESP locator projection, and GameMode Checker
 - Added press-edge tracking to the shared module keybind toggle so repeated key-down events do not toggle a module repeatedly; always pass key-up to clear held state while chat/container input is blocked.
 - Extracted off-screen locator math into a testable helper, retained the Bedrock pitch/yaw convention, handled nearly vertical targets, and replaced the fixed downward fallback for degenerate/behind-camera projections with an angular fallback. The Hitbox/ESP rotation reader now uses the SDK Actor rotation accessor with finite-value checks.

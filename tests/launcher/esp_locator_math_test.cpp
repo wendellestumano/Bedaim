@@ -54,6 +54,24 @@ int main() {
     check(!edgeDirection(origin, {0,0,0}, level, dir),
           "zero-length target vector is rejected without division by zero");
 
+    // Match AimAssist's live camera basis, including nonzero yaw and both
+    // signs of pitch. A camera-aligned target must stay on-screen when looking
+    // sharply upward or downward.
+    const Rotation viewCases[] = {Rotation{-65.0f, 37.0f}, Rotation{65.0f, -121.0f}};
+    for (const Rotation view : viewCases) {
+        const float pitch = view.pitch * kDegToRad;
+        const float yaw = view.yaw * kDegToRad;
+        const float cosPitch = std::cos(pitch);
+        const Vec3 forward{
+            -std::sin(yaw) * cosPitch,
+            -std::sin(pitch),
+            std::cos(yaw) * cosPitch
+        };
+        const Vec3 aligned{forward.x * 12.0f, forward.y * 12.0f, forward.z * 12.0f};
+        check(!isOffscreen(origin, aligned, view, 16.0f/9.0f),
+              "camera-aligned target stays on-screen for signed pitch and nonzero yaw");
+    }
+
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
