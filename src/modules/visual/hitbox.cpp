@@ -219,8 +219,9 @@ static bool hasCategory(void* actor, uint32_t categoryBit) {
 
 static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
                                           const bedrocktools::sdk::Vec3& localPosition,
-                                          const ActorVec& actors, bool actorSnapshotValid,
-                                          bool actorSnapshotEmpty, float targetRange) {
+                                          const std::vector<DistanceSortedActor>& actors,
+                                          bool actorSnapshotValid, bool actorSnapshotEmpty,
+                                          float targetRange) {
     if (!esp || !localPlayer) return;
     esp->beginOffscreenFrame(localPosition, getActorRotation(localPlayer));
     if (!esp->enabled || !esp->showOffscreenIndicators ||
