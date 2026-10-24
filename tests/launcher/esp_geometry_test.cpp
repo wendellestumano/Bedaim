@@ -44,7 +44,7 @@ int main() {
         check(finite(segment.first) && finite(segment.second), "AABB line endpoints are finite");
     }
 
-    const AABB invalid{{0, 0, 0}, {0, 1, 1}};
+    const bedaim::esp_geometry::AABB invalid{{0, 0, 0}, {0, 1, 1}};
     check(!isValidBounds(invalid), "zero-width AABB rejected");
     check(!buildAabbEdges(invalid, edges), "invalid AABB does not generate lines");
 
@@ -64,6 +64,22 @@ int main() {
           "disabled animation is independent of wall-clock time");
     check(!same(animatedRingA.outer[0].first, animatedRingB.outer[0].first),
           "enabled animation changes outer ring phase");
+
+    const Vec3 ringCenter{
+        (box.min.x + box.max.x) * 0.5f,
+        box.max.y + std::fmax(0.18f, (box.max.y - box.min.y) * 0.14f),
+        (box.min.z + box.max.z) * 0.5f
+    };
+    Vec3 viewNormal{camera.x-ringCenter.x, camera.y-ringCenter.y, camera.z-ringCenter.z};
+    const float normalLength = std::sqrt(viewNormal.x*viewNormal.x +
+                                         viewNormal.y*viewNormal.y +
+                                         viewNormal.z*viewNormal.z);
+    viewNormal.x /= normalLength; viewNormal.y /= normalLength; viewNormal.z /= normalLength;
+    const Vec3 radial{animatedRingA.outer[0].first.x-ringCenter.x,
+                      animatedRingA.outer[0].first.y-ringCenter.y,
+                      animatedRingA.outer[0].first.z-ringCenter.z};
+    check(std::fabs(radial.x*viewNormal.x + radial.y*viewNormal.y + radial.z*viewNormal.z) < 0.01f,
+          "reticle geometry lies in a camera-facing plane");
     for (const auto& segment : animatedRingA.outer) {
         check(finite(segment.first) && finite(segment.second), "outer ring endpoints are finite");
     }
