@@ -60,8 +60,8 @@ public:
     float m_hitboxScale = 1.0f;
     bool m_distanceDependentHitbox = true;
     float m_hitboxDistanceGrowth = 5.0f;
-    float m_hitboxDistanceMinLimit = 0.40f;
-    float m_hitboxDistanceMaxLimit = 4.0f;
+    float m_hitboxDistanceMinLimit = 0.1f;
+    float m_hitboxDistanceMaxLimit = 500.0f;
     bool m_hitboxGrowthScaleV2 = true;
     float m_strength = 0.25f;
     float m_aimSpeed = 5.0f;
