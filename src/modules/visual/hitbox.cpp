@@ -406,9 +406,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         constexpr double tau = 6.2831853071795864769;
         const double seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78, tau));
-        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12, tau));
-        const float radius = std::clamp(std::max(width * 1.02f, 0.42f), 0.38f, 0.72f);
+        const double animationEnabled = (esp && esp->animatedIndicators) ? 1.0 : 0.0;
+        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled, tau));
+        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled, tau));
+        const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
+        const float radius = std::clamp(std::max(width * 1.02f, 0.42f) * sizeScale, 0.22f, 1.20f);
         std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> outerLines;
         std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> innerLines;
         outerLines.reserve(88);
