@@ -4,7 +4,7 @@
 
 namespace bedrocktools::events {
 
-struct FrameEvent : Cancellable {
+struct FrameEvent {
     static constexpr EventType type = EventType::Frame;
 };
 
