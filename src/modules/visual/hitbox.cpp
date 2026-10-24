@@ -395,8 +395,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         drawLines(lines, color);
     };
 
-    // Camera-facing segmented neon ring, positioned in world space near the top of
-    // the player's bounds. It follows the player and does not depend on Aim Assist.
+    // The supplied pixel-art reticle becomes a world-anchored ring above each
+    // player. The split arcs and four arrowheads rotate independently; no Aim Assist
+    // target state is consulted, only ESP visibility and the live player AABB.
     auto drawTargetRing = [&](const AABB& aabb) {
         const float width = aabb.max.x - aabb.min.x;
         const float height = aabb.max.y - aabb.min.y;
@@ -404,7 +405,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const float centerZ = (aabb.min.z + aabb.max.z) * 0.5f;
         const bedrocktools::sdk::Vec3 center{
             centerX,
-            aabb.max.y - std::max(0.06f, height * 0.18f),
+            aabb.max.y + std::max(0.18f, height * 0.14f),
             centerZ
         };
 
@@ -415,7 +416,6 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         if (!std::isfinite(nLen) || nLen < 0.001f) return;
         nx /= nLen; ny /= nLen; nz /= nLen;
 
-        // right = world-up x view-normal; up = view-normal x right
         float rx = nz, ry = 0.0f, rz = -nx;
         const float rLen = std::sqrt(rx*rx + ry*ry + rz*rz);
         if (rLen < 0.001f) { rx = 1.0f; ry = 0.0f; rz = 0.0f; }
@@ -424,10 +424,16 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const float uy = nz*rx - nx*rz;
         const float uz = nx*ry - ny*rx;
 
-        const float radius = std::clamp(std::max(width * 0.95f, 0.38f), 0.34f, 0.62f);
+        const float radius = std::clamp(std::max(width * 1.02f, 0.42f), 0.38f, 0.72f);
         constexpr float tau = 6.2831853071795864769f;
-        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> ringLines;
-        ringLines.reserve(112);
+        const float seconds = std::chrono::duration<float>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        const float outerPhase = seconds * 0.78f;
+        const float innerPhase = -seconds * 1.12f;
+        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> outerLines;
+        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> innerLines;
+        outerLines.reserve(96);
+        innerLines.reserve(76);
         auto pointAt = [&](float r, float angle) {
             return bedrocktools::sdk::Vec3{
                 center.x + rx * std::cos(angle) * r + ux * std::sin(angle) * r,
@@ -436,34 +442,52 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             };
         };
 
-        // Outer ring has four deliberate breaks, echoing the sharp pixel-art arrow.
+        // Four rotating gaps echo the segmented ring in the reference icon.
         constexpr int outerSegments = 64;
         for (int i = 0; i < outerSegments; ++i) {
             if ((i % 16) >= 12) continue;
-            const float a0 = tau * static_cast<float>(i) / outerSegments;
-            const float a1 = tau * static_cast<float>(i + 1) / outerSegments;
-            ringLines.push_back({pointAt(radius, a0), pointAt(radius, a1)});
+            const float a0 = tau * static_cast<float>(i) / outerSegments + outerPhase;
+            const float a1 = tau * static_cast<float>(i + 1) / outerSegments + outerPhase;
+            outerLines.push_back({pointAt(radius, a0), pointAt(radius, a1)});
         }
-        // Two clean inner rings keep the target readable without a busy center sprite.
+
+        // Four inward-pointing chevrons orbit the outside ring like the supplied PNG.
+        for (int i = 0; i < 4; ++i) {
+            const float angle = tau * static_cast<float>(i) / 4.0f + outerPhase;
+            const auto tip = pointAt(radius * 0.77f, angle);
+            const auto base = pointAt(radius * 1.17f, angle);
+            const float wing = radius * 0.18f;
+            const float tangentX = -rx * std::sin(angle) + ux * std::cos(angle);
+            const float tangentY = -ry * std::sin(angle) + uy * std::cos(angle);
+            const float tangentZ = -rz * std::sin(angle) + uz * std::cos(angle);
+            const bedrocktools::sdk::Vec3 wingA{
+                base.x + tangentX * wing, base.y + tangentY * wing, base.z + tangentZ * wing};
+            const bedrocktools::sdk::Vec3 wingB{
+                base.x - tangentX * wing, base.y - tangentY * wing, base.z - tangentZ * wing};
+            outerLines.push_back({tip, wingA});
+            outerLines.push_back({wingA, wingB});
+            outerLines.push_back({wingB, tip});
+        }
+
+        // Inner arcs counter-rotate slowly, creating visible movement without a
+        // rapidly flashing full-screen effect or a center lock point.
         constexpr int middleSegments = 48;
         for (int i = 0; i < middleSegments; ++i) {
-            const float a0 = tau * static_cast<float>(i) / middleSegments;
-            const float a1 = tau * static_cast<float>(i + 1) / middleSegments;
-            ringLines.push_back({pointAt(radius * 0.72f, a0), pointAt(radius * 0.72f, a1)});
+            if ((i % 12) >= 10) continue;
+            const float a0 = tau * static_cast<float>(i) / middleSegments + innerPhase;
+            const float a1 = tau * static_cast<float>(i + 1) / middleSegments + innerPhase;
+            innerLines.push_back({pointAt(radius * 0.70f, a0), pointAt(radius * 0.70f, a1)});
         }
         constexpr int innerSegments = 32;
         for (int i = 0; i < innerSegments; ++i) {
-            const float a0 = tau * static_cast<float>(i) / innerSegments;
-            const float a1 = tau * static_cast<float>(i + 1) / innerSegments;
-            ringLines.push_back({pointAt(radius * 0.42f, a0), pointAt(radius * 0.42f, a1)});
+            if ((i % 8) == 7) continue;
+            const float a0 = tau * static_cast<float>(i) / innerSegments - outerPhase * 0.45f;
+            const float a1 = tau * static_cast<float>(i + 1) / innerSegments - outerPhase * 0.45f;
+            innerLines.push_back({pointAt(radius * 0.39f, a0), pointAt(radius * 0.39f, a1)});
         }
-        // Four short cardinal ticks give it a crisp, game-readable silhouette.
-        for (int i = 0; i < 4; ++i) {
-            const float a = tau * static_cast<float>(i) / 4.0f;
-            ringLines.push_back({pointAt(radius * 1.06f, a), pointAt(radius * 1.24f, a)});
-        }
-        const std::uint32_t neonGreen = 0xFF39FF14u;
-        drawLines(ringLines, neonGreen);
+
+        drawLines(outerLines, 0xFF7247FFu); // violet
+        drawLines(innerLines, 0xFF405DFFu); // electric blue
     };
 
     void* selectedEntity = nullptr;
