@@ -1,3 +1,11 @@
+## 2026-10-24 — Reset to main and refocus ESP
+
+- Restarted from the unmodified `main` commit `4cd96223548dc03efd3b670c0eba53c785be5710`; earlier experimental ESP/HUD/AimAssist changes are not carried into this branch.
+- Removed the standalone GameMode Checker module and its AimAssist-only spectator heuristic dependency; AimAssist retains its existing native game-mode/attackability checks.
+- Retired the unreliable off-screen locator arrow. ESP now focuses on player AABB boxes, optional camera-to-player tracers, and the existing target ring, with tracers configurable in the ESP settings.
+- ProtoHax reference: `hax0r31337/ProtoHax-Android`, `ModuleESP.kt` (GPL-3.0). This implementation uses the project as a behavioral reference; it does not copy Kotlin source.
+- Validation pending: host tests, Android ARM64 compilation/package, then in-game rendering verification.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.

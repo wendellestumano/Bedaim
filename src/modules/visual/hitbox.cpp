@@ -7,6 +7,7 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
+#include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
@@ -218,52 +219,6 @@ static bool hasCategory(void* actor, uint32_t categoryBit) {
 
 
 
-static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
-                                          const bedrocktools::sdk::Vec3& localPosition,
-                                          const ActorVec& actors, bool actorSnapshotValid,
-                                          bool actorSnapshotEmpty, float targetRange) {
-    if (!esp || !localPlayer) return;
-    esp->beginOffscreenFrame(localPosition, getActorRotation(localPlayer));
-    if (!esp->enabled || !esp->showOffscreenIndicators ||
-        !s_actorFetchNearby || !s_actorIsPlayer) return;
-
-    const bool empty = actorSnapshotEmpty;
-    const bool valid = actorSnapshotValid;
-    if (!valid) {
-        espLogOnce(espLoggedSnapshot, bedrocktools::diagnostics::Level::Warning,
-                   "offscreen_actor_snapshot=malformed");
-        return;
-    }
-    if (empty) {
-        espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Warning,
-                   "offscreen_actor_snapshot=empty; no nearby actors returned");
-        return;
-    }
-
-    bool foundPlayer = false;
-    for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
-        void* actor = it->mActor;
-        if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000 ||
-            actor == localPlayer || !std::isfinite(it->mDistance) ||
-            it->mDistance < 0.0f || it->mDistance > targetRange ||
-            !s_actorIsPlayer(actor)) continue;
-        foundPlayer = true;
-        if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
-        const AABB bounds = getActorAABB(actor);
-        if (!validRenderBounds(bounds)) continue;
-        const bedrocktools::sdk::Vec3 center{
-            (bounds.min.x + bounds.max.x) * 0.5f,
-            (bounds.min.y + bounds.max.y) * 0.5f,
-            (bounds.min.z + bounds.max.z) * 0.5f
-        };
-        esp->considerOffscreenCandidate(center, it->mDistance);
-    }
-    if (!foundPlayer) {
-        espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Info,
-                   "offscreen_actor_snapshot=valid_but_no_players_in_range");
-    }
-}
-
 static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     if (_renderLevel_orig) {
         _renderLevel_orig(_this, screenContext, a3);
@@ -295,10 +250,6 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             (begin > 0x1000 && end >= begin &&
              (end - begin) % sizeof(DistanceSortedActor) == 0 &&
              (end - begin) / sizeof(DistanceSortedActor) <= 8192);
-    }
-    if (espEnabled) {
-        updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
-                                  actors, actorSnapshotValid, actorSnapshotEmpty, espRange);
     }
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
     if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
@@ -488,6 +439,49 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     float dz = camZ - localPos.z;
     bool isThirdPerson = (dx*dx + dy*dy + dz*dz) > 0.05f;
 
+    std::vector<EspModule::ProjectedBox> projectedEspBoxes;
+    const auto hudSurface = pl::modmenu::getHudSurfaceSize();
+    const bedrocktools::sdk::Vec2 cameraRotation = getActorRotation(g_localPlayerPtr);
+    const float yawRad = cameraRotation.y * 0.01745329251994329577f;
+    const float pitchRad = cameraRotation.x * 0.01745329251994329577f;
+    const float cosPitch = std::cos(pitchRad);
+    const bedrocktools::sdk::Vec3 forward{-std::sin(yawRad)*cosPitch, -std::sin(pitchRad), std::cos(yawRad)*cosPitch};
+    const bedrocktools::sdk::Vec3 right{-std::cos(yawRad), 0.0f, -std::sin(yawRad)};
+    const bedrocktools::sdk::Vec3 up{-std::sin(pitchRad)*std::sin(yawRad), std::cos(pitchRad), std::sin(pitchRad)*std::cos(yawRad)};
+    constexpr float kEspVerticalFovRadians = 1.9198621771937625f; // 110 degrees, ProtoHax-style perspective projection
+    const float focalY = (std::isfinite(hudSurface.height) && hudSurface.height > 1.0f)
+        ? hudSurface.height / (2.0f * std::tan(kEspVerticalFovRadians * 0.5f)) : 0.0f;
+    const float focalX = (std::isfinite(hudSurface.width) && hudSurface.width > 1.0f)
+        ? hudSurface.width / (2.0f * std::tan(kEspVerticalFovRadians * 0.5f) * std::max(0.1f, hudSurface.width / std::max(1.0f, hudSurface.height))) : 0.0f;
+    auto projectAabb = [&](const AABB& bounds, std::uint32_t color) {
+        if (focalX <= 0.0f || focalY <= 0.0f) return;
+        const bedrocktools::sdk::Vec3 corners[8] = {
+            {bounds.min.x,bounds.min.y,bounds.min.z},{bounds.min.x,bounds.max.y,bounds.min.z},
+            {bounds.max.x,bounds.min.y,bounds.min.z},{bounds.max.x,bounds.max.y,bounds.min.z},
+            {bounds.min.x,bounds.min.y,bounds.max.z},{bounds.min.x,bounds.max.y,bounds.max.z},
+            {bounds.max.x,bounds.min.y,bounds.max.z},{bounds.max.x,bounds.max.y,bounds.max.z}
+        };
+        float left = hudSurface.width, top = hudSurface.height, rightEdge = 0.0f, bottom = 0.0f;
+        int projected = 0;
+        for (const auto& point : corners) {
+            const float dx = point.x - camX, dy = point.y - camY, dz = point.z - camZ;
+            const float depth = dx*forward.x + dy*forward.y + dz*forward.z;
+            if (!std::isfinite(depth) || depth <= 0.05f) continue;
+            const float cameraX = dx*right.x + dy*right.y + dz*right.z;
+            const float cameraY = dx*up.x + dy*up.y + dz*up.z;
+            const float sx = hudSurface.width*0.5f + cameraX*focalX/depth;
+            const float sy = hudSurface.height*0.5f - cameraY*focalY/depth;
+            if (!std::isfinite(sx) || !std::isfinite(sy)) continue;
+            left = std::min(left, sx); rightEdge = std::max(rightEdge, sx);
+            top = std::min(top, sy); bottom = std::max(bottom, sy); ++projected;
+        }
+        if (projected < 2 || rightEdge <= 0.0f || left >= hudSurface.width || bottom <= 0.0f || top >= hudSurface.height) return;
+        left = std::clamp(left, 0.0f, hudSurface.width); rightEdge = std::clamp(rightEdge, 0.0f, hudSurface.width);
+        top = std::clamp(top, 0.0f, hudSurface.height); bottom = std::clamp(bottom, 0.0f, hudSurface.height);
+        if (rightEdge - left < 1.0f || bottom - top < 1.0f) return;
+        projectedEspBoxes.push_back({left, top, rightEdge, bottom, color});
+    };
+
     auto renderActor = [&](void* ent, bool allowEsp) {
         const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
         AABB aabb=getActorAABB(ent);
@@ -504,9 +498,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            drawBox(aabb,color);
+            projectAabb(aabb,color);
             if (esp->showLockInAim) drawTargetRing(aabb);
-            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
+            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=projected_2d_player_box; HUD boxes and tracers queued");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
@@ -586,6 +580,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     }else if(espEnabled){
         espLogOnce(espLoggedQuery,bedrocktools::diagnostics::Level::Warning,"actor_query=signature_unavailable; ESP cannot enumerate nearby players");
     }
+
+    if (esp) esp->publishProjectedBoxes(espEnabled ? std::move(projectedEspBoxes) : std::vector<EspModule::ProjectedBox>{});
 
     colorHolder[0] = savedColor[0];
     colorHolder[1] = savedColor[1];
