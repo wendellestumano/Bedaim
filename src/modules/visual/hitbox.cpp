@@ -218,39 +218,78 @@ static bool hasCategory(void* actor, uint32_t categoryBit) {
 
 
 
+static void* s_locatorPreferredTarget = nullptr;
+static std::chrono::steady_clock::time_point s_locatorPreferredTargetSeen{};
+
 static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
-                                          const bedrocktools::sdk::Vec3& localPosition) {
+                                      const bedrocktools::sdk::Vec3& localPosition,
+                                      const ActorVec& actors, bool actorSnapshotValid,
+                                      float targetRange) {
     if (!esp || !localPlayer) return;
     esp->beginOffscreenFrame(localPosition, getActorRotation(localPlayer));
     if (!esp->enabled || !esp->showOffscreenIndicators) return;
 
-    // The locator must follow the same player the Aim Assist currently tracks,
-    // not whichever unrelated player happens to be the nearest off-screen actor.
+    // Prefer the exact player selected by Aim Assist. When that player leaves
+    // the Aim Assist FOV, retain identity briefly and revalidate it against the
+    // current actor snapshot rather than switching the arrow to an unrelated
+    // nearer player or continuing to use a stale actor pointer.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     auto* aim = (aimBase && aimBase->enabled)
         ? static_cast<AimAssistModule*>(aimBase) : nullptr;
-    if (!aim) return;
-
-    void* target = nullptr;
-    AABB targetBounds{};
+    void* currentTarget = nullptr;
+    AABB currentBounds{};
     float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target ||
-        !aim->currentTargetIsPlayerSnapshot(target) || !validRenderBounds(targetBounds)) {
+    const bool hasCurrentPlayerTarget =
+        aim && aim->currentTargetSnapshot(currentTarget, currentBounds, aimRange) &&
+        currentTarget && aim->currentTargetIsPlayerSnapshot(currentTarget) &&
+        validRenderBounds(currentBounds);
+
+    const auto now = std::chrono::steady_clock::now();
+    if (hasCurrentPlayerTarget) {
+        s_locatorPreferredTarget = currentTarget;
+        s_locatorPreferredTargetSeen = now;
+        if (s_actorIsInvisible && s_actorIsInvisible(currentTarget) && !esp->showInvisible) return;
+        const bedrocktools::sdk::Vec3 center{
+            (currentBounds.min.x + currentBounds.max.x) * 0.5f,
+            (currentBounds.min.y + currentBounds.max.y) * 0.5f,
+            (currentBounds.min.z + currentBounds.max.z) * 0.5f
+        };
+        const float dx = center.x - localPosition.x;
+        const float dy = center.y - (localPosition.y + 1.62f);
+        const float dz = center.z - localPosition.z;
+        const float distance = std::sqrt(dx*dx + dy*dy + dz*dz);
+        if (std::isfinite(distance) && distance <= std::min(aimRange, esp->range))
+            esp->considerOffscreenCandidate(center, distance);
         return;
     }
 
-    if (s_actorIsInvisible && s_actorIsInvisible(target) && !esp->showInvisible) return;
-    const bedrocktools::sdk::Vec3 center{
-        (targetBounds.min.x + targetBounds.max.x) * 0.5f,
-        (targetBounds.min.y + targetBounds.max.y) * 0.5f,
-        (targetBounds.min.z + targetBounds.max.z) * 0.5f
-    };
-    const float dx = center.x - localPosition.x;
-    const float dy = center.y - (localPosition.y + 1.62f);
-    const float dz = center.z - localPosition.z;
-    const float targetDistance = std::sqrt(dx*dx + dy*dy + dz*dz);
-    if (!std::isfinite(targetDistance) || targetDistance > std::min(aimRange, esp->range)) return;
-    esp->considerOffscreenCandidate(center, targetDistance);
+    constexpr auto kTargetRetention = std::chrono::milliseconds(1800);
+    if (!s_locatorPreferredTarget ||
+        s_locatorPreferredTargetSeen.time_since_epoch().count() == 0 ||
+        now < s_locatorPreferredTargetSeen ||
+        now - s_locatorPreferredTargetSeen > kTargetRetention) {
+        s_locatorPreferredTarget = nullptr;
+        s_locatorPreferredTargetSeen = {};
+        return;
+    }
+    if (!actorSnapshotValid || !actors.begin || !actors.end) return;
+
+    for (DistanceSortedActor* entry = actors.begin; entry < actors.end; ++entry) {
+        if (entry->mActor != s_locatorPreferredTarget ||
+            !std::isfinite(entry->mDistance) || entry->mDistance < 0.0f ||
+            entry->mDistance > targetRange || !s_actorIsPlayer ||
+            !s_actorIsPlayer(entry->mActor)) continue;
+        if (s_actorIsInvisible && s_actorIsInvisible(entry->mActor) && !esp->showInvisible) return;
+        const AABB bounds = getActorAABB(entry->mActor);
+        if (!validRenderBounds(bounds)) return;
+        const bedrocktools::sdk::Vec3 center{
+            (bounds.min.x + bounds.max.x) * 0.5f,
+            (bounds.min.y + bounds.max.y) * 0.5f,
+            (bounds.min.z + bounds.max.z) * 0.5f
+        };
+        esp->considerOffscreenCandidate(center, entry->mDistance);
+        return;
+    }
 }
 
 static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
@@ -286,7 +325,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
              (end - begin) / sizeof(DistanceSortedActor) <= 8192);
     }
     if (espEnabled) {
-        updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos);
+        updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
+                                  actors, actorSnapshotValid, queryRange);
     }
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
     if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
