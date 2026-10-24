@@ -17,6 +17,8 @@ public:
     void onEnable() override;
     void onDisable() override;
     void onFrame() override;
+    void onMenuRegistered() override;
+    bool onMenuConfigChanged(std::string_view key, std::string_view value) override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
@@ -54,6 +56,10 @@ private:
     bool m_enableHitStop = true;
     bool m_showImpactText = true;
 
-    int m_hitStopFrames = 0;
+    // Configurable visual impact effect; deliberately bounded to avoid multi-second freezes.
+    int m_flashOpacity = 235;       // 0..255 alpha
+    int m_flashDurationMs = 250;    // 50..500 ms
+    int m_hitStopDurationMs = 65;   // 0..250 ms
+    std::chrono::steady_clock::time_point m_hitStopUntil{};
     bool m_hitStopPending = false;
 };
