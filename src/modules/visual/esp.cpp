@@ -221,11 +221,11 @@ void EspModule::onMenuRegistered(){
  };
  toggle("showPlayers","Show players","Draw outlines around other players.",true);
  toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
- toggle("showLockInAim","Lock in Aim","Show the cyberpunk target reticle while Aim Assist has a player target.",true,"indicators");
+ toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
  toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
- size.description="Size of the screen-edge arrow and lock reticle.";size.category="indicators";
+ size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
  size.hasCurrentValue=true;size.minValue="24";size.maxValue="96";size.step="2";size.unit=" px";schema.node(std::move(size));
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
