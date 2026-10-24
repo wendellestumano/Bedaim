@@ -21,19 +21,27 @@
 #include <vector>
 
 namespace {
-using GetRuntimeActorListFn = std::vector<void*> (*)(void*);
+struct DistanceSortedActor {
+    void* mActor;
+    float mDistance;
+    float _pad;
+};
+struct ActorVec {
+    DistanceSortedActor* begin;
+    DistanceSortedActor* end;
+    DistanceSortedActor* cap;
+};
+using ActorFetchNearbyActorsSortedFn = ActorVec (*)(void*, void*, int);
 using ActorIsPlayerFn = bool (*)(void*);
+using ActorIsInvisibleFn = bool (*)(void*);
 using ActorGetNameTagFn = const std::string& (*)(const void*);
-using ActorGetStatusFlagFn = bool (*)(const void*, int);
-using ActorIsFlyingFn = bool (*)(const void*);
 using BlockSourceIsSolidBlockingBlockFn =
     bool (*)(void*, const bedrocktools::sdk::BlockPos*);
 
-GetRuntimeActorListFn g_getRuntimeActorList = nullptr;
+ActorFetchNearbyActorsSortedFn g_actorFetchNearbyActorsSorted = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
+ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
-ActorGetStatusFlagFn g_actorGetStatusFlag = nullptr;
-ActorIsFlyingFn g_actorIsFlying = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 GamemodeCheckerModule* g_checker = nullptr;
 
@@ -132,28 +140,27 @@ bool hasSolidBlockInsideBody(void* actor) {
     return false;
 }
 bool hasSpectatorNoclipEvidence(void* actor) {
-    if (!actor || !g_actorGetStatusFlag || !g_actorIsFlying) return false;
+    // Player::isFlying and Actor::getStatusFlag are commonly stripped from the
+    // runtime's dynamic symbol table. Use Bedaim's already-resolved ActorIsInvisible
+    // signature plus actual solid-block overlap, which is much stronger evidence
+    // than invisibility alone and works without exported method names.
+    if (!actor || !g_actorIsInvisible || !g_isSolidBlockingBlock) return false;
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> probeLock(g_spectatorProbeMutex);
     auto& probe = g_spectatorProbes[actor];
 
-    // Aim Assist calls this per tick; sample each actor at most about 6.7 Hz.
     if (probe.hasLastPosition && now - probe.lastSeen < std::chrono::milliseconds(150))
         return probe.consecutiveNoclipSamples >= 2;
 
-    const auto* nativeActor = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor);
     bool invisible = false;
-    bool hasCollision = true;
-    bool flying = false;
     try {
-        invisible = g_actorGetStatusFlag(actor, 5);     // ActorFlags::Invisible
-        hasCollision = g_actorGetStatusFlag(actor, 48); // ActorFlags::HasCollision
-        flying = g_actorIsFlying(actor);
+        invisible = g_actorIsInvisible(actor);
     } catch (...) {
         probe.lastSeen = now;
         return false;
     }
 
+    const auto* nativeActor = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor);
     const auto position = nativeActor->position();
     if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
         !std::isfinite(position.z)) {
@@ -168,18 +175,15 @@ bool hasSpectatorNoclipEvidence(void* actor) {
     probe.hasLastPosition = true;
     probe.lastSeen = now;
 
-    // Avoid block scans unless the cheap state flags already resemble Spectator.
-    if (!invisible || hasCollision || !flying || !moving) {
+    if (!invisible || !moving) {
         probe.consecutiveNoclipSamples = 0;
         return false;
     }
 
-    const bool bodyOverlapsSolidBlock = hasSolidBlockInsideBody(actor);
-    if (bodyOverlapsSolidBlock) {
+    if (hasSolidBlockInsideBody(actor))
         probe.consecutiveNoclipSamples = std::min(probe.consecutiveNoclipSamples + 1u, 5u);
-    } else {
+    else
         probe.consecutiveNoclipSamples = 0;
-    }
     return probe.consecutiveNoclipSamples >= 2;
 }
 std::string safeName(void* actor) {
@@ -219,8 +223,8 @@ GamemodeCheckerModule::GamemodeCheckerModule()
 }
 
 void GamemodeCheckerModule::onInit() {
-    g_getRuntimeActorList = reinterpret_cast<GetRuntimeActorListFn>(
-        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
+    g_actorFetchNearbyActorsSorted = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
     g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
     g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
@@ -229,10 +233,8 @@ void GamemodeCheckerModule::onInit() {
         g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
             resolveGameSymbol("_ZNK5Actor10getNameTagEv"));
     }
-    g_actorGetStatusFlag = reinterpret_cast<ActorGetStatusFlagFn>(
-        resolveGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
-    g_actorIsFlying = reinterpret_cast<ActorIsFlyingFn>(
-        resolveGameSymbol("_ZNK6Player8isFlyingEv"));
+    g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
     g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
 
@@ -258,19 +260,23 @@ bool GamemodeCheckerModule::isSpectatorCandidate(void* actor) {
 }
 
 void GamemodeCheckerModule::refresh(void* localPlayer) {
-    // Keep native enumeration capped at 5 Hz on mobile.
+    // Nearby actor query is shared with Hitbox/ESP and avoids the previous
+    // Level/ActorManager mix-up that made the checker report actors:OFF.
     if (++m_ticks < 4) return;
     m_ticks = 0;
 
-    // Runtime signatures can resolve after the module is initialized; retry missing
-    // lookups on this throttled refresh instead of leaving the overlay permanently empty.
-    if (!g_getRuntimeActorList) {
-        g_getRuntimeActorList = reinterpret_cast<GetRuntimeActorListFn>(
-            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorManagerList));
+    if (!g_actorFetchNearbyActorsSorted) {
+        g_actorFetchNearbyActorsSorted = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
+            bedrocktools::memory::resolve(
+                bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
     }
     if (!g_actorIsPlayer) {
         g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
             bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    }
+    if (!g_actorIsInvisible) {
+        g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
     }
     if (!g_actorGetNameTag) {
         g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
@@ -280,18 +286,12 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
             resolveGameSymbol("_ZNK5Actor10getNameTagEv"));
     }
-    if (!g_actorGetStatusFlag) {
-        g_actorGetStatusFlag = reinterpret_cast<ActorGetStatusFlagFn>(
-            resolveGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
-    }
-    if (!g_actorIsFlying) {
-        g_actorIsFlying = reinterpret_cast<ActorIsFlyingFn>(
-            resolveGameSymbol("_ZNK6Player8isFlyingEv"));
-    }
     if (!g_isSolidBlockingBlock) {
         g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
-            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
+            bedrocktools::memory::resolve(
+                bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     }
+
     const auto probeNow = std::chrono::steady_clock::now();
     {
         std::lock_guard<std::mutex> probeLock(g_spectatorProbeMutex);
@@ -304,10 +304,9 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     }
 
     GamemodeCheckerDiagnostics diag{};
-    diag.actorListReady = g_getRuntimeActorList != nullptr;
+    diag.actorQueryReady = g_actorFetchNearbyActorsSorted != nullptr;
     diag.playerClassifierReady = g_actorIsPlayer != nullptr;
-    // SDK's field-backed name is the primary route; the native getter is fallback only.
-    diag.nameGetterReady = true;
+    diag.nameGetterReady = g_actorGetNameTag != nullptr;
 
     auto publishDiagnosticsOnly = [&]() {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -315,60 +314,48 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         m_players.clear();
     };
 
-    if (!localPlayer || !diag.actorListReady || !diag.playerClassifierReady) {
+    if (!localPlayer || !diag.actorQueryReady || !diag.playerClassifierReady) {
         publishDiagnosticsOnly();
         return;
     }
 
-    const auto base = reinterpret_cast<std::uintptr_t>(localPlayer);
-    if (base > std::numeric_limits<std::uintptr_t>::max() -
-                   bedrocktools::sdk::offsets::Actor::mLevel - sizeof(void*)) {
-        publishDiagnosticsOnly();
-        return;
-    }
-
-    void* level = nullptr;
-    std::memcpy(&level, reinterpret_cast<const void*>(
-        base + bedrocktools::sdk::offsets::Actor::mLevel), sizeof(level));
-    diag.levelReady = level != nullptr;
-    if (!level) {
-        publishDiagnosticsOnly();
-        return;
-    }
-
-    const auto levelAddress = reinterpret_cast<std::uintptr_t>(level);
-    if (levelAddress > std::numeric_limits<std::uintptr_t>::max() -
-                           bedrocktools::sdk::offsets::Level::mActorManager - sizeof(void*)) {
-        publishDiagnosticsOnly();
-        return;
-    }
-    void* actorManager = nullptr;
-    std::memcpy(&actorManager, reinterpret_cast<const void*>(
-        levelAddress + bedrocktools::sdk::offsets::Level::mActorManager), sizeof(actorManager));
-    diag.actorManagerReady = actorManager != nullptr;
-    if (!actorManager) {
-        publishDiagnosticsOnly();
-        return;
-    }
-
-    std::vector<void*> actors;
+    bedrocktools::sdk::Vec3 extent{80.0f, 80.0f, 80.0f};
+    ActorVec actors{};
     try {
-        actors = g_getRuntimeActorList(actorManager);
+        // Type 1 is the same query category used by the working Hitbox module.
+        actors = g_actorFetchNearbyActorsSorted(localPlayer, &extent, 1);
     } catch (...) {
         publishDiagnosticsOnly();
         return;
     }
-    if (actors.size() > 4096) {
-        diag.actorCount = actors.size();
+
+    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    const auto cap = reinterpret_cast<std::uintptr_t>(actors.cap);
+    if (!actors.begin && !actors.end && !actors.cap) {
+        diag.querySucceeded = true; // a valid empty result
         publishDiagnosticsOnly();
         return;
     }
-    diag.actorCount = actors.size();
+    if (begin < 0x1000u || end < begin || cap < end ||
+        (end - begin) % sizeof(DistanceSortedActor) != 0) {
+        publishDiagnosticsOnly();
+        return;
+    }
+    const std::size_t actorCount = (end - begin) / sizeof(DistanceSortedActor);
+    if (actorCount > 4096) {
+        diag.actorCount = actorCount;
+        publishDiagnosticsOnly();
+        return;
+    }
+    diag.querySucceeded = true;
+    diag.actorCount = actorCount;
 
     std::vector<PlayerModeEntry> next;
     std::unordered_set<void*> seen;
-    seen.reserve(actors.size());
-    for (void* actor : actors) {
+    seen.reserve(actorCount);
+    for (std::size_t index = 0; index < actorCount; ++index) {
+        void* actor = actors.begin[index].mActor;
         if (!actor || actor == localPlayer || !seen.emplace(actor).second) continue;
 
         bool isPlayer = false;
@@ -402,19 +389,20 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             mode = modeName(gameType);
         } else if (hasPredicateMode && (predicateMode == 1 || predicateMode == 3)) {
             mode = modeName(predicateMode);
-        } else if (hasCombatCreativeHint) {
-            mode = "Creative*";
-            inferred = true;
         } else if (inferredSpectator) {
             mode = "Spectator*";
             inferred = true;
+        } else if (hasCombatCreativeHint) {
+            mode = "Creative*";
+            inferred = true;
         } else if (hasAttackability) {
             inferred = true;
-            if (attackable) mode = "Survival/Adventure*";
-            else mode = "Creative/Spectator*";
+            mode = attackable ? "Survival/Adventure*" : "Creative/Spectator*";
         } else {
             mode = "Unknown";
-        }       if (hasExactGameType) ++diag.exactModeCount;
+        }
+
+        if (hasExactGameType) ++diag.exactModeCount;
         else if (inferred) ++diag.inferredModeCount;
         else ++diag.unresolvedModeCount;
 
@@ -431,7 +419,6 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     m_diagnostics = diag;
     m_players.swap(next);
 }
-
 void GamemodeCheckerModule::onFrame() {
     if (!enabled) return;
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -471,9 +458,8 @@ void GamemodeCheckerModule::onFrame() {
     status.h = 13.0f;
     status.size = 12.0f;
     status.color = 0xFFE0E0E0;
-    const char* enumerator = !m_diagnostics.actorListReady ? "actors:OFF" :
-        !m_diagnostics.levelReady ? "level:OFF" :
-        !m_diagnostics.actorManagerReady ? "manager:OFF" : "actors:OK";
+    const char* enumerator = !m_diagnostics.actorQueryReady ? "query:OFF" :
+        !m_diagnostics.querySucceeded ? "query:ERR" : "actors:OK";
     const char* modeApi = (m_diagnostics.exactModeCount > 0) ? "mode:EXACT" :
         (m_diagnostics.inferredModeCount > 0) ? "mode:INFERRED" :
         (m_diagnostics.playerCount > 0 ? "mode:UNKNOWN" : "mode:N/A");
@@ -512,9 +498,9 @@ void GamemodeCheckerModule::onFrame() {
         empty.color = 0xFFBBBBBB;
         empty.text = (m_diagnostics.playerCount > 0)
             ? "Players found, names unavailable"
-            : (!m_diagnostics.actorListReady || !m_diagnostics.playerClassifierReady ||
-               !m_diagnostics.levelReady || !m_diagnostics.actorManagerReady)
-                ? "Enumeration path unavailable" : "No remote players found";
+            : (!m_diagnostics.actorQueryReady || !m_diagnostics.querySucceeded ||
+               !m_diagnostics.playerClassifierReady)
+                ? "Nearby-player query unavailable" : "No remote players found";
         commands.push_back(empty);
     }
     ::submitDrawCommands(moduleId, commands);

@@ -479,7 +479,22 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     else if (key == "range") m_range = std::clamp(number, 2.0f, 80.0f);
     else if (key == "strength") m_strength = std::clamp(number, 0.0f, 1.0f);
     else if (key == "hitboxScale") m_hitboxScale = std::clamp(number, 0.30f, 50.0f);
-    else if (key == "hitboxDistanceGrowth") m_hitboxDistanceGrowth = std::clamp(number, 0.1f, 500.0f);
+    else if (key == "hitboxDistanceGrowth" || key == "m_hitboxDistanceGrowth")
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            number, m_hitboxDistanceStrengthMinLimit, m_hitboxDistanceStrengthMaxLimit);
+    else if (key == "m_hitboxDistanceStrengthMinLimit" || key == "hitboxDistanceStrengthMinLimit") {
+        m_hitboxDistanceStrengthMinLimit = std::clamp(number, 0.1f, 500.0f);
+        if (m_hitboxDistanceStrengthMinLimit > m_hitboxDistanceStrengthMaxLimit)
+            m_hitboxDistanceStrengthMaxLimit = m_hitboxDistanceStrengthMinLimit;
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            m_hitboxDistanceGrowth, m_hitboxDistanceStrengthMinLimit, m_hitboxDistanceStrengthMaxLimit);
+    } else if (key == "m_hitboxDistanceStrengthMaxLimit" || key == "hitboxDistanceStrengthMaxLimit") {
+        m_hitboxDistanceStrengthMaxLimit = std::clamp(number, 0.1f, 500.0f);
+        if (m_hitboxDistanceStrengthMaxLimit < m_hitboxDistanceStrengthMinLimit)
+            m_hitboxDistanceStrengthMinLimit = m_hitboxDistanceStrengthMaxLimit;
+        m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+            m_hitboxDistanceGrowth, m_hitboxDistanceStrengthMinLimit, m_hitboxDistanceStrengthMaxLimit);
+    }
     else if (key == "swordAimPointY" || key == "m_swordAimPointY") m_swordAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "axeAimPointY" || key == "m_axeAimPointY") m_axeAimPointY = std::clamp(number, 0.05f, 0.95f);
     else if (key == "maceAimPointY" || key == "m_maceAimPointY") m_maceAimPointY = std::clamp(number, 0.05f, 0.95f);
@@ -1504,6 +1519,12 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_targetRetentionRadius = std::clamp(j.value("m_targetRetentionRadius", m_targetRetentionRadius), 0.5f, 5.0f);
     m_hitboxScale = std::clamp(j.value("m_hitboxScale", m_hitboxScale), 0.30f, 50.0f);
     m_distanceDependentHitbox = j.value("m_distanceDependentHitbox", m_distanceDependentHitbox);
+    m_hitboxDistanceStrengthMinLimit = std::clamp(
+        j.value("m_hitboxDistanceStrengthMinLimit", m_hitboxDistanceStrengthMinLimit), 0.1f, 500.0f);
+    m_hitboxDistanceStrengthMaxLimit = std::clamp(
+        j.value("m_hitboxDistanceStrengthMaxLimit", m_hitboxDistanceStrengthMaxLimit), 0.1f, 500.0f);
+    if (m_hitboxDistanceStrengthMaxLimit < m_hitboxDistanceStrengthMinLimit)
+        m_hitboxDistanceStrengthMaxLimit = m_hitboxDistanceStrengthMinLimit;
     // A marker distinguishes old percentage-based configs from the expanded
     // scale, so values above 10 remain usable after every menu change.
     const bool usesExpandedGrowthScale = j.value("m_hitboxGrowthScaleV2", false);
@@ -1518,7 +1539,8 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         if (savedHitboxGrowth >= 99.5f && savedHitboxGrowth <= 100.5f)
             migratedHitboxGrowth = 5.0f;
     }
-    m_hitboxDistanceGrowth = std::clamp(migratedHitboxGrowth, 0.1f, 500.0f);
+    m_hitboxDistanceGrowth = bedaim::aimmath::clampDistanceHitboxStrength(
+        migratedHitboxGrowth, m_hitboxDistanceStrengthMinLimit, m_hitboxDistanceStrengthMaxLimit);
     m_hitboxGrowthScaleV2 = true;
     m_rotationSpeed = std::clamp(j.value("m_rotationSpeed", m_rotationSpeed), 0.1f, 1000.0f);
     m_predictionMode = j.value("m_predictionMode", m_predictionMode);
@@ -1581,6 +1603,8 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_hitboxScale"] = m_hitboxScale;
     j["m_distanceDependentHitbox"] = m_distanceDependentHitbox;
     j["m_hitboxDistanceGrowth"] = m_hitboxDistanceGrowth;
+    j["m_hitboxDistanceStrengthMinLimit"] = m_hitboxDistanceStrengthMinLimit;
+    j["m_hitboxDistanceStrengthMaxLimit"] = m_hitboxDistanceStrengthMaxLimit;
     j["m_hitboxGrowthScaleV2"] = true;
     j["m_strength"] = m_strength;
     j["m_aimSpeed"] = m_aimSpeed;

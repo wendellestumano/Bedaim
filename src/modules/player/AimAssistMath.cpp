@@ -106,6 +106,15 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
     return bestIndex;
 }
 
+float clampDistanceHitboxStrength(float value, float minimum, float maximum) noexcept {
+    const float safeMinimum = std::clamp(
+        std::isfinite(minimum) ? minimum : 0.1f, 0.1f, 500.0f);
+    const float safeMaximum = std::clamp(
+        std::isfinite(maximum) ? maximum : 500.0f, safeMinimum, 500.0f);
+    const float safeValue = std::isfinite(value) ? value : safeMinimum;
+    return std::clamp(safeValue, safeMinimum, safeMaximum);
+}
+
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
                           float strength, bool enabled) noexcept {
     const float safeBase = std::clamp(

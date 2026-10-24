@@ -18,6 +18,12 @@ target("aimassist_math_test")
     add_includedirs("../include", "../src")
 target_end()
 
+target("esp_locator_math_test")
+    set_kind("binary")
+    add_files("launcher/esp_locator_math_test.cpp")
+    add_includedirs("../src")
+target_end()
+
 target("atomic_config_writer_test")
     set_kind("binary")
     add_files("launcher/atomic_config_writer_test.cpp", "../src/config/AtomicConfigWriter.cpp")
