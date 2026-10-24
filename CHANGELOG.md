@@ -1,3 +1,10 @@
+## 2026-10-23 — ESP target-ring and off-screen arrow polish
+- Replace the fixed screen-center Lock in Aim sprite with a camera-facing segmented ring drawn in world space above every in-range player while ESP is enabled; it no longer depends on Aim Assist having a target.
+- Use a neon-green multi-ring silhouette with deliberate outer gaps and cardinal ticks, inspired by the supplied target-pack footage and angular arrow reference.
+- Delay off-screen arrows until the target is near/outside the expected viewport edge (yaw threshold 50°, pitch threshold 32°) and remove the previous constant vertical bias that tilted arrow directions.
+- Reuse the shared actor snapshot for world ESP and off-screen candidate selection to avoid duplicate per-frame actor enumeration.
+- Validation: host regression tests passed on the prior revision, but Android packaging and in-game verification remain pending for these latest rendering changes.
+
 ## 2026-10-23 — Integrate ESP Lock in Aim and off-screen indicators
 - Add transparent cyberpunk Lock in Aim and direction-arrow sprites based on the provided Bedaim ESP concepts; register a 16-direction arrow set for HUD rendering.
 - Add ESP HUD controls for Lock in Aim, off-screen player indicators, subtle animation, indicator size, player visibility, invisibility, range, and game-mode outline colors.
