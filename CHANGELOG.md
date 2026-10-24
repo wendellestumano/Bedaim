@@ -1,3 +1,10 @@
+## 2026-10-24 — Stable-main ESP and configurable mace impact effects
+- Start from the current `main` commit `4cd96223548dc03efd3b670c0eba53c785be5710`; this pass does not merge or port the closed experimental PR #94.
+- Remove game-mode queries from the ESP outline path. All players use one configurable ARGB outline color; legacy per-mode config migrates to the prior Survival color.
+- Add ULTRAKILL HUD controls for white-flash opacity, flash duration (50–500 ms), and bounded visual hit-stop (0–250 ms), plus toggles for flash, shake, and impact labels. The code never forces an FPS cap of 1; the effect uses the existing frame-event cancellation mechanism only.
+- ESP architecture research: [WClient](https://github.com/RetrivedMods/WClient), [Lumina Client](https://github.com/TheProjectLumina/LuminaClient), and [ProtoHax](https://github.com/hax0r31337/protohax). The implementation plan is to keep acquisition/filtering, world geometry, and HUD indicators as separate stages; ProtoHax is network-layer oriented, so it is not a drop-in world-renderer source. No third-party source code is copied in this pass.
+- This pass intentionally leaves native signatures, actor-vector ownership, and hook installation unchanged to reduce runtime risk. Android build and in-game validation are pending.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.
