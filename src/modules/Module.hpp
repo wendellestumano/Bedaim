@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 #include "../core/Diagnostics.hpp"
+#include "../core/KeybindEdge.hpp"
 #include <string>
 #include <string_view>
 #include <utility>
@@ -35,7 +36,10 @@ public:
     virtual void onMenuRegistered() {}
     
     virtual void onKeybindEvent(const std::string& key, bool isDown) {
-        if (key == "keybind" && isDown) {
+        if (key != "keybind") return;
+        // Key-down repeats must not repeatedly toggle the module. Key-up only
+        // releases the edge latch; it never changes the active state.
+        if (m_toggleKeyEdge.update(isDown)) {
             setKeybindActive(!keybindActive);
         }
     }
@@ -43,6 +47,9 @@ public:
     void setMasterEnabled(bool state) {
         if (masterEnabled == state) return;
         masterEnabled = state;
+        // A module disabled from the menu may stop receiving key-up events.
+        // Clear the latch on a master-state transition so the next press works.
+        m_toggleKeyEdge.reset();
         updateEnabledState();
     }
 
@@ -81,4 +88,7 @@ public:
         j["keybindActive"] = keybindActive;
         j["masterEnabled"] = masterEnabled;
     }
+
+private:
+    bedrocktools::core::KeybindEdge m_toggleKeyEdge;
 };

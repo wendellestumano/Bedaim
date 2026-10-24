@@ -1,5 +1,6 @@
 #include "esp.hpp"
 #include "esp_assets.hpp"
+#include "EspLocatorMath.hpp"
 #include "hitbox.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
@@ -34,11 +35,6 @@ bool parseColor(std::string_view v,std::uint32_t& out){
 }
 void loadColor(const nlohmann::json& j,const char* key,std::uint32_t& v){
  if(!j.contains(key)||!j[key].is_string())return;std::uint32_t parsed=0;if(parseColor(j[key].get<std::string>(),parsed))v=parsed;
-}
-float normalizeDegrees(float value){
- while(value>180.0f)value-=360.0f;
- while(value< -180.0f)value+=360.0f;
- return value;
 }
 }
 
@@ -83,24 +79,16 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
 
-    const float dx=targetCenter.x-m_hudLocalPosition.x;
-    const float dz=targetCenter.z-m_hudLocalPosition.z;
-    const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
-    const float horizontal=std::sqrt(dx*dx+dz*dz);
-    if(horizontal<0.001f)return;
-    constexpr float kRadToDeg=57.29577951308232f;
-    constexpr float kMaxVerticalFov=110.0f;
-    const float targetYaw=std::atan2(-dx,dz)*kRadToDeg;
-    const float yawDelta=normalizeDegrees(targetYaw-m_hudLocalRotation.y);
-    const float targetPitch=-std::atan2(dy,horizontal)*kRadToDeg;
-    const float pitchDelta=targetPitch-m_hudLocalRotation.x;
-
-    // Use a high-end viewport bound, rather than the old 42°/28° thresholds,
-    // so the locator waits until the player's bearing is genuinely off-screen.
-    const float halfVertical=kMaxVerticalFov*0.5f+1.5f;
-    const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
-    const float halfHorizontal=std::atan(std::tan(kMaxVerticalFov*0.5f/kRadToDeg)*aspect)*kRadToDeg+2.0f;
-    if(std::fabs(yawDelta)<=halfHorizontal&&std::fabs(pitchDelta)<=halfVertical)return;
+    const bedaim::esp_locator::Vec3 localEye{
+        m_hudLocalPosition.x, m_hudLocalPosition.y + 1.62f, m_hudLocalPosition.z
+    };
+    const bedaim::esp_locator::Vec3 target{
+        targetCenter.x, targetCenter.y, targetCenter.z
+    };
+    const bedaim::esp_locator::Rotation rotation{
+        m_hudLocalRotation.x, m_hudLocalRotation.y
+    };
+    if(!bedaim::esp_locator::isOffscreen(localEye, target, rotation, m_hudViewportAspect))return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
@@ -148,40 +136,15 @@ void EspModule::onFrame(){
         bedrocktools::sdk::Vec2 rotation{};
         float distance=0.0f;
         if(offscreenTargetSnapshot(target,local,rotation,distance)){
-            float dx=target.x-local.x;
-            float dy=target.y-(local.y+1.62f);
-            float dz=target.z-local.z;
-            const float worldLength=std::sqrt(dx*dx+dy*dy+dz*dz);
-            if(worldLength>0.001f){
-                dx/=worldLength;dy/=worldLength;dz/=worldLength;
-                constexpr float kRadToDeg=57.29577951308232f;
-                constexpr float kDegToRad=0.01745329251994329577f;
-                const float yaw=rotation.y*kDegToRad;
-                const float pitch=rotation.x*kDegToRad;
-
-                // Bedrock camera basis. The sign of the projected direction must be
-                // flipped for targets behind the camera to keep the edge arrow honest.
-                const float rightX=-std::cos(yaw);
-                const float rightZ=-std::sin(yaw);
-                const float upX=-std::sin(pitch)*std::sin(yaw);
-                const float upY=std::cos(pitch);
-                const float upZ=std::sin(pitch)*std::cos(yaw);
-                const float forwardX=-std::sin(yaw)*std::cos(pitch);
-                const float forwardY=-std::sin(pitch);
-                const float forwardZ=std::cos(yaw)*std::cos(pitch);
-                const float cameraDepth=dx*forwardX+dy*forwardY+dz*forwardZ;
-                float dirX=dx*rightX+dz*rightZ;
-                float dirY=-(dx*upX+dy*upY+dz*upZ);
-                const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
-                if(directionLength<0.0001f){
-                    dirX=0.0f;
-                    dirY=1.0f;
-                }else{
-                    if(cameraDepth<0.0f){dirX=-dirX;dirY=-dirY;}
-                    dirX/=directionLength;
-                    dirY/=directionLength;
-                }
-
+            const bedaim::esp_locator::Vec3 localEye{
+                local.x, local.y + 1.62f, local.z
+            };
+            const bedaim::esp_locator::Vec3 targetCenter{target.x, target.y, target.z};
+            const bedaim::esp_locator::Rotation cameraRotation{rotation.x, rotation.y};
+            bedaim::esp_locator::Direction direction{};
+            if(bedaim::esp_locator::edgeDirection(localEye, targetCenter, cameraRotation, direction)){
+                const float dirX=direction.x;
+                const float dirY=direction.y;
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
                 const float edgeMargin=size*0.5f+12.0f;
@@ -195,7 +158,7 @@ void EspModule::onFrame(){
                 px=std::clamp(px,12.0f,std::max(12.0f,surface.width-size-12.0f));
                 py=std::clamp(py,12.0f,std::max(12.0f,surface.height-size-12.0f));
 
-                float angle=std::atan2(dirY,dirX)*kRadToDeg;
+                float angle=std::atan2(dirY,dirX)*bedaim::esp_locator::kRadToDeg;
                 if(angle<0.0f)angle+=360.0f;
                 int sprite=static_cast<int>(std::lround(angle/22.5f))%16;
                 pl::modmenu::DrawCommand arrow{};

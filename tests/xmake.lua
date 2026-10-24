@@ -67,3 +67,16 @@ target("player_game_type_test")
     add_includedirs("../src")
 target_end()
 
+
+
+target("keybind_edge_test")
+    set_kind("binary")
+    add_files("launcher/keybind_edge_test.cpp")
+    add_includedirs("../src")
+target_end()
+
+target("esp_locator_math_test")
+    set_kind("binary")
+    add_files("launcher/esp_locator_math_test.cpp")
+    add_includedirs("../src")
+target_end()

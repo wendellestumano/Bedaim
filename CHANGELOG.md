@@ -1,3 +1,11 @@
+## 2026-10-24 — Harden keybind edges, ESP locator projection, and GameMode Checker
+- Added press-edge tracking to the shared module keybind toggle so repeated key-down events do not toggle a module repeatedly; always pass key-up to clear held state while chat/container input is blocked.
+- Extracted off-screen locator math into a testable helper, retained the Bedrock pitch/yaw convention, handled nearly vertical targets, and replaced the fixed downward fallback for degenerate/behind-camera projections with an angular fallback. The Hitbox/ESP rotation reader now uses the SDK Actor rotation accessor with finite-value checks.
+- Reworked GameMode Checker enumeration to use the existing nearby-actor query used by AimAssist/ESP, bound vector sizes and validate actor-array reads, and removed speculative noclip/block-collision mode inference. Added one-time query/classifier/mode/name stage logs for crash diagnosis.
+- Added keybind and ESP locator host tests. Latest results: keybind 9/9, locator 13/13, AimAssist math regression 42/42; syntax-only checks passed for the four touched implementation translation units.
+- ProtoHax reference review: used compatible geometry/rotation principles from public ESP/docs; no ProtoHax source was copied. The older public Kotlin ESP is GPL-3.0 and does not share Bedaim's native renderer/API.
+- Android package build and in-game verification remain pending: this Termux environment has no configured Android SDK/NDK, and XMake cannot resolve the preloader package for Android without that toolchain. No working new Levipack is claimed.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.

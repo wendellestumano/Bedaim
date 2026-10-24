@@ -201,13 +201,12 @@ static AABB getActorAABB(void* actor) {
 }
 
 static bedrocktools::sdk::Vec2 getActorRotation(void* actor) {
-    bedrocktools::sdk::Vec2 rot = {0.f, 0.f};
-    uintptr_t actorAddr = (uintptr_t)actor;
-    uintptr_t rotComp = *(uintptr_t*)(actorAddr + bedrocktools::sdk::offsets::Actor::mActorRotationComponent);
-    if (rotComp) {
-        rot = *(bedrocktools::sdk::Vec2*)rotComp;
-    }
-    return rot;
+    if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000)
+        return {0.0f, 0.0f};
+    const auto rotation = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor)->rotation();
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y))
+        return {0.0f, 0.0f};
+    return rotation;
 }
 
 static bool hasCategory(void* actor, uint32_t categoryBit) {

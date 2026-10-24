@@ -20,8 +20,8 @@ struct GamemodeCheckerDiagnostics {
     bool actorListReady = false;
     bool playerClassifierReady = false;
     bool nameGetterReady = false;
-    bool levelReady = false;
-    bool actorManagerReady = false;
+    bool localPlayerReady = false;
+    bool actorSnapshotReady = false;
 };
 
 class GamemodeCheckerModule final : public Module {

@@ -39,9 +39,12 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
 }
 
 static void onModuleKeybind(std::string_view module_id, std::string_view key, bool isDown) {
-    if (ModuleRegistry::get().keybindBlocked()) return;
     auto* mod = ModuleRegistry::get().find(module_id);
     if (!mod) return;
+
+    // Block activation presses while chat/containers own input, but always pass
+    // releases through so opening a screen cannot leave a stale "pressed" latch.
+    if (ModuleRegistry::get().keybindBlocked() && isDown) return;
     mod->onKeybindEvent(std::string(key), isDown);
 }
 
