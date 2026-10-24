@@ -5,7 +5,7 @@
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
-#include "../hud/gamemodechecker.hpp"
+#include "SpectatorProbe.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
@@ -819,7 +819,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                     continue;
                 }
                 if (!hasExactGameType && !hasExactModePredicate &&
-                    GamemodeCheckerModule::isSpectatorCandidate(candidate)) {
+                    bedaim::spectatorprobe::isSpectatorCandidate(candidate)) {
                     continue;
                 }
 

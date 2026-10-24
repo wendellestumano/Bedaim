@@ -4,10 +4,10 @@
 #include <bedrocktools/sdk/Types.hpp>
 #include <string>
 
-class HitboxModule : public Module {
+class EspRenderBridge : public Module {
 public:
-    HitboxModule();
-    ~HitboxModule() override;
+    EspRenderBridge();
+    ~EspRenderBridge() override;
 
     void onInit() override;
     void onEnable() override;
@@ -41,3 +41,6 @@ private:
 
     void applyPatch();
 };
+
+// Initializes the internal RenderLevel bridge only when ESP is enabled.
+void ensureEspRenderHook();
