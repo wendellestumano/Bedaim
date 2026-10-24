@@ -10,6 +10,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
+#include <chrono>
 #include <algorithm>
 #include <atomic>
 #include <string>
@@ -152,8 +153,7 @@ static bool validRenderBounds(const AABB& b) {
         b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
 }
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
- espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
- espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false};
+ espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -426,11 +426,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const float uz = nx*ry - ny*rx;
 
         const float radius = std::clamp(std::max(width * 1.02f, 0.42f), 0.38f, 0.72f);
-        constexpr float tau = 6.2831853071795864769f;
-        const float seconds = std::chrono::duration<float>(
+        constexpr double tau = 6.2831853071795864769;
+        const double seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
-        const float outerPhase = seconds * 0.78f;
-        const float innerPhase = -seconds * 1.12f;
+        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78, tau));
+        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12, tau));
         std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> outerLines;
         std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> innerLines;
         outerLines.reserve(96);
