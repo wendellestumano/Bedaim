@@ -17,6 +17,7 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 // Short-lived /proc/self/maps validation used before version-sensitive native calls.
 // This reduces invalid-pointer crashes but cannot guarantee object lifetime across threads.
 bool isReadableMemoryRange(const void* pointer, std::size_t size) noexcept;
+bool isWritableMemoryRange(const void* pointer, std::size_t size) noexcept;
 bool isExecutableMemoryRange(const void* pointer, std::size_t size = 1) noexcept;
 bool isValidGameObject(const void* object) noexcept;
 

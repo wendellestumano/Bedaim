@@ -30,7 +30,7 @@ public:
     // Render hook publishes copied world-space values, never actor pointers.
     void beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition,
                              const bedrocktools::sdk::Vec2& localRotation);
-    void considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,
+    bool considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,
                                     float distance, std::uintptr_t identity);
     bool offscreenTargetsSnapshot(std::vector<OffscreenTarget>& targets,
                                   bedrocktools::sdk::Vec3& localPosition,

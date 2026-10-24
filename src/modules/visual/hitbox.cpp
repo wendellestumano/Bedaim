@@ -11,6 +11,7 @@
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
 #include <limits>
+#include <new>
 #include <chrono>
 #include <algorithm>
 #include <atomic>
@@ -34,10 +35,41 @@ struct DistanceSortedActor {
 };
 
 struct ActorVec {
-    DistanceSortedActor* begin;
-    DistanceSortedActor* end;
-    DistanceSortedActor* cap;
+    DistanceSortedActor* begin = nullptr;
+    DistanceSortedActor* end = nullptr;
+    DistanceSortedActor* cap = nullptr;
+
+    ActorVec() noexcept = default;
+    ~ActorVec() noexcept { release(); }
+    ActorVec(const ActorVec&) = delete;
+    ActorVec& operator=(const ActorVec&) = delete;
+    ActorVec(ActorVec&& other) noexcept { take(other); }
+    ActorVec& operator=(ActorVec&& other) noexcept {
+        if (this != &other) { release(); take(other); }
+        return *this;
+    }
+
+private:
+    void take(ActorVec& other) noexcept {
+        begin = other.begin; end = other.end; cap = other.cap;
+        other.begin = other.end = other.cap = nullptr;
+    }
+    void release() noexcept {
+        auto* allocation = begin;
+        const auto b = reinterpret_cast<std::uintptr_t>(begin);
+        const auto e = reinterpret_cast<std::uintptr_t>(end);
+        const auto c = reinterpret_cast<std::uintptr_t>(cap);
+        begin = end = cap = nullptr;
+        if (!b || b <= 0x1000 || e < b || c < e ||
+            b % alignof(DistanceSortedActor) != 0 ||
+            (e-b) % sizeof(DistanceSortedActor) != 0 ||
+            (c-b) % sizeof(DistanceSortedActor) != 0 ||
+            c-b == 0 || c-b > (16u * 1024u * 1024u)) return;
+        if (!bedrocktools::core::gamehooks::isReadableMemoryRange(allocation, c-b)) return;
+        ::operator delete(allocation);
+    }
 };
+static_assert(sizeof(ActorVec) == 3 * sizeof(void*));
 
 typedef ActorVec (*Actor_fetchNearbyActorsSorted_t)(void* actor, void* extent, int actorType);
 
@@ -294,47 +326,68 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
     if (!esp->enabled || !esp->showOffscreenIndicators ||
         !s_actorFetchNearby || !s_actorIsPlayer ||
         !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(s_actorFetchNearby)) ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
             reinterpret_cast<const void*>(s_actorIsPlayer)) ||
         !bedrocktools::core::gamehooks::isValidGameObject(localPlayer)) return;
 
-    const bool empty = actorSnapshotEmpty;
-    const bool valid = actorSnapshotValid;
-    if (!valid) {
+    if (!actorSnapshotValid) {
         espLogOnce(espLoggedSnapshot, bedrocktools::diagnostics::Level::Warning,
                    "offscreen_actor_snapshot=malformed");
         return;
     }
-    if (empty) {
+    if (actorSnapshotEmpty) {
         espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Warning,
                    "offscreen_actor_snapshot=empty; no nearby actors returned");
         return;
     }
 
-    bool foundPlayer = false;
-    for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
-        void* actor = it->mActor;
-        if (!actor || actor == localPlayer || !std::isfinite(it->mDistance) ||
-            it->mDistance < 0.0f || it->mDistance > targetRange ||
-            !bedrocktools::core::gamehooks::isValidGameObject(actor) ||
-            !s_actorIsPlayer(actor)) continue;
-        foundPlayer = true;
+    const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    const std::size_t actorCount = (end - begin) / sizeof(DistanceSortedActor);
+    std::size_t playersFound = 0;
+    std::size_t validBoundsFound = 0;
+    std::size_t offscreenAccepted = 0;
+    for (std::size_t i = 0; i < actorCount; ++i) {
+        DistanceSortedActor entry{};
+        std::memcpy(&entry, reinterpret_cast<const std::byte*>(actors.begin) +
+                    i * sizeof(DistanceSortedActor), sizeof(entry));
+        void* actor = entry.mActor;
+        if (!actor || actor == localPlayer || !std::isfinite(entry.mDistance) ||
+            entry.mDistance < 0.0f || entry.mDistance > targetRange ||
+            !bedrocktools::core::gamehooks::isValidGameObject(actor)) continue;
+        if (!s_actorIsPlayer(actor)) continue;
+        ++playersFound;
         if (s_actorIsInvisible &&
             bedrocktools::core::gamehooks::isExecutableMemoryRange(
                 reinterpret_cast<const void*>(s_actorIsInvisible)) &&
             s_actorIsInvisible(actor) && !esp->showInvisible) continue;
         const AABB bounds = getActorAABB(actor);
         if (!validRenderBounds(bounds)) continue;
+        ++validBoundsFound;
         const bedrocktools::sdk::Vec3 center{
             (bounds.min.x + bounds.max.x) * 0.5f,
             (bounds.min.y + bounds.max.y) * 0.5f,
             (bounds.min.z + bounds.max.z) * 0.5f
         };
-        esp->considerOffscreenCandidate(center, it->mDistance,
-            reinterpret_cast<std::uintptr_t>(actor));
+        if (esp->considerOffscreenCandidate(center, entry.mDistance,
+                reinterpret_cast<std::uintptr_t>(actor))) ++offscreenAccepted;
     }
-    if (!foundPlayer) {
+
+    if (playersFound == 0) {
         espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Info,
                    "offscreen_actor_snapshot=valid_but_no_players_in_range");
+    }
+    static std::chrono::steady_clock::time_point lastSummary{};
+    const auto now = std::chrono::steady_clock::now();
+    if (lastSummary.time_since_epoch().count() == 0 || now - lastSummary >= std::chrono::seconds(2)) {
+        lastSummary = now;
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "ESP",
+            "locator_scan=valid actors=" + std::to_string(actorCount) +
+            " players_in_range=" + std::to_string(playersFound) +
+            " valid_aabb=" + std::to_string(validBoundsFound) +
+            " offscreen_targets_stored=" + std::to_string(offscreenAccepted) +
+            " range=" + std::to_string(targetRange));
     }
 }
 
@@ -379,9 +432,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
              (capacity - begin) / sizeof(DistanceSortedActor) <= 16384);
         const auto usedBytes = end >= begin ? end - begin : 0;
         actorSnapshotValid = layoutValid &&
-            (actorSnapshotEmpty || usedBytes == 0 ||
+            (actorSnapshotEmpty || (usedBytes != 0 &&
              bedrocktools::core::gamehooks::isReadableMemoryRange(
-                 reinterpret_cast<const void*>(begin), usedBytes));
+                 reinterpret_cast<const void*>(begin), usedBytes) &&
+             bedrocktools::core::gamehooks::isReadableMemoryRange(
+                 reinterpret_cast<const void*>(begin), capacity - begin)));
         if (!actorSnapshotValid && espEnabled) {
             espLogOnce(espLoggedSnapshot, bedrocktools::diagnostics::Level::Warning,
                 "actor_snapshot=unreadable_or_malformed; refused to inspect entries");

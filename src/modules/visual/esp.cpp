@@ -73,12 +73,12 @@ void EspModule::beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition
     m_offscreenFrameTime=std::chrono::steady_clock::now();
 }
 
-void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,
+bool EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,
                                            float distance, std::uintptr_t identity){
     if(!std::isfinite(targetCenter.x)||!std::isfinite(targetCenter.y)||!std::isfinite(targetCenter.z)||
-       !std::isfinite(distance)||distance<0.0f||distance>std::clamp(range,8.0f,80.0f))return;
+       !std::isfinite(distance)||distance<0.0f||distance>std::clamp(range,8.0f,80.0f))return false;
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
-    if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
+    if(m_offscreenFrameTime.time_since_epoch().count()==0)return false;
 
     const bedaim::esp_locator::Vec3 localEye{
         m_hudLocalPosition.x, m_hudLocalPosition.y + 1.62f, m_hudLocalPosition.z
@@ -89,7 +89,7 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     // behind the camera is explicitly off-screen; it is not lost to a yaw-only
     // angular test. FOV is still a conservative 110-degree fallback because
     // Bedaim has no verified getter for the game's current HUD projection FOV.
-    if(!bedaim::esp_locator::isOffscreen(localEye,target,rotation,m_hudViewportAspect))return;
+    if(!bedaim::esp_locator::isOffscreen(localEye,target,rotation,m_hudViewportAspect))return false;
 
     auto byDistance=[](const OffscreenTarget& a,const OffscreenTarget& b){return a.distance<b.distance;};
     auto existing=std::find_if(m_offscreenTargets.begin(),m_offscreenTargets.end(),
@@ -98,16 +98,17 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
         existing->center=targetCenter;
         existing->distance=distance;
         std::stable_sort(m_offscreenTargets.begin(),m_offscreenTargets.end(),byDistance);
-        return;
+        return true;
     }
 
     OffscreenTarget candidate{targetCenter,distance,identity};
     if(m_offscreenTargets.size()>=kMaxOffscreenTargets){
-        if(distance>=m_offscreenTargets.back().distance)return;
+        if(distance>=m_offscreenTargets.back().distance)return false;
         m_offscreenTargets.pop_back();
     }
     const auto position=std::upper_bound(m_offscreenTargets.begin(),m_offscreenTargets.end(),candidate,byDistance);
     m_offscreenTargets.insert(position,candidate);
+    return true;
 }
 
 bool EspModule::offscreenTargetsSnapshot(std::vector<OffscreenTarget>& targets,
@@ -143,6 +144,8 @@ void EspModule::onFrame(){
     const float cx=surface.width*0.5f, cy=surface.height*0.5f;
     const auto now=std::chrono::steady_clock::now();
     const float seconds=std::chrono::duration<float>(now.time_since_epoch()).count();
+    std::size_t snapshotTargetCount=0;
+    bool targetSnapshotReady=false;
 
     // One arrow per distinct off-screen player. Snapshots contain copied world
     // coordinates and an identity token only; no actor pointer is dereferenced here.
@@ -151,6 +154,8 @@ void EspModule::onFrame(){
         bedrocktools::sdk::Vec3 local{};
         bedrocktools::sdk::Vec2 rotation{};
         if(offscreenTargetsSnapshot(targets,local,rotation)){
+            targetSnapshotReady=true;
+            snapshotTargetCount=targets.size();
             const bedaim::esp_locator::Vec3 localEye{local.x,local.y+1.62f,local.z};
             const bedaim::esp_locator::Rotation cameraRotation{rotation.x,rotation.y};
             std::array<int,4> edgeSlots{}; // left, right, top, bottom
@@ -197,6 +202,15 @@ void EspModule::onFrame(){
         }
     }
     pl::modmenu::submitDrawCommands(moduleId,commands);
+    static std::chrono::steady_clock::time_point lastHudSummary{};
+    if(lastHudSummary.time_since_epoch().count()==0 || now-lastHudSummary>=std::chrono::seconds(2)){
+        lastHudSummary=now;
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,"ESP",
+            "hud_frame=active surface="+std::to_string(static_cast<int>(surface.width))+"x"+
+            std::to_string(static_cast<int>(surface.height))+" target_snapshot="+
+            (targetSnapshotReady?"ready":"empty_or_stale")+" targets="+
+            std::to_string(snapshotTargetCount)+" image_commands="+std::to_string(commands.size()));
+    }
 }
 
 void EspModule::onMenuRegistered(){

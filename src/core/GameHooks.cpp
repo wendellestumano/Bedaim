@@ -279,10 +279,12 @@ struct ReadableRegion {
     std::uintptr_t begin{};
     std::uintptr_t end{};
     bool readable = false;
+    bool writable = false;
     bool executable = false;
 };
 
-bool isMemoryRange(const void* pointer, std::size_t size, bool requireExecutable) {
+bool isMemoryRange(const void* pointer, std::size_t size,
+                   bool requireExecutable, bool requireWritable = false) {
     if (!pointer || size == 0) return false;
     const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
     if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
@@ -309,7 +311,7 @@ bool isMemoryRange(const void* pointer, std::size_t size, bool requireExecutable
                 permissions[0] == 'r' && regionEnd > regionBegin) {
                 refreshed.push_back({static_cast<std::uintptr_t>(regionBegin),
                                      static_cast<std::uintptr_t>(regionEnd), true,
-                                     permissions[2] == 'x'});
+                                     permissions[1] == 'w', permissions[2] == 'x'});
             }
         }
         std::fclose(maps);
@@ -331,7 +333,8 @@ bool isMemoryRange(const void* pointer, std::size_t size, bool requireExecutable
     if (it == readableRegions.begin()) return false;
     const auto& region = *std::prev(it);
     return begin >= region.begin && end <= region.end && region.readable &&
-        (!requireExecutable || region.executable);
+        (!requireExecutable || region.executable) &&
+        (!requireWritable || region.writable);
 }
 
 bool isReadableMemory(const void* pointer, std::size_t size) {
@@ -340,6 +343,10 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
 
 bool isExecutableMemory(const void* pointer, std::size_t size) {
     return isMemoryRange(pointer, size, true);
+}
+
+bool isWritableMemory(const void* pointer, std::size_t size) {
+    return isMemoryRange(pointer, size, false, true);
 }
 
 bool isValidGameObjectInternal(const void* object) {
@@ -803,6 +810,10 @@ bool hookEgl() {
 
 bool isReadableMemoryRange(const void* pointer, std::size_t size) noexcept {
     try { return isReadableMemory(pointer, size); } catch (...) { return false; }
+}
+
+bool isWritableMemoryRange(const void* pointer, std::size_t size) noexcept {
+    try { return isWritableMemory(pointer, size); } catch (...) { return false; }
 }
 
 bool isExecutableMemoryRange(const void* pointer, std::size_t size) noexcept {

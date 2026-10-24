@@ -9,12 +9,14 @@
 #include "core/Diagnostics.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <dlfcn.h>
 #include <limits>
+#include <new>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -22,17 +24,48 @@
 
 namespace {
 using ActorIsPlayerFn = bool (*)(void*);
-using ActorGetNameTagFn = const std::string& (*)(const void*);
+using ActorGetNameTagFn = std::string (*)(const void*);
 struct DistanceSortedActor {
     void* actor;
     float distance;
     float padding;
 };
 struct ActorVector {
-    DistanceSortedActor* begin;
-    DistanceSortedActor* end;
-    DistanceSortedActor* capacity;
+    DistanceSortedActor* begin = nullptr;
+    DistanceSortedActor* end = nullptr;
+    DistanceSortedActor* capacity = nullptr;
+
+    ActorVector() noexcept = default;
+    ~ActorVector() noexcept { release(); }
+    ActorVector(const ActorVector&) = delete;
+    ActorVector& operator=(const ActorVector&) = delete;
+    ActorVector(ActorVector&& other) noexcept { take(other); }
+    ActorVector& operator=(ActorVector&& other) noexcept {
+        if (this != &other) { release(); take(other); }
+        return *this;
+    }
+
+private:
+    void take(ActorVector& other) noexcept {
+        begin = other.begin; end = other.end; capacity = other.capacity;
+        other.begin = other.end = other.capacity = nullptr;
+    }
+    void release() noexcept {
+        auto* allocation = begin;
+        const auto b = reinterpret_cast<std::uintptr_t>(begin);
+        const auto e = reinterpret_cast<std::uintptr_t>(end);
+        const auto c = reinterpret_cast<std::uintptr_t>(capacity);
+        begin = end = capacity = nullptr;
+        if (!b || b <= 0x1000 || e < b || c < e ||
+            b % alignof(DistanceSortedActor) != 0 ||
+            (e-b) % sizeof(DistanceSortedActor) != 0 ||
+            (c-b) % sizeof(DistanceSortedActor) != 0 ||
+            c-b == 0 || c-b > (16u * 1024u * 1024u)) return;
+        if (!bedrocktools::core::gamehooks::isReadableMemoryRange(allocation, c-b)) return;
+        ::operator delete(allocation);
+    }
 };
+static_assert(sizeof(ActorVector) == 3 * sizeof(void*));
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
 
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
@@ -215,9 +248,9 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         return;
     }
 
-    // Reuse the same build-matched nearby-actor query already used by Aim Assist
-    // and Hitbox/ESP. This avoids dereferencing Level/ActorManager offsets here
-    // and avoids returning a non-trivial std::vector across a guessed ABI.
+    // Reuse the build-matched native query. Its ABI returns a 24-byte vector
+    // (sret in x8); ActorVector mirrors its three pointers and releases the owned
+    // result allocation after the snapshot has been consumed.
     bedrocktools::sdk::Vec3 extent{80.0f, 80.0f, 80.0f};
     ActorVector actorVector{};
     static std::atomic_bool queryBeforeLogged{false};
@@ -247,14 +280,20 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             (end - begin) / sizeof(DistanceSortedActor) > 8192 ||
             (capacity - begin) / sizeof(DistanceSortedActor) > 16384 ||
             begin % alignof(DistanceSortedActor) != 0 ||
+            (capacity - begin) > (16u * 1024u * 1024u) ||
             ((end - begin) != 0 &&
              !bedrocktools::core::gamehooks::isReadableMemoryRange(
-                 reinterpret_cast<const void*>(begin), end - begin))) {
+                 reinterpret_cast<const void*>(begin), end - begin)) ||
+            ((capacity - begin) != 0 &&
+             !bedrocktools::core::gamehooks::isReadableMemoryRange(
+                 reinterpret_cast<const void*>(begin), capacity - begin))) {
             static std::atomic_bool badActorVectorLogged{false};
             if (!badActorVectorLogged.exchange(true, std::memory_order_acq_rel)) {
                 bedrocktools::diagnostics::log(
                     bedrocktools::diagnostics::Level::Warning, "GameModeChecker",
-                    "nearby_actor_query returned an invalid vector layout; refusing to read entries");
+                    "nearby_actor_query_invalid begin=" + std::to_string(begin) +
+                    " end=" + std::to_string(end) + " capacity=" + std::to_string(capacity) +
+                    "; refusing to read entries");
             }
             publishDiagnosticsOnly();
             return;
@@ -365,6 +404,21 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     std::sort(next.begin(), next.end(), [](const auto& a, const auto& b) {
         return a.name < b.name;
     });
+    static std::chrono::steady_clock::time_point lastSummary{};
+    const auto summaryNow = std::chrono::steady_clock::now();
+    if (lastSummary.time_since_epoch().count() == 0 ||
+        summaryNow - lastSummary >= std::chrono::seconds(2)) {
+        lastSummary = summaryNow;
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+            "GameModeChecker", "refresh_summary snapshot=" +
+            std::string(diag.actorSnapshotReady ? "valid" : "invalid") +
+            " actors=" + std::to_string(diag.actorCount) +
+            " players=" + std::to_string(diag.playerCount) +
+            " named=" + std::to_string(diag.namedPlayerCount) +
+            " exact=" + std::to_string(diag.exactModeCount) +
+            " inferred=" + std::to_string(diag.inferredModeCount) +
+            " unresolved=" + std::to_string(diag.unresolvedModeCount));
+    }
     std::lock_guard<std::mutex> lock(m_mutex);
     m_diagnostics = diag;
     m_players.swap(next);

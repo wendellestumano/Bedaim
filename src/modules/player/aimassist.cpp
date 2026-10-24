@@ -26,6 +26,7 @@
 #include <string>
 #include <optional>
 #include <limits>
+#include <new>
 #include <atomic>
 #include <string_view>
 #include <unordered_set>
@@ -36,7 +37,7 @@
 namespace {
 using ActorIsPlayerFn = bool (*)(void*);
 using ActorIsInvisibleFn = bool (*)(void*);
-using ActorGetNameTagFn = const std::string& (*)(void*);
+using ActorGetNameTagFn = std::string (*)(void*);
 using BlockSourceIsSolidBlockingBlockFn = bool (*)(void*, const bedrocktools::sdk::BlockPos*);
 using LocalPlayerApplyTurnDeltaFn = void (*)(void*, bedrocktools::sdk::Vec2*);
 
@@ -47,10 +48,44 @@ struct DistanceSortedActor {
 };
 
 struct ActorVector {
-    DistanceSortedActor* begin;
-    DistanceSortedActor* end;
-    DistanceSortedActor* capacity;
+    DistanceSortedActor* begin = nullptr;
+    DistanceSortedActor* end = nullptr;
+    DistanceSortedActor* capacity = nullptr;
+
+    ActorVector() noexcept = default;
+    ~ActorVector() noexcept { release(); }
+    ActorVector(const ActorVector&) = delete;
+    ActorVector& operator=(const ActorVector&) = delete;
+    ActorVector(ActorVector&& other) noexcept { take(other); }
+    ActorVector& operator=(ActorVector&& other) noexcept {
+        if (this != &other) { release(); take(other); }
+        return *this;
+    }
+
+private:
+    void take(ActorVector& other) noexcept {
+        begin = other.begin; end = other.end; capacity = other.capacity;
+        other.begin = other.end = other.capacity = nullptr;
+    }
+    void release() noexcept {
+        auto* allocation = begin;
+        const auto b = reinterpret_cast<std::uintptr_t>(begin);
+        const auto e = reinterpret_cast<std::uintptr_t>(end);
+        const auto c = reinterpret_cast<std::uintptr_t>(capacity);
+        begin = end = capacity = nullptr;
+        if (!b || b <= 0x1000 || e < b || c < e ||
+            b % alignof(DistanceSortedActor) != 0 ||
+            (e-b) % sizeof(DistanceSortedActor) != 0 ||
+            (c-b) % sizeof(DistanceSortedActor) != 0 ||
+            c-b == 0 || c-b > (16u * 1024u * 1024u)) return;
+        if (!bedrocktools::core::gamehooks::isReadableMemoryRange(allocation, c-b)) return;
+        // libminecraftpe's returned vector owns a heap allocation of trivial
+        // 16-byte distance/actor records. The previous POD view never ran the
+        // std::vector destructor and leaked this allocation on every query.
+        ::operator delete(allocation);
+    }
 };
+static_assert(sizeof(ActorVector) == 3 * sizeof(void*));
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
 
@@ -65,21 +100,95 @@ HitboxExpanderModule* g_hitboxExpander = nullptr;
 std::once_flag g_hitboxExpanderEventOnce;
 
 bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& out) {
-    if (!origin || !g_fetchNearbyActors || !std::isfinite(radius) || radius <= 0.0f) return false;
+    if (!origin || !g_fetchNearbyActors || !std::isfinite(radius) || radius <= 0.0f ||
+        !bedrocktools::core::gamehooks::isValidGameObject(origin) ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(g_fetchNearbyActors))) return false;
     bedrocktools::sdk::Vec3 extent{radius, radius, radius};
     ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
+    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
+    const bool allNull = begin == 0 && end == 0 && capacity == 0;
+    if (allNull) return true;
+    if (begin <= 0x1000 || end < begin || capacity < end ||
+        begin % alignof(DistanceSortedActor) != 0 ||
         (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 16384) return false;
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        if (entry->actor && reinterpret_cast<std::uintptr_t>(entry->actor) > 0x1000)
-            out.insert(entry->actor);
+        (capacity - begin) % sizeof(DistanceSortedActor) != 0 ||
+        (end - begin) / sizeof(DistanceSortedActor) > 8192 ||
+        (capacity - begin) / sizeof(DistanceSortedActor) > 16384 ||
+        !bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(begin), capacity - begin)) return false;
+
+    const auto count = (end - begin) / sizeof(DistanceSortedActor);
+    for (std::size_t i = 0; i < count; ++i) {
+        DistanceSortedActor entry{};
+        std::memcpy(&entry, reinterpret_cast<const std::byte*>(actors.begin) +
+                    i * sizeof(DistanceSortedActor), sizeof(entry));
+        if (!std::isfinite(entry.distance) || entry.distance < 0.0f ||
+            !bedrocktools::core::gamehooks::isValidGameObject(entry.actor)) continue;
+        out.insert(entry.actor);
     }
     return true;
 }
 std::atomic_bool g_loggedGameTypeUnavailable{false};
+
+bool finiteVec3(const bedrocktools::sdk::Vec3& v);
+
+bool readActorBoundsPointers(void* actor, void*& componentOut, bedrocktools::sdk::AABB*& boundsOut) {
+    using namespace bedrocktools::sdk;
+    componentOut = nullptr;
+    boundsOut = nullptr;
+    if (!bedrocktools::core::gamehooks::isValidGameObject(actor)) return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto maxAddress = std::numeric_limits<std::uintptr_t>::max();
+    const auto componentOffset = static_cast<std::uintptr_t>(
+        offsets::Actor::mStateVectorComponent + offsets::BuiltInActorComponents::mAABBShapeComponent);
+    if (base > maxAddress - componentOffset) return false;
+    const auto componentSlot = base + componentOffset;
+    if (!bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(componentSlot), sizeof(void*))) return false;
+    std::uintptr_t component = 0;
+    std::memcpy(&component, reinterpret_cast<const void*>(componentSlot), sizeof(component));
+    const auto aabbOffset = static_cast<std::uintptr_t>(offsets::AABBShapeComponent::mAABB);
+    if (component <= 0x1000 || component > maxAddress - aabbOffset) return false;
+    const auto boundsAddress = component + aabbOffset;
+    if (!bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(boundsAddress), sizeof(AABB)) ||
+        !bedrocktools::core::gamehooks::isWritableMemoryRange(
+            reinterpret_cast<const void*>(boundsAddress), sizeof(AABB))) return false;
+    componentOut = reinterpret_cast<void*>(component);
+    boundsOut = reinterpret_cast<AABB*>(boundsAddress);
+    return true;
+}
+
+bool readActorLevelAndPosition(void* actor, void*& levelOut, bedrocktools::sdk::Vec3& positionOut) {
+    using namespace bedrocktools::sdk;
+    levelOut = nullptr;
+    positionOut = {};
+    const auto base = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto maxAddress = std::numeric_limits<std::uintptr_t>::max();
+    const auto levelOffset = static_cast<std::uintptr_t>(offsets::Actor::mLevel);
+    const auto stateOffset = static_cast<std::uintptr_t>(offsets::Actor::mStateVectorComponent);
+    if (base <= 0x1000 || base > maxAddress - levelOffset || base > maxAddress - stateOffset)
+        return false;
+    if (!bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(base + levelOffset), sizeof(void*)) ||
+        !bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(base + stateOffset), sizeof(void*))) return false;
+    std::uintptr_t state = 0, level = 0;
+    std::memcpy(&state, reinterpret_cast<const void*>(base + stateOffset), sizeof(state));
+    std::memcpy(&level, reinterpret_cast<const void*>(base + levelOffset), sizeof(level));
+    if (state <= 0x1000 ||
+        !bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(state), sizeof(Vec3))) return false;
+    Vec3 position{};
+    std::memcpy(&position, reinterpret_cast<const void*>(state), sizeof(position));
+    if (!finiteVec3(position)) return false;
+    levelOut = reinterpret_cast<void*>(level);
+    positionOut = position;
+    return true;
+}
 
 pl::log::Logger& aimAssistLogger() {
     static auto& logger = pl::log::Logger::getOrCreate("Bedaim-AimAssist");
@@ -238,9 +347,15 @@ bool hasClearLineOfSight(void* blockSource,
 
 
 bool categoryHasMobBit(void* actor) {
-    if (!actor) return false;
-    const auto categories = *reinterpret_cast<const std::uint32_t*>(
-        reinterpret_cast<std::uintptr_t>(actor) + bedrocktools::sdk::offsets::Actor::mCategories);
+    if (!bedrocktools::core::gamehooks::isValidGameObject(actor)) return false;
+    const auto address = reinterpret_cast<std::uintptr_t>(actor);
+    const auto offset = static_cast<std::uintptr_t>(bedrocktools::sdk::offsets::Actor::mCategories);
+    if (address > std::numeric_limits<std::uintptr_t>::max() - offset) return false;
+    const auto field = address + offset;
+    if (!bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(field), sizeof(std::uint32_t))) return false;
+    std::uint32_t categories = 0;
+    std::memcpy(&categories, reinterpret_cast<const void*>(field), sizeof(categories));
     // BedrockTools' existing Hitbox module uses category bit 2 to identify entities.
     return (categories & 2u) != 0;
 }
@@ -1745,20 +1860,20 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
             continue;
         }
 
-        const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-        if (actorAddress <= 0x1000) {
+        if (!bedrocktools::core::gamehooks::isValidGameObject(actor)) {
             it = m_nativeBoundsOriginal.erase(it);
             continue;
         }
-
-        auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
-            offsets::BuiltInActorComponents::mAABBShapeComponent);
-        void* currentComponent = *componentSlot;
-        auto* actorObject = reinterpret_cast<Actor*>(actor);
-        void* currentLevel = actorObject->level();
-        const Vec3 currentPosition = actorObject->position();
-        if (currentComponent != snapshot.component || currentLevel != snapshot.level ||
-            reinterpret_cast<std::uintptr_t>(currentComponent) <= 0x1000 ||
+        void* currentLevel = nullptr;
+        Vec3 currentPosition{};
+        if (!readActorLevelAndPosition(actor, currentLevel, currentPosition)) {
+            it = m_nativeBoundsOriginal.erase(it);
+            continue;
+        }
+        void* currentComponent = nullptr;
+        AABB* currentBounds = nullptr;
+        if (!readActorBoundsPointers(actor, currentComponent, currentBounds) ||
+            currentComponent != snapshot.component || currentLevel != snapshot.level ||
             !finiteVec3(currentPosition) || !finiteVec3(snapshot.originalActorPosition)) {
             it = m_nativeBoundsOriginal.erase(it);
             continue;
@@ -1777,9 +1892,9 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
              snapshot.originalBounds.max.y + delta.y,
              snapshot.originalBounds.max.z + delta.z}
         };
-        auto* currentBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(currentComponent) +
-            offsets::AABBShapeComponent::mAABB);
-        if (validBounds(translated)) std::memcpy(currentBounds, &translated, sizeof(AABB));
+        if (validBounds(translated) &&
+            bedrocktools::core::gamehooks::isReadableMemoryRange(currentBounds, sizeof(AABB)))
+            std::memcpy(currentBounds, &translated, sizeof(AABB));
 
         // Keep the first unexpanded snapshot while enabled. Re-capturing the box
         // after each movement tick would bake any stale world position into the
@@ -1799,18 +1914,40 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     }
 
     Vec3 extent{32.0f, 32.0f, 32.0f};
+    if (!bedrocktools::core::gamehooks::isValidGameObject(player) ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(g_fetchNearbyActors)) ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(g_actorIsPlayer))) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
+            "HitboxExpander", "actor_snapshot", "native_dependency_unvalidated");
+        return;
+    }
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-    if (!begin || !end || end < begin ||
-        (end - begin) % sizeof(DistanceSortedActor) != 0 ||
-        (end - begin) / sizeof(DistanceSortedActor) > 8192) {
+    const auto capacity = reinterpret_cast<std::uintptr_t>(actors.capacity);
+    const bool allNull = begin == 0 && end == 0 && capacity == 0;
+    if (!allNull && (begin <= 0x1000 || end < begin || capacity < end ||
+        begin % alignof(DistanceSortedActor) != 0 ||
+        (end-begin) % sizeof(DistanceSortedActor) != 0 ||
+        (capacity-begin) % sizeof(DistanceSortedActor) != 0 ||
+        (end-begin) / sizeof(DistanceSortedActor) > 8192 ||
+        (capacity-begin) / sizeof(DistanceSortedActor) > 16384 ||
+        !bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(begin), capacity-begin))) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
-            "HitboxExpander", "actor_snapshot", "malformed");
+            "HitboxExpander", "actor_snapshot", "malformed_or_unreadable; skipped_native_bounds_writes");
         return;
     }
+    if (allNull) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "HitboxExpander", "actor_snapshot", "empty");
+        return;
+    }
+    const auto actorCount = (end-begin) / sizeof(DistanceSortedActor);
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "actor_snapshot", "valid");
+        "HitboxExpander", "actor_snapshot", "valid_count=" + std::to_string(actorCount));
 
     bool expandPlayers = false;
     bool expandMobs = false;
@@ -1840,31 +1977,31 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     if (expansionTypesChanged) restoreNativeBounds(player);
     if (!expandPlayers && !expandMobs) return;
 
-    void* playerLevel = reinterpret_cast<Actor*>(player)->level();
-    if (!playerLevel) return;
+    void* playerLevel = nullptr;
+    Vec3 playerPosition{};
+    if (!readActorLevelAndPosition(player, playerLevel, playerPosition) || !playerLevel) return;
 
-    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
-        void* actor = entry->actor;
-        if (!actor || actor == player || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000) continue;
+    for (std::size_t actorIndex = 0; actorIndex < actorCount; ++actorIndex) {
+        DistanceSortedActor entry{};
+        std::memcpy(&entry, reinterpret_cast<const std::byte*>(actors.begin) +
+                    actorIndex * sizeof(DistanceSortedActor), sizeof(entry));
+        void* actor = entry.actor;
+        if (!std::isfinite(entry.distance) || entry.distance < 0.0f ||
+            !actor || actor == player ||
+            !bedrocktools::core::gamehooks::isValidGameObject(actor)) continue;
 
         const bool isPlayer = g_actorIsPlayer(actor);
         if (isPlayer ? !expandPlayers : (!expandMobs || !categoryHasMobBit(actor))) continue;
 
-        const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-        auto* actorObject = reinterpret_cast<Actor*>(actor);
-        void* actorLevel = actorObject->level();
-        if (!actorLevel || actorLevel != playerLevel) continue;
-        auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
-            offsets::BuiltInActorComponents::mAABBShapeComponent);
-        void* component = *componentSlot;
-        if (reinterpret_cast<std::uintptr_t>(component) <= 0x1000) continue;
-
-        auto* nativeBounds = reinterpret_cast<AABB*>(reinterpret_cast<std::uintptr_t>(component) +
-            offsets::AABBShapeComponent::mAABB);
-        const Vec3 actorPosition = actorObject->position();
-        if (!finiteVec3(actorPosition)) continue;
-
-        AABB baseBounds = *nativeBounds;
+        void* actorLevel = nullptr;
+        Vec3 actorPosition{};
+        if (!readActorLevelAndPosition(actor, actorLevel, actorPosition) ||
+            !actorLevel || actorLevel != playerLevel) continue;
+        void* component = nullptr;
+        AABB* nativeBounds = nullptr;
+        if (!readActorBoundsPointers(actor, component, nativeBounds)) continue;
+        AABB baseBounds{};
+        std::memcpy(&baseBounds, nativeBounds, sizeof(baseBounds));
         {
             std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
             auto snapshotIt = m_nativeBoundsOriginal.find(actor);

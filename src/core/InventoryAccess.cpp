@@ -1,11 +1,13 @@
 #include "InventoryAccess.hpp"
 #include "Diagnostics.hpp"
+#include "GameHooks.hpp"
 
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -23,17 +25,25 @@ namespace bedrocktools::core {
 namespace {
 using namespace bedrocktools::sdk::offsets::Inventory;
 
+bool isReadableMemory(const void* pointer, std::size_t size);
+
 template<class T>
 T read(const void* object, std::size_t offset) {
-    return *reinterpret_cast<const T*>(static_cast<const std::byte*>(object) + offset);
+    T value{};
+    if (!object) return value;
+    const auto base = reinterpret_cast<std::uintptr_t>(object);
+    if (offset > std::numeric_limits<std::uintptr_t>::max() - base) return value;
+    const auto address = base + offset;
+    const auto* source = reinterpret_cast<const void*>(address);
+    if (!isReadableMemory(source, sizeof(T))) return value;
+    std::memcpy(&value, source, sizeof(T));
+    return value;
 }
-
-bool isReadableMemory(const void* pointer, std::size_t size);
 
 bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size) {
     begin = 0;
     size = 0;
-    if (!player) return false;
+    if (!player || !bedrocktools::core::gamehooks::isValidGameObject(player)) return false;
     const void* proxy = read<const void*>(player, PlayerInventory);
     if (!proxy) return false;
     const void* inventory = read<const void*>(proxy, PlayerInventoryContainer);
@@ -45,7 +55,8 @@ bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size
     const auto bytes = end - begin;
     if (bytes % ItemStackSize != 0) return false;
     size = bytes / ItemStackSize;
-    return size <= 64;
+    if (size > 64) return false;
+    return bytes == 0 || isReadableMemory(reinterpret_cast<const void*>(begin), bytes);
 }
 
 constexpr std::size_t PlayerTransactionManagerOffset = 0xA28;
@@ -361,7 +372,7 @@ std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const 
 }
 
 int InventoryAccess::selectedHotbarSlot(const sdk::Player* player) const {
-    if (!player) return -1;
+    if (!player || !bedrocktools::core::gamehooks::isValidGameObject(player)) return -1;
     const void* inventory = read<const void*>(player, PlayerInventory);
     if (!inventory) return -1;
     const int slot = read<int>(inventory, PlayerInventorySelectedSlot);
@@ -381,7 +392,8 @@ std::string InventoryAccess::selectedHotbarIdentifier(const sdk::Player* player)
 }
 
 bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
-    if (!player || slot < 0 || slot > 8) return false;
+    if (!player || slot < 0 || slot > 8 ||
+        !bedrocktools::core::gamehooks::isValidGameObject(player)) return false;
     std::uintptr_t begin = 0;
     std::size_t size = 0;
     if (!inventorySlots(player, begin, size) || !begin || size < 9) return false;
@@ -404,20 +416,35 @@ bool InventoryAccess::selectHotbarSlot(sdk::Player* player, int slot) const {
         return reinterpret_cast<SelectSlotFn>(address);
     }();
 
-    if (nativeSelectSlot) {
+    if (nativeSelectSlot &&
+        bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(nativeSelectSlot)) &&
+        isMinecraftFunction(reinterpret_cast<const void*>(nativeSelectSlot))) {
         const bool result = nativeSelectSlot(inventory, slot, 0); // ContainerID::Inventory
         return result && selectedHotbarSlot(player) == slot;
     }
 
-    // Some Android builds strip the native method's symbol. Fall back to the verified
-    // selected-slot field, then ask the native player to publish the updated selection.
-    auto* selected = reinterpret_cast<int*>(
-        static_cast<std::byte*>(inventory) + PlayerInventorySelectedSlot);
-    *selected = slot;
+    // The supplied stripped engine does not export PlayerInventory::selectSlot.
+    // Do not call Player vtable index 164 as a guess: if that slot moved, equipping
+    // a sword/mace invokes an unrelated native method and can terminate the game.
+    // Validate the field's mapping before the local fallback, then report that this
+    // path cannot guarantee the same server-side publication as the native method.
+    const auto inventoryAddress = reinterpret_cast<std::uintptr_t>(inventory);
+    if (inventoryAddress > std::numeric_limits<std::uintptr_t>::max() - PlayerInventorySelectedSlot)
+        return false;
+    const auto selectedAddress = inventoryAddress + PlayerInventorySelectedSlot;
+    auto* selected = reinterpret_cast<int*>(selectedAddress);
+    if (!bedrocktools::core::gamehooks::isWritableMemoryRange(selected, sizeof(int))) return false;
+    std::memcpy(selected, &slot, sizeof(slot));
     if (selectedHotbarSlot(player) != slot) return false;
-    bedrocktools::sdk::virtualCall<void>(
-        player, bedrocktools::sdk::offsets::VTable::PlayerSendInventory, true);
-    return selectedHotbarSlot(player) == slot;
+
+    static std::atomic_bool loggedFieldOnlyHotbarFallback{false};
+    if (!loggedFieldOnlyHotbarFallback.exchange(true, std::memory_order_acq_rel)) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "InventoryAccess",
+            "hotbar_selector=native_symbol_unavailable; using validated local field fallback and skipping unverified PlayerSendInventory vtable slot 164; server-side selection sync is not guaranteed");
+    }
+    return true;
 }
 
 OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* player, int slot) const {
