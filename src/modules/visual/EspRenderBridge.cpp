@@ -691,7 +691,7 @@ void EspRenderBridge::ensureRenderHook() {
 void ensureEspRenderHook() {
     static EspRenderBridge bridge;
     static std::once_flag initialized;
-    std::call_once(initialized, [&bridge] { bridge.onInit(); });
+    std::call_once(initialized, [] { bridge.onInit(); });
     bridge.ensureRenderHook();
 }
 
