@@ -1,3 +1,13 @@
+## 2026-10-24 — Stable-base AimAssist/weapon arbitration/Unglide/ESP improvements
+- Continue from the exact Build #1284 source commit `cbdc298509874b74afc82d58b6d7e30348a48c01`; leave the Build #1284 AimAssist actor-query ABI untouched (no manual-vector to std::vector return conversion).
+- Add `Hitbox Distance Strength Min Limit` and `Hitbox Distance Strength Max Limit` exact-value settings, clamp the dynamic steering-box multiplier to those persisted bounds, and add host math tests for both limits.
+- Smooth the dynamic hitbox scale with time-based exponential interpolation and replace Smooth/Adaptive's binary inside-box early return with continuous steering attenuation to avoid stutter at the virtual hitbox boundary.
+- Add shared hotbar arbitration so ShiftBlade publishes sword priority before MaceFall's same-tick handler; pending mace swaps are cancelled/restored when the sword has priority. Register ShiftBlade before MaceFall to make this deterministic.
+- Remove Unglide's redundant internal `m_unglideEnabled` setting (the module's own enabled switch is now the only enable gate) and remove the exact camera-ray intersection gate, which could reject a valid target while Aim Assist was still smoothing toward it. Range, vertical difference, player target and gliding-state gates remain.
+- Make the locator follow the same player selected by Aim Assist. If that target leaves Aim Assist's FOV, revalidate its identity against the live actor snapshot and refresh retention while it remains present, instead of picking another nearby off-screen player.
+- Persist min/max settings entered through the Aim Assist exact-value ModuleBuilder form.
+- Validation: fresh host regression tests and Android ARM64 package build are required for this revision. Runtime Unglide input delivery still depends on the installed Key Mapper keymap and must be verified in-game; successful compilation alone does not prove Space was consumed.
+
 ## 2026-10-24 — Continue ESP work from stable Build #1284
 - Use known-good Build #1284 commit `cbdc298509874b74afc82d58b6d7e30348a48c01` as the exact parent for this branch, rather than building on crash-reported builds #1301–#1303.
 - Leave `src/modules/player/aimassist.cpp` and its existing `ActorVector` return declaration untouched; this visual iteration intentionally avoids the native return-ABI changes introduced in the crash-reported branch.
