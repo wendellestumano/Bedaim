@@ -556,7 +556,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             m_burstRemaining = std::clamp(m_burstCount, 1, 10);
         }
         if (!bedaim::macefall::shouldBeginUnglideDispatch(
-                enabled && m_unglideEnabled, m_dispatchInProgress,
+                enabled, m_dispatchInProgress,
                 m_triggerState == TriggerState::Triggered, m_burstRemaining)) {
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
             return;
