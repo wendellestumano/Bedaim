@@ -40,16 +40,51 @@ inline bool relativeAngles(Vec3 localPosition, Vec3 targetCenter, Rotation rotat
     return std::isfinite(yawDelta) && std::isfinite(pitchDelta);
 }
 inline bool isOffscreen(Vec3 localPosition, Vec3 targetCenter, Rotation rotation,
-                        float aspect) noexcept {
-    float yawDelta = 0.0f, pitchDelta = 0.0f;
-    if (!relativeAngles(localPosition, targetCenter, rotation, yawDelta, pitchDelta)) return false;
-    constexpr float verticalFov = 110.0f;
+                        float aspect, float verticalFov = 110.0f) noexcept {
+    if (!finite(localPosition) || !finite(targetCenter) ||
+        !std::isfinite(rotation.pitch) || !std::isfinite(rotation.yaw)) return false;
+
+    const float dx = targetCenter.x - localPosition.x;
+    const float dy = targetCenter.y - localPosition.y;
+    const float dz = targetCenter.z - localPosition.z;
+    if (!std::isfinite(dx) || !std::isfinite(dy) || !std::isfinite(dz)) return false;
+
+    // Bedrock camera basis shared with edgeDirection. This is the same idea as
+    // Apollon's view-matrix projection: test camera-space depth before the
+    // perspective divide. In particular, a target behind the camera is always
+    // off-screen rather than being accidentally accepted by wrapped yaw angles.
+    const float yaw = rotation.yaw * kDegToRad;
+    const float pitch = rotation.pitch * kDegToRad;
+    const float cosPitch = std::cos(pitch);
+    const float sinPitch = std::sin(pitch);
+    const float cosYaw = std::cos(yaw);
+    const float sinYaw = std::sin(yaw);
+    const float rightX = -cosYaw;
+    const float rightZ = -sinYaw;
+    const float upX = -sinPitch * sinYaw;
+    const float upY = cosPitch;
+    const float upZ = sinPitch * cosYaw;
+    const float forwardX = -sinYaw * cosPitch;
+    const float forwardY = -sinPitch;
+    const float forwardZ = cosYaw * cosPitch;
+
+    const float cameraDepth = dx * forwardX + dy * forwardY + dz * forwardZ;
+    const float cameraRight = dx * rightX + dz * rightZ;
+    const float cameraUp = dx * upX + dy * upY + dz * upZ;
+    if (!std::isfinite(cameraDepth) || !std::isfinite(cameraRight) ||
+        !std::isfinite(cameraUp)) return false;
+    if (cameraDepth <= 0.001f) return true;
+
     const float safeAspect = std::clamp(std::isfinite(aspect) ? aspect : (16.0f / 9.0f),
                                         0.5f, 3.2f);
-    const float halfVertical = verticalFov * 0.5f + 1.5f;
+    const float safeFov = std::clamp(std::isfinite(verticalFov) ? verticalFov : 110.0f,
+                                     30.0f, 150.0f);
+    const float halfVertical = safeFov * 0.5f + 1.5f;
     const float halfHorizontal =
-        std::atan(std::tan(verticalFov * 0.5f * kDegToRad) * safeAspect) * kRadToDeg + 2.0f;
-    return std::fabs(yawDelta) > halfHorizontal || std::fabs(pitchDelta) > halfVertical;
+        std::atan(std::tan(safeFov * 0.5f * kDegToRad) * safeAspect) * kRadToDeg + 2.0f;
+    const float yawAngle = std::atan2(cameraRight, cameraDepth) * kRadToDeg;
+    const float pitchAngle = std::atan2(cameraUp, cameraDepth) * kRadToDeg;
+    return std::fabs(yawAngle) > halfHorizontal || std::fabs(pitchAngle) > halfVertical;
 }
 inline bool edgeDirection(Vec3 localPosition, Vec3 targetCenter, Rotation rotation,
                           Direction& out) noexcept {

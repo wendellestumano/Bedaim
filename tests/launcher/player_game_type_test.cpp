@@ -29,6 +29,19 @@ int main() {
     expectNative(2, 2, "Adventure is recognized");
     expectNative(6, 3, "Spectator native enum value 6 maps to canonical id 3");
 
+    std::int32_t componentMode = -99;
+    check(bedaim::playergametype::normalizeActorComponentValue(1, componentMode),
+          "ActorGameTypeComponent Creative value is recognized separately");
+    check(componentMode == 1, "component Creative maps to canonical Creative");
+    componentMode = -99;
+    check(bedaim::playergametype::normalizeActorComponentValue(6, componentMode),
+          "ActorGameTypeComponent Spectator value is recognized separately");
+    check(componentMode == 3, "component Spectator maps to canonical Spectator");
+    componentMode = -99;
+    check(!bedaim::playergametype::normalizeActorComponentValue(5, componentMode),
+          "component Default remains unknown instead of being called Survival");
+    check(componentMode == -99, "component Default leaves canonical output unchanged");
+
     for (const std::int32_t unknown : {-1, 3, 4, 5, 7, 99}) {
         std::int32_t canonical = -99;
         check(!bedaim::playergametype::normalizeNativeValue(unknown, canonical),

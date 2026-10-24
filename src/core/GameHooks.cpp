@@ -273,29 +273,25 @@ DiagnosticGameHooksLogger& gameHooksLogger() {
     return logger;
 }
 
-// Check a pointer against the process's readable mappings before dereferencing
-// memory obtained from a version-sensitive native object layout.
+// Check version-sensitive native pointers against the current process mappings.
+// The 50 ms thread-local cache reduces /proc parsing overhead on hot paths.
 struct ReadableRegion {
     std::uintptr_t begin{};
     std::uintptr_t end{};
+    bool readable = false;
+    bool executable = false;
 };
 
-bool isReadableMemory(const void* pointer, std::size_t size) {
+bool isMemoryRange(const void* pointer, std::size_t size, bool requireExecutable) {
     if (!pointer || size == 0) return false;
     const auto begin = reinterpret_cast<std::uintptr_t>(pointer);
     if (size > std::numeric_limits<std::uintptr_t>::max() - begin) return false;
     const auto end = begin + size;
 
-    // GameMode validation can happen on every attack attempt. A thread-local
-    // 50 ms readable-map snapshot makes those checks O(log mappings), instead of
-    // opening/parsing /proc/self/maps on every call. No pointer is considered
-    // valid solely because it was validated earlier; address containment is
-    // still checked against the current short-lived snapshot for every query.
     thread_local std::vector<ReadableRegion> readableRegions;
     thread_local std::chrono::steady_clock::time_point mapsRefreshed{};
     thread_local bool mapsCacheValid = false;
     const auto now = std::chrono::steady_clock::now();
-
     if (!mapsCacheValid || now < mapsRefreshed ||
         now - mapsRefreshed > std::chrono::milliseconds(50)) {
         std::vector<ReadableRegion> refreshed;
@@ -312,7 +308,8 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
             if (std::sscanf(line, "%llx-%llx %4s", &regionBegin, &regionEnd, permissions) == 3 &&
                 permissions[0] == 'r' && regionEnd > regionBegin) {
                 refreshed.push_back({static_cast<std::uintptr_t>(regionBegin),
-                                     static_cast<std::uintptr_t>(regionEnd)});
+                                     static_cast<std::uintptr_t>(regionEnd), true,
+                                     permissions[2] == 'x'});
             }
         }
         std::fclose(maps);
@@ -333,7 +330,28 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
         });
     if (it == readableRegions.begin()) return false;
     const auto& region = *std::prev(it);
-    return begin >= region.begin && end <= region.end;
+    return begin >= region.begin && end <= region.end && region.readable &&
+        (!requireExecutable || region.executable);
+}
+
+bool isReadableMemory(const void* pointer, std::size_t size) {
+    return isMemoryRange(pointer, size, false);
+}
+
+bool isExecutableMemory(const void* pointer, std::size_t size) {
+    return isMemoryRange(pointer, size, true);
+}
+
+bool isValidGameObjectInternal(const void* object) {
+    if (!isReadableMemory(object, sizeof(std::uintptr_t))) return false;
+    std::uintptr_t vtableAddress = 0;
+    std::memcpy(&vtableAddress, object, sizeof(vtableAddress));
+    if (vtableAddress <= 0x1000 ||
+        !isReadableMemory(reinterpret_cast<const void*>(vtableAddress), sizeof(std::uintptr_t))) return false;
+    std::uintptr_t firstVirtual = 0;
+    std::memcpy(&firstVirtual, reinterpret_cast<const void*>(vtableAddress), sizeof(firstVirtual));
+    return firstVirtual > 0x1000 &&
+        isExecutableMemory(reinterpret_cast<const void*>(firstVirtual), 1);
 }
 
 bool isMinecraftFunction(const void* address) {
@@ -783,6 +801,18 @@ bool hookEgl() {
 }
 }
 
+bool isReadableMemoryRange(const void* pointer, std::size_t size) noexcept {
+    try { return isReadableMemory(pointer, size); } catch (...) { return false; }
+}
+
+bool isExecutableMemoryRange(const void* pointer, std::size_t size) noexcept {
+    try { return isExecutableMemory(pointer, size); } catch (...) { return false; }
+}
+
+bool isValidGameObject(const void* object) noexcept {
+    try { return isValidGameObjectInternal(object); } catch (...) { return false; }
+}
+
 bool install() {
     std::lock_guard lock(installMutex);
     if (installed) return true;
@@ -1046,8 +1076,49 @@ bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* 
 }
 
 
+bool tryGetPlayerComponentGameType(void* player, std::int32_t& outComponentValue) {
+    if (!isValidGameObject(player)) return false;
+    using ActorGameTypeComponentFn = std::int32_t (*)(void* entityContext);
+    static std::atomic<ActorGameTypeComponentFn> getter{nullptr};
+    auto query = getter.load(std::memory_order_acquire);
+    if (!query) {
+        const auto address = bedrocktools::memory::resolve(SignatureId::ActorGameTypeComponent);
+        if (address && isExecutableMemory(reinterpret_cast<const void*>(address), 1)) {
+            auto* candidate = reinterpret_cast<ActorGameTypeComponentFn>(address);
+            ActorGameTypeComponentFn expected = nullptr;
+            if (getter.compare_exchange_strong(expected, candidate,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                query = candidate;
+                static std::atomic_bool loggedComponentQuery{false};
+                if (!loggedComponentQuery.exchange(true, std::memory_order_acq_rel)) {
+                    gameHooksLogger().info(
+                        "Resolved ActorGameTypeComponent getter through a unique 96-byte ARM64 signature; querying via Player::entityContext().");
+                }
+            } else {
+                query = expected;
+            }
+        }
+    }
+    if (!query || !isExecutableMemory(reinterpret_cast<const void*>(query), 1)) return false;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(player);
+    constexpr auto contextOffset = static_cast<std::uintptr_t>(bedrocktools::sdk::offsets::Actor::mEntityContext);
+    if (actorAddress > std::numeric_limits<std::uintptr_t>::max() - contextOffset) return false;
+    const auto contextAddress = actorAddress + contextOffset;
+    // This helper reads EntityContext fields at +0x08 (registry reference) and
+    // +0x10 (entity ID). Check the complete local header before invoking native code.
+    constexpr std::size_t kEntityContextHeaderSize = 0x18;
+    auto* entityContext = reinterpret_cast<void*>(contextAddress);
+    if (!isReadableMemory(entityContext, kEntityContextHeaderSize)) return false;
+
+    const std::int32_t rawValue = query(entityContext);
+    if (rawValue != 1 && rawValue != 5 && rawValue != 6) return false;
+    outComponentValue = rawValue;
+    return true;
+}
+
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
-    if (!player) return false;
+    if (!isValidGameObject(player)) return false;
     auto getter = playerGetGameTypeOriginal.load(std::memory_order_acquire);
     if (!getter) {
         // The resolver owns and synchronizes its retry timestamp internally.
@@ -1056,7 +1127,7 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
         getter = playerGetGameTypeOriginal.load(std::memory_order_acquire);
     }
 
-    if (getter) {
+    if (getter && isExecutableMemory(reinterpret_cast<const void*>(getter), 1)) {
         const std::int32_t nativeValue = getter(player);
         std::int32_t canonical = -1;
         // Native C++ GameType values: Survival=0, Creative=1, Adventure=2,
@@ -1071,6 +1142,14 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
                 "Player::getPlayerGameType returned unrecognized native value {}; checking the observed setter cache instead of guessing.",
                 nativeValue);
         }
+    }
+
+    std::int32_t componentRaw = -1;
+    std::int32_t componentCanonical = -1;
+    if (tryGetPlayerComponentGameType(player, componentRaw) &&
+        bedaim::playergametype::normalizeActorComponentValue(componentRaw, componentCanonical)) {
+        outGameType = componentCanonical;
+        return true;
     }
 
     {
@@ -1094,7 +1173,7 @@ bool tryGetPlayerGameType(void* player, std::int32_t& outGameType) {
 }
 
 bool tryGetPlayerNoDamageCreativeHint(void* player) {
-    if (!player) return false;
+    if (!isValidGameObject(player)) return false;
     const auto now = std::chrono::steady_clock::now();
     const int hurtTime = reinterpret_cast<const bedrocktools::sdk::Actor*>(player)->hurtTime();
 
@@ -1131,7 +1210,15 @@ bool tryGetPlayerNoDamageCreativeHint(void* player) {
 }
 
 bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType) {
-    if (!player) return false;
+    if (!isValidGameObject(player)) return false;
+
+    std::int32_t componentRaw = -1;
+    std::int32_t componentCanonical = -1;
+    if (tryGetPlayerComponentGameType(player, componentRaw) &&
+        bedaim::playergametype::normalizeActorComponentValue(componentRaw, componentCanonical)) {
+        outGameType = componentCanonical;
+        return true;
+    }
 
     auto isCreative = actorIsCreativeOriginal.load(std::memory_order_acquire);
     auto isSpectator = actorIsSpectatorOriginal.load(std::memory_order_acquire);
@@ -1182,8 +1269,9 @@ bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType) {
         }
     }
 
+    if (isCreative && !isExecutableMemory(reinterpret_cast<const void*>(isCreative), 1)) isCreative = nullptr;
+    if (isSpectator && !isExecutableMemory(reinterpret_cast<const void*>(isSpectator), 1)) isSpectator = nullptr;
     if (!isCreative && !isSpectator) return false;
-    if (!isReadableMemory(player, sizeof(void*))) return false;
 
     bool creative = false;
     bool spectator = false;
@@ -1216,7 +1304,7 @@ bool tryGetPlayerCreativeSpectator(void* player, std::int32_t& outGameType) {
 }
 
 bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
-    if (!actor) return false;
+    if (!isValidGameObject(actor)) return false;
 
     auto function = actorIsAttackableGamemodeOriginal.load(std::memory_order_acquire);
     if (!function) {
@@ -1247,7 +1335,7 @@ bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
         }
     }
 
-    if (!function) return false;
+    if (!function || !isExecutableMemory(reinterpret_cast<const void*>(function), 1)) return false;
     outIsAttackable = function(actor);
     return true;
 }

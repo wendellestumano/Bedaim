@@ -7,6 +7,7 @@
 #include "core/Diagnostics.hpp"
 #include <pl/ModMenu.hpp>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -43,7 +44,7 @@ EspModule::EspModule():Module("ESP","Player outlines, Lock in Aim and off-screen
 void EspModule::onInit(){
     bedaim::espassets::registerImages();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,"ESP",
-        "hud_assets=registered; lock-in sprite and 16 directional arrow rotations");
+        "hud_assets=registered; multi-target off-screen arrows use camera-space projection");
 }
 
 void EspModule::onEnable() {
@@ -59,7 +60,7 @@ void EspModule::onEnable() {
 void EspModule::onDisable(){
     pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
-    m_offscreenTargetValid=false;
+    m_offscreenTargets.clear();
     m_offscreenFrameTime={};
 }
 
@@ -68,12 +69,12 @@ void EspModule::beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     m_hudLocalPosition=localPosition;
     m_hudLocalRotation=localRotation;
-    m_offscreenTargetDistance=std::numeric_limits<float>::max();
-    m_offscreenTargetValid=false;
+    m_offscreenTargets.clear();
     m_offscreenFrameTime=std::chrono::steady_clock::now();
 }
 
-void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,float distance){
+void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,
+                                           float distance, std::uintptr_t identity){
     if(!std::isfinite(targetCenter.x)||!std::isfinite(targetCenter.y)||!std::isfinite(targetCenter.z)||
        !std::isfinite(distance)||distance<0.0f||distance>std::clamp(range,8.0f,80.0f))return;
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
@@ -82,31 +83,46 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const bedaim::esp_locator::Vec3 localEye{
         m_hudLocalPosition.x, m_hudLocalPosition.y + 1.62f, m_hudLocalPosition.z
     };
-    const bedaim::esp_locator::Vec3 target{
-        targetCenter.x, targetCenter.y, targetCenter.z
-    };
-    const bedaim::esp_locator::Rotation rotation{
-        m_hudLocalRotation.x, m_hudLocalRotation.y
-    };
-    if(!bedaim::esp_locator::isOffscreen(localEye, target, rotation, m_hudViewportAspect))return;
-    if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
-    m_offscreenTargetCenter=targetCenter;
-    m_offscreenTargetDistance=distance;
-    m_offscreenTargetValid=true;
+    const bedaim::esp_locator::Vec3 target{targetCenter.x,targetCenter.y,targetCenter.z};
+    const bedaim::esp_locator::Rotation rotation{m_hudLocalRotation.x,m_hudLocalRotation.y};
+    // Use the same camera-space basis as the direction projection. A target
+    // behind the camera is explicitly off-screen; it is not lost to a yaw-only
+    // angular test. FOV is still a conservative 110-degree fallback because
+    // Bedaim has no verified getter for the game's current HUD projection FOV.
+    if(!bedaim::esp_locator::isOffscreen(localEye,target,rotation,m_hudViewportAspect))return;
+
+    auto byDistance=[](const OffscreenTarget& a,const OffscreenTarget& b){return a.distance<b.distance;};
+    auto existing=std::find_if(m_offscreenTargets.begin(),m_offscreenTargets.end(),
+        [identity](const OffscreenTarget& item){return identity!=0 && item.identity==identity;});
+    if(existing!=m_offscreenTargets.end()){
+        existing->center=targetCenter;
+        existing->distance=distance;
+        std::stable_sort(m_offscreenTargets.begin(),m_offscreenTargets.end(),byDistance);
+        return;
+    }
+
+    OffscreenTarget candidate{targetCenter,distance,identity};
+    if(m_offscreenTargets.size()>=kMaxOffscreenTargets){
+        if(distance>=m_offscreenTargets.back().distance)return;
+        m_offscreenTargets.pop_back();
+    }
+    const auto position=std::upper_bound(m_offscreenTargets.begin(),m_offscreenTargets.end(),candidate,byDistance);
+    m_offscreenTargets.insert(position,candidate);
 }
 
-bool EspModule::offscreenTargetSnapshot(bedrocktools::sdk::Vec3& targetCenter,
-                                        bedrocktools::sdk::Vec3& localPosition,
-                                        bedrocktools::sdk::Vec2& localRotation,
-                                        float& distance) const {
+bool EspModule::offscreenTargetsSnapshot(std::vector<OffscreenTarget>& targets,
+                                         bedrocktools::sdk::Vec3& localPosition,
+                                         bedrocktools::sdk::Vec2& localRotation) const {
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     const auto now=std::chrono::steady_clock::now();
-    if(!m_offscreenTargetValid||m_offscreenFrameTime.time_since_epoch().count()==0||
-       now<m_offscreenFrameTime||now-m_offscreenFrameTime>std::chrono::milliseconds(250))return false;
-    targetCenter=m_offscreenTargetCenter;
+    if(m_offscreenTargets.empty()||m_offscreenFrameTime.time_since_epoch().count()==0||
+       now<m_offscreenFrameTime||now-m_offscreenFrameTime>std::chrono::milliseconds(250)){
+        targets.clear();
+        return false;
+    }
+    targets=m_offscreenTargets;
     localPosition=m_hudLocalPosition;
     localRotation=m_hudLocalRotation;
-    distance=m_offscreenTargetDistance;
     return true;
 }
 
@@ -123,44 +139,54 @@ void EspModule::onFrame(){
         m_hudViewportAspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
     }
     std::vector<pl::modmenu::DrawCommand> commands;
-    commands.reserve(1);
+    commands.reserve(kMaxOffscreenTargets);
     const float cx=surface.width*0.5f, cy=surface.height*0.5f;
     const auto now=std::chrono::steady_clock::now();
     const float seconds=std::chrono::duration<float>(now.time_since_epoch()).count();
 
-    // The player reticle is rendered around each player's world-space AABB by
-    // the existing RenderLevel hook. Never place a fixed reticle at screen center.
-
+    // One arrow per distinct off-screen player. Snapshots contain copied world
+    // coordinates and an identity token only; no actor pointer is dereferenced here.
     if(showOffscreenIndicators){
-        bedrocktools::sdk::Vec3 target{},local{};
+        std::vector<OffscreenTarget> targets;
+        bedrocktools::sdk::Vec3 local{};
         bedrocktools::sdk::Vec2 rotation{};
-        float distance=0.0f;
-        if(offscreenTargetSnapshot(target,local,rotation,distance)){
-            const bedaim::esp_locator::Vec3 localEye{
-                local.x, local.y + 1.62f, local.z
-            };
-            const bedaim::esp_locator::Vec3 targetCenter{target.x, target.y, target.z};
-            const bedaim::esp_locator::Rotation cameraRotation{rotation.x, rotation.y};
-            bedaim::esp_locator::Direction direction{};
-            if(bedaim::esp_locator::edgeDirection(localEye, targetCenter, cameraRotation, direction)){
-                const float dirX=direction.x;
-                const float dirY=direction.y;
+        if(offscreenTargetsSnapshot(targets,local,rotation)){
+            const bedaim::esp_locator::Vec3 localEye{local.x,local.y+1.62f,local.z};
+            const bedaim::esp_locator::Rotation cameraRotation{rotation.x,rotation.y};
+            std::array<int,4> edgeSlots{}; // left, right, top, bottom
+            for(const auto& target:targets){
+                const bedaim::esp_locator::Vec3 targetCenter{
+                    target.center.x,target.center.y,target.center.z
+                };
+                bedaim::esp_locator::Direction direction{};
+                if(!bedaim::esp_locator::edgeDirection(localEye,targetCenter,cameraRotation,direction))continue;
+
+                const float dirX=direction.x, dirY=direction.y;
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
-                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
+                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+target.distance*0.17f):1.0f);
                 const float edgeMargin=size*0.5f+12.0f;
                 const float halfW=std::max(1.0f,cx-edgeMargin);
                 const float halfH=std::max(1.0f,cy-edgeMargin);
                 const float tx=std::fabs(dirX)>0.0001f?halfW/std::fabs(dirX):std::numeric_limits<float>::infinity();
                 const float ty=std::fabs(dirY)>0.0001f?halfH/std::fabs(dirY):std::numeric_limits<float>::infinity();
+                const bool horizontalEdge=tx<=ty;
                 const float t=std::min(tx,ty);
                 float px=cx+dirX*t-size*0.5f;
                 float py=cy+dirY*t-size*0.5f;
+
+                // Targets stacked on the same edge receive small alternating
+                // tangential offsets so multiple arrows remain independently visible.
+                const int side=horizontalEdge?(dirX<0.0f?0:1):(dirY<0.0f?2:3);
+                const int slot=edgeSlots[static_cast<std::size_t>(side)]++;
+                const int signedSlot=slot==0?0:((slot+1)/2)*(slot%2?1:-1);
+                const float offset=static_cast<float>(signedSlot)*(size*0.78f+4.0f);
+                if(horizontalEdge)py+=offset;else px+=offset;
+
                 px=std::clamp(px,12.0f,std::max(12.0f,surface.width-size-12.0f));
                 py=std::clamp(py,12.0f,std::max(12.0f,surface.height-size-12.0f));
-
                 float angle=std::atan2(dirY,dirX)*bedaim::esp_locator::kRadToDeg;
                 if(angle<0.0f)angle+=360.0f;
-                int sprite=static_cast<int>(std::lround(angle/22.5f))%16;
+                const int sprite=static_cast<int>(std::lround(angle/22.5f))%16;
                 pl::modmenu::DrawCommand arrow{};
                 arrow.type=pl::modmenu::DrawCommandType::Image;
                 arrow.x=px;arrow.y=py;arrow.w=size;arrow.h=size;
@@ -185,7 +211,7 @@ void EspModule::onMenuRegistered(){
  toggle("showPlayers","Show players","Draw outlines around other players.",true);
  toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
  toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
- toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
+ toggle("showOffscreenIndicators","Off-screen indicators","Point to multiple players outside the view (up to 24 nearest).",true,"indicators");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
  size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";

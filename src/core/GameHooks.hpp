@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 namespace bedrocktools::core::gamehooks {
@@ -13,7 +14,17 @@ void* gameModeForPlayer(void* player);
 bool attackAvailable(void* gameMode);
 bool attack(void* gameMode, void* target, bool playPredictiveSound, const void* hitPosition);
 
+// Short-lived /proc/self/maps validation used before version-sensitive native calls.
+// This reduces invalid-pointer crashes but cannot guarantee object lifetime across threads.
+bool isReadableMemoryRange(const void* pointer, std::size_t size) noexcept;
+bool isExecutableMemoryRange(const void* pointer, std::size_t size = 1) noexcept;
+bool isValidGameObject(const void* object) noexcept;
+
 // GameType values: Survival=0, Creative=1, Adventure=2, Spectator=3.
+// Returns raw ActorGameTypeComponent values: 1=Creative, 5=Default, 6=Spectator.
+// The version-specific getter is resolved by a unique ARM64 signature; it accepts
+// the Player's EntityContext (Player + mEntityContext), not the Player pointer.
+bool tryGetPlayerComponentGameType(void* player, std::int32_t& outComponentValue);
 bool tryGetPlayerGameType(void* player, std::int32_t& outGameType);
 // Heuristic only: three hitbox-overlapping attack attempts without a hurt timer
 // may mark Creative? for targeting, but never overrides an exact native GameType.

@@ -77,6 +77,7 @@ enum class SignatureId : std::uint16_t {
     ActorIsPlayer,
     ActorIsInvisible,
     ActorFetchNearbyActorsSorted,
+    ActorGameTypeComponent,
     ActorGetNameTag,
     ActorSetNameTag,
     SynchedActorDataEnsureIndex,

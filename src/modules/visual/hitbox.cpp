@@ -10,6 +10,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
+#include <limits>
 #include <chrono>
 #include <algorithm>
 #include <atomic>
@@ -188,15 +189,31 @@ static void ensureMaterials() {
 }
 
 static AABB getActorAABB(void* actor) {
- const AABB empty{{0,0,0},{0,0,0}};const auto addr=reinterpret_cast<std::uintptr_t>(actor);
+ const AABB empty{{0,0,0},{0,0,0}};
+ const auto addr=reinterpret_cast<std::uintptr_t>(actor);
  if(addr<=0x1000)return empty;
- const auto state=*reinterpret_cast<std::uintptr_t*>(addr+bedrocktools::sdk::offsets::Actor::mStateVectorComponent);
- if(state<=0x1000)return empty;
- const auto component=*reinterpret_cast<std::uintptr_t*>(addr+bedrocktools::sdk::offsets::Actor::mStateVectorComponent+
-    bedrocktools::sdk::offsets::BuiltInActorComponents::mAABBShapeComponent);
- if(component<=0x1000)return empty;
- AABB aabb{};std::memcpy(&aabb,reinterpret_cast<const void*>(component+
-    bedrocktools::sdk::offsets::AABBShapeComponent::mAABB),sizeof(aabb));
+ constexpr auto maxAddress=std::numeric_limits<std::uintptr_t>::max();
+ const auto stateOffset=static_cast<std::uintptr_t>(bedrocktools::sdk::offsets::Actor::mStateVectorComponent);
+ const auto boxComponentOffset=stateOffset+
+    static_cast<std::uintptr_t>(bedrocktools::sdk::offsets::BuiltInActorComponents::mAABBShapeComponent);
+ if(addr>maxAddress-stateOffset||addr>maxAddress-boxComponentOffset)return empty;
+ const auto stateField=addr+stateOffset;
+ const auto componentField=addr+boxComponentOffset;
+ if(!bedrocktools::core::gamehooks::isReadableMemoryRange(
+        reinterpret_cast<const void*>(stateField),sizeof(std::uintptr_t))||
+    !bedrocktools::core::gamehooks::isReadableMemoryRange(
+        reinterpret_cast<const void*>(componentField),sizeof(std::uintptr_t)))return empty;
+ std::uintptr_t state=0,component=0;
+ std::memcpy(&state,reinterpret_cast<const void*>(stateField),sizeof(state));
+ std::memcpy(&component,reinterpret_cast<const void*>(componentField),sizeof(component));
+ if(state<=0x1000||component<=0x1000)return empty;
+ const auto aabbOffset=static_cast<std::uintptr_t>(bedrocktools::sdk::offsets::AABBShapeComponent::mAABB);
+ if(component>maxAddress-aabbOffset)return empty;
+ const auto aabbAddress=component+aabbOffset;
+ if(!bedrocktools::core::gamehooks::isReadableMemoryRange(
+        reinterpret_cast<const void*>(aabbAddress),sizeof(AABB)))return empty;
+ AABB aabb{};
+ std::memcpy(&aabb,reinterpret_cast<const void*>(aabbAddress),sizeof(aabb));
  return validRenderBounds(aabb)?aabb:empty;
 }
 
@@ -255,11 +272,17 @@ static bedrocktools::sdk::Vec2 getActorRotation(void* actor) {
 }
 
 static bool hasCategory(void* actor, uint32_t categoryBit) {
-    uintptr_t actorAddr = (uintptr_t)actor;
-    uint32_t categories = *(uint32_t*)(actorAddr + bedrocktools::sdk::offsets::Actor::mCategories);
+    const auto actorAddr = reinterpret_cast<std::uintptr_t>(actor);
+    const auto offset = static_cast<std::uintptr_t>(bedrocktools::sdk::offsets::Actor::mCategories);
+    if (actorAddr <= 0x1000 || actorAddr > std::numeric_limits<std::uintptr_t>::max() - offset)
+        return false;
+    const auto field = actorAddr + offset;
+    if (!bedrocktools::core::gamehooks::isReadableMemoryRange(
+            reinterpret_cast<const void*>(field), sizeof(std::uint32_t))) return false;
+    std::uint32_t categories = 0;
+    std::memcpy(&categories, reinterpret_cast<const void*>(field), sizeof(categories));
     return (categories & categoryBit) != 0;
 }
-
 
 
 static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
@@ -269,7 +292,10 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
     if (!esp || !localPlayer) return;
     esp->beginOffscreenFrame(localPosition, getActorRotation(localPlayer));
     if (!esp->enabled || !esp->showOffscreenIndicators ||
-        !s_actorFetchNearby || !s_actorIsPlayer) return;
+        !s_actorFetchNearby || !s_actorIsPlayer ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(s_actorIsPlayer)) ||
+        !bedrocktools::core::gamehooks::isValidGameObject(localPlayer)) return;
 
     const bool empty = actorSnapshotEmpty;
     const bool valid = actorSnapshotValid;
@@ -287,12 +313,15 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
     bool foundPlayer = false;
     for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
         void* actor = it->mActor;
-        if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000 ||
-            actor == localPlayer || !std::isfinite(it->mDistance) ||
+        if (!actor || actor == localPlayer || !std::isfinite(it->mDistance) ||
             it->mDistance < 0.0f || it->mDistance > targetRange ||
+            !bedrocktools::core::gamehooks::isValidGameObject(actor) ||
             !s_actorIsPlayer(actor)) continue;
         foundPlayer = true;
-        if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
+        if (s_actorIsInvisible &&
+            bedrocktools::core::gamehooks::isExecutableMemoryRange(
+                reinterpret_cast<const void*>(s_actorIsInvisible)) &&
+            s_actorIsInvisible(actor) && !esp->showInvisible) continue;
         const AABB bounds = getActorAABB(actor);
         if (!validRenderBounds(bounds)) continue;
         const bedrocktools::sdk::Vec3 center{
@@ -300,7 +329,8 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
             (bounds.min.y + bounds.max.y) * 0.5f,
             (bounds.min.z + bounds.max.z) * 0.5f
         };
-        esp->considerOffscreenCandidate(center, it->mDistance);
+        esp->considerOffscreenCandidate(center, it->mDistance,
+            reinterpret_cast<std::uintptr_t>(actor));
     }
     if (!foundPlayer) {
         espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Info,
@@ -329,16 +359,33 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     ActorVec actors{};
     bool actorSnapshotValid = false;
     bool actorSnapshotEmpty = true;
-    if (s_actorFetchNearby) {
+    const bool actorQueryReady = s_actorFetchNearby &&
+        bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(s_actorFetchNearby)) &&
+        bedrocktools::core::gamehooks::isValidGameObject(g_localPlayerPtr);
+    if (actorQueryReady) {
         bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
         actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
         const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
         const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
-        actorSnapshotEmpty = begin == 0 && end == 0;
-        actorSnapshotValid = actorSnapshotEmpty ||
-            (begin > 0x1000 && end >= begin &&
+        const auto capacity = reinterpret_cast<std::uintptr_t>(actors.cap);
+        actorSnapshotEmpty = begin == 0 && end == 0 && capacity == 0;
+        const bool layoutValid = actorSnapshotEmpty ||
+            (begin > 0x1000 && end >= begin && capacity >= end &&
+             begin % alignof(DistanceSortedActor) == 0 &&
              (end - begin) % sizeof(DistanceSortedActor) == 0 &&
-             (end - begin) / sizeof(DistanceSortedActor) <= 8192);
+             (capacity - begin) % sizeof(DistanceSortedActor) == 0 &&
+             (end - begin) / sizeof(DistanceSortedActor) <= 8192 &&
+             (capacity - begin) / sizeof(DistanceSortedActor) <= 16384);
+        const auto usedBytes = end >= begin ? end - begin : 0;
+        actorSnapshotValid = layoutValid &&
+            (actorSnapshotEmpty || usedBytes == 0 ||
+             bedrocktools::core::gamehooks::isReadableMemoryRange(
+                 reinterpret_cast<const void*>(begin), usedBytes));
+        if (!actorSnapshotValid && espEnabled) {
+            espLogOnce(espLoggedSnapshot, bedrocktools::diagnostics::Level::Warning,
+                "actor_snapshot=unreadable_or_malformed; refused to inspect entries");
+        }
     }
     if (espEnabled) {
         updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
@@ -533,7 +580,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     bool isThirdPerson = (dx*dx + dy*dy + dz*dz) > 0.05f;
 
     auto renderActor = [&](void* ent, bool allowEsp) {
-        const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
+        if (!bedrocktools::core::gamehooks::isValidGameObject(ent)) return;
+        const bool playerClassifierReady = s_actorIsPlayer &&
+            bedrocktools::core::gamehooks::isExecutableMemoryRange(
+                reinterpret_cast<const void*>(s_actorIsPlayer));
+        const bool isPlayer=playerClassifierReady&&s_actorIsPlayer(ent);
         AABB aabb=getActorAABB(ent);
         if(!validRenderBounds(aabb)){
             if(espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr)
@@ -618,13 +669,20 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             void* ent=it->mActor;
             if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
                !std::isfinite(it->mDistance)||it->mDistance<0||it->mDistance>queryRange)continue;
-            const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
+            if (!bedrocktools::core::gamehooks::isValidGameObject(ent)) continue;
+            const bool playerClassifierReady = s_actorIsPlayer &&
+                bedrocktools::core::gamehooks::isExecutableMemoryRange(
+                    reinterpret_cast<const void*>(s_actorIsPlayer));
+            const bool isPlayer=playerClassifierReady&&s_actorIsPlayer(ent);
             const bool wantsEsp=espEnabled&&esp->showPlayers&&isPlayer&&it->mDistance<=espRange;
             const bool isEntityCategory=isPlayer||hasCategory(ent,2);
             const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(isPlayer)&&isEntityCategory;
             const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_hitboxMod->showPlayers:(hasCategory(ent,2)&&g_hitboxMod->showEntities));
             if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
-            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
+            if(s_actorIsInvisible&&
+               bedrocktools::core::gamehooks::isExecutableMemoryRange(
+                   reinterpret_cast<const void*>(s_actorIsInvisible)) &&
+               s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
             renderActor(ent,wantsEsp);
         }
     }else if(espEnabled){

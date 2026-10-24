@@ -9,6 +9,7 @@
 #include "core/Diagnostics.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -94,18 +95,15 @@ void* resolveGameSymbol(const char* symbol) {
 }
 
 std::string safeName(void* actor) {
-    if (!actor) return {};
+    if (!bedrocktools::core::gamehooks::isValidGameObject(actor) || !g_actorGetNameTag ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(g_actorGetNameTag))) return {};
     std::string name;
-    // Prefer the exported native Actor::getNameTag API; keep the SDK field as fallback.
-    if (g_actorGetNameTag) {
-        logStageOnce(stageNameBefore, "stage=before_name_tag_getter");
-        try { name = g_actorGetNameTag(actor); } catch (...) { name.clear(); }
-        logStageOnce(stageNameAfter, "stage=after_name_tag_getter");
-    }
-    if (name.empty()) {
-        try { name = reinterpret_cast<const bedrocktools::sdk::Player*>(actor)->name(); }
-        catch (...) { name.clear(); }
-    }
+    // Use the build-resolved native getter only. Falling back to a guessed SDK
+    // layout after a failed native call adds another unchecked fault path.
+    logStageOnce(stageNameBefore, "stage=before_name_tag_getter");
+    try { name = g_actorGetNameTag(actor); } catch (...) { name.clear(); }
+    logStageOnce(stageNameAfter, "stage=after_name_tag_getter");
     if (name.size() > 96) name.resize(96);
     name.erase(std::remove_if(name.begin(), name.end(), [](unsigned char c) {
         return c < 0x20 || c == 0x7f;
@@ -196,7 +194,9 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     GamemodeCheckerDiagnostics diag{};
     diag.actorListReady = g_fetchNearbyActors != nullptr;
     diag.playerClassifierReady = g_actorIsPlayer != nullptr;
-    diag.nameGetterReady = true;
+    diag.nameGetterReady = g_actorGetNameTag &&
+        bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(g_actorGetNameTag));
     diag.localPlayerReady = localPlayer != nullptr;
 
     auto publishDiagnosticsOnly = [&]() {
@@ -205,7 +205,12 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
         m_players.clear();
     };
 
-    if (!localPlayer || !diag.actorListReady || !diag.playerClassifierReady) {
+    if (!localPlayer || !diag.actorListReady || !diag.playerClassifierReady ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(g_fetchNearbyActors)) ||
+        !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+            reinterpret_cast<const void*>(g_actorIsPlayer)) ||
+        !bedrocktools::core::gamehooks::isValidGameObject(localPlayer)) {
         publishDiagnosticsOnly();
         return;
     }
@@ -240,7 +245,11 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             (end - begin) % sizeof(DistanceSortedActor) != 0 ||
             (capacity - begin) % sizeof(DistanceSortedActor) != 0 ||
             (end - begin) / sizeof(DistanceSortedActor) > 8192 ||
-            (capacity - begin) / sizeof(DistanceSortedActor) > 16384) {
+            (capacity - begin) / sizeof(DistanceSortedActor) > 16384 ||
+            begin % alignof(DistanceSortedActor) != 0 ||
+            ((end - begin) != 0 &&
+             !bedrocktools::core::gamehooks::isReadableMemoryRange(
+                 reinterpret_cast<const void*>(begin), end - begin))) {
             static std::atomic_bool badActorVectorLogged{false};
             if (!badActorVectorLogged.exchange(true, std::memory_order_acq_rel)) {
                 bedrocktools::diagnostics::log(
@@ -260,12 +269,9 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
             std::to_string(actorCount));
     }
 
-    // The returned vector belongs to the live engine query and is consumed
-    // synchronously by AimAssist and Hitbox using direct iteration as well.
-    // Reading its entries through /proc/self/mem fails in some Android game
-    // processes even when this native vector is valid, incorrectly leaving the
-    // checker at query:OFF. Validate the vector header above, then copy only
-    // actor pointers directly before calling any per-actor native methods.
+    // The returned vector belongs to the live engine query. Validate that the
+    // full used range remains in a readable mapping before copying entries; a
+    // valid-looking begin/end/capacity triple alone is not sufficient.
     static std::atomic_bool directSnapshotLogged{false};
     if (!directSnapshotLogged.exchange(true, std::memory_order_acq_rel)) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
@@ -274,10 +280,12 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
     std::vector<void*> actors;
     actors.reserve(actorCount);
     for (std::size_t i = 0; i < actorCount; ++i) {
-        const DistanceSortedActor& entry = actorVector.begin[i];
-        const auto actorAddress = reinterpret_cast<std::uintptr_t>(entry.actor);
-        if (!entry.actor || entry.actor == localPlayer || actorAddress <= 0x1000 ||
-            actorAddress % alignof(void*) != 0) continue;
+        DistanceSortedActor entry{};
+        std::memcpy(&entry, reinterpret_cast<const std::byte*>(actorVector.begin) +
+                    i * sizeof(DistanceSortedActor), sizeof(entry));
+        if (!std::isfinite(entry.distance) || entry.distance < 0.0f ||
+            !bedrocktools::core::gamehooks::isValidGameObject(entry.actor) ||
+            entry.actor == localPlayer) continue;
         actors.push_back(entry.actor);
     }
 
@@ -289,6 +297,9 @@ void GamemodeCheckerModule::refresh(void* localPlayer) {
 
         bool isPlayer = false;
         logStageOnce(stageActorClassifyBefore, "stage=before_actor_classifier");
+        if (!bedrocktools::core::gamehooks::isValidGameObject(actor) ||
+            !bedrocktools::core::gamehooks::isExecutableMemoryRange(
+                reinterpret_cast<const void*>(g_actorIsPlayer))) continue;
         try {
             isPlayer = g_actorIsPlayer(actor);
         } catch (...) {

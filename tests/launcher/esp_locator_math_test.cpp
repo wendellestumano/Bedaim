@@ -32,6 +32,11 @@ int main() {
 
     check(!isOffscreen(origin, {0, 0, 10}, level, 16.0f/9.0f),
           "target straight ahead is not classified as off-screen");
+    check(isOffscreen(origin, {0, 0, -10}, level, 16.0f/9.0f),
+          "target behind the camera is always classified as off-screen");
+    check(isOffscreen(origin, {20, 0, 10}, level, 16.0f/9.0f, 60.0f) &&
+              !isOffscreen(origin, {20, 0, 10}, level, 16.0f/9.0f, 110.0f),
+          "projection responds to configured vertical FOV instead of ignoring it");
     check(isOffscreen(origin, {0, 10, 0}, level, 16.0f/9.0f),
           "near-vertical target is not discarded by a horizontal-distance gate");
     check(edgeDirection(origin, {0, 10, 0}, level, dir) && dir.y < 0,

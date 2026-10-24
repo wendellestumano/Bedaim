@@ -18,4 +18,16 @@ inline bool normalizeNativeValue(std::int32_t nativeValue,
     }
 }
 
+// Apollon's ActorGameTypeComponent uses a different raw representation:
+// Creative=1, Default=5, Spectator=6, missing/unknown=-1. It does not encode
+// Survival/Adventure exactly, so only the two unambiguous modes are normalized.
+inline bool normalizeActorComponentValue(std::int32_t rawValue,
+                                         std::int32_t& canonical) noexcept {
+    switch (rawValue) {
+        case 1: canonical = 1; return true; // Creative
+        case 6: canonical = 3; return true; // Spectator
+        default: return false; // Default=5 and missing/unknown are not exact modes
+    }
+}
+
 } // namespace bedaim::playergametype
