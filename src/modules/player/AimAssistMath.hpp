@@ -35,7 +35,14 @@ std::size_t nearestAnchorToRay(const Vec3& origin, const Vec3& direction,
 // Scale for the virtual steering area: smaller than the native box nearby,
 // then progressively larger with distance. This does not modify native collision.
 float distanceHitboxScale(float baseScale, float distance, float configuredRange,
-                          float strength, bool enabled,
-                          float minimumScale = 0.25f,
-                          float maximumScale = 200.0f) noexcept;
+                          float strength, bool enabled) noexcept;
+
+struct DistanceStrengthLimits {
+    float minimum;
+    float maximum;
+};
+
+// Sanitize user-specified limits and clamp the distance-strength setting itself.
+DistanceStrengthLimits normalizeDistanceStrengthLimits(float minimum, float maximum) noexcept;
+float clampDistanceHitboxStrength(float value, float minimum, float maximum) noexcept;
 } // namespace bedaim::aimmath
