@@ -67,3 +67,9 @@ target("player_game_type_test")
     add_includedirs("../src")
 target_end()
 
+target("esp_geometry_test")
+    set_kind("binary")
+    add_files("launcher/esp_geometry_test.cpp", "../src/modules/visual/esp_geometry.cpp")
+    add_includedirs("../include", "../src")
+target_end()
+
