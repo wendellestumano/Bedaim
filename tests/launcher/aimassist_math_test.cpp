@@ -147,6 +147,17 @@ int main() {
           "distance hitbox strength accepts 500 and produces a larger bounded steering volume");
     check(bedaim::aimmath::distanceHitboxScale(1.0f, 80.0f, 80.0f, 500.0f, true) <= 40.0f,
           "far-range hitbox multiplier remains bounded at maximum strength");
+    const float constrainedNear = bedaim::aimmath::distanceHitboxScale(
+        1.0f, 0.5f, 30.0f, 5.0f, true, 0.9f, 1.5f);
+    const float constrainedFar = bedaim::aimmath::distanceHitboxScale(
+        1.0f, 30.0f, 30.0f, 500.0f, true, 0.9f, 1.5f);
+    check(std::abs(constrainedNear - 0.9f) < 1.0e-4f,
+          "user minimum limit clamps near distance strength");
+    check(std::abs(constrainedFar - 1.5f) < 1.0e-4f,
+          "user maximum limit clamps expanded distance strength");
+    check(std::abs(bedaim::aimmath::distanceHitboxScale(
+              0.5f, 30.0f, 30.0f, 5.0f, false, 0.25f, 0.75f) - 0.5f) < 1.0e-4f,
+          "disabled distance curve respects configured limits without forcing base scale to one");
 
     std::cout << checks << " checks, " << failures << " failures\\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
