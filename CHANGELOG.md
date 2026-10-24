@@ -1,5 +1,5 @@
 ## 2026-10-24 — XRAY crash containment and world-ready gating
-- Added a live-LocalPlayer gate before XRAY face filtering, face-mask overrides, and chunk-rebuild traversal. ClientInstance updates in the main menu no longer trigger chunk-list traversal.
+- Added an active-world gate before XRAY face filtering, face-mask overrides, and chunk-rebuild traversal: a LocalPlayer must exist and reference a live Level. Main-menu updates no longer walk the chunk coordinator list.
 - Fail open for null-region/synthetic tessellation instead of filtering menu or inventory-preview meshes.
 - Resolve LocalPlayer only while XRAY is enabled or a chunk rebuild is pending; the ordinary Connected Glass-off frame path does not gain a per-frame native lookup.
 - Preserved the existing Connected Glass face-mask update convention; no unverified change to that native operation is being used as a crash fix.

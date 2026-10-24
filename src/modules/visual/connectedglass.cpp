@@ -598,7 +598,8 @@ void ConnectedGlassHandleClientInstanceUpdate(void* clientInstance) {
     // ClientInstanceUpdate also fires in the main menu. The native render-chunk
     // list is touched only after the client exposes a live local player.
     auto* client = static_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-    const bool worldReady = client->localPlayer() != nullptr;
+    auto* localPlayer = client->localPlayer();
+    const bool worldReady = localPlayer && localPlayer->level() != nullptr;
     g_worldReady.store(worldReady, std::memory_order_release);
     if (!worldReady || !rebuildPending) return;
 
