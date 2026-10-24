@@ -355,6 +355,49 @@ void* resolveMinecraftFunction(const char* name) {
     return valid ? address : nullptr;
 }
 
+void* resolvePinnedActorAttackability() {
+    // These RVAs are from the public Apollon offset table for Minecraft Bedrock
+    // 1.26.52.3. Use them only when the runtime reports that exact version and
+    // ActorIsPlayer resolves inside the loaded libminecraftpe image; never guess
+    // offsets for other versions.
+    const bool knownVersion =
+        gameVersion.find("1.26.52.3") != std::string::npos ||
+        gameVersion.find("1.26.52.03") != std::string::npos;
+    if (!knownVersion) return nullptr;
+
+#if defined(__aarch64__)
+    constexpr std::uintptr_t rva = 0xC95B500;
+#elif defined(__ARM_ARCH_7A__)
+    constexpr std::uintptr_t rva = 0x88D587C;
+#elif defined(__x86_64__)
+    constexpr std::uintptr_t rva = 0xD5891A0;
+#else
+    constexpr std::uintptr_t rva = 0;
+    return nullptr;
+#endif
+
+    const auto actorIsPlayerAddress = bedrocktools::memory::resolve(SignatureId::ActorIsPlayer);
+    if (!actorIsPlayerAddress) return nullptr;
+
+    Dl_info anchor{};
+    if (!dladdr(reinterpret_cast<void*>(actorIsPlayerAddress), &anchor) ||
+        !anchor.dli_fname || !anchor.dli_fbase ||
+        std::string_view(anchor.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
+        return nullptr;
+    }
+
+    const auto base = reinterpret_cast<std::uintptr_t>(anchor.dli_fbase);
+    if (base > std::numeric_limits<std::uintptr_t>::max() - rva) return nullptr;
+    void* candidate = reinterpret_cast<void*>(base + rva);
+    Dl_info candidateInfo{};
+    if (!dladdr(candidate, &candidateInfo) || !candidateInfo.dli_fbase ||
+        candidateInfo.dli_fbase != anchor.dli_fbase || !candidateInfo.dli_fname ||
+        std::string_view(candidateInfo.dli_fname).find("libminecraftpe.so") == std::string_view::npos) {
+        return nullptr;
+    }
+    return candidate;
+}
+
 void* resolveLoadedClientSupportFunction(const char* name) {
     if (!name || !*name) return nullptr;
 
@@ -1230,7 +1273,8 @@ bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
             // Apollon calls Actor::isAttackableGamemode() directly. Prefer the
             // exported native method over inferring attackability from GameType IDs.
             // resolveMinecraftFunction accepts only addresses owned by libminecraftpe.so.
-            // Never fall back to unverified version-specific offsets.
+            // If stripped, the separate fallback is gated to the exact documented build and
+            // verifies the candidate belongs to that same loaded image.
             const char* symbols[] = {
                 "_ZN5Actor20isAttackableGamemodeEv",
                 "_ZNK5Actor20isAttackableGamemodeEv"
@@ -1243,6 +1287,14 @@ bool tryIsActorAttackableGamemode(void* actor, bool& outIsAttackable) {
                 gameHooksLogger().info(
                     "Resolved trusted Actor::isAttackableGamemode; Aim Assist can apply the native attackability filter.");
                 break;
+            }
+            if (!function) {
+                if (void* address = resolvePinnedActorAttackability()) {
+                    function = reinterpret_cast<ActorIsAttackableGamemodeFn>(address);
+                    actorIsAttackableGamemodeOriginal.store(function, std::memory_order_release);
+                    gameHooksLogger().warn(
+                        "Using version-gated 1.26.52.3 Actor::isAttackableGamemode compatibility RVA.");
+                }
             }
         }
     }

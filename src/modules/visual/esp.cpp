@@ -1,5 +1,6 @@
 #include "esp.hpp"
 #include "esp_assets.hpp"
+#include "EspLocatorMath.hpp"
 #include "hitbox.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
@@ -147,63 +148,59 @@ void EspModule::onFrame(){
         bedrocktools::sdk::Vec3 target{},local{};
         bedrocktools::sdk::Vec2 rotation{};
         float distance=0.0f;
-        if(offscreenTargetSnapshot(target,local,rotation,distance)){
-            float dx=target.x-local.x;
-            float dy=target.y-(local.y+1.62f);
-            float dz=target.z-local.z;
-            const float worldLength=std::sqrt(dx*dx+dy*dy+dz*dz);
-            if(worldLength>0.001f){
-                dx/=worldLength;dy/=worldLength;dz/=worldLength;
-                constexpr float kRadToDeg=57.29577951308232f;
-                constexpr float kDegToRad=0.01745329251994329577f;
-                const float yaw=rotation.y*kDegToRad;
-                const float pitch=rotation.x*kDegToRad;
+        if (offscreenTargetSnapshot(target, local, rotation, distance)) {
+            const float dx = target.x - local.x;
+            const float dy = target.y - (local.y + 1.62f);
+            const float dz = target.z - local.z;
+            const float horizontal = std::hypot(dx, dz);
+            if (std::isfinite(horizontal) && horizontal > 0.001f && std::isfinite(dy)) {
+                constexpr float kRadToDeg = 57.29577951308232f;
+                constexpr float kDegToRad = 0.01745329251994329577f;
+                constexpr float kMaxVerticalFov = 110.0f;
 
-                // Bedrock camera basis. The sign of the projected direction must be
-                // flipped for targets behind the camera to keep the edge arrow honest.
-                const float rightX=-std::cos(yaw);
-                const float rightZ=-std::sin(yaw);
-                const float upX=-std::sin(pitch)*std::sin(yaw);
-                const float upY=std::cos(pitch);
-                const float upZ=std::sin(pitch)*std::cos(yaw);
-                const float forwardX=-std::sin(yaw)*std::cos(pitch);
-                const float forwardY=-std::sin(pitch);
-                const float forwardZ=std::cos(yaw)*std::cos(pitch);
-                const float cameraDepth=dx*forwardX+dy*forwardY+dz*forwardZ;
-                float dirX=dx*rightX+dz*rightZ;
-                float dirY=-(dx*upX+dy*upY+dz*upZ);
-                const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
-                if(directionLength<0.0001f){
-                    dirX=0.0f;
-                    dirY=1.0f;
-                }else{
-                    if(cameraDepth<0.0f){dirX=-dirX;dirY=-dirY;}
-                    dirX/=directionLength;
-                    dirY/=directionLength;
+                const float targetYaw = std::atan2(-dx, dz) * kRadToDeg;
+                const float targetPitch = -std::atan2(dy, horizontal) * kRadToDeg;
+                const float halfVertical = kMaxVerticalFov * 0.5f + 1.5f;
+                const float aspect = std::clamp(m_hudViewportAspect, 0.5f, 3.2f);
+                const float halfHorizontal =
+                    std::atan(std::tan(kMaxVerticalFov * 0.5f * kDegToRad) * aspect) *
+                    kRadToDeg + 2.0f;
+
+                // Compute the edge direction from angular deltas. A camera-space
+                // projection with a depth-sign flip reverses the vertical component
+                // when looking near zenith/nadir, causing the arrow to point opposite
+                // the actual target. Angular pitch remains stable at those extremes.
+                bedaim::esplocator::Direction direction{};
+                if (bedaim::esplocator::screenEdgeDirection(
+                        targetYaw, targetPitch, rotation.y, rotation.x,
+                        halfHorizontal, halfVertical, direction)) {
+                    const float dirX = direction.x;
+                    const float dirY = direction.y;
+                    const float size = std::clamp(indicatorSize, 24.0f, 96.0f) *
+                        (animatedIndicators ? 1.0f + 0.045f * std::sin(seconds * 4.0f + 0.6f) : 1.0f);
+                    const float edgeMargin = size * 0.5f + 12.0f;
+                    const float halfW = std::max(1.0f, cx - edgeMargin);
+                    const float halfH = std::max(1.0f, cy - edgeMargin);
+                    const float tx = std::fabs(dirX) > 0.0001f
+                        ? halfW / std::fabs(dirX) : std::numeric_limits<float>::infinity();
+                    const float ty = std::fabs(dirY) > 0.0001f
+                        ? halfH / std::fabs(dirY) : std::numeric_limits<float>::infinity();
+                    const float t = std::min(tx, ty);
+                    float px = cx + dirX * t - size * 0.5f;
+                    float py = cy + dirY * t - size * 0.5f;
+                    px = std::clamp(px, 12.0f, std::max(12.0f, surface.width - size - 12.0f));
+                    py = std::clamp(py, 12.0f, std::max(12.0f, surface.height - size - 12.0f));
+
+                    float angle = std::atan2(dirY, dirX) * kRadToDeg;
+                    if (angle < 0.0f) angle += 360.0f;
+                    const int sprite = static_cast<int>(std::lround(angle / 22.5f)) % 16;
+                    pl::modmenu::DrawCommand arrow{};
+                    arrow.type = pl::modmenu::DrawCommandType::Image;
+                    arrow.x = px; arrow.y = py; arrow.w = size; arrow.h = size;
+                    arrow.color = 0xFFFFFFFFu;
+                    arrow.imageId = "bedaim.esp.arrow." + std::to_string(sprite);
+                    commands.push_back(std::move(arrow));
                 }
-
-                const float size=std::clamp(indicatorSize,24.0f,96.0f)*
-                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
-                const float edgeMargin=size*0.5f+12.0f;
-                const float halfW=std::max(1.0f,cx-edgeMargin);
-                const float halfH=std::max(1.0f,cy-edgeMargin);
-                const float tx=std::fabs(dirX)>0.0001f?halfW/std::fabs(dirX):std::numeric_limits<float>::infinity();
-                const float ty=std::fabs(dirY)>0.0001f?halfH/std::fabs(dirY):std::numeric_limits<float>::infinity();
-                const float t=std::min(tx,ty);
-                float px=cx+dirX*t-size*0.5f;
-                float py=cy+dirY*t-size*0.5f;
-                px=std::clamp(px,12.0f,std::max(12.0f,surface.width-size-12.0f));
-                py=std::clamp(py,12.0f,std::max(12.0f,surface.height-size-12.0f));
-
-                float angle=std::atan2(dirY,dirX)*kRadToDeg;
-                if(angle<0.0f)angle+=360.0f;
-                int sprite=static_cast<int>(std::lround(angle/22.5f))%16;
-                pl::modmenu::DrawCommand arrow{};
-                arrow.type=pl::modmenu::DrawCommandType::Image;
-                arrow.x=px;arrow.y=py;arrow.w=size;arrow.h=size;
-                arrow.color=0xFFFFFFFFu;
-                arrow.imageId="bedaim.esp.arrow."+std::to_string(sprite);
-                commands.push_back(std::move(arrow));
             }
         }
     }

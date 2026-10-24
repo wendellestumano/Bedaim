@@ -207,8 +207,19 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Base size of the virtual steering region.");
     toggle("m_distanceDependentHitbox", "Distance-dependent hitbox", "hitbox",
            "Tighten near targets and expand the virtual aim region with distance.");
-    slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox", "0.1", "500",
-           "0.1", "x", "Higher values expand the virtual steering volume more at long range; this does not alter server collision.");
+    const std::string hitboxStrengthMinLimit =
+        schemaCurrentValue(config, "m_hitboxDistanceStrengthMinLimit", "0.1");
+    const std::string hitboxStrengthMaxLimit =
+        schemaCurrentValue(config, "m_hitboxDistanceStrengthMaxLimit", "500");
+    slider("m_hitboxDistanceGrowth", "Distance hitbox strength", "hitbox",
+           hitboxStrengthMinLimit.c_str(), hitboxStrengthMaxLimit.c_str(),
+           "0.1", "x", "Strength of distance-based hitbox growth/shrink. Its minimum and maximum are controlled below.");
+    slider("m_hitboxDistanceStrengthMinLimit", "Distance strength min limit", "hitbox",
+           "0.1", "500", "0.1", "x",
+           "Lowest value allowed for Distance hitbox strength; prevents the strength from shrinking below this value.");
+    slider("m_hitboxDistanceStrengthMaxLimit", "Distance strength max limit", "hitbox",
+           "0.1", "500", "0.1", "x",
+           "Highest value allowed for Distance hitbox strength; prevents the strength from growing above this value.");
     toggle("m_fourPointAiming", "Four-point hitbox aiming", "hitbox",
            "Select the closest of four stable hitbox anchors, then keep the existing slide behavior.");
 
@@ -575,7 +586,9 @@ void registerModulesWithLauncher() {
                 else if (k == "m_strength") displayName = "BEHAVIOR > Strongness";
                 else if (k == "m_hitboxScale") displayName = "BEHAVIOR > Hitbox area";
                 else if (k == "m_distanceDependentHitbox") displayName = "BEHAVIOR > Distance-dependent hitbox";
-                else if (k == "m_hitboxDistanceGrowth") displayName = "BEHAVIOR > Distance hitbox strength (0.1-200)";
+                else if (k == "m_hitboxDistanceGrowth") displayName = "HITBOX > Distance hitbox strength";
+                else if (k == "m_hitboxDistanceStrengthMinLimit") displayName = "HITBOX > Distance strength min limit";
+                else if (k == "m_hitboxDistanceStrengthMaxLimit") displayName = "HITBOX > Distance strength max limit";
                 else if (k == "m_targetPlayers") displayName = "TARGETING > Players";
                 else if (k == "m_targetMobs") displayName = "TARGETING > Mobs";
                 else if (k == "m_ignoreCreativeSpectator") displayName = "TARGETING > Ignore Creative/Spectator";
@@ -810,6 +823,7 @@ void registerModulesWithLauncher() {
                 "m_fov", "m_range", "m_aimSpeed", "m_rotationSpeed", "m_predictionMode", "m_predictionLeadMs",
                 "m_strength", "m_hitboxScale",
                 "m_distanceDependentHitbox", "m_hitboxDistanceGrowth",
+                "m_hitboxDistanceStrengthMinLimit", "m_hitboxDistanceStrengthMaxLimit",
                 "m_targetSwitchHysteresis", "m_targetSwitchDistanceMargin", "m_targetSelectionMode",
                 "m_targetRetentionRadius", "m_targetPlayers", "m_targetMobs", "m_cantSeeThroughBlocks", "m_whitelistNames",
                 "m_weaponOnly", "m_weaponSword", "m_weaponAxe", "m_weaponMace",

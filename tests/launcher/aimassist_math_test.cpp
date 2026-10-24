@@ -124,6 +124,18 @@ int main() {
           "spear identifier maps to the spear category");
     check(classifyHeldWeaponIdentifier("") == HeldWeapon::None,
           "empty item identifier fails closed");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(4.0f, 2.0f, 12.0f) - 4.0f) < 1.0e-4f,
+          "strength remains unchanged inside the configured limits");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(0.5f, 2.0f, 12.0f) - 2.0f) < 1.0e-4f,
+          "minimum strength limit prevents further shrinkage");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(25.0f, 2.0f, 12.0f) - 12.0f) < 1.0e-4f,
+          "maximum strength limit prevents further growth");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(25.0f, 9.0f, 2.0f) - 9.0f) < 1.0e-4f,
+          "reversed limits are normalized without invalid std::clamp bounds");
+    check(std::abs(bedaim::aimmath::clampDistanceHitboxStrength(
+              std::numeric_limits<float>::quiet_NaN(), 3.0f, 10.0f) - 3.0f) < 1.0e-4f,
+          "non-finite strength falls back to the configured minimum");
+
     const float nearScale = bedaim::aimmath::distanceHitboxScale(1.0f, 0.5f, 30.0f, 5.0f, true);
     const float mediumScale = bedaim::aimmath::distanceHitboxScale(1.0f, 10.0f, 30.0f, 5.0f, true);
     const float farScale = bedaim::aimmath::distanceHitboxScale(1.0f, 30.0f, 30.0f, 5.0f, true);
