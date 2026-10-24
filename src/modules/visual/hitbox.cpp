@@ -376,6 +376,77 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         drawLines(lines, color);
     };
 
+    // Camera-facing segmented neon ring, positioned in world space near the top of
+    // the player's bounds. It follows the player and does not depend on Aim Assist.
+    auto drawTargetRing = [&](const AABB& aabb) {
+        const float width = aabb.max.x - aabb.min.x;
+        const float height = aabb.max.y - aabb.min.y;
+        const float centerX = (aabb.min.x + aabb.max.x) * 0.5f;
+        const float centerZ = (aabb.min.z + aabb.max.z) * 0.5f;
+        const bedrocktools::sdk::Vec3 center{
+            centerX,
+            aabb.max.y - std::max(0.06f, height * 0.18f),
+            centerZ
+        };
+
+        float nx = camX - center.x;
+        float ny = camY - center.y;
+        float nz = camZ - center.z;
+        const float nLen = std::sqrt(nx*nx + ny*ny + nz*nz);
+        if (!std::isfinite(nLen) || nLen < 0.001f) return;
+        nx /= nLen; ny /= nLen; nz /= nLen;
+
+        // right = world-up x view-normal; up = view-normal x right
+        float rx = nz, ry = 0.0f, rz = -nx;
+        const float rLen = std::sqrt(rx*rx + ry*ry + rz*rz);
+        if (rLen < 0.001f) { rx = 1.0f; ry = 0.0f; rz = 0.0f; }
+        else { rx /= rLen; ry /= rLen; rz /= rLen; }
+        const float ux = ny*rz - nz*ry;
+        const float uy = nz*rx - nx*rz;
+        const float uz = nx*ry - ny*rx;
+
+        const float radius = std::clamp(std::max(width * 0.95f, 0.38f), 0.34f, 0.62f);
+        constexpr float tau = 6.2831853071795864769f;
+        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> ringLines;
+        ringLines.reserve(112);
+        auto pointAt = [&](float r, float angle) {
+            return bedrocktools::sdk::Vec3{
+                center.x + rx * std::cos(angle) * r + ux * std::sin(angle) * r,
+                center.y + ry * std::cos(angle) * r + uy * std::sin(angle) * r,
+                center.z + rz * std::cos(angle) * r + uz * std::sin(angle) * r
+            };
+        };
+
+        // Outer ring has four deliberate breaks, echoing the sharp pixel-art arrow.
+        constexpr int outerSegments = 64;
+        for (int i = 0; i < outerSegments; ++i) {
+            if ((i % 16) >= 12) continue;
+            const float a0 = tau * static_cast<float>(i) / outerSegments;
+            const float a1 = tau * static_cast<float>(i + 1) / outerSegments;
+            ringLines.push_back({pointAt(radius, a0), pointAt(radius, a1)});
+        }
+        // Two clean inner rings keep the target readable without a busy center sprite.
+        constexpr int middleSegments = 48;
+        for (int i = 0; i < middleSegments; ++i) {
+            const float a0 = tau * static_cast<float>(i) / middleSegments;
+            const float a1 = tau * static_cast<float>(i + 1) / middleSegments;
+            ringLines.push_back({pointAt(radius * 0.72f, a0), pointAt(radius * 0.72f, a1)});
+        }
+        constexpr int innerSegments = 32;
+        for (int i = 0; i < innerSegments; ++i) {
+            const float a0 = tau * static_cast<float>(i) / innerSegments;
+            const float a1 = tau * static_cast<float>(i + 1) / innerSegments;
+            ringLines.push_back({pointAt(radius * 0.42f, a0), pointAt(radius * 0.42f, a1)});
+        }
+        // Four short cardinal ticks give it a crisp, game-readable silhouette.
+        for (int i = 0; i < 4; ++i) {
+            const float a = tau * static_cast<float>(i) / 4.0f;
+            ringLines.push_back({pointAt(radius * 1.06f, a), pointAt(radius * 1.24f, a)});
+        }
+        const std::uint32_t neonGreen = 0xFF39FF14u;
+        drawLines(ringLines, neonGreen);
+    };
+
     void* selectedEntity = nullptr;
     uintptr_t levelPtr = *(uintptr_t*)((uintptr_t)g_localPlayerPtr + bedrocktools::sdk::offsets::Actor::mLevel);
     if (levelPtr && s_hitResultGetEntity) {
@@ -411,7 +482,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
             drawBox(aabb,color);
-            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry");
+            if (esp->showLockInAim) drawTargetRing(aabb);
+            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
