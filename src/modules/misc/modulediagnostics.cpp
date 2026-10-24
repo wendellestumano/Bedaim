@@ -258,7 +258,7 @@ void ModuleDiagnosticsModule::onDisable() {
 
 void ModuleDiagnosticsModule::startFreshLogSession() {
     // Keep only stable startup facts that are essential for diagnosing native
-    // routes (especially AutoHit's attack hook and AutoTotem's offhand reader).
+    // routes, especially AutoHit's native attack hook.
     // Old gameplay decisions/toggles are discarded so the new export is clean.
     const auto previousEntries = bedrocktools::diagnostics::snapshot();
     std::vector<bedrocktools::diagnostics::Entry> baselineEntries;
@@ -271,7 +271,7 @@ void ModuleDiagnosticsModule::startFreshLogSession() {
             entry.component == "Config" ||
             (entry.component == "ModuleRegistry" &&
                 entry.message.rfind("registered modules initialized:", 0) == 0) ||
-            ((entry.component == "AutoHit" || entry.component == "AutoTotem") &&
+            (entry.component == "AutoHit" &&
                 entry.message.rfind("lifecycle=initialized", 0) == 0) ||
             ((entry.component == "BedrockAim" || entry.component == "HitboxExpander") &&
                 entry.message.rfind("native_dependencies=ready", 0) == 0);
