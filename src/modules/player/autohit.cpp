@@ -424,10 +424,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
     std::optional<WeaponCustomProfile> customProfile;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        const auto found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
-            [&](const auto& item) {
-                return item.identifier == normalizedItem;
-            });
+        // Prefer an exact item profile. Category aliases are fallback profiles.
+        auto found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+            [&](const auto& item) { return item.identifier == normalizedItem; });
+        if (found == m_customWeaponProfiles.end()) {
+            found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+                [&](const auto& item) {
+                    return bedaim::autohit::weapon::matchesIdentifier(item, normalizedItem);
+                });
+        }
         if (found != m_customWeaponProfiles.end()) customProfile = *found;
 
         // A switch to a different held item breaks the old burst cycle immediately.
