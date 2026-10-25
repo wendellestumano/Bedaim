@@ -1,3 +1,9 @@
+## 2026-10-24 — Fix XRAY world-ready gate
+
+- Removed XRAY's dependency on the version-sensitive `ClientInstanceGetLocalPlayer` signature, which was already known to fail resolution on the target runtime and could leave `g_worldReady` false forever. The gate now updates from the existing `LocalPlayerPreTickEvent` emitted by the known-working NormalTick hook.
+- Before a pending chunk rebuild, require both a recent live-player tick and a non-null ClientInstance region. Main-menu updates remain fail-closed, and the render-chunk coordinator list is not traversed unless a world is active.
+- This targets the likely reason terrain faces remained opaque despite XRAY being enabled. CI and device verification are still required; it does not yet prove ore visibility.
+
 ## 2026-10-24 — XRAY crash containment and world-ready gating
 - Added an active-world gate before XRAY face filtering, face-mask overrides, and chunk-rebuild traversal: a LocalPlayer must exist and reference a live Level. Main-menu updates no longer walk the chunk coordinator list.
 - Fail open for null-region/synthetic tessellation instead of filtering menu or inventory-preview meshes.

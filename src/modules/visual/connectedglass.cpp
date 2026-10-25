@@ -7,6 +7,7 @@
 #include <bedrocktools/sdk/render/Block.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 
 #include <algorithm>
 #include <array>
@@ -580,6 +581,15 @@ bool ConnectedGlassSetXRayMode(bool enabled) {
     return true;
 }
 
+void ConnectedGlassHandleLocalPlayerPreTick(void* player) {
+    // NormalTick is the known-working source for LocalPlayerPreTickEvent.
+    // Do not use ClientInstanceGetLocalPlayer here: that signature has failed
+    // to resolve on the target Bedrock build and leaves XRAY permanently gated.
+    auto* localPlayer = static_cast<bedrocktools::sdk::Player*>(player);
+    const bool worldReady = localPlayer && localPlayer->level() != nullptr;
+    g_worldReady.store(worldReady, std::memory_order_release);
+}
+
 void ConnectedGlassHandleClientInstanceUpdate(void* clientInstance) {
     if (!clientInstance) {
         g_worldReady.store(false, std::memory_order_release);
@@ -589,19 +599,21 @@ void ConnectedGlassHandleClientInstanceUpdate(void* clientInstance) {
     const bool rebuildPending = g_rebuildPending.load(std::memory_order_acquire);
     const bool xrayEnabled = g_xrayEnabled.load(std::memory_order_acquire);
     if (!rebuildPending && !xrayEnabled) {
-        // Do not add a LocalPlayer native call to the normal Connected Glass-off
-        // frame path. XRAY state is only tracked while XRAY or a rebuild is pending.
         g_worldReady.store(false, std::memory_order_release);
         return;
     }
 
-    // ClientInstanceUpdate also fires in the main menu. The native render-chunk
-    // list is touched only after the client exposes a live local player.
+    // ClientInstanceUpdate also fires in the main menu. Trust the live player
+    // tick gate, then require the ClientInstance's current region before touching
+    // render-chunk coordinators. This avoids the unresolved local-player signature.
     auto* client = static_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
-    auto* localPlayer = client->localPlayer();
-    const bool worldReady = localPlayer && localPlayer->level() != nullptr;
-    g_worldReady.store(worldReady, std::memory_order_release);
-    if (!worldReady || !rebuildPending) return;
+    const bool worldReady = g_worldReady.load(std::memory_order_acquire)
+        && client->region() != nullptr;
+    if (!worldReady) {
+        g_worldReady.store(false, std::memory_order_release);
+        return;
+    }
+    if (!rebuildPending) return;
 
     if (rebuildRenderChunks(clientInstance)) {
         g_rebuildPending.store(false, std::memory_order_release);
@@ -690,6 +702,9 @@ void ConnectedGlassModule::installHooks() {
 void ConnectedGlassModule::onInit() {
     applySettings();
     installHooks();
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>([](auto& event) {
+        ConnectedGlassHandleLocalPlayerPreTick(event.player);
+    });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>([](auto& event) {
         ConnectedGlassHandleClientInstanceUpdate(event.clientInstance);
     });
