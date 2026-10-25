@@ -32,6 +32,6 @@ const bedrocktools::api::ApiV1 api{
 };
 }
 
-extern "C" BEDROCKTOOLS_API const bedrocktools::api::ApiV1* BedrockTools_GetApi(std::uint32_t version) {
+extern "C" BEDROCKTOOLS_API const bedrocktools::api::ApiV1* BedAim_GetApi(std::uint32_t version) {
     return version == bedrocktools::api::AbiVersion ? &api : nullptr;
 }

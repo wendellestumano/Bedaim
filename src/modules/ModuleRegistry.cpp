@@ -1,59 +1,13 @@
 #include "ModuleRegistry.hpp"
 #include "../core/Diagnostics.hpp"
-#include "visual/fullbright.hpp"
-#include "visual/motionblur.hpp"
-#include "visual/fpsunlocker.hpp"
-#include "visual/fogcolor.hpp"
-#include "visual/glintcolor.hpp"
-#include "visual/tnttimer.hpp"
-#include "visual/nofog.hpp"
-#include "hud/pingcounter.hpp"
-#include "hud/worldtime.hpp"
-#include "hud/totemcounter.hpp"
-#include "hud/arrowcounter.hpp"
-#include "hud/potcounter.hpp"
-#include "player/quickloot.hpp"
 #include "player/aimassist.hpp"
 #include "player/autohit.hpp"
 #include "player/maceswapper.hpp"
 #include "player/unglide.hpp"
 #include "player/swordswapper.hpp"
-#include "hud/reachcounter.hpp"
-#include "hud/breakindicator.hpp"
-#include "hud/playercoords.hpp"
-#include "hud/compass.hpp"
-#include "hud/armorhud.hpp"
-#include "hud/potionhud.hpp"
-#include "player/timechanger.hpp"
-#include "player/autosprint.hpp"
-#include "player/weatherchanger.hpp"
-#include "player/nick.hpp"
-#include "misc/nodisconnect.hpp"
-#include "misc/chattimestamps.hpp"
-#include "misc/notouchborder.hpp"
-#include "misc/forceglobalrp.hpp"
-#include "misc/cpslimiter.hpp"
-#include "hud/speeddisplay.hpp"
-#include "hud/debugmenu.hpp"
-#include "visual/viewmodel.hpp"
-#include "hud/keystrokes.hpp"
-#include "visual/thirdpersonnametag.hpp"
-#include "hud/tablist.hpp"
 #include "hud/gamemodechecker.hpp"
-#include "hud/combocounter.hpp"
 #include "hud/ultrakillhud.hpp"
-#include "visual/chunkborder.hpp"
 #include "visual/hitbox.hpp"
-#include "visual/zoom.hpp"
-#include "visual/cinematiccamera.hpp"
-#include "visual/breadcrumbs.hpp"
-#include "visual/lightoverlay.hpp"
-#include "visual/shulkerpreview.hpp"
-#include "visual/connectedglass.hpp"
-#include "player/skinstealer.hpp"
-#include "player/autogg.hpp"
-#include "player/autoreq.hpp"
-#include "misc/hiveutils.hpp"
 #include "misc/modulediagnostics.hpp"
 #include "visual/swingmodifier.hpp"
 #include "visual/esp.hpp"
@@ -107,62 +61,15 @@ bool ModuleRegistry::keybindBlocked() const {
 void registerAllModules() {
     auto& registry = ModuleRegistry::get();
     if (!registry.modules().empty()) return;
-    registry.emplace<FullbrightModule>();
-    registry.emplace<MotionBlurModule>();
-    registry.emplace<FogColorModule>();
-    registry.emplace<GlintColorModule>();
-    registry.emplace<TntTimerModule>();
-    registry.emplace<NoFogModule>();
-    registry.emplace<PingCounterModule>();
-    registry.emplace<ReachCounterModule>();
-    registry.emplace<ComboDisplay>();
     registry.emplace<UltrakillHudModule>();
-    registry.emplace<BreakIndicatorModule>();
-    registry.emplace<PlayerCoordsModule>();
-    registry.emplace<CompassModule>();
-    registry.emplace<ArmorHudModule>();
-    registry.emplace<PotionHudModule>();
-    registry.emplace<TimeChangerModule>();
-    registry.emplace<WorldTimeModule>();
-    registry.emplace<TotemCounterModule>();
-    registry.emplace<ArrowCounterModule>();
-    registry.emplace<PotCounterModule>();
-    registry.emplace<QuickLootModule>();
-    registry.emplace<AutoSprintModule>();
     registry.emplace<AimAssistModule>();
     registry.emplace<AutoHitModule>();
     registry.emplace<HitboxExpanderModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<UnglideModule>();
     registry.emplace<SwordSwapperModule>();
-    registry.emplace<WeatherChangerModule>();
-    registry.emplace<NickModule>();
-    registry.emplace<NoDisconnectModule>();
-    registry.emplace<ChatTimestampsModule>();
-    registry.emplace<NoTouchBorderModule>();
-    registry.emplace<CpsLimiterModule>();
-    registry.emplace<SpeedDisplayModule>();
-    registry.emplace<DebugMenuModule>();
-    registry.emplace<ViewModelModule>();
     registry.emplace<SwingModifierModule>();
-    registry.emplace<KeystrokesModule>();
-    registry.emplace<ThirdPersonNametagModule>();
-    registry.emplace<TablistModule>();
     registry.emplace<GamemodeCheckerModule>();
-    registry.emplace<ChunkBorderModule>();
-    registry.emplace<HitboxModule>();
-    registry.emplace<ZoomModule>();
-    registry.emplace<CinematicCameraModule>();
-    registry.emplace<BreadcrumbsModule>();
-    registry.emplace<SkinStealerModule>();
-    registry.emplace<AutoGG>();
-    registry.emplace<AutoReQ>();
-    registry.emplace<HiveUtilsModule>();
     registry.emplace<ModuleDiagnosticsModule>();
-    registry.emplace<FPSUnlockerModule>();
-    registry.emplace<LightOverlayModule>();
-    registry.emplace<ShulkerPreviewModule>();
-    registry.emplace<ConnectedGlassModule>();
-    registry.emplace<ForceGlobalRPModule>();
     registry.emplace<EspModule>();
 }
