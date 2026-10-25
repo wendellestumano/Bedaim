@@ -444,7 +444,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
     }
 
-    bedrocktools::sdk::Vec3 localPos = g_playerPos;
+    bedrocktools::sdk::Vec3 localPos = reinterpret_cast<const bedrocktools::sdk::Actor*>(g_localPlayerPtr)->position();
     float dx = camX - localPos.x;
     float dy = camY - (localPos.y + 1.62f);
     float dz = camZ - localPos.z;
