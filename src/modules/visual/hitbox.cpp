@@ -7,6 +7,7 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
@@ -140,7 +141,6 @@ static uintptr_t    s_renderMaterialGroup = 0;
 
 static void (*_renderLevel_orig)(void* _this, void* screenContext, void* a3);
 
-static bedrocktools::sdk::Vec3 g_playerPos = {0.f, 0.f, 0.f};
 static void* g_localPlayerPtr = nullptr;
 
 struct AABB {
@@ -153,8 +153,8 @@ static bool validRenderBounds(const AABB& b) {
         b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
 }
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
- espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
- espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false};
+ espLoggedColor{false},espLoggedQuery{false},espLoggedEmptyActors{false},
+ espLoggedBounds{false},espLoggedOutline{false};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -162,10 +162,6 @@ static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level l
 static void s_hitboxTickCallback(void* _this) {
     if (!_this) return;
     g_localPlayerPtr = _this;
-    uintptr_t svc = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::Actor::mStateVectorComponent);
-    if (svc != 0) {
-        g_playerPos = *(bedrocktools::sdk::Vec3*)svc;
-    }
 }
 
 static MaterialPtr getMaterial(const char* name) {
@@ -188,16 +184,32 @@ static void ensureMaterials() {
 }
 
 static AABB getActorAABB(void* actor) {
- const AABB empty{{0,0,0},{0,0,0}};const auto addr=reinterpret_cast<std::uintptr_t>(actor);
- if(addr<=0x1000)return empty;
- const auto state=*reinterpret_cast<std::uintptr_t*>(addr+bedrocktools::sdk::offsets::Actor::mStateVectorComponent);
- if(state<=0x1000)return empty;
- const auto component=*reinterpret_cast<std::uintptr_t*>(addr+bedrocktools::sdk::offsets::Actor::mStateVectorComponent+
-    bedrocktools::sdk::offsets::BuiltInActorComponents::mAABBShapeComponent);
- if(component<=0x1000)return empty;
- AABB aabb{};std::memcpy(&aabb,reinterpret_cast<const void*>(component+
-    bedrocktools::sdk::offsets::AABBShapeComponent::mAABB),sizeof(aabb));
- return validRenderBounds(aabb)?aabb:empty;
+    const AABB empty{{0, 0, 0}, {0, 0, 0}};
+    if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000) return empty;
+
+    const auto* nativeActor = reinterpret_cast<const bedrocktools::sdk::Actor*>(actor);
+    const auto nativeBounds = nativeActor->bounds();
+    const AABB bounds{nativeBounds.min, nativeBounds.max};
+    if (validRenderBounds(bounds)) return bounds;
+
+    // Some runtime actors expose an empty/uninitialised AABB component. For players,
+    // recover a visible outline from the SDK world position rather than dropping ESP.
+    if (s_actorIsPlayer && s_actorIsPlayer(actor)) {
+        const auto position = nativeActor->position();
+        if (std::isfinite(position.x) && std::isfinite(position.y) &&
+            std::isfinite(position.z)) {
+            const AABB fallback{
+                {position.x - 0.30f, position.y, position.z - 0.30f},
+                {position.x + 0.30f, position.y + 1.80f, position.z + 0.30f}
+            };
+            if (validRenderBounds(fallback)) {
+                espLogOnce(espLoggedBounds, bedrocktools::diagnostics::Level::Warning,
+                           "player_bounds=fallback_from_position; using 0.6x1.8 outline");
+                return fallback;
+            }
+        }
+    }
+    return empty;
 }
 
 static bedrocktools::sdk::Vec2 getActorRotation(void* actor) {
@@ -217,52 +229,6 @@ static bool hasCategory(void* actor, uint32_t categoryBit) {
 }
 
 
-
-static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
-                                          const bedrocktools::sdk::Vec3& localPosition,
-                                          const ActorVec& actors, bool actorSnapshotValid,
-                                          bool actorSnapshotEmpty, float targetRange) {
-    if (!esp || !localPlayer) return;
-    esp->beginOffscreenFrame(localPosition, getActorRotation(localPlayer));
-    if (!esp->enabled || !esp->showOffscreenIndicators ||
-        !s_actorFetchNearby || !s_actorIsPlayer) return;
-
-    const bool empty = actorSnapshotEmpty;
-    const bool valid = actorSnapshotValid;
-    if (!valid) {
-        espLogOnce(espLoggedSnapshot, bedrocktools::diagnostics::Level::Warning,
-                   "offscreen_actor_snapshot=malformed");
-        return;
-    }
-    if (empty) {
-        espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Warning,
-                   "offscreen_actor_snapshot=empty; no nearby actors returned");
-        return;
-    }
-
-    bool foundPlayer = false;
-    for (DistanceSortedActor* it = actors.begin; it < actors.end; ++it) {
-        void* actor = it->mActor;
-        if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000 ||
-            actor == localPlayer || !std::isfinite(it->mDistance) ||
-            it->mDistance < 0.0f || it->mDistance > targetRange ||
-            !s_actorIsPlayer(actor)) continue;
-        foundPlayer = true;
-        if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
-        const AABB bounds = getActorAABB(actor);
-        if (!validRenderBounds(bounds)) continue;
-        const bedrocktools::sdk::Vec3 center{
-            (bounds.min.x + bounds.max.x) * 0.5f,
-            (bounds.min.y + bounds.max.y) * 0.5f,
-            (bounds.min.z + bounds.max.z) * 0.5f
-        };
-        esp->considerOffscreenCandidate(center, it->mDistance);
-    }
-    if (!foundPlayer) {
-        espLogOnce(espLoggedEmptyPlayerQuery, bedrocktools::diagnostics::Level::Info,
-                   "offscreen_actor_snapshot=valid_but_no_players_in_range");
-    }
-}
 
 static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     if (_renderLevel_orig) {
@@ -295,10 +261,6 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             (begin > 0x1000 && end >= begin &&
              (end - begin) % sizeof(DistanceSortedActor) == 0 &&
              (end - begin) / sizeof(DistanceSortedActor) <= 8192);
-    }
-    if (espEnabled) {
-        updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
-                                  actors, actorSnapshotValid, actorSnapshotEmpty, espRange);
     }
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
     if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
