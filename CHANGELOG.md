@@ -1,3 +1,9 @@
+## 2026-10-25 — ULTRAKILL HUD hit-stop correction
+
+- Added a shared monotonic hit-stop deadline observed by both `ClientInstance::update` and EGL presentation, instead of delaying only the swap caller.
+- Request the pause only after a confirmed mace hit, using the configured 250–750 ms duration.
+- Kept the frame event observational and retained VOLT 2.3.2 as a binary-level reference only; the stripped library does not reveal its full limiter implementation.
+
 ## 2026-10-25 — Implement ULTRAKILL HUD hit-stop with post-swap frame pacing
 
 - Confirmed `FrameEvent` is observational and its cancellation does not stop EGL presentation, which explains why the previous hit-stop implementation did not freeze the game.
