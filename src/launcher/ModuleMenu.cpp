@@ -608,6 +608,9 @@ void registerModulesWithLauncher() {
                 else if (k == "m_weaponOtherMelee") displayName = "WEAPON FILTER > Other melee";
                 else if (k == "m_elytraMode") displayName = "SPECIAL > Elytra mode";
             }
+            if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" && k == "m_hitStopDurationMs") {
+                displayName = "ULTRAKILL HUD > Impact hold duration (ms)";
+            }
 
             TmpConfigEntry entry;
             entry.key = k;
@@ -634,7 +637,11 @@ void registerModulesWithLauncher() {
                 } else {
                     int minVal = 0;
                     int maxVal = 200;
-                    if (kLower.find("cps") != std::string::npos) {
+                    if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" &&
+                        kLower == "m_hitstopdurationms") {
+                        minVal = 250;
+                        maxVal = 750;
+                    } else if (kLower.find("cps") != std::string::npos) {
                         minVal = 1;
                         maxVal = 30;
                     } else if (kLower.find("time") != std::string::npos) {
