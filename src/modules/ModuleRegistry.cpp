@@ -50,6 +50,7 @@
 #include "visual/lightoverlay.hpp"
 #include "visual/shulkerpreview.hpp"
 #include "visual/connectedglass.hpp"
+#include "visual/xray.hpp"
 #include "player/skinstealer.hpp"
 #include "player/autogg.hpp"
 #include "player/autoreq.hpp"
@@ -163,6 +164,7 @@ void registerAllModules() {
     registry.emplace<LightOverlayModule>();
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
+    registry.emplace<XRayModule>();
     registry.emplace<ForceGlobalRPModule>();
     registry.emplace<EspModule>();
 }

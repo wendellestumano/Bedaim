@@ -1,3 +1,16 @@
+## 2026-10-24 — Fix XRAY world-ready gate
+
+- Removed XRAY's dependency on the version-sensitive `ClientInstanceGetLocalPlayer` signature, which was already known to fail resolution on the target runtime and could leave `g_worldReady` false forever. The gate now updates from the existing `LocalPlayerPreTickEvent` emitted by the known-working NormalTick hook.
+- Before a pending chunk rebuild, require both a recent live-player tick and a non-null ClientInstance region. Main-menu updates remain fail-closed, and the render-chunk coordinator list is not traversed unless a world is active.
+- This targets the likely reason terrain faces remained opaque despite XRAY being enabled. CI and device verification are still required; it does not yet prove ore visibility.
+
+## 2026-10-24 — XRAY crash containment and world-ready gating
+- Added an active-world gate before XRAY face filtering, face-mask overrides, and chunk-rebuild traversal: a LocalPlayer must exist and reference a live Level. Main-menu updates no longer walk the chunk coordinator list.
+- Fail open for null-region/synthetic tessellation instead of filtering menu or inventory-preview meshes.
+- Resolve LocalPlayer only while XRAY is enabled or a chunk rebuild is pending; the ordinary Connected Glass-off frame path does not gain a per-frame native lookup.
+- Preserved the existing Connected Glass face-mask update convention; no unverified change to that native operation is being used as a crash fix.
+- Crash containment is not in-game confirmation. Keep PR #101 in draft until menu launch, world entry/exit, ore visibility, Connected Glass, and Android CI are verified.
+
 ## 2026-10-24 — Audit X-Ray / AlphaDepth pack integration
 - Inspected Connected Glass: its hooks only crop texture UVs for glass blocks/panes and do not switch block visibility or load AlphaDepth materials; it must not be repurposed as the X-Ray renderer.
 - Audited the supplied Outline X-Ray 1.0.6 pack: 54 alpha-enabled block textures, a compiled `RenderChunk.material.bin` containing `DepthOnlyOpaque`, 22 ore/ancient-debris block-shape mappings, and a declared patched Minecraft/BetterRenderDragon 1.26.51+ requirement.

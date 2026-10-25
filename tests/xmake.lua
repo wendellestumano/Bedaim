@@ -67,3 +67,9 @@ target("player_game_type_test")
     add_includedirs("../src")
 target_end()
 
+
+target("xray_block_policy_test")
+    set_kind("binary")
+    add_files("launcher/xray_block_policy_test.cpp")
+    add_includedirs("../src")
+target_end()

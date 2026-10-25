@@ -3,9 +3,11 @@
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 #include <bedrocktools/sdk/render/Block.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/LocalPlayerPreTickEvent.hpp>
 
 #include <algorithm>
 #include <array>
@@ -16,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include "xray_block_policy.hpp"
 
 namespace {
 
@@ -71,6 +74,11 @@ using SetAllDirtyFn = void (*)(void*, bool, bool);
 
 std::atomic_bool g_enabled{false};
 std::atomic_bool g_rebuildPending{false};
+std::atomic_bool g_xrayEnabled{false};
+std::atomic_bool g_xrayHooksReady{false};
+// Native render hooks also run for menu/inventory previews. XRAY must remain
+// inert until ClientInstance has a live LocalPlayer.
+std::atomic_bool g_worldReady{false};
 std::atomic_bool g_connectGlassBlocks{true};
 std::atomic_bool g_connectGlassPanes{true};
 std::atomic_bool g_connectDifferentColors{true};
@@ -140,6 +148,15 @@ GlassInfo classifyGlass(const void* block) {
     if (!fullName || fullName->size() > 256
         || (!fullName->empty() && fullName->data() == nullptr)) return {};
     return classifyGlassName({fullName->data(), fullName->size()}, block);
+}
+
+bool isXrayTarget(const void* block) {
+    if (!block) return false;
+    const auto* blockObj = static_cast<const bedrocktools::sdk::Block*>(block);
+    const std::string* fullName = blockObj->fullName();
+    if (!fullName || fullName->size() > 256
+        || (!fullName->empty() && fullName->data() == nullptr)) return false;
+    return bedaim::xray::isTargetBlockName(*fullName);
 }
 
 std::string_view shapeIndependentName(const GlassInfo& info) {
@@ -347,6 +364,19 @@ void renderFace(
 ) {
     if (!original) return;
 
+    // XRAY shares the existing Connected Glass tessellation detours. Suppress
+    // terrain faces only for world tessellation; inventory/previews may use a
+    // null or synthetic region and must continue through the original path.
+    if (g_xrayEnabled.load(std::memory_order_relaxed)
+        && g_worldReady.load(std::memory_order_acquire)
+        && tessellator && block && position) {
+        void* region = field<void*>(
+            tessellator, bedrocktools::sdk::offsets::BlockTessellator::mRegion);
+        // Null regions are common for synthetic/inventory tessellation. Fail open
+        // rather than filtering menu assets and item previews.
+        if (region && !isXrayTarget(block)) return;
+    }
+
     std::optional<TextureCopy> texture;
     do {
         if (!g_enabled.load(std::memory_order_relaxed)
@@ -477,6 +507,19 @@ uint64_t boUpdateRenderFaceDetour(
 ) {
     if (!g_boUpdateRenderFaceOriginal) return 0;
     const uint64_t result = g_boUpdateRenderFaceOriginal(self, block, pos, aabb, face);
+
+    // Expose every face of ores/ancient debris even when the terrain next to
+    // them would normally occlude it. The same native face-mask operation is
+    // already used by Connected Glass for connected pane faces.
+    if (g_xrayEnabled.load(std::memory_order_relaxed)
+        && g_worldReady.load(std::memory_order_acquire)
+        && self && block && face < 6 && isXrayTarget(block)) {
+        const uint64_t bit = uint64_t{1} << face;
+        // Keep the same face-mask update convention as the original Connected Glass path.
+        field<uint64_t>(self, 0) |= bit;
+        return result | bit;
+    }
+
     if (!g_enabled.load(std::memory_order_relaxed) || !g_paneRc.active || !pos) return result;
     if (face != static_cast<uint8_t>(GlassFace::Up) && face != static_cast<uint8_t>(GlassFace::Down)) return result;
 
@@ -503,7 +546,8 @@ bedrocktools::hooks::Handle installHook(bedrocktools::memory::SignatureId id, vo
 }
 
 bool rebuildRenderChunks(void* clientInstance) {
-    if (!clientInstance || !g_setAllDirty) return false;
+    if (!clientInstance || !g_setAllDirty
+        || !g_worldReady.load(std::memory_order_acquire)) return false;
 
     void* levelRenderer = field<void*>(clientInstance, bedrocktools::sdk::offsets::ClientInstance::mLevelRenderer);
     if (!levelRenderer) return false;
@@ -530,8 +574,47 @@ bool rebuildRenderChunks(void* clientInstance) {
 
 }
 
+bool ConnectedGlassSetXRayMode(bool enabled) {
+    if (enabled && !g_xrayHooksReady.load(std::memory_order_acquire)) return false;
+    const bool previous = g_xrayEnabled.exchange(enabled, std::memory_order_acq_rel);
+    if (previous != enabled) g_rebuildPending.store(true, std::memory_order_release);
+    return true;
+}
+
+void ConnectedGlassHandleLocalPlayerPreTick(void* player) {
+    // NormalTick is the known-working source for LocalPlayerPreTickEvent.
+    // Do not use ClientInstanceGetLocalPlayer here: that signature has failed
+    // to resolve on the target Bedrock build and leaves XRAY permanently gated.
+    auto* localPlayer = static_cast<bedrocktools::sdk::Player*>(player);
+    const bool worldReady = localPlayer && localPlayer->level() != nullptr;
+    g_worldReady.store(worldReady, std::memory_order_release);
+}
+
 void ConnectedGlassHandleClientInstanceUpdate(void* clientInstance) {
-    if (!g_rebuildPending.load(std::memory_order_acquire)) return;
+    if (!clientInstance) {
+        g_worldReady.store(false, std::memory_order_release);
+        return;
+    }
+
+    const bool rebuildPending = g_rebuildPending.load(std::memory_order_acquire);
+    const bool xrayEnabled = g_xrayEnabled.load(std::memory_order_acquire);
+    if (!rebuildPending && !xrayEnabled) {
+        g_worldReady.store(false, std::memory_order_release);
+        return;
+    }
+
+    // ClientInstanceUpdate also fires in the main menu. Trust the live player
+    // tick gate, then require the ClientInstance's current region before touching
+    // render-chunk coordinators. This avoids the unresolved local-player signature.
+    auto* client = static_cast<bedrocktools::sdk::ClientInstance*>(clientInstance);
+    const bool worldReady = g_worldReady.load(std::memory_order_acquire)
+        && client->region() != nullptr;
+    if (!worldReady) {
+        g_worldReady.store(false, std::memory_order_release);
+        return;
+    }
+    if (!rebuildPending) return;
+
     if (rebuildRenderChunks(clientInstance)) {
         g_rebuildPending.store(false, std::memory_order_release);
     }
@@ -608,11 +691,20 @@ void ConnectedGlassModule::installHooks() {
     m_hooked = g_getBlock && g_isSolidBlockingBlock && g_textureCopyCtor && g_textureDtor && g_setAllDirty;
     for (const auto& h : g_faceHooks) m_hooked = m_hooked && h.handle;
     m_hooked = m_hooked && g_paneTessHook && g_bgGetTextureHook && g_tessVertexHook && g_boUpdateRenderFaceHook;
+
+    // XRAY only needs all six face hooks, the occlusion-mask detour and the
+    // chunk dirtying entry point; optional pane/texture hooks are not required.
+    bool xrayReady = g_setAllDirty && g_boUpdateRenderFaceHook;
+    for (const auto& h : g_faceHooks) xrayReady = xrayReady && h.handle;
+    g_xrayHooksReady.store(xrayReady, std::memory_order_release);
 }
 
 void ConnectedGlassModule::onInit() {
     applySettings();
     installHooks();
+    bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerPreTickEvent>([](auto& event) {
+        ConnectedGlassHandleLocalPlayerPreTick(event.player);
+    });
     bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>([](auto& event) {
         ConnectedGlassHandleClientInstanceUpdate(event.clientInstance);
     });
