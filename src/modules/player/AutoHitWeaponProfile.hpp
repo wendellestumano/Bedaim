@@ -107,10 +107,21 @@ inline std::string normalizeIdentifier(std::string_view identifier) {
 
     // The rocket's localization key can be exposed as item.fireworks by
     // Item::getDescriptionId(), while profile configuration uses its registry ID.
-    if (normalized == "minecraft:fireworks" || normalized == "minecraft:firework") {
+    if (normalized == "minecraft:fireworks" ||
+        normalized == "minecraft:firework" ||
+        normalized == "minecraft:fireworks_rocket" ||
+        normalized == "minecraft:fireworkrocket" ||
+        normalized == "minecraft:rocket") {
         normalized = "minecraft:firework_rocket";
     }
     return normalized;
+}
+
+inline bool matchesNormalizedIdentifier(std::string_view configuredIdentifier,
+                                       std::string_view runtimeIdentifier) {
+    const auto configured = normalizeIdentifier(configuredIdentifier);
+    const auto runtime = normalizeIdentifier(runtimeIdentifier);
+    return !configured.empty() && !runtime.empty() && configured == runtime;
 }
 
 inline std::string displayNameForIdentifier(std::string_view identifier) {
