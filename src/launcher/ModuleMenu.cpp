@@ -260,10 +260,15 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
             ConfigControlTypeV2::Text, "", "", "", "",
             "Enter an exact Bedrock item ID such as minecraft:firework_rocket. Each added item gets independent Aim Multiplier and Aim Point Y settings.",
             false, {}, ConfigChoiceStyleV2::Auto);
-    addNode("m_addCustomEquipmentButton", "Add custom equipment profile", "custom_equipment",
-            ConfigControlTypeV2::Button, "", "", "", "",
-            "Create a profile for the item identifier above. Existing IDs are not duplicated.",
-            false, {}, ConfigChoiceStyleV2::Auto);
+    ConfigNodeV2 addCustomEquipmentButton;
+    addCustomEquipmentButton.id = "m_addCustomEquipmentButton";
+    addCustomEquipmentButton.key = addCustomEquipmentButton.id;
+    addCustomEquipmentButton.title = "Add custom equipment profile";
+    addCustomEquipmentButton.description = "Create a profile for the item identifier above. Existing IDs are not duplicated.";
+    addCustomEquipmentButton.category = "custom_equipment";
+    addCustomEquipmentButton.type = ConfigControlTypeV2::Button;
+    addCustomEquipmentButton.actionValue = "add";
+    schema.node(std::move(addCustomEquipmentButton));
     if (config.contains("m_customEquipmentProfiles") && config["m_customEquipmentProfiles"].is_array()) {
         const auto& customProfiles = config["m_customEquipmentProfiles"];
         for (std::size_t i = 0; i < customProfiles.size() && i < 64; ++i) {
