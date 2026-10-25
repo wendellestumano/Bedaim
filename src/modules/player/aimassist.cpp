@@ -469,7 +469,7 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
     }
     if (key == "m_addCustomEquipmentButton") {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        const std::string identifier = bedrocktools::autohit::weapon::normalizeIdentifier(m_customEquipmentIdentifier);
+        const std::string identifier = bedaim::autohit::weapon::normalizeIdentifier(m_customEquipmentIdentifier);
         if (identifier.empty() || identifier.size() > 128 || m_customEquipmentProfiles.size() >= 64) return false;
         const auto existing = std::find_if(m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
             [&](const auto& profile) { return profile.identifier == identifier; });
@@ -729,7 +729,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (selectedWeaponSlot != m_cachedWeaponSlot ||
         m_nextHeldWeaponRefresh.time_since_epoch().count() == 0 ||
         weaponCheckTime >= m_nextHeldWeaponRefresh) {
-        m_cachedHeldItemIdentifier = bedrocktools::autohit::weapon::normalizeIdentifier(
+        m_cachedHeldItemIdentifier = bedaim::autohit::weapon::normalizeIdentifier(
             inventory.selectedHotbarIdentifier(player));
         m_cachedHeldWeaponCode = static_cast<int>(heldWeaponFromIdentifier(m_cachedHeldItemIdentifier));
         m_cachedWeaponSlot = selectedWeaponSlot;
@@ -1637,7 +1637,7 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
         for (const auto& item : *customProfilesIt) {
             if (!item.is_object() || m_customEquipmentProfiles.size() >= 64) continue;
             CustomEquipmentProfile profile;
-            profile.identifier = bedrocktools::autohit::weapon::normalizeIdentifier(
+            profile.identifier = bedaim::autohit::weapon::normalizeIdentifier(
                 item.value("identifier", std::string{}));
             if (profile.identifier.empty() || profile.identifier.size() > 128) continue;
             const auto duplicate = std::find_if(m_customEquipmentProfiles.begin(),
