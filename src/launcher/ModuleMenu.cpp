@@ -345,7 +345,7 @@ static void registerUltrakillHudConfigSchema(std::string_view moduleId,
              {"m_showReticle", "Crosshair reticle", "Draw the ULTRAKILL-style center reticle."},
              {"m_enableParryFlash", "Attack / parry flash", "Show a visual pulse when an attack is attempted."},
              {"m_enableImpactShake", "Impact shake", "Add a brief visual screen-shake effect after an attack."},
-             {"m_enableHitStop", "Extended impact hold (visual only)", "Extend the HUD impact effect without cancelling BedrockTools frame events."},
+             {"m_enableHitStop", "Impact hit-stop", "Hold the displayed white impact frame and temporarily suppress subsequent frame swaps."},
              {"m_showImpactText", "Impact text", "Show HIT CONFIRMED / MACE HIT / GROUND SLAM text."}}) {
         ConfigNodeV2 node;
         node.id = key;
@@ -359,6 +359,22 @@ static void registerUltrakillHudConfigSchema(std::string_view moduleId,
         node.hasCurrentValue = config.contains(key);
         schema.node(std::move(node));
     }
+
+    ConfigNodeV2 duration;
+    duration.id = "m_hitStopDurationMs";
+    duration.key = "m_hitStopDurationMs";
+    duration.category = "hud";
+    duration.title = "Impact hold duration";
+    duration.description = "Duration of the 1-FPS-style hit-stop hold, from 250 to 750 milliseconds.";
+    duration.type = ConfigControlTypeV2::SliderInt;
+    duration.defaultValue = schemaCurrentValue(initialDefaults, "m_hitStopDurationMs", "400");
+    duration.currentValue = schemaCurrentValue(config, "m_hitStopDurationMs", "400");
+    duration.hasCurrentValue = config.contains("m_hitStopDurationMs");
+    duration.minValue = "250";
+    duration.maxValue = "750";
+    duration.step = "50";
+    duration.unit = "ms";
+    schema.node(std::move(duration));
 
     setConfigSchemaJson(moduleId, schema.toJson());
 }
@@ -592,6 +608,9 @@ void registerModulesWithLauncher() {
                 else if (k == "m_weaponOtherMelee") displayName = "WEAPON FILTER > Other melee";
                 else if (k == "m_elytraMode") displayName = "SPECIAL > Elytra mode";
             }
+            if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" && k == "m_hitStopDurationMs") {
+                displayName = "ULTRAKILL HUD > Impact hold duration (ms)";
+            }
 
             TmpConfigEntry entry;
             entry.key = k;
@@ -618,7 +637,11 @@ void registerModulesWithLauncher() {
                 } else {
                     int minVal = 0;
                     int maxVal = 200;
-                    if (kLower.find("cps") != std::string::npos) {
+                    if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" &&
+                        kLower == "m_hitstopdurationms") {
+                        minVal = 250;
+                        maxVal = 750;
+                    } else if (kLower.find("cps") != std::string::npos) {
                         minVal = 1;
                         maxVal = 30;
                     } else if (kLower.find("time") != std::string::npos) {

@@ -22,6 +22,7 @@ public:
 
 private:
     void onLocalPlayerTick(bedrocktools::sdk::Player* player);
+    void onAttackAttempt(bedrocktools::sdk::Actor* target);
     void onAttackResult(bedrocktools::sdk::Actor* target, bool result);
     bool isMaceEquipped(bedrocktools::sdk::Player* player) const;
 
@@ -54,6 +55,7 @@ private:
     bool m_enableHitStop = true;
     bool m_showImpactText = true;
 
-    int m_hitStopFrames = 0;
+    int m_hitStopDurationMs = 400;
+    std::chrono::steady_clock::time_point m_hitStopUntil{};
     bool m_hitStopPending = false;
 };

@@ -1,3 +1,16 @@
+## 2026-10-25 — Restore AutoHit and Hitbox Extender
+
+- Restored the AutoHit implementation and its guard/weapon-profile support files from the last pre-cleanup revision.
+- Registered `AutoHitModule` again.
+- Replaced the inherited visual `HitboxModule` registration with `HitboxExpanderModule`, whose implementation is part of AimAssist's module source.
+- Kept the unrelated Bedaim modules and their current implementations unchanged.
+
+## 2026-10-25 — Restore Aim Assist gamemode helper and fix hit-stop build
+
+- Restored the gamemode checker helper declarations and implementation required by Aim Assist after the source cleanup removed them.
+- Made the spectator-candidate predicate lazily resolve its supporting game APIs, so Aim Assist does not rely on the unregistered optional overlay's initialization callback.
+- Continued fixing the ULTRAKILL HUD white impact flash and configurable 250–750 ms hit-stop.
+
 ## 2026-10-24 — Fix XRAY world-ready gate
 
 - Removed XRAY's dependency on the version-sensitive `ClientInstanceGetLocalPlayer` signature, which was already known to fail resolution on the target runtime and could leave `g_worldReady` false forever. The gate now updates from the existing `LocalPlayerPreTickEvent` emitted by the known-working NormalTick hook.
