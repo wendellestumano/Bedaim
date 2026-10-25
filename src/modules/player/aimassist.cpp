@@ -745,7 +745,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     const auto customEquipment = std::find_if(
         m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
         [&](const auto& profile) {
-            return profile.enabled && profile.identifier == m_cachedHeldItemIdentifier;
+            return profile.enabled &&
+                bedaim::autohit::weapon::matchesNormalizedIdentifier(
+                    profile.identifier, m_cachedHeldItemIdentifier);
         });
     const bool customEquipmentAllowed = customEquipment != m_customEquipmentProfiles.end();
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
@@ -1290,7 +1292,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const auto customEquipmentForAim = std::find_if(
         m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
         [&](const auto& profile) {
-            return profile.enabled && profile.identifier == m_cachedHeldItemIdentifier;
+            return profile.enabled &&
+                bedaim::autohit::weapon::matchesNormalizedIdentifier(
+                    profile.identifier, m_cachedHeldItemIdentifier);
         });
     if (customEquipmentForAim != m_customEquipmentProfiles.end())
         aimPointY = customEquipmentForAim->aimPointY;
@@ -1449,7 +1453,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     const auto customEquipmentMultiplier = std::find_if(
         m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
         [&](const auto& profile) {
-            return profile.enabled && profile.identifier == m_cachedHeldItemIdentifier;
+            return profile.enabled &&
+                bedaim::autohit::weapon::matchesNormalizedIdentifier(
+                    profile.identifier, m_cachedHeldItemIdentifier);
         });
     if (customEquipmentMultiplier != m_customEquipmentProfiles.end())
         weaponAimMultiplier = customEquipmentMultiplier->aimMultiplier;
