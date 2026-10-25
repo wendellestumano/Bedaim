@@ -1,5 +1,4 @@
 #include "esp.hpp"
-#include "esp_assets.hpp"
 #include "hitbox.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../player/aimassist.hpp"
@@ -9,9 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
-#include <limits>
 #include <string>
-#include <vector>
 
 namespace {
 std::string cfgText(const nlohmann::json& j,const char* key,const char* fallback){
@@ -35,20 +32,11 @@ bool parseColor(std::string_view v,std::uint32_t& out){
 void loadColor(const nlohmann::json& j,const char* key,std::uint32_t& v){
  if(!j.contains(key)||!j[key].is_string())return;std::uint32_t parsed=0;if(parseColor(j[key].get<std::string>(),parsed))v=parsed;
 }
-float normalizeDegrees(float value){
- while(value>180.0f)value-=360.0f;
- while(value< -180.0f)value+=360.0f;
- return value;
-}
 }
 
-EspModule::EspModule():Module("ESP","Player outlines, Lock in Aim and off-screen direction indicators."){showInMenu=true;}
+EspModule::EspModule():Module("ESP","Player outlines and world-space target ring."){showInMenu=true;}
 
-void EspModule::onInit(){
-    bedaim::espassets::registerImages();
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,"ESP",
-        "hud_assets=registered; lock-in sprite and 16 directional arrow rotations");
-}
+void EspModule::onInit() {}
 
 void EspModule::onEnable() {
     auto* hitbox = static_cast<HitboxModule*>(ModuleRegistry::get().find("bedrocktools.Hitbox"));
@@ -65,10 +53,7 @@ void EspModule::onDisable(){
 }
 
 void EspModule::onFrame() {
-    if (!enabled) return;
-    // ESP boxes and the target ring are rendered in world space by HitboxModule's
-    // shared RenderLevel hook. No screen-edge player locator is part of this module.
-    pl::modmenu::submitDrawCommands(moduleId, std::span<const pl::modmenu::DrawCommand>{});
+    // The world-space ESP box and target ring are handled by HitboxModule's RenderLevel hook.
 }
 
 void EspModule::onMenuRegistered(){
