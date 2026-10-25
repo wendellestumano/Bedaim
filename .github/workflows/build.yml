@@ -52,6 +52,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: BedrockTools-levipack
-          path: build/android/arm64-v8a/release/BedrockTools.levipack
+          name: Bedaim-levipack
+          path: build/android/arm64-v8a/release/Bedaim.levipack
           if-no-files-found: error
