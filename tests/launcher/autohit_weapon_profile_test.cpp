@@ -86,6 +86,16 @@ int main() {
     assert(custom.initialBurstHits == 3 && custom.initialBurstCps == 12.0f);
     assert(matchesIdentifier(custom, "minecraft:diamond_sword"));
     assert(!matchesIdentifier(custom, "minecraft:netherite_sword"));
+    CustomProfile allSwords{.identifier = "minecraft:sword", .enabled = true};
+    allSwords = normalizeCustomProfile(std::move(allSwords));
+    assert(matchesIdentifier(allSwords, "minecraft:diamond_sword"));
+    assert(matchesIdentifier(allSwords, "minecraft:netherite_sword"));
+    assert(matchesIdentifier(allSwords, "item.minecraft.wooden_sword"));
+    assert(!matchesIdentifier(allSwords, "minecraft:diamond_axe"));
+    CustomProfile allAxes{.identifier = "minecraft:axe", .enabled = true};
+    allAxes = normalizeCustomProfile(std::move(allAxes));
+    assert(matchesIdentifier(allAxes, "minecraft:netherite_axe"));
+    assert(!matchesIdentifier(allAxes, "minecraft:diamond_sword"));
     assert(!matchesIdentifier(custom, ""));
 
     return 0;
