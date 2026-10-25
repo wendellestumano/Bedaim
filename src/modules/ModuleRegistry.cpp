@@ -39,7 +39,6 @@
 #include "hud/keystrokes.hpp"
 #include "visual/thirdpersonnametag.hpp"
 #include "hud/tablist.hpp"
-#include "hud/gamemodechecker.hpp"
 #include "hud/combocounter.hpp"
 #include "hud/ultrakillhud.hpp"
 #include "visual/chunkborder.hpp"
@@ -50,7 +49,6 @@
 #include "visual/lightoverlay.hpp"
 #include "visual/shulkerpreview.hpp"
 #include "visual/connectedglass.hpp"
-#include "visual/xray.hpp"
 #include "player/skinstealer.hpp"
 #include "player/autogg.hpp"
 #include "player/autoreq.hpp"
@@ -149,7 +147,6 @@ void registerAllModules() {
     registry.emplace<KeystrokesModule>();
     registry.emplace<ThirdPersonNametagModule>();
     registry.emplace<TablistModule>();
-    registry.emplace<GamemodeCheckerModule>();
     registry.emplace<ChunkBorderModule>();
     registry.emplace<HitboxModule>();
     registry.emplace<ZoomModule>();
@@ -164,7 +161,6 @@ void registerAllModules() {
     registry.emplace<LightOverlayModule>();
     registry.emplace<ShulkerPreviewModule>();
     registry.emplace<ConnectedGlassModule>();
-    registry.emplace<XRayModule>();
     registry.emplace<ForceGlobalRPModule>();
     registry.emplace<EspModule>();
 }
