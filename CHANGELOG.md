@@ -1,3 +1,9 @@
+## 2026-10-25 — XRAY terrain-filter diagnostics
+
+- Added one-shot diagnostics to distinguish the main reasons opaque terrain may remain visible: world-ready gate not active, face hook never reached, tessellator region null, non-ore face successfully suppressed, and ore face passed through.
+- Logging is one-shot per process and only runs while XRAY is enabled; no per-frame spam and no new native hooks.
+- This is a diagnostic build, not a claimed transparency fix. If the logs show the non-ore suppression path, the remaining issue is likely cached chunk geometry or another rendering path; if the region gate is bypassing, the runtime tessellator context must be validated before changing safety behavior.
+
 ## 2026-10-24 — Fix XRAY world-ready gate
 
 - Removed XRAY's dependency on the version-sensitive `ClientInstanceGetLocalPlayer` signature, which was already known to fail resolution on the target runtime and could leave `g_worldReady` false forever. The gate now updates from the existing `LocalPlayerPreTickEvent` emitted by the known-working NormalTick hook.
