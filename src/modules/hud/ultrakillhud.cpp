@@ -6,6 +6,7 @@
 #include <bedrocktools/events/AttackEvent.hpp>
 #include <bedrocktools/events/AttackResultEvent.hpp>
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/FrameEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <pl/ModMenu.hpp>
 
@@ -121,7 +122,8 @@ void UltrakillHudModule::onInit() {
                 m_hitStopPending = false;
                 const int duration = std::clamp(m_hitStopDurationMs, 250, 750);
                 m_hitStopUntil = Clock::now() + std::chrono::milliseconds(duration);
-                event.requestPostSwapHold(std::chrono::milliseconds(duration));
+                // The actual pause is requested by the confirmed attack result,
+                // not by this per-frame observer.
                 return;
             }
             if (m_hitStopUntil.time_since_epoch().count() != 0 &&
@@ -197,6 +199,8 @@ void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
     if (m_enableHitStop) {
         m_hitStopPending = true;
         m_hitStopUntil = {};
+        bedrocktools::events::FrameEvent::requestGlobalHitStop(
+            std::chrono::milliseconds(std::clamp(m_hitStopDurationMs, 250, 750)));
     } else {
         m_hitStopPending = false;
         m_hitStopUntil = {};
