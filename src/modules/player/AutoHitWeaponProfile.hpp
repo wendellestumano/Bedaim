@@ -47,7 +47,10 @@ struct CatalogEntry {
     std::string_view displayName;
 };
 
-inline constexpr std::array<CatalogEntry, 25> kWeaponCatalog{{
+inline constexpr std::array<CatalogEntry, 28> kWeaponCatalog{{
+    {"minecraft:sword", "All Swords (category)"},
+    {"minecraft:axe", "All Axes (category)"},
+    {"minecraft:spear", "All Spears (category)"},
     {"minecraft:mace", "Mace"},
     {"minecraft:diamond_sword", "Diamond Sword"},
     {"minecraft:wooden_sword", "Wooden Sword"},
@@ -179,7 +182,13 @@ inline CustomProfile normalizeCustomProfile(CustomProfile profile) {
 
 inline bool matchesIdentifier(const CustomProfile& profile, std::string_view identifier) {
     const auto normalized = normalizeIdentifier(identifier);
-    return !normalized.empty() && profile.identifier == normalized;
+    if (normalized.empty()) return false;
+    // Category aliases intentionally match every item classified in that family.
+    // Exact item profiles remain exact, and AutoHit resolves them before aliases.
+    if (profile.identifier == "minecraft:sword") return classify(normalized) == Class::Sword;
+    if (profile.identifier == "minecraft:axe") return classify(normalized) == Class::Axe;
+    if (profile.identifier == "minecraft:spear") return classify(normalized) == Class::Spear;
+    return profile.identifier == normalized;
 }
 
 inline Profile resolve(Class weapon,
