@@ -1,4 +1,5 @@
 #include "aimassist.hpp"
+#include "SpectatorEvidence.hpp"
 #include "AimAssistMath.hpp"
 #include "AimAssistPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
@@ -378,6 +379,7 @@ void AimAssistModule::resetTrackingState() {
 }
 
 void AimAssistModule::onInit() {
+    bedaim::player::initializeSpectatorEvidence();
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
     // GameType lookup is centralized and retried by GameHooks after runtime load.
@@ -817,6 +819,11 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                     // Repeated hit attempts with no observed damage are only a Creative candidate.
                     continue;
                 }
+                if (!hasExactGameType && !hasExactModePredicate &&
+                    bedaim::player::isSpectatorCandidate(candidate)) {
+                    continue;
+                }
+
                 bool isAttackable = true;
                 if (bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(
                         candidate, isAttackable)) {
