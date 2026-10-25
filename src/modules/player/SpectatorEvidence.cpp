@@ -126,6 +126,29 @@ bool hasSpectatorNoclipEvidence(void* actor) {
     if (!actor || !g_actorGetStatusFlag || !g_actorIsFlying) return false;
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> probeLock(g_spectatorProbeMutex);
+
+    // Bound the lifetime and size of probes as players enter and leave view.
+    static auto nextCleanup = std::chrono::steady_clock::time_point{};
+    if (now >= nextCleanup) {
+        nextCleanup = now + std::chrono::seconds(1);
+        for (auto it = g_spectatorProbes.begin(); it != g_spectatorProbes.end();) {
+            if (now - it->second.lastSeen > std::chrono::seconds(20)) {
+                it = g_spectatorProbes.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        while (g_spectatorProbes.size() > 512) {
+            auto oldest = g_spectatorProbes.end();
+            for (auto it = g_spectatorProbes.begin(); it != g_spectatorProbes.end(); ++it) {
+                if (it->first == actor) continue;
+                if (oldest == g_spectatorProbes.end() ||
+                    it->second.lastSeen < oldest->second.lastSeen) oldest = it;
+            }
+            if (oldest == g_spectatorProbes.end()) break;
+            g_spectatorProbes.erase(oldest);
+        }
+    }
     auto& probe = g_spectatorProbes[actor];
 
     // Aim Assist calls this per tick; sample each actor at most about 6.7 Hz.
