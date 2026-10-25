@@ -35,7 +35,7 @@ The source is public so people can study how a real LeviLauncher mod is structur
 ## Installation
 
 1. Install LeviLauncher.
-2. Download the latest `BedrockTools.levipack` release.
+2. Download the latest `Bedaim.levipack` artifact or release.
 3. Import the package from LeviLauncher's mod manager and enable it.
 4. Launch Minecraft through LeviLauncher.
 
@@ -54,7 +54,7 @@ xmake f -y -p android -a arm64-v8a -m release --ndk=/path/to/android-ndk-r28c
 xmake -y
 ```
 
-The release build produces `libBedrockTools.so` and `BedrockTools.levipack` in the xmake target directory.
+The Android release build produces `libBedrockTools.so` and `Bedaim.levipack` in the xmake target directory. The package manifest uses `Bedaim` as its display name.
 
 Public SDK headers are under `include/bedrocktools`. Shared runtime code lives under `src/core`, while features are kept under `src/modules` by category. Minecraft signatures and offsets are version-specific, so those are the main pieces that normally need updating for a new game build.
 
