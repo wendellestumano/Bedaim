@@ -1,4 +1,5 @@
 #include "connectedglass.hpp"
+#include "core/Diagnostics.hpp"
 
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
@@ -79,6 +80,11 @@ std::atomic_bool g_xrayHooksReady{false};
 // Native render hooks also run for menu/inventory previews. XRAY must remain
 // inert until ClientInstance has a live LocalPlayer.
 std::atomic_bool g_worldReady{false};
+std::atomic_bool g_xrayFaceHookSeenLogged{false};
+std::atomic_bool g_xrayNullRegionLogged{false};
+std::atomic_bool g_xrayNonTargetLogged{false};
+std::atomic_bool g_xrayTargetLogged{false};
+std::atomic_bool g_xrayWorldGateLogged{false};
 std::atomic_bool g_connectGlassBlocks{true};
 std::atomic_bool g_connectGlassPanes{true};
 std::atomic_bool g_connectDifferentColors{true};
@@ -367,14 +373,43 @@ void renderFace(
     // XRAY shares the existing Connected Glass tessellation detours. Suppress
     // terrain faces only for world tessellation; inventory/previews may use a
     // null or synthetic region and must continue through the original path.
-    if (g_xrayEnabled.load(std::memory_order_relaxed)
-        && g_worldReady.load(std::memory_order_acquire)
-        && tessellator && block && position) {
+    const bool xrayEnabled = g_xrayEnabled.load(std::memory_order_relaxed);
+    const bool worldReady = g_worldReady.load(std::memory_order_acquire);
+    if (xrayEnabled && !worldReady
+        && !g_xrayWorldGateLogged.exchange(true, std::memory_order_acq_rel)) {
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Warning, "XRay",
+            "diagnostic: xray enabled but world-ready gate is false inside face hook");
+    }
+    if (xrayEnabled && worldReady && tessellator && block && position) {
+        if (!g_xrayFaceHookSeenLogged.exchange(true, std::memory_order_acq_rel)) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Info, "XRay",
+                "diagnostic: terrain face hook reached with XRAY enabled in a live world");
+        }
         void* region = field<void*>(
             tessellator, bedrocktools::sdk::offsets::BlockTessellator::mRegion);
         // Null regions are common for synthetic/inventory tessellation. Fail open
-        // rather than filtering menu assets and item previews.
-        if (region && !isXrayTarget(block)) return;
+        // rather than filtering menu assets and item previews; log this branch once
+        // so a failed region gate is distinguishable from a failed native hook.
+        if (!region) {
+            if (!g_xrayNullRegionLogged.exchange(true, std::memory_order_acq_rel)) {
+                bedrocktools::diagnostics::log(
+                    bedrocktools::diagnostics::Level::Warning, "XRay",
+                    "diagnostic: face hook reached but BlockTessellator::mRegion is null; terrain filtering is bypassed");
+            }
+        } else if (!isXrayTarget(block)) {
+            if (!g_xrayNonTargetLogged.exchange(true, std::memory_order_acq_rel)) {
+                bedrocktools::diagnostics::log(
+                    bedrocktools::diagnostics::Level::Info, "XRay",
+                    "diagnostic: first non-ore block face suppressed");
+            }
+            return;
+        } else if (!g_xrayTargetLogged.exchange(true, std::memory_order_acq_rel)) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Info, "XRay",
+                "diagnostic: ore/ancient-debris face passed through the filter");
+        }
     }
 
     std::optional<TextureCopy> texture;
