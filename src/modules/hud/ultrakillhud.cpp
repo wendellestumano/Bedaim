@@ -100,27 +100,35 @@ bool UltrakillHudModule::isMaceEquipped(Player* player) const {
 void UltrakillHudModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onLocalPlayerTick(event.player); });
+    bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>(
+        [this](auto& event) { onAttackAttempt(event.target); });
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
-    // Runtime calls ModuleRegistry::onFrame() before this last-priority listener.
-    // The impact frame itself is presented, then the next two swaps are held.
+    // Let one frame submit the full-white overlay, then hold the presented frame
+    // until the configurable hit-stop deadline. This avoids sleeping/blocking the
+    // render thread and keeps the frame-event cancellation time-bounded.
     bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
         [this](auto& event) {
             if (!enabled) return;
             std::lock_guard lock(m_stateMutex);
             if (!m_enableHitStop) {
                 m_hitStopPending = false;
-                m_hitStopFrames = 0;
+                m_hitStopUntil = {};
                 return;
             }
             if (m_hitStopPending) {
                 m_hitStopPending = false;
+                const int duration = std::clamp(m_hitStopDurationMs, 250, 750);
+                m_hitStopUntil = Clock::now() + std::chrono::milliseconds(duration);
                 return;
             }
-            if (m_hitStopFrames > 0) {
-                --m_hitStopFrames;
-                event.cancel();
+            if (m_hitStopUntil.time_since_epoch().count() != 0) {
+                if (Clock::now() < m_hitStopUntil) {
+                    event.cancel();
+                } else {
+                    m_hitStopUntil = {};
+                }
             }
         }, bedrocktools::events::EventPriority::Last);
 }
@@ -152,6 +160,19 @@ void UltrakillHudModule::onLocalPlayerTick(Player* player) {
     m_lastY = currentY;
 }
 
+void UltrakillHudModule::onAttackAttempt(Actor* target) {
+    if (!enabled || !target) return;
+    const auto now = Clock::now();
+    std::lock_guard lock(m_stateMutex);
+    m_flashStarted = now;
+    m_flashActive = true;
+    m_impactFallSpeedBps = std::max(0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
+    if (m_enableHitStop) {
+        m_hitStopPending = true;
+        m_hitStopUntil = {};
+    }
+}
+
 void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
     if (!enabled || !target || !result) return;
     Player* player = m_localPlayer.load(std::memory_order_acquire);
@@ -172,13 +193,15 @@ void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
         0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
     m_flashActive = true;
 
-    // Present one flash frame, then hold it briefly for the visual hit-stop.
+    // Confirmed mace hits restart the flash/hold so the visible impact matches
+    // the successful result rather than only the initial attack attempt.
+    m_flashActive = true;
     if (m_enableHitStop) {
-        m_hitStopFrames = 4;
         m_hitStopPending = true;
+        m_hitStopUntil = {};
     } else {
-        m_hitStopFrames = 0;
         m_hitStopPending = false;
+        m_hitStopUntil = {};
     }
 }
 
@@ -190,8 +213,8 @@ void UltrakillHudModule::onEnable() {
     m_flashStarted = {};
     m_impactFallSpeedBps = 0.0f;
     m_flashActive = false;
-    m_hitStopFrames = 0;
     m_hitStopPending = false;
+    m_hitStopUntil = {};
     m_hasLastY = false;
     m_fallSpeedBps.store(0.0f, std::memory_order_relaxed);
 }
@@ -200,8 +223,8 @@ void UltrakillHudModule::onDisable() {
     {
         std::lock_guard lock(m_stateMutex);
         m_flashActive = false;
-        m_hitStopFrames = 0;
         m_hitStopPending = false;
+        m_hitStopUntil = {};
     }
     const std::vector<PLModMenu_DrawCommand> empty;
     submitDrawCommands(moduleId, empty);
@@ -316,11 +339,11 @@ void UltrakillHudModule::onFrame() {
         cmds.push_back(std::move(cmd));
     };
 
-    // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
-    // the game simulation is not paused and no artificial frame drops are introduced.
+    // Pure-white ULTRAKILL impact flash. The first frame is rendered before the
+    // frame listener holds subsequent swaps for the configured duration.
     if (m_enableParryFlash && impactVisible) {
         const float fade = std::exp(-std::max(0.0f, hitAge) / 0.052f);
-        const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
+        const int baseAlpha = 255;
         const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
         if (alpha >= 5) addRect(0.0f, 0.0f, screenW, screenH, withAlpha(kWhite, alpha));
 
@@ -498,6 +521,7 @@ void UltrakillHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_enableParryFlash")) m_enableParryFlash = j["m_enableParryFlash"].get<bool>();
     if (j.contains("m_enableImpactShake")) m_enableImpactShake = j["m_enableImpactShake"].get<bool>();
     if (j.contains("m_enableHitStop")) m_enableHitStop = j["m_enableHitStop"].get<bool>();
+    if (j.contains("m_hitStopDurationMs")) m_hitStopDurationMs = std::clamp(j["m_hitStopDurationMs"].get<int>(), 250, 750);
     if (j.contains("m_showImpactText")) m_showImpactText = j["m_showImpactText"].get<bool>();
 }
 
@@ -512,5 +536,6 @@ void UltrakillHudModule::saveConfig(nlohmann::json& j) {
     j["m_enableParryFlash"] = m_enableParryFlash;
     j["m_enableImpactShake"] = m_enableImpactShake;
     j["m_enableHitStop"] = m_enableHitStop;
+    j["m_hitStopDurationMs"] = std::clamp(m_hitStopDurationMs, 250, 750);
     j["m_showImpactText"] = m_showImpactText;
 }
