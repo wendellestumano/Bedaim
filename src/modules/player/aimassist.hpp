@@ -8,9 +8,16 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 class AimAssistModule final : public Module {
 public:
+    struct CustomEquipmentProfile {
+        std::string identifier;
+        bool enabled = true;
+        float aimMultiplier = 1.0f;
+        float aimPointY = 0.55f;
+    };
     AimAssistModule();
     ~AimAssistModule() override;
 
@@ -86,6 +93,8 @@ public:
     std::string m_predictionMode = "Ranged";
     float m_predictionLeadMs = 120.0f;
     std::string m_whitelistNames = "";
+    std::string m_customEquipmentIdentifier;
+    std::vector<CustomEquipmentProfile> m_customEquipmentProfiles;
 
 private:
     void resetTrackingState();
@@ -97,6 +106,7 @@ private:
     void* m_lastTarget = nullptr;
     bool m_lastTargetIsPlayer = false;
     int m_cachedHeldWeaponCode = 0;
+    std::string m_cachedHeldItemIdentifier;
     int m_cachedWeaponSlot = -1;
     std::chrono::steady_clock::time_point m_nextHeldWeaponRefresh{};
     bool m_weaponFilterAllowsCurrent = true;
