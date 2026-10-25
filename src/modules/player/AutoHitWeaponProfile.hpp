@@ -104,6 +104,12 @@ inline std::string normalizeIdentifier(std::string_view identifier) {
     } else if (!normalized.empty() && normalized.find(':') == std::string::npos) {
         normalized = "minecraft:" + normalized;
     }
+
+    // The rocket's localization key can be exposed as item.fireworks by
+    // Item::getDescriptionId(), while profile configuration uses its registry ID.
+    if (normalized == "minecraft:fireworks" || normalized == "minecraft:firework") {
+        normalized = "minecraft:firework_rocket";
+    }
     return normalized;
 }
 
@@ -128,7 +134,7 @@ inline std::string displayNameForIdentifier(std::string_view identifier) {
 }
 
 inline float normalizeRange(float range) noexcept {
-    return std::isfinite(range) ? std::clamp(range, 1.0f, 6.0f) : 3.2f;
+    return std::isfinite(range) ? std::clamp(range, 1.0f, 15.0f) : 3.2f;
 }
 
 inline float normalizeNormalCps(float cps) noexcept {
