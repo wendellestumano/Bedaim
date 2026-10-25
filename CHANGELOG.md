@@ -1,3 +1,10 @@
+## 2026-10-25 — Restore AutoHit and Hitbox Extender
+
+- Restored the AutoHit implementation and its guard/weapon-profile support files from the last pre-cleanup revision.
+- Registered `AutoHitModule` again.
+- Replaced the inherited visual `HitboxModule` registration with `HitboxExpanderModule`, whose implementation is part of AimAssist's module source.
+- Kept the unrelated Bedaim modules and their current implementations unchanged.
+
 ## 2026-10-25 — Restore Aim Assist gamemode helper and fix hit-stop build
 
 - Restored the gamemode checker helper declarations and implementation required by Aim Assist after the source cleanup removed them.
