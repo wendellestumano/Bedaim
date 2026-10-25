@@ -5,7 +5,6 @@
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
-#include "../hud/gamemodechecker.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
@@ -818,11 +817,6 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                     // Repeated hit attempts with no observed damage are only a Creative candidate.
                     continue;
                 }
-                if (!hasExactGameType && !hasExactModePredicate &&
-                    GamemodeCheckerModule::isSpectatorCandidate(candidate)) {
-                    continue;
-                }
-
                 bool isAttackable = true;
                 if (bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(
                         candidate, isAttackable)) {
