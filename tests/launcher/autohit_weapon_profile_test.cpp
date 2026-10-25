@@ -62,6 +62,10 @@ int main() {
     assert(normalizeIdentifier("item.minecraft.mace") == "minecraft:mace");
     assert(normalizeIdentifier("item.fireworks") == "minecraft:firework_rocket");
     assert(normalizeIdentifier("minecraft:fireworks") == "minecraft:firework_rocket");
+    assert(normalizeIdentifier("item.minecraft.fireworks") == "minecraft:firework_rocket");
+    assert(normalizeIdentifier("minecraft:fireworks_rocket") == "minecraft:firework_rocket");
+    assert(matchesNormalizedIdentifier("minecraft:firework_rocket", "item.fireworks"));
+    assert(matchesNormalizedIdentifier("minecraft:fireworks", "minecraft:firework_rocket"));
     assert(normalizeIdentifier("item.myaddon.blazing_sword") == "myaddon:blazing_sword");
     assert(normalizeIdentifier("MyAddon:Blazing_Sword") == "myaddon:blazing_sword");
     assert(normalizeRange(4.5f) == 4.5f);
