@@ -89,6 +89,10 @@ int main() {
     assert(custom.initialBurstHits == 3 && custom.initialBurstCps == 12.0f);
     assert(matchesIdentifier(custom, "minecraft:diamond_sword"));
     assert(!matchesIdentifier(custom, "minecraft:netherite_sword"));
+    CustomProfile fireworks{.identifier = "Minecraft:firework_rocket", .enabled = true};
+    fireworks = normalizeCustomProfile(std::move(fireworks));
+    assert(matchesIdentifier(fireworks, "item.fireworks"));
+    assert(matchesIdentifier(fireworks, "minecraft:firework_rocket"));
     CustomProfile allSwords{.identifier = "minecraft:sword", .enabled = true};
     allSwords = normalizeCustomProfile(std::move(allSwords));
     assert(matchesIdentifier(allSwords, "minecraft:diamond_sword"));
