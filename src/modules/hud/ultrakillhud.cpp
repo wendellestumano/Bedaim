@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -103,24 +104,23 @@ void UltrakillHudModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
-    // Runtime calls ModuleRegistry::onFrame() before this last-priority listener.
-    // The impact frame itself is presented, then the next two swaps are held.
+    // FrameEvent runs from the EGL swap hook after HUD commands are submitted.
+    // Briefly delay this presentation once per confirmed impact. Do not cancel the
+    // event: the renderer must always execute its real eglSwapBuffers call.
     bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
-        [this](auto& event) {
+        [this](auto&) {
             if (!enabled) return;
-            std::lock_guard lock(m_stateMutex);
-            if (!m_enableHitStop) {
-                m_hitStopPending = false;
-                m_hitStopFrames = 0;
-                return;
+            bool holdForImpact = false;
+            {
+                std::lock_guard lock(m_stateMutex);
+                if (!m_enableHitStop) {
+                    m_hitStopPending = false;
+                    return;
+                }
+                holdForImpact = std::exchange(m_hitStopPending, false);
             }
-            if (m_hitStopPending) {
-                m_hitStopPending = false;
-                return;
-            }
-            if (m_hitStopFrames > 0) {
-                --m_hitStopFrames;
-                event.cancel();
+            if (holdForImpact) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(22));
             }
         }, bedrocktools::events::EventPriority::Last);
 }
@@ -172,14 +172,8 @@ void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
         0.0f, -m_fallSpeedBps.load(std::memory_order_relaxed));
     m_flashActive = true;
 
-    // Present one flash frame, then hold it briefly for the visual hit-stop.
-    if (m_enableHitStop) {
-        m_hitStopFrames = 4;
-        m_hitStopPending = true;
-    } else {
-        m_hitStopFrames = 0;
-        m_hitStopPending = false;
-    }
+    // One short presentation hold is requested on the next frame after impact.
+    m_hitStopPending = m_enableHitStop;
 }
 
 void UltrakillHudModule::onEnable() {
@@ -190,7 +184,6 @@ void UltrakillHudModule::onEnable() {
     m_flashStarted = {};
     m_impactFallSpeedBps = 0.0f;
     m_flashActive = false;
-    m_hitStopFrames = 0;
     m_hitStopPending = false;
     m_hasLastY = false;
     m_fallSpeedBps.store(0.0f, std::memory_order_relaxed);
@@ -200,7 +193,6 @@ void UltrakillHudModule::onDisable() {
     {
         std::lock_guard lock(m_stateMutex);
         m_flashActive = false;
-        m_hitStopFrames = 0;
         m_hitStopPending = false;
     }
     const std::vector<PLModMenu_DrawCommand> empty;
@@ -315,28 +307,6 @@ void UltrakillHudModule::onFrame() {
         cmd.text = text;
         cmds.push_back(std::move(cmd));
     };
-
-    // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
-    // the game simulation is not paused and no artificial frame drops are introduced.
-    if (m_enableParryFlash && impactVisible) {
-        const float fade = std::exp(-std::max(0.0f, hitAge) / 0.052f);
-        const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
-        const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
-        if (alpha >= 5) addRect(0.0f, 0.0f, screenW, screenH, withAlpha(kWhite, alpha));
-
-        const float cx = screenW * 0.5f;
-        const float cy = screenH * 0.5f;
-        const float spread = (10.0f + (1.0f - impactProgress) * 22.0f) * scale;
-        const int spokeAlpha = static_cast<int>(220.0f * impactProgress);
-        addLine(cx - spread, cy, -spread * 0.55f, -spread * 0.35f,
-                2.0f * scale, withAlpha(kRed, spokeAlpha));
-        addLine(cx + spread, cy, spread * 0.55f, -spread * 0.35f,
-                2.0f * scale, withAlpha(kCyan, spokeAlpha));
-        addLine(cx, cy - spread, -spread * 0.35f, -spread * 0.55f,
-                2.0f * scale, withAlpha(kWhite, spokeAlpha));
-        addLine(cx, cy + spread, spread * 0.35f, spread * 0.55f,
-                2.0f * scale, withAlpha(kWhite, spokeAlpha));
-    }
 
     // Lower-left weapon panel: live held-item identifier and a horizontal outline glyph.
     if (m_showMaceStatus) {
@@ -482,6 +452,28 @@ void UltrakillHudModule::onFrame() {
         addText(cx + 19.0f * scale, cy - 13.0f * scale,
                 "IMPACT FLASH", 7.0f * scale,
                 withAlpha(kCyan, static_cast<int>(240.0f * impactProgress)));
+    }
+
+    // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
+    // the game simulation is not paused and no artificial frame drops are introduced.
+    if (m_enableParryFlash && impactVisible) {
+        const float fade = std::exp(-std::max(0.0f, hitAge) / 0.075f);
+        const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
+        const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
+        if (alpha >= 5) addRect(0.0f, 0.0f, screenW, screenH, withAlpha(0xFFFFFFFFu, alpha));
+
+        const float cx = screenW * 0.5f;
+        const float cy = screenH * 0.5f;
+        const float spread = (10.0f + (1.0f - impactProgress) * 22.0f) * scale;
+        const int spokeAlpha = static_cast<int>(220.0f * impactProgress);
+        addLine(cx - spread, cy, -spread * 0.55f, -spread * 0.35f,
+                2.0f * scale, withAlpha(kRed, spokeAlpha));
+        addLine(cx + spread, cy, spread * 0.55f, -spread * 0.35f,
+                2.0f * scale, withAlpha(kCyan, spokeAlpha));
+        addLine(cx, cy - spread, -spread * 0.35f, -spread * 0.55f,
+                2.0f * scale, withAlpha(kWhite, spokeAlpha));
+        addLine(cx, cy + spread, spread * 0.35f, spread * 0.55f,
+                2.0f * scale, withAlpha(kWhite, spokeAlpha));
     }
 
     submitDrawCommands(moduleId, cmds);
