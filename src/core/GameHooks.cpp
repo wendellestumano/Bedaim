@@ -716,6 +716,10 @@ bool gameModeAttackDetour(void* gameMode, void* target, bool playPredictiveSound
 
 void* clientUpdateDetour(void* clientInstance, bool value) {
     if (clientInstance) currentClientInstance.store(clientInstance, std::memory_order_release);
+
+    // Freeze the actual ClientInstance update path during the same hit-stop
+    // window used by EGL presentation; this is not just an FPS/render delay.
+    FrameEvent::waitForGlobalHitStop();
     void* result = clientUpdateOriginal ? clientUpdateOriginal(clientInstance, value) : nullptr;
     ClientInstanceUpdateEvent event{reinterpret_cast<bedrocktools::sdk::ClientInstance*>(clientInstance)};
     bus().publish(event);
@@ -760,11 +764,15 @@ EGLBoolean swapBuffersDetour(EGLDisplay display, EGLSurface surface) {
     if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
         FrameEvent event;
         bus().publish(event);
-        // FrameEvent is observational only. A module must never suppress the
-        // real EGL swap: returning EGL_TRUE without calling the original stalls
-        // presentation and can conflict with BedrockTools' own render hooks.
     }
-    return swapBuffersOriginal ? swapBuffersOriginal(display, surface) : EGL_FALSE;
+
+    // Present the impact frame, then keep this presentation path aligned with
+    // the shared hit-stop deadline. The game-update path uses the same deadline.
+    const EGLBoolean result = swapBuffersOriginal
+        ? swapBuffersOriginal(display, surface)
+        : EGL_FALSE;
+    if (result == EGL_TRUE) FrameEvent::waitForGlobalHitStop();
+    return result;
 }
 
 bool hookEgl() {

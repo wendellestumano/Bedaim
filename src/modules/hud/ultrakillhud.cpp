@@ -6,6 +6,7 @@
 #include <bedrocktools/events/AttackEvent.hpp>
 #include <bedrocktools/events/AttackResultEvent.hpp>
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/FrameEvent.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <pl/ModMenu.hpp>
 
@@ -105,9 +106,9 @@ void UltrakillHudModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
-    // Let one frame submit the full-white overlay, then hold the presented frame
-    // until the configurable hit-stop deadline. This avoids sleeping/blocking the
-    // render thread and keeps the frame-event cancellation time-bounded.
+    // The EGL hook presents the impact frame, then applies this bounded
+    // post-swap hold. Cancelling FrameEvent is observational only and cannot
+    // pause Bedrock's frame loop.
     bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
         [this](auto& event) {
             if (!enabled) return;
@@ -121,14 +122,13 @@ void UltrakillHudModule::onInit() {
                 m_hitStopPending = false;
                 const int duration = std::clamp(m_hitStopDurationMs, 250, 750);
                 m_hitStopUntil = Clock::now() + std::chrono::milliseconds(duration);
+                // The actual pause is requested by the confirmed attack result,
+                // not by this per-frame observer.
                 return;
             }
-            if (m_hitStopUntil.time_since_epoch().count() != 0) {
-                if (Clock::now() < m_hitStopUntil) {
-                    event.cancel();
-                } else {
-                    m_hitStopUntil = {};
-                }
+            if (m_hitStopUntil.time_since_epoch().count() != 0 &&
+                Clock::now() >= m_hitStopUntil) {
+                m_hitStopUntil = {};
             }
         }, bedrocktools::events::EventPriority::Last);
 }
@@ -199,6 +199,8 @@ void UltrakillHudModule::onAttackResult(Actor* target, bool result) {
     if (m_enableHitStop) {
         m_hitStopPending = true;
         m_hitStopUntil = {};
+        bedrocktools::events::FrameEvent::requestGlobalHitStop(
+            std::chrono::milliseconds(std::clamp(m_hitStopDurationMs, 250, 750)));
     } else {
         m_hitStopPending = false;
         m_hitStopUntil = {};
