@@ -2,10 +2,10 @@
 #include "../core/Diagnostics.hpp"
 
 #include "player/aimassist.hpp"
+#include "player/autohit.hpp"
 #include "player/maceswapper.hpp"
 #include "player/unglide.hpp"
 #include "player/swordswapper.hpp"
-#include "visual/hitbox.hpp"
 #include "visual/esp.hpp"
 #include "hud/ultrakillhud.hpp"
 #include "misc/modulediagnostics.hpp"
@@ -61,10 +61,11 @@ void registerAllModules() {
     if (!registry.modules().empty()) return;
 
     registry.emplace<AimAssistModule>();
+    registry.emplace<AutoHitModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<UnglideModule>();
     registry.emplace<SwordSwapperModule>();
-    registry.emplace<HitboxModule>();
+    registry.emplace<HitboxExpanderModule>();
     registry.emplace<EspModule>();
     registry.emplace<UltrakillHudModule>();
     registry.emplace<ModuleDiagnosticsModule>();
