@@ -33,6 +33,4 @@ private:
     void applySettings();
 };
 
-// Enables/disables XRay through the block-tessellation hooks already owned by ConnectedGlass.
-bool ConnectedGlassSetXRayMode(bool enabled);
 void ConnectedGlassHandleClientInstanceUpdate(void* clientInstance);
