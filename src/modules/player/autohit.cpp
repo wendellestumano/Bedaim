@@ -665,6 +665,43 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
             if (profile.identifier.empty() || !seen.insert(profile.identifier).second) continue;
             m_customWeaponProfiles.push_back(std::move(profile));
         }
+
+        // Migrate legacy per-material profiles to family profiles, so an existing
+        // saved config actually gets the new category behavior rather than only
+        // seeing category entries in the chooser. Keep unrelated items untouched.
+        const auto ensureFamilyProfile = [&](std::string_view familyId) {
+            const std::string family(familyId);
+            const auto found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+                [&](const auto& profile) { return profile.identifier == family; });
+            if (found != m_customWeaponProfiles.end()) return;
+            const auto catalog = std::find_if(bedaim::autohit::weapon::kWeaponCatalog.begin(),
+                bedaim::autohit::weapon::kWeaponCatalog.end(),
+                [&](const auto& entry) { return entry.identifier == family; });
+            if (catalog == bedaim::autohit::weapon::kWeaponCatalog.end()) return;
+            m_customWeaponProfiles.push_back(makeLegacyProfile(
+                *catalog, m_attackRange, m_swordEnabled, m_swordCps,
+                m_axeEnabled, m_axeCps, m_maceEnabled, m_maceCps,
+                m_tridentEnabled, m_tridentCps));
+        };
+        ensureFamilyProfile("minecraft:sword");
+        ensureFamilyProfile("minecraft:axe");
+        ensureFamilyProfile("minecraft:spear");
+        // Remove vanilla material-specific entries from the profile bench. Their
+        // category profiles now own those families; unrelated/custom IDs remain.
+        m_customWeaponProfiles.erase(
+            std::remove_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+                [](const auto& profile) {
+                    const auto type = bedaim::autohit::weapon::classify(profile.identifier);
+                    const auto colon = profile.identifier.find(':');
+                    const bool isVanilla = colon != std::string::npos &&
+                        profile.identifier.substr(0, colon) == "minecraft";
+                    const bool isFamilyAlias = colon != std::string::npos &&
+                        profile.identifier.substr(colon + 1) == bedaim::autohit::weapon::name(type);
+                    return isVanilla && !isFamilyAlias &&
+                        (type == bedaim::autohit::weapon::Class::Sword ||
+                         type == bedaim::autohit::weapon::Class::Axe ||
+                         type == bedaim::autohit::weapon::Class::Spear);
+                }), m_customWeaponProfiles.end());
     } else {
         // One-time migration from the former sword/axe/mace/trident settings.
         // Expand each class default into individual item IDs so every weapon can
@@ -775,8 +812,19 @@ void AutoHitModule::onMenuRegistered() {
     weaponChoice.hasCurrentValue = true;
     weaponChoice.searchable = true;
     for (const auto& entry : bedaim::autohit::weapon::kWeaponCatalog) {
+        const std::string identifier(entry.identifier);
+        const auto weaponClass = bedaim::autohit::weapon::classify(identifier);
+        const auto colon = identifier.find(':');
+        const bool isFamilyAlias = colon != std::string::npos &&
+            identifier.substr(colon + 1) == bedaim::autohit::weapon::name(weaponClass);
+        // Use one profile per family for swords, axes and spears rather than
+        // forcing users to configure each vanilla material separately.
+        if (!isFamilyAlias &&
+            (weaponClass == bedaim::autohit::weapon::Class::Sword ||
+             weaponClass == bedaim::autohit::weapon::Class::Axe ||
+             weaponClass == bedaim::autohit::weapon::Class::Spear)) continue;
         ConfigOptionV2 option;
-        option.value = std::string(entry.identifier);
+        option.value = identifier;
         option.label = std::string(entry.displayName);
         weaponChoice.options.push_back(std::move(option));
     }
