@@ -254,6 +254,22 @@ void GamemodeCheckerModule::onDisable() {
 }
 
 bool GamemodeCheckerModule::isSpectatorCandidate(void* actor) {
+    // Aim Assist uses this as a lightweight helper even when the optional
+    // Gamemode Checker overlay is not registered. Resolve its supporting APIs
+    // lazily here so the helper does not depend on the overlay's onInit().
+    if (!g_actorGetStatusFlag) {
+        g_actorGetStatusFlag = reinterpret_cast<ActorGetStatusFlagFn>(
+            resolveGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
+    }
+    if (!g_actorIsFlying) {
+        g_actorIsFlying = reinterpret_cast<ActorIsFlyingFn>(
+            resolveGameSymbol("_ZNK6Player8isFlyingEv"));
+    }
+    if (!g_isSolidBlockingBlock) {
+        g_isSolidBlockingBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
+            bedrocktools::memory::resolve(
+                bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
+    }
     return hasSpectatorNoclipEvidence(actor);
 }
 
