@@ -757,14 +757,25 @@ void* chatCloseDetour(void* a0, void* a1, void* a2, void* a3, void* a4, void* a5
 }
 
 EGLBoolean swapBuffersDetour(EGLDisplay display, EGLSurface surface) {
+    auto postSwapHoldUntil = std::chrono::steady_clock::time_point{};
     if (eglGetCurrentContext() != EGL_NO_CONTEXT) {
         FrameEvent event;
         bus().publish(event);
-        // FrameEvent is observational only. A module must never suppress the
-        // real EGL swap: returning EGL_TRUE without calling the original stalls
-        // presentation and can conflict with BedrockTools' own render hooks.
+        postSwapHoldUntil = event.postSwapHoldUntil();
     }
-    return swapBuffersOriginal ? swapBuffersOriginal(display, surface) : EGL_FALSE;
+
+    // Present the impact frame first, then briefly hold the render/game thread.
+    // Cancelling FrameEvent cannot stop rendering because this event is only an
+    // observer; post-swap pacing gives the HUD a real, bounded hit-stop window.
+    const EGLBoolean result = swapBuffersOriginal
+        ? swapBuffersOriginal(display, surface)
+        : EGL_FALSE;
+    if (result == EGL_TRUE &&
+        postSwapHoldUntil.time_since_epoch().count() != 0 &&
+        std::chrono::steady_clock::now() < postSwapHoldUntil) {
+        std::this_thread::sleep_until(postSwapHoldUntil);
+    }
+    return result;
 }
 
 bool hookEgl() {
