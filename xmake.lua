@@ -23,8 +23,6 @@ target("BedrockTools")
     set_languages("c++20")
     set_strip("all")
     add_files("src/main.cpp", "src/core/**.cpp", "src/config/*.cpp", "src/launcher/*.cpp", "src/modules/**.cpp")
-    -- Keep the retired experimental combat modules out of the packaged native library.
-    remove_files("src/modules/player/autototem.cpp")
     add_includedirs("include", {public = true})
     add_includedirs("src", "third_party")
     add_packages("preloader", "nlohmann_json", "glm", "entt", "fmt")
