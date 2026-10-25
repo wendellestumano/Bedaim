@@ -105,9 +105,9 @@ void UltrakillHudModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::AttackResultEvent>(
         [this](auto& event) { onAttackResult(event.target, event.result); });
 
-    // Let one frame submit the full-white overlay, then hold the presented frame
-    // until the configurable hit-stop deadline. This avoids sleeping/blocking the
-    // render thread and keeps the frame-event cancellation time-bounded.
+    // The EGL hook presents the impact frame, then applies this bounded
+    // post-swap hold. Cancelling FrameEvent is observational only and cannot
+    // pause Bedrock's frame loop.
     bedrocktools::events::bus().subscribe<bedrocktools::events::FrameEvent>(
         [this](auto& event) {
             if (!enabled) return;
@@ -121,14 +121,12 @@ void UltrakillHudModule::onInit() {
                 m_hitStopPending = false;
                 const int duration = std::clamp(m_hitStopDurationMs, 250, 750);
                 m_hitStopUntil = Clock::now() + std::chrono::milliseconds(duration);
+                event.requestPostSwapHold(std::chrono::milliseconds(duration));
                 return;
             }
-            if (m_hitStopUntil.time_since_epoch().count() != 0) {
-                if (Clock::now() < m_hitStopUntil) {
-                    event.cancel();
-                } else {
-                    m_hitStopUntil = {};
-                }
+            if (m_hitStopUntil.time_since_epoch().count() != 0 &&
+                Clock::now() >= m_hitStopUntil) {
+                m_hitStopUntil = {};
             }
         }, bedrocktools::events::EventPriority::Last);
 }
