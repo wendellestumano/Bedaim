@@ -50,11 +50,16 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
     if (!mod) return;
 
     if (mod->onMenuConfigChanged(key, value)) {
-        // Snapshot the post-callback settings. V2 schema changes are debounced below
-        // so live sliders and text inputs are not rebuilt on every edit event.
-        nlohmann::json snapshot;
-        mod->saveConfig(snapshot);
-        scheduleModuleConfigSchemaRefresh(mod, key, snapshot);
+        // Text fields must not trigger a schema rebuild while the user is typing.
+        // On Android 16 / Levi Launcher 1.5.27, rebuilding the focused TextView
+        // can leave focus-search pointing at a non-focusable view and crash on key-up.
+        const bool editingIdentifier =
+            key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier";
+        if (!editingIdentifier) {
+            nlohmann::json snapshot;
+            mod->saveConfig(snapshot);
+            scheduleModuleConfigSchemaRefresh(mod, key, snapshot);
+        }
         persistModuleConfig();
         return;
     }
