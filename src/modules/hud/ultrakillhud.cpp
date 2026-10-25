@@ -454,8 +454,7 @@ void UltrakillHudModule::onFrame() {
                 withAlpha(kCyan, static_cast<int>(240.0f * impactProgress)));
     }
 
-    // ULTRAKILL-inspired white impact flash. This is a visual hit-stop pulse:
-    // the game simulation is not paused and no artificial frame drops are introduced.
+    // Submit the full-screen impact flash last so it overlays every HUD element.
     if (m_enableParryFlash && impactVisible) {
         const float fade = std::exp(-std::max(0.0f, hitAge) / 0.075f);
         const int baseAlpha = impactFallSpeed >= 4.0f ? 255 : 232;
