@@ -366,7 +366,7 @@ static void registerUltrakillHudConfigSchema(std::string_view moduleId,
     duration.category = "hud";
     duration.title = "Impact hold duration";
     duration.description = "Duration of the 1-FPS-style hit-stop hold, from 250 to 750 milliseconds.";
-    duration.type = ConfigControlTypeV2::SliderFloat;
+    duration.type = ConfigControlTypeV2::SliderInt;
     duration.defaultValue = schemaCurrentValue(initialDefaults, "m_hitStopDurationMs", "400");
     duration.currentValue = schemaCurrentValue(config, "m_hitStopDurationMs", "400");
     duration.hasCurrentValue = config.contains("m_hitStopDurationMs");
