@@ -54,6 +54,5 @@ private:
     bool m_enableHitStop = true;
     bool m_showImpactText = true;
 
-    int m_hitStopFrames = 0;
     bool m_hitStopPending = false;
 };

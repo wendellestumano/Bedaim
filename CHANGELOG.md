@@ -1,3 +1,11 @@
+## 2026-10-24 — Stabilize ULTRAKILL HUD and ESP; retire unfinished modules
+
+- Replaced the HUD's ineffective FrameEvent cancellation with a single 22 ms presentation hold after a confirmed mace impact. The EGL swap still runs normally; this is a brief hit-stop effect, not a one-second FPS=1 cap.
+- Moved the ULTRAKILL white flash to the topmost end of the HUD draw list and extended its fade to make the impact visible.
+- Hardened ESP player boxes by using the BedrockTools SDK actor bounds and falling back to a standard player-sized outline when the native AABB is unavailable.
+- Removed the off-screen player locator arrow from ESP. Removed the Gamemode Checker and XRay modules completely, including dormant XRay interception code and its dedicated policy test. Aim Assist keeps native game-mode checks and a standalone conservative spectator-evidence fallback.
+- Device rendering and Android package verification remain pending.
+
 ## 2026-10-24 — Fix XRAY world-ready gate
 
 - Removed XRAY's dependency on the version-sensitive `ClientInstanceGetLocalPlayer` signature, which was already known to fail resolution on the target runtime and could leave `g_worldReady` false forever. The gate now updates from the existing `LocalPlayerPreTickEvent` emitted by the known-working NormalTick hook.

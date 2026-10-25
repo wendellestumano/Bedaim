@@ -1,11 +1,11 @@
 #include "aimassist.hpp"
+#include "SpectatorEvidence.hpp"
 #include "AimAssistMath.hpp"
 #include "AimAssistPolicy.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
-#include "../hud/gamemodechecker.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
@@ -379,6 +379,7 @@ void AimAssistModule::resetTrackingState() {
 }
 
 void AimAssistModule::onInit() {
+    bedaim::player::initializeSpectatorEvidence();
     g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorFetchNearbyActorsSorted));
     // GameType lookup is centralized and retried by GameHooks after runtime load.
@@ -819,7 +820,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
                     continue;
                 }
                 if (!hasExactGameType && !hasExactModePredicate &&
-                    GamemodeCheckerModule::isSpectatorCandidate(candidate)) {
+                    bedaim::player::isSpectatorCandidate(candidate)) {
                     continue;
                 }
 
