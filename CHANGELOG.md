@@ -1,3 +1,10 @@
+## 2026-10-25 — Implement ULTRAKILL HUD hit-stop with post-swap frame pacing
+
+- Confirmed `FrameEvent` is observational and its cancellation does not stop EGL presentation, which explains why the previous hit-stop implementation did not freeze the game.
+- Added a bounded one-shot post-swap hold request to `FrameEvent` and made the EGL swap hook present the impact frame before sleeping until the hit-stop deadline.
+- Replaced the ineffective frame-event cancellation with a 250–750 ms post-swap hold tied to the HUD's existing duration setting.
+- VOLT's specific implementation was not available as public source during this pass; this uses Bedaim's existing EGL hook rather than copying unverified code.
+
 ## 2026-10-25 — Restore AutoHit and Hitbox Extender
 
 - Restored the AutoHit implementation and its guard/weapon-profile support files from the last pre-cleanup revision.
