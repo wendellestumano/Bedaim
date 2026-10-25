@@ -344,6 +344,7 @@ void AimAssistModule::resetTrackingState() {
     m_targetPresent = false;
     m_lastTargetIsPlayer = false;
     m_cachedHeldWeaponCode = 0;
+    m_cachedHeldItemIdentifier.clear();
     m_cachedWeaponSlot = -1;
     m_nextHeldWeaponRefresh = {};
     m_weaponFilterAllowsCurrent = true;
