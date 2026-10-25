@@ -730,9 +730,14 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (selectedWeaponSlot != m_cachedWeaponSlot ||
         m_nextHeldWeaponRefresh.time_since_epoch().count() == 0 ||
         weaponCheckTime >= m_nextHeldWeaponRefresh) {
-        m_cachedHeldItemIdentifier = bedaim::autohit::weapon::normalizeIdentifier(
-            inventory.selectedHotbarIdentifier(player));
+        const std::string rawHeldItemIdentifier = inventory.selectedHotbarIdentifier(player);
+        m_cachedHeldItemIdentifier = bedaim::autohit::weapon::normalizeIdentifier(rawHeldItemIdentifier);
         m_cachedHeldWeaponCode = static_cast<int>(heldWeaponFromIdentifier(m_cachedHeldItemIdentifier));
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "custom_equipment_item",
+            m_cachedHeldItemIdentifier.empty() ? "identifier_unavailable" : "identifier_resolved",
+            "raw=" + (rawHeldItemIdentifier.empty() ? std::string("<empty>") : rawHeldItemIdentifier) +
+                "; normalized=" + (m_cachedHeldItemIdentifier.empty() ? std::string("<empty>") : m_cachedHeldItemIdentifier));
         m_cachedWeaponSlot = selectedWeaponSlot;
         m_nextHeldWeaponRefresh = weaponCheckTime + std::chrono::milliseconds(100);
     }
@@ -743,6 +748,12 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
             return profile.enabled && profile.identifier == m_cachedHeldItemIdentifier;
         });
     const bool customEquipmentAllowed = customEquipment != m_customEquipmentProfiles.end();
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "BedrockAim", "custom_equipment_match",
+        customEquipmentAllowed ? "profile_matched" : "no_profile_match",
+        "item=" + (m_cachedHeldItemIdentifier.empty() ? std::string("<empty>") : m_cachedHeldItemIdentifier) +
+            "; profiles=" + std::to_string(m_customEquipmentProfiles.size()) +
+            "; weapon_only=" + std::string(m_weaponOnly ? "true" : "false"));
     m_weaponFilterAllowsCurrent = !m_weaponOnly || customEquipmentAllowed ||
         weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
             m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee);
