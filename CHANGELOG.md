@@ -1,3 +1,8 @@
+## 2026-10-25 — Stabilize Hitbox Expander frame state
+
+- Keep the existing pre/post local-player tick handling and add a final reapplication after the original ClientInstance update, when the engine has had an opportunity to refresh other actors' native AABBs.
+- The frame callback runs only while Hitbox Expander is enabled and a local player can be resolved. This is a targeted stability experiment; CI and in-game validation are still required.
+
 ## 2026-10-25 — Restore AutoHit and Hitbox Extender
 
 - Restored the AutoHit implementation and its guard/weapon-profile support files from the last pre-cleanup revision.
