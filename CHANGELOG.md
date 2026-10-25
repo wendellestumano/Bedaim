@@ -1,3 +1,10 @@
+## 2026-10-25 — AutoHit category profiles and Aim Assist custom equipment
+
+- Added AutoHit category aliases such as `minecraft:sword`, `minecraft:axe`, and `minecraft:spear`; exact item profiles take precedence over category profiles.
+- Added an Aim Assist Custom Equipment section with per-item enable switch, aim-speed multiplier, and vertical aim point.
+- Custom equipment IDs are normalized and persisted in config, so identifiers such as `Minecraft:firework_rocket` can be added without hardcoding the item into the weapon catalog.
+- Added regression tests for category profile matching. CI and in-game verification are still required.
+
 ## 2026-10-25 — Restore AutoHit and Hitbox Extender
 
 - Restored the AutoHit implementation and its guard/weapon-profile support files from the last pre-cleanup revision.
