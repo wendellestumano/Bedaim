@@ -24,7 +24,7 @@ def parse_version(path: Path) -> dict[str, str]:
 def build_manifest(values: dict[str, str]) -> dict[str, object]:
     return {
         "type": "preload-native",
-        "name": " ",
+        "name": "ㅤ",
         "author": values["Author"],
         "description": values["Description"],
         "version": values["Version"],
