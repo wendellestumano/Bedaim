@@ -183,11 +183,15 @@ inline CustomProfile normalizeCustomProfile(CustomProfile profile) {
 inline bool matchesIdentifier(const CustomProfile& profile, std::string_view identifier) {
     const auto normalized = normalizeIdentifier(identifier);
     if (normalized.empty()) return false;
-    // Category aliases intentionally match every item classified in that family.
-    // Exact item profiles remain exact, and AutoHit resolves them before aliases.
-    if (profile.identifier == "minecraft:sword") return classify(normalized) == Class::Sword;
-    if (profile.identifier == "minecraft:axe") return classify(normalized) == Class::Axe;
-    if (profile.identifier == "minecraft:spear") return classify(normalized) == Class::Spear;
+    // A namespace item whose path is exactly its weapon-family name is a
+    // category alias (minecraft:sword, minecraft:axe, minecraft:bow, etc.).
+    // AutoHit checks exact IDs first, so the vanilla item itself keeps priority.
+    const Class profileClass = classify(profile.identifier);
+    const auto separator = profile.identifier.find(':');
+    if (separator != std::string::npos && profileClass != Class::Unsupported &&
+        profile.identifier.substr(separator + 1) == name(profileClass)) {
+        return classify(normalized) == profileClass;
+    }
     return profile.identifier == normalized;
 }
 
