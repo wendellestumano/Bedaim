@@ -57,6 +57,7 @@ int main() {
     using bedaim::autohit::weapon::normalizeBurstHits;
     using bedaim::autohit::weapon::normalizeCustomProfile;
     using bedaim::autohit::weapon::matchesIdentifier;
+    using bedaim::autohit::weapon::matchesNormalizedIdentifier;
     assert(normalizeIdentifier("  MACE  ") == "minecraft:mace");
     assert(normalizeIdentifier("item.minecraft.diamond_sword") == "minecraft:diamond_sword");
     assert(normalizeIdentifier("item.minecraft.mace") == "minecraft:mace");
