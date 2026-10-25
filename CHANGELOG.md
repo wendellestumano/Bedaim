@@ -1,3 +1,11 @@
+## 2026-10-24 — Make BedAim a standalone LeviPack
+
+- Give the native target, shared-library filename, exported API entry point, generated package, and artifact a BedAim-specific identity so BedAim can be installed separately from BedrockTools.
+- Remove the upstream BedrockTools module registrations from the launcher menu while retaining BedAim-added modules (Aim Assist, AutoHit, Hitbox Expander, Mace/Sword Swapper, Unglide, Game Mode Checker, Ultrakill HUD, ESP, diagnostics, and Swing Modifier).
+- Update the Levi mod metadata and build instructions for `BedAim.levipack`.
+- Keep the upstream-derived runtime/SDK source and GPL attribution; BedAim no longer depends on a separately installed `libBedrockTools.so`.
+- Validation pending: CI build and in-game launch are required before calling this migration complete.
+
 ## 2026-10-24 — Audit X-Ray / AlphaDepth pack integration
 - Inspected Connected Glass: its hooks only crop texture UVs for glass blocks/panes and do not switch block visibility or load AlphaDepth materials; it must not be repurposed as the X-Ray renderer.
 - Audited the supplied Outline X-Ray 1.0.6 pack: 54 alpha-enabled block textures, a compiled `RenderChunk.material.bin` containing `DepthOnlyOpaque`, 22 ore/ancient-debris block-shape mappings, and a declared patched Minecraft/BetterRenderDragon 1.26.51+ requirement.

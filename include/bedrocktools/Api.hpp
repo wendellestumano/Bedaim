@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bedrocktools/Export.hpp>
+#include <bedrocktools/Version.hpp>
 #include <bedrocktools/events/Events.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <cstddef>
@@ -34,9 +35,9 @@ inline std::uintptr_t resolve(memory::SignatureId id, const ApiV1* runtime) {
 using GetApiFunction = const ApiV1*(*)(std::uint32_t version);
 
 inline const ApiV1* find(std::uint32_t version = AbiVersion) {
-    void* handle = dlopen("libBedrockTools.so", RTLD_NOW | RTLD_NOLOAD);
+    void* handle = dlopen(RuntimeLibrary.data(), RTLD_NOW | RTLD_NOLOAD);
     if (!handle) return nullptr;
-    auto getter = reinterpret_cast<GetApiFunction>(dlsym(handle, "BedrockTools_GetApi"));
+    auto getter = reinterpret_cast<GetApiFunction>(dlsym(handle, "BedAim_GetApi"));
     const ApiV1* result = getter ? getter(version) : nullptr;
     dlclose(handle);
     return compatible(result) ? result : nullptr;
@@ -44,4 +45,4 @@ inline const ApiV1* find(std::uint32_t version = AbiVersion) {
 
 }
 
-extern "C" BEDROCKTOOLS_API const bedrocktools::api::ApiV1* BedrockTools_GetApi(std::uint32_t version);
+extern "C" BEDROCKTOOLS_API const bedrocktools::api::ApiV1* BedAim_GetApi(std::uint32_t version);

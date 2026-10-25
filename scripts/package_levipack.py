@@ -28,7 +28,7 @@ def build_manifest(values: dict[str, str]) -> dict[str, object]:
         "author": values["Author"],
         "description": values["Description"],
         "version": values["Version"],
-        "entry": "libBedrockTools.so",
+        "entry": "libBedAim.so",
         "icon": "icon.png",
         "overwrite_files": ["icon.png", "resources/minecraft.ttf"],
         "overwrite_folders": [],
@@ -53,19 +53,19 @@ def write_package(library: Path, icon: Path, font: Path, version_header: Path, o
     manifest_bytes = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         archive.writestr("manifest.json", manifest_bytes)
-        archive.write(library, "libBedrockTools.so")
+        archive.write(library, "libBedAim.so")
         archive.write(icon, "icon.png")
         archive.write(font, "resources/minecraft.ttf")
 
     with zipfile.ZipFile(output, "r") as archive:
         names = set(archive.namelist())
-        expected = {"manifest.json", "libBedrockTools.so", "icon.png", "resources/minecraft.ttf"}
+        expected = {"manifest.json", "libBedAim.so", "icon.png", "resources/minecraft.ttf"}
         if names != expected:
             raise RuntimeError(f"Unexpected package entries: {sorted(names)}")
         parsed = json.loads(archive.read("manifest.json"))
         if parsed != manifest:
             raise RuntimeError("Manifest verification failed")
-        if archive.getinfo("libBedrockTools.so").file_size != library.stat().st_size:
+        if archive.getinfo("libBedAim.so").file_size != library.stat().st_size:
             raise RuntimeError("Library verification failed")
         if archive.getinfo("icon.png").file_size != icon.stat().st_size:
             raise RuntimeError("Icon verification failed")
