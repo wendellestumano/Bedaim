@@ -103,7 +103,8 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
         .category("aim", "Aim", "Rotation, behavior and tracking profile")
         .category("targeting", "Targeting", "Target selection and visibility")
         .category("hitbox", "Hitbox", "Virtual hitbox area used for steering")
-        .category("weapons", "Weapons", "Item filters")
+        .category("weapons", "Weapons", "Item filters and per-equipment profiles")
+        .category("custom_equipment", "Custom Equipment", "Independent settings for exact item identifiers")
         .category("special", "Special", "Elytra and jump behavior");
 
     auto addNode = [&](const std::string& key, const std::string& title,
@@ -254,6 +255,86 @@ static void registerAimAssistConfigSchema(std::string_view moduleId,
            "Aim-speed multiplier while a spear is held.");
     slider("m_otherMeleeAimMultiplier", "Other melee aim profile", "weapons", "0.2", "10", "0.1", "x",
            "Aim-speed multiplier while another melee weapon is held.");
+
+    addNode("m_customEquipmentIdentifier", "Custom item identifier", "custom_equipment",
+            ConfigControlTypeV2::Text, "", "", "", "",
+            "Enter an exact Bedrock item ID such as minecraft:firework_rocket. Each added item gets independent Aim Multiplier and Aim Point Y settings.",
+            false, {}, ConfigChoiceStyleV2::Auto);
+    addNode("m_addCustomEquipmentButton", "Add custom equipment profile", "custom_equipment",
+            ConfigControlTypeV2::Button, "", "", "", "",
+            "Create a profile for the item identifier above. Existing IDs are not duplicated.",
+            false, {}, ConfigChoiceStyleV2::Auto);
+    if (config.contains("m_customEquipmentProfiles") && config["m_customEquipmentProfiles"].is_array()) {
+        const auto& customProfiles = config["m_customEquipmentProfiles"];
+        for (std::size_t i = 0; i < customProfiles.size() && i < 64; ++i) {
+            const auto& profile = customProfiles[i];
+            if (!profile.is_object()) continue;
+            const std::string identifier = profile.value("identifier", std::string{});
+            if (identifier.empty()) continue;
+            const std::string index = std::to_string(i);
+            ConfigNodeV2 section;
+            section.id = "m_customEquipmentSection_" + index;
+            section.title = identifier + " — Custom Equipment Profile";
+            section.description = "Exact item ID; only this held item uses these overrides.";
+            section.category = "custom_equipment";
+            section.type = ConfigControlTypeV2::Section;
+            schema.node(std::move(section));
+
+            ConfigNodeV2 enabledNode;
+            enabledNode.id = "m_customEquipmentEnabled_" + index;
+            enabledNode.key = enabledNode.id;
+            enabledNode.title = "Enable: " + identifier;
+            enabledNode.description = "Allow this custom item through the weapon filter and apply its profile.";
+            enabledNode.category = "custom_equipment";
+            enabledNode.type = ConfigControlTypeV2::Toggle;
+            enabledNode.defaultValue = "true";
+            enabledNode.currentValue = profile.value("enabled", true) ? "true" : "false";
+            enabledNode.hasCurrentValue = true;
+            schema.node(std::move(enabledNode));
+
+            ConfigNodeV2 multiplierNode;
+            multiplierNode.id = "m_customEquipmentMultiplier_" + index;
+            multiplierNode.key = multiplierNode.id;
+            multiplierNode.title = identifier + " > Aim Multiplier";
+            multiplierNode.description = "Per-item multiplier applied to Aim Assist speed.";
+            multiplierNode.category = "custom_equipment";
+            multiplierNode.type = ConfigControlTypeV2::SliderFloat;
+            multiplierNode.defaultValue = "1.0";
+            multiplierNode.currentValue = std::to_string(profile.value("aimMultiplier", 1.0f));
+            multiplierNode.hasCurrentValue = true;
+            multiplierNode.minValue = "0.2";
+            multiplierNode.maxValue = "10";
+            multiplierNode.step = "0.1";
+            multiplierNode.unit = "x";
+            schema.node(std::move(multiplierNode));
+
+            ConfigNodeV2 pointNode;
+            pointNode.id = "m_customEquipmentPointY_" + index;
+            pointNode.key = pointNode.id;
+            pointNode.title = identifier + " > Aim Point Y";
+            pointNode.description = "Vertical aim point: 0.05 near feet, 0.95 near head.";
+            pointNode.category = "custom_equipment";
+            pointNode.type = ConfigControlTypeV2::SliderFloat;
+            pointNode.defaultValue = "0.55";
+            pointNode.currentValue = std::to_string(profile.value("aimPointY", 0.55f));
+            pointNode.hasCurrentValue = true;
+            pointNode.minValue = "0.05";
+            pointNode.maxValue = "0.95";
+            pointNode.step = "0.05";
+            pointNode.unit = "Y";
+            schema.node(std::move(pointNode));
+
+            ConfigNodeV2 deleteNode;
+            deleteNode.id = "m_customEquipmentDelete_" + index;
+            deleteNode.key = deleteNode.id;
+            deleteNode.title = "Delete profile: " + identifier;
+            deleteNode.description = "Remove this custom equipment profile.";
+            deleteNode.category = "custom_equipment";
+            deleteNode.type = ConfigControlTypeV2::Button;
+            deleteNode.actionValue = "delete";
+            schema.node(std::move(deleteNode));
+        }
+    }
 
     toggle("m_naturalization", "Naturalize jumps", "special",
            "Temporarily reduce pitch correction during a jump.");
