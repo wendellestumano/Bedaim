@@ -1644,6 +1644,16 @@ void HitboxExpanderModule::onInit() {
             [](auto& event) {
                 if (g_hitboxExpander) g_hitboxExpander->processPostTick(event.player);
             });
+        // Actor bounds can be recalculated by the engine after the local-player tick,
+        // particularly when other actors update later in the same client frame. Reapply
+        // once after ClientInstance::update so the final pre-render state stays expanded.
+        bedrocktools::events::bus().subscribe<bedrocktools::events::ClientInstanceUpdateEvent>(
+            [](auto& event) {
+                auto* module = g_hitboxExpander;
+                if (!module || !module->enabled || !event.clientInstance) return;
+                auto* player = event.clientInstance->localPlayer();
+                if (player) module->processPostTick(player);
+            });
     });
 }
 
