@@ -96,6 +96,10 @@ int main() {
     allAxes = normalizeCustomProfile(std::move(allAxes));
     assert(matchesIdentifier(allAxes, "minecraft:netherite_axe"));
     assert(!matchesIdentifier(allAxes, "minecraft:diamond_sword"));
+    CustomProfile allBows{.identifier = "minecraft:bow", .enabled = true};
+    allBows = normalizeCustomProfile(std::move(allBows));
+    assert(matchesIdentifier(allBows, "myaddon:longbow"));
+    assert(!matchesIdentifier(allBows, "minecraft:diamond_sword"));
     assert(!matchesIdentifier(custom, ""));
 
     return 0;
