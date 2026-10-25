@@ -153,7 +153,7 @@ static bool validRenderBounds(const AABB& b) {
         b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
 }
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
- espLoggedColor{false},espLoggedQuery{false},espLoggedEmptyActors{false},
+ espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
  espLoggedBounds{false},espLoggedOutline{false};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
