@@ -1,7 +1,6 @@
 #include "esp.hpp"
 #include "hitbox.hpp"
 #include "../ModuleRegistry.hpp"
-#include "../player/aimassist.hpp"
 #include "core/Diagnostics.hpp"
 #include <pl/ModMenu.hpp>
 #include <algorithm>
