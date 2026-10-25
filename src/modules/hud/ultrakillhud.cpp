@@ -240,13 +240,23 @@ void UltrakillHudModule::onFrame() {
     Clock::time_point flashStarted{};
     float impactFallSpeed = 0.0f;
     bool flashActive = false;
+    bool hitStopHolding = false;
+    bool hitStopEnabled = false;
+    int hitStopDurationMs = 400;
     std::string selectedItemId;
 
     {
         std::lock_guard lock(m_stateMutex);
         selectedItemId = m_selectedItemId;
+        hitStopEnabled = m_enableHitStop;
+        hitStopDurationMs = std::clamp(m_hitStopDurationMs, 250, 750);
+        hitStopHolding = hitStopEnabled &&
+            (m_hitStopPending ||
+             (m_hitStopUntil.time_since_epoch().count() != 0 && now < m_hitStopUntil));
 
-        if (m_flashActive && now - m_flashStarted >= std::chrono::milliseconds(250)) {
+        const auto flashDuration = std::chrono::milliseconds(
+            hitStopEnabled ? hitStopDurationMs : 250);
+        if (m_flashActive && now - m_flashStarted >= flashDuration) {
             m_flashActive = false;
         }
         if (m_lastConfirmedHit.time_since_epoch().count() != 0 &&
@@ -278,8 +288,12 @@ void UltrakillHudModule::onFrame() {
     const float hitAge = flashActive
         ? std::chrono::duration<float>(now - flashStarted).count()
         : 100.0f;
-    const bool impactVisible = flashActive && hitAge >= 0.0f && hitAge < 0.25f;
-    const float impactProgress = impactVisible ? clamp01(1.0f - hitAge / 0.25f) : 0.0f;
+    const float flashDurationSeconds =
+        static_cast<float>(hitStopEnabled ? hitStopDurationMs : 250) / 1000.0f;
+    const bool impactVisible = flashActive && hitAge >= 0.0f &&
+        hitAge < flashDurationSeconds;
+    const float impactProgress = impactVisible
+        ? clamp01(1.0f - hitAge / flashDurationSeconds) : 0.0f;
 
     float shakeX = 0.0f;
     float shakeY = 0.0f;
@@ -342,7 +356,10 @@ void UltrakillHudModule::onFrame() {
     // Pure-white ULTRAKILL impact flash. The first frame is rendered before the
     // frame listener holds subsequent swaps for the configured duration.
     if (m_enableParryFlash && impactVisible) {
-        const float fade = std::exp(-std::max(0.0f, hitAge) / 0.052f);
+        // Keep the first submitted flash fully white while the frame hold is active.
+        // Fade only after the configured hit-stop window has elapsed.
+        const float fade = hitStopHolding
+            ? 1.0f : std::exp(-std::max(0.0f, hitAge) / 0.052f);
         const int baseAlpha = 255;
         const int alpha = static_cast<int>(static_cast<float>(baseAlpha) * fade);
         if (alpha >= 5) addRect(0.0f, 0.0f, screenW, screenH, withAlpha(kWhite, alpha));
