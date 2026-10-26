@@ -73,3 +73,10 @@ target("xray_block_policy_test")
     add_files("launcher/xray_block_policy_test.cpp")
     add_includedirs("../src")
 target_end()
+
+
+target("elytramacing_policy_test")
+    set_kind("binary")
+    add_files("launcher/elytramacing_policy_test.cpp")
+    add_includedirs("../src")
+target_end()
