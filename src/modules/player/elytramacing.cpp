@@ -722,6 +722,14 @@ void ElytraMacingModule::loadConfig(const nlohmann::json& j) {
     m_startGlideKeymapUid = j.value("m_startGlideKeymapUid", m_startGlideKeymapUid);
     m_fireworkKeymapUid = j.value("m_fireworkKeymapUid", m_fireworkKeymapUid);
     m_lookUpKeymapUid = j.value("m_lookUpKeymapUid", m_lookUpKeymapUid);
+    // Migrate earlier configs that stored empty values before these device UIDs
+    // were supplied. Explicit non-empty user values remain untouched.
+    if (m_startGlideKeymapUid.empty())
+        m_startGlideKeymapUid = "587f1cfd-e4cf-475c-b868-08d15f55f649";
+    if (m_fireworkKeymapUid.empty())
+        m_fireworkKeymapUid = "29bcde0c-ab40-4e6e-91e4-27cc373c3709";
+    if (m_lookUpKeymapUid.empty())
+        m_lookUpKeymapUid = "894975b5-38a1-4072-8964-6b83c0ae6f61";
     m_unglideKeymapUid = j.value("m_unglideKeymapUid", m_unglideKeymapUid);
     if (!validUid(m_startGlideKeymapUid)) m_startGlideKeymapUid.clear();
     if (!validUid(m_fireworkKeymapUid)) m_fireworkKeymapUid.clear();
@@ -773,11 +781,11 @@ void ElytraMacingModule::onMenuRegistered() {
             .description("Paste the UUID of each Key Mapper keymap. Empty UIDs disable that action.")
             .defaultEnabled(true)
             .config("m_startGlideKeymapUid", "Start glide keymap UID (double jump)", ConfigType::Text,
-                    value("m_startGlideKeymapUid", ""))
+                    value("m_startGlideKeymapUid", "587f1cfd-e4cf-475c-b868-08d15f55f649"))
             .config("m_fireworkKeymapUid", "Firework use keymap UID", ConfigType::Text,
-                    value("m_fireworkKeymapUid", ""))
+                    value("m_fireworkKeymapUid", "29bcde0c-ab40-4e6e-91e4-27cc373c3709"))
             .config("m_lookUpKeymapUid", "Recovery look-up keymap UID", ConfigType::Text,
-                    value("m_lookUpKeymapUid", ""))
+                    value("m_lookUpKeymapUid", "894975b5-38a1-4072-8964-6b83c0ae6f61"))
             .config("m_unglideKeymapUid", "Stop gliding keymap UID", ConfigType::Text,
                     value("m_unglideKeymapUid", "e2225852-1df2-4232-bb26-606f11fc8745"))
             .onConfigChanged([this](std::string_view, std::string_view key, std::string_view item) {
