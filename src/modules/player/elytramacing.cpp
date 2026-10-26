@@ -600,6 +600,22 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         return;
     }
 
+    // Recovery boosts must not depend on the Aim Assist target snapshot being
+    // immediately available: the look-up macro can temporarily move the ray off
+    // target. Once glide state is actually confirmed, spend the recovery rocket,
+    // then let Aim Assist reacquire the player on the following ticks.
+    if (gliding && m_boostImmediatelyAfterGlide && now >= m_nextRocket) {
+        if (selectManagedItemLocked(player, "firework_rocket")) {
+            if (requestKeymapLocked(Action::Firework, m_fireworkKeymapUid, now)) {
+                m_boostImmediatelyAfterGlide = false;
+                note("rocket", "recovery_boost_requested",
+                     "Boost fired after confirmed glide; target reacquisition can continue afterward.");
+                return;
+            }
+        }
+        m_nextRocket = now + 1000ms;
+    }
+
     // When no launch is in progress, a falling player gets one start-glide attempt
     // before target-dependent chase/attack decisions are considered.
     if (!gliding && bedaim::elytramacing::shouldRequestGlide(
@@ -616,7 +632,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     }
 
     if (!targetValid) {
-        if (m_phase == Phase::Chase && m_slotOwned)
+        if (m_phase == Phase::Chase && m_slotOwned && !m_boostImmediatelyAfterGlide)
             cleanupManagedSlotLocked(player);
         return;
     }
@@ -629,17 +645,6 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
             note("mace_window", "rearm_allowed",
                  "Target separation/hysteresis permits another approach.");
         }
-    }
-
-    if (gliding && m_boostImmediatelyAfterGlide && now >= m_nextRocket) {
-        if (selectManagedItemLocked(player, "firework_rocket")) {
-            if (requestKeymapLocked(Action::Firework, m_fireworkKeymapUid, now)) {
-                m_boostImmediatelyAfterGlide = false;
-                note("rocket", "recovery_boost_requested");
-                return;
-            }
-        }
-        m_nextRocket = now + 1000ms;
     }
 
     if (gliding && bedaim::elytramacing::shouldBoostTowardTarget(
