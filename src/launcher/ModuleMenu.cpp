@@ -538,6 +538,8 @@ private:
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Mace Swapper" ||
                            entry.first == "bedrocktools.Auto Hit" ||
+                           entry.first == "bedrocktools.Unglide" ||
+                           entry.first == "bedrocktools.ElytraMacing" ||
                            entry.first == "bedrocktools.ESP") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
@@ -566,6 +568,7 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                  mod->moduleId != "bedrocktools.Mace Swapper" &&
                  mod->moduleId != "bedrocktools.Auto Hit" &&
                  mod->moduleId != "bedrocktools.Unglide" &&
+                 mod->moduleId != "bedrocktools.ElytraMacing" &&
                  mod->moduleId != "bedrocktools.ESP" &&
                  mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
                  mod->moduleId != "bedrocktools.Module Diagnostics")) return;
