@@ -16,6 +16,9 @@ public:
     AutoHitModule();
 
     void onInit() override;
+    // Lets coordinated combat modules verify that the exact held item is enabled
+    // in AutoHit's persisted profile list before entering an attack window.
+    bool hasEnabledProfileFor(std::string_view identifier);
     void onEnable() override;
     void onDisable() override;
     bool onMouseEvent(int button, bool isDown) override;
