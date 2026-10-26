@@ -97,6 +97,7 @@ private:
         "e2225852-1df2-4232-bb26-606f11fc8745";
 
     float m_engageDistance = 4.5f;
+    float m_approachAimOffsetY = 2.5f;
     float m_windBurstRiseThreshold = 0.08f;
     int m_rocketIntervalMs = 250;
     int m_recoveryLookUpWaitMs = 300;
