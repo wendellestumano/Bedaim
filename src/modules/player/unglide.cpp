@@ -377,7 +377,9 @@ std::optional<bool> playerIsGlidingForUnglide(void* player) {
 
 }
 
-
+std::optional<bool> UnglideModule::queryGlidingState(void* player) {
+    return playerIsGlidingForUnglide(player);
+}
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
