@@ -646,14 +646,17 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         m_nextRocket = now + 1000ms;
     }
 
-    const bool autoHitReady = [&]() {
-        auto* base = ModuleRegistry::get().find("bedrocktools.Auto Hit");
-        return base && base->enabled;
-    }();
+    auto* autoHitBase = ModuleRegistry::get().find("bedrocktools.Auto Hit");
+    auto* autoHit = autoHitBase ? static_cast<AutoHitModule*>(autoHitBase) : nullptr;
+    const bool autoHitReady = autoHit && autoHit->enabled &&
+        autoHit->hasEnabledProfileFor("minecraft:mace");
     const bool crosshairConfirmed = targetValid &&
         aim->currentTargetInCrosshair(player, target, 0.22f);
     const int maceSlot = bedrocktools::core::InventoryAccess::get().findHotbarSlot(player, "mace");
     const bool maceAvailable = maceSlot >= 0 && autoHitReady;
+    if (maceSlot >= 0 && !autoHitReady)
+        note("dependency", "mace_profile_disabled",
+             "Enable the minecraft:mace profile in AutoHit before ElytraMacing stops gliding.");
 
     if (bedaim::elytramacing::shouldDisengageForMace(
             true, gliding, targetValid && crosshairConfirmed,
