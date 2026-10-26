@@ -15,9 +15,9 @@ ElytraMacing is a new controller module, not a wrapper around the previous Mace 
 
 Open **ElytraMacing Keymapper UIDs** in the Bedaim settings page and paste the UUIDs of these keymaps:
 
-- **Start glide keymap**: a macro that taps Jump twice with a short release interval, to attempt to start Elytra gliding.
-- **Firework use keymap**: activates/uses the selected hotbar item once. ElytraMacing selects a hotbar slot containing `firework_rocket` first.
-- **Recovery look-up keymap**: a short upward camera swipe. During this action Aim Assist can be temporarily suspended so it does not immediately countersteer the swipe.
+- **Start glide keymap**: `587f1cfd-e4cf-475c-b868-08d15f55f649` — a macro that taps Jump twice with a short release interval.
+- **Firework use keymap**: `29bcde0c-ab40-4e6e-91e4-27cc373c3709` — activates/uses the selected hotbar item once. ElytraMacing selects a hotbar slot containing `firework_rocket` first.
+- **Recovery look-up keymap**: `894975b5-38a1-4072-8964-6b83c0ae6f61` — a short upward camera swipe. During this action Aim Assist can be temporarily suspended so it does not immediately countersteer the swipe.
 - **Stop gliding keymap**: a keymap that taps the user's chosen glide-stop/Space input. Its default UUID is the previously configured Unglide UID `e2225852-1df2-4232-bb26-606f11fc8745`; replace it if that keymap differs on the device.
 
 Empty UIDs disable their associated actions. The controller will not guess keymap identifiers. A Key Mapper broadcast being accepted is not proof that the key sequence ran or that the Minecraft state changed; the runtime checks gliding and height changes separately.
