@@ -27,6 +27,18 @@ int main() {
     check(normalizeEngageDistance(std::numeric_limits<float>::quiet_NaN()) == 4.5f,
           "non-finite engagement distance falls back to safe default");
 
+    using bedaim::elytramacing::shouldAimAboveTarget;
+    check(shouldAimAboveTarget(true, true, true, 8.0f, 4.5f, true),
+          "gliding chase aims above a distant target");
+    check(!shouldAimAboveTarget(true, false, true, 8.0f, 4.5f, true),
+          "no approach offset while not gliding");
+    check(!shouldAimAboveTarget(true, true, false, 8.0f, 4.5f, true),
+          "no approach offset without a valid target");
+    check(!shouldAimAboveTarget(true, true, true, 4.5f, 4.5f, true),
+          "approach offset resets at the engagement boundary");
+    check(!shouldAimAboveTarget(true, true, true, 8.0f, 4.5f, false),
+          "approach offset is disabled outside the chase phase");
+
     check(shouldBoostTowardTarget(true, true, true, 8.0f, 4.5f, true),
           "gliding player boosts toward a valid distant target");
     check(!shouldBoostTowardTarget(true, false, true, 8.0f, 4.5f, true),
