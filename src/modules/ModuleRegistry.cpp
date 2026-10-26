@@ -5,6 +5,7 @@
 #include "player/autohit.hpp"
 #include "player/maceswapper.hpp"
 #include "player/unglide.hpp"
+#include "player/elytramacing.hpp"
 #include "player/swordswapper.hpp"
 #include "visual/esp.hpp"
 #include "hud/ultrakillhud.hpp"
@@ -69,4 +70,5 @@ void registerAllModules() {
     registry.emplace<EspModule>();
     registry.emplace<UltrakillHudModule>();
     registry.emplace<ModuleDiagnosticsModule>();
+    registry.emplace<ElytraMacingModule>();
 }
