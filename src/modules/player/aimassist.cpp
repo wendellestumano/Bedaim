@@ -421,12 +421,14 @@ void AimAssistModule::onInit() {
 
 void AimAssistModule::onEnable() {
     m_externalControlSuspended.store(false, std::memory_order_release);
+    m_externalAimOffsetY.store(0.0f, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
 void AimAssistModule::onDisable() {
     m_externalControlSuspended.store(false, std::memory_order_release);
+    m_externalAimOffsetY.store(0.0f, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
@@ -1147,6 +1149,11 @@ void AimAssistModule::setExternalControlSuspended(bool suspended) noexcept {
     m_externalControlSuspended.store(suspended, std::memory_order_release);
 }
 
+void AimAssistModule::setExternalAimOffsetY(float blocks) noexcept {
+    const float safeOffset = std::isfinite(blocks) ? std::clamp(blocks, 0.0f, 8.0f) : 0.0f;
+    m_externalAimOffsetY.store(safeOffset, std::memory_order_release);
+}
+
 void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     auto* player = m_lastPlayer;
@@ -1435,7 +1442,11 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     m_lastAimPoint.z = std::clamp(m_lastAimPoint.z, targetAimBounds.min.z, targetAimBounds.max.z);
 
     const float aimDx = m_lastAimPoint.x - eyePosition.x;
-    const float aimDy = m_lastAimPoint.y - eyePosition.y;
+    // The temporary ElytraMacing offset changes only camera steering, not the
+    // real target bounds or hit point. It is reset when the approach ends.
+    const float approachAimOffsetY = std::clamp(
+        m_externalAimOffsetY.load(std::memory_order_acquire), 0.0f, 8.0f);
+    const float aimDy = m_lastAimPoint.y + approachAimOffsetY - eyePosition.y;
     const float aimDz = m_lastAimPoint.z - eyePosition.z;
     const float aimHorizontal = std::sqrt(aimDx * aimDx + aimDz * aimDz);
     const float desiredYaw = std::atan2(-aimDx, aimDz) * kRadToDeg;
