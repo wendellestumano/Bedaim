@@ -5,7 +5,7 @@
 ElytraMacing is a new controller module, not a wrapper around the previous Mace Swapper implementation.
 
 1. It requires Aim Assist to be enabled and uses its fresh player-target snapshot and gliding-state query.
-2. When gliding and farther than the configured engagement distance, it selects a firework rocket from the hotbar and triggers the configured Firework Key Mapper keymap at a bounded interval.
+2. When gliding and farther than the configured engagement distance, it temporarily aims above the target using the configurable world-space offset, selects a firework rocket from the hotbar, and triggers the configured Firework Key Mapper keymap at a bounded interval. The offset returns to zero outside the chase phase so normal target aiming/AutoHit can take over.
 3. If falling and not gliding, it requests the configured Start Glide keymap. That keymap should contain the user's two-jump Elytra activation sequence. The controller checks the real gliding state before requesting the recovery boost.
 4. When a player target is close, Aim Assist confirms the target in the crosshair, a mace is in the hotbar, AutoHit is enabled, and the exact `minecraft:mace` AutoHit profile is enabled, it selects the mace and triggers the Stop Gliding keymap. AutoHit remains responsible for attack input and its existing target/range checks.
 5. The controller watches player-height changes during the attack window. A detected upward impulse requests re-gliding and then a rapid firework boost.
@@ -27,7 +27,7 @@ Empty UIDs disable their associated actions. The controller will not guess keyma
 - Enable Aim Assist and AutoHit. Raise Aim Assist's target range enough to acquire the player during the rocket approach; the controller can only use the target Aim Assist currently exposes.
 - Enable the `minecraft:mace` profile in AutoHit and keep the mace and firework rockets in the hotbar.
 - Disable the older Mace Swapper while validating ElytraMacing, so two independent systems do not attempt to schedule the same mace attack.
-- The controller only engages player targets, only stops gliding after its range/crosshair/item/profile gates pass, and bounds glide retries and rocket cadence.
+- The controller only engages player targets, only stops gliding after its range/crosshair/item/profile gates pass, bounds glide retries and rocket cadence, and resets the temporary above-target aim offset before the mace engagement window.
 - Slot restoration is conditional: on disable it restores the prior slot only if the currently selected slot is still the slot ElytraMacing last selected. If the user manually changes slots, that selection is preserved.
 - Recovery is heuristic. Stationary ticks after a fall are used as a landing signal; they are not a native ground-contact API. Wind Burst is inferred from an upward position delta during the attack window; neither signal alone proves that the mace hit registered.
 
