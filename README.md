@@ -40,3 +40,9 @@ The Android release build creates `libBedrockTools.so` and `Bedaim.levipack`. Th
 ## License and credits
 
 The repository includes upstream BedrockTools SDK/runtime components. Respect the licenses and credits of retained upstream code and follow Minecraft and LeviLauncher terms.
+
+## Experimental ElytraMacing test branch
+
+The `feat/elytramacing-from-scratch-20261026` branch contains an experimental ElytraMacing state machine and its Unglide/Key Mapper integration. Keep this branch separate from `main` until the Android ARM64 build and in-game tests are complete.
+
+Before testing, configure the Key Mapper keymaps for start-glide (double jump), firework use, and recovery look-up; the stop-glide action uses the existing Unglide keymap by default. Test in a disposable world and verify each action independently: rocket use while gliding, glide start while falling, target-range mace/stop-glide transition, and recovery after Wind Burst or landing. A successful CI build confirms compilation and host policy tests only; it does not confirm that Android broadcasts or the full combat sequence work in-game.
