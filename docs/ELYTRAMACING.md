@@ -13,7 +13,7 @@ ElytraMacing is a new controller module, not a wrapper around the previous Mace 
 
 ## Key Mapper setup
 
-Open **ElytraMacing Keymapper UIDs** in the Bedaim settings page and paste the UUIDs of these keymaps:
+Open the **ElytraMacing** module settings page and set the four Key Mapper UID fields under Flight and Recovery:
 
 - **Start glide keymap**: `587f1cfd-e4cf-475c-b868-08d15f55f649` — a macro that taps Jump twice with a short release interval.
 - **Firework use keymap**: `29bcde0c-ab40-4e6e-91e4-27cc373c3709` — activates/uses the selected hotbar item once. ElytraMacing selects a hotbar slot containing `firework_rocket` first.
