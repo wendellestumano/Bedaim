@@ -3,7 +3,7 @@
 #include "ElytraMacingPolicy.hpp"
 #include "aimassist.hpp"
 #include "autohit.hpp"
-#include "../../core/ConfigManager.hpp"
+#include "../../config/ConfigManager.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/InventoryAccess.hpp"
 #include "../../core/KeyMapperBridge.hpp"
@@ -275,8 +275,8 @@ bool ElytraMacingModule::requestKeymapLocked(
                         m_nextRocket = finishedAt + std::chrono::milliseconds(750);
                     if (action == Action::StartGlide)
                         m_nextGlideAttempt = finishedAt + std::chrono::milliseconds(800);
-                    if (action == Action::LookUp)
-                        m_recoveryLookUpSent = false;
+                    // Keep the failed lookup marked as completed; the recovery phase
+                    // will skip the camera action and continue to the double-jump attempt.
                 } else if (action == Action::Firework) {
                     m_nextRocket = finishedAt +
                         std::chrono::milliseconds(std::clamp(m_rocketIntervalMs, 100, 1000));
@@ -317,7 +317,9 @@ void ElytraMacingModule::startRecoveryGlideLocked(Clock::time_point now) {
     m_phase = Phase::RecoveryGlide;
     m_phaseStarted = now;
     m_recoveryGlideRequested = false;
-    if (!m_dispatchInProgress && !m_startGlideKeymapUid.empty()) {
+    if (m_startGlideKeymapUid.empty()) {
+        m_recoveryGlideAttempts = 2;
+    } else if (!m_dispatchInProgress) {
         m_recoveryGlideRequested = requestKeymapLocked(
             Action::StartGlide, m_startGlideKeymapUid, now);
         if (m_recoveryGlideRequested) ++m_recoveryGlideAttempts;
@@ -477,32 +479,28 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     }
 
     if (m_phase == Phase::RecoveryLookUp) {
-        if (!m_lookUpKeymapUid.empty()) {
-            if (!m_recoveryLookUpSent && !m_dispatchInProgress) {
-                m_recoveryLookUpSent = requestKeymapLocked(
-                    Action::LookUp, m_lookUpKeymapUid, now);
-                if (m_recoveryLookUpSent) return;
-                // A missing/invalid lookup UID should not block the double-jump attempt.
-                startRecoveryGlideLocked(now);
-                return;
-            }
-            if (m_dispatchInProgress) return;
-            if (m_lastCompletedAction == Action::LookUp &&
-                !m_lastDispatchSucceeded) {
-                startRecoveryGlideLocked(now);
-                return;
-            }
-            if (m_recoveryLookUpSent &&
-                m_lastCompletedAction == Action::LookUp &&
-                m_lastDispatchSucceeded &&
+        if (m_lookUpKeymapUid.empty()) {
+            startRecoveryGlideLocked(now);
+            return;
+        }
+        if (m_dispatchInProgress) return;
+        if (m_recoveryLookUpSent && m_lastCompletedAction == Action::LookUp) {
+            if (!m_lastDispatchSucceeded ||
                 now - m_dispatchCompletedAt >=
                     std::chrono::milliseconds(std::clamp(m_recoveryLookUpWaitMs, 100, 1000))) {
                 startRecoveryGlideLocked(now);
-                return;
             }
             return;
         }
-        startRecoveryGlideLocked(now);
+        if (!m_recoveryLookUpSent) {
+            m_recoveryLookUpSent = requestKeymapLocked(
+                Action::LookUp, m_lookUpKeymapUid, now);
+            if (!m_recoveryLookUpSent) {
+                // A failed camera macro must not block the double-jump recovery.
+                startRecoveryGlideLocked(now);
+            }
+            return;
+        }
         return;
     }
 
@@ -516,17 +514,36 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
             m_nextRocket = now;
             m_sawFallDuringAttack = false;
             m_stationaryTicks = 0;
+            if (!targetValid) setAimSuspendedLocked(false);
             note("recovery", "glide_confirmed", "Recovery rocket is now eligible.");
             return;
         }
+
+        if (!m_dispatchInProgress && m_recoveryGlideRequested &&
+            m_lastCompletedAction == Action::StartGlide &&
+            now - m_dispatchCompletedAt >= 900ms) {
+            if (m_recoveryGlideAttempts < 2) {
+                m_recoveryGlideRequested = false;
+                m_phaseStarted = now;
+            } else {
+                setAimSuspendedLocked(false);
+                m_phase = Phase::Chase;
+                m_nextGlideAttempt = now + 900ms;
+                note("recovery", "glide_not_confirmed",
+                     "Bounded recovery attempts exhausted; regular fall detection may retry.");
+                return;
+            }
+        }
+
         if (!m_dispatchInProgress && !m_recoveryGlideRequested &&
-            m_recoveryGlideAttempts < 2 &&
-            now - m_phaseStarted >= 900ms) {
+            m_recoveryGlideAttempts < 2 && now - m_phaseStarted >= 100ms) {
             m_recoveryGlideRequested = requestKeymapLocked(
                 Action::StartGlide, m_startGlideKeymapUid, now);
             if (m_recoveryGlideRequested) {
                 ++m_recoveryGlideAttempts;
                 m_phaseStarted = now;
+            } else if (m_startGlideKeymapUid.empty()) {
+                m_recoveryGlideAttempts = 2;
             }
             return;
         }
