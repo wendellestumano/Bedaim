@@ -26,7 +26,7 @@ public:
     void loadConfig(const nlohmann::json& json) override;
     void saveConfig(nlohmann::json& json) override;
 
-private:
+public:
     enum class Phase {
         Chase,
         AwaitingGlide,
@@ -43,6 +43,7 @@ private:
         LookUp
     };
 
+private:
     void processPlayerTick(bedrocktools::sdk::Player* player);
     bool requestKeymapLocked(Action action, const std::string& uid,
                              std::chrono::steady_clock::time_point now);
