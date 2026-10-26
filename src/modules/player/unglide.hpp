@@ -1,6 +1,7 @@
 #pragma once
 #include "../Module.hpp"
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -17,6 +18,7 @@ private:
  std::mutex m_stateMutex; std::chrono::steady_clock::time_point m_nextAttempt{},m_nextDiagnostic{};
  // Protects the state while the potentially blocking JNI broadcast runs without the mutex.
  bool m_dispatchInProgress=false;
+ std::uint64_t m_dispatchToken=0;
  int m_burstRemaining=0;
  enum class TriggerState { Idle, Tracking, Triggered };
  TriggerState m_triggerState=TriggerState::Idle;
