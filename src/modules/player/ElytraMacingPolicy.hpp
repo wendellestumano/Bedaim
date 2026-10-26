@@ -37,10 +37,15 @@ inline bool shouldDisengageForMace(bool enabled, bool gliding, bool targetValid,
     return targetDistance <= normalizeEngageDistance(engageDistance);
 }
 
-inline bool shouldRequestGlide(bool enabled, bool gliding, float verticalDelta,
-                               bool keymapAvailable, bool cooldownReady) noexcept {
+inline bool shouldRequestGlide(bool enabled, bool gliding, bool grounded,
+                               float verticalDelta, bool keymapAvailable,
+                               bool cooldownReady) noexcept {
+    // Start the flight sequence while grounded, so the configured keymap can
+    // perform the initial jump and second jump. If already airborne, only
+    // request recovery during a genuine fall; a level/upward airborne player
+    // must not trigger the launch macro at a Wind Burst apex.
     return enabled && !gliding && keymapAvailable && cooldownReady &&
-           std::isfinite(verticalDelta) && verticalDelta < -0.025f;
+           (grounded || (std::isfinite(verticalDelta) && verticalDelta < -0.025f));
 }
 
 inline bool detectedWindBurstRise(bool attackWindowActive, bool gliding,
