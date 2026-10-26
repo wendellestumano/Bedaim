@@ -143,6 +143,7 @@ void ElytraMacingModule::onEnable() {
     m_cycleTarget = nullptr;
     m_hasLastPlayerY = false;
     m_sawFallDuringAttack = false;
+    m_sawUpwardMotionDuringAttack = false;
     m_stationaryTicks = 0;
     m_glideAttempts = 0;
     m_recoveryGlideAttempts = 0;
@@ -356,6 +357,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         m_cycleTarget = nullptr;
         m_hasLastPlayerY = false;
         m_sawFallDuringAttack = false;
+        m_sawUpwardMotionDuringAttack = false;
         m_stationaryTicks = 0;
         if (m_aimSuspended) setAimSuspendedLocked(false);
         note("player", "player_pointer_changed", "Reset flight state; old inventory is not dereferenced.");
@@ -369,6 +371,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         m_cycleTarget = nullptr;
         m_hasLastPlayerY = false;
         m_sawFallDuringAttack = false;
+        m_sawUpwardMotionDuringAttack = false;
         m_stationaryTicks = 0;
         if (m_aimSuspended) setAimSuspendedLocked(false);
         if (!enabled) return;
@@ -389,10 +392,13 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         if (m_verticalDelta < -0.025f) {
             m_sawFallDuringAttack = true;
             m_stationaryTicks = 0;
+        } else if (m_verticalDelta > 0.025f) {
+            // An observed rise may be the mace's Wind Burst or the climb toward
+            // its apex. Do not later misclassify that apex as a ground landing.
+            m_sawUpwardMotionDuringAttack = true;
+            m_stationaryTicks = 0;
         } else if (m_sawFallDuringAttack && std::abs(m_verticalDelta) < 0.02f) {
             ++m_stationaryTicks;
-        } else if (m_verticalDelta > 0.025f) {
-            m_stationaryTicks = 0;
         }
     } else if (m_phase != Phase::RecoveryLookUp && m_phase != Phase::RecoveryGlide) {
         m_stationaryTicks = 0;
@@ -430,6 +436,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
             m_phase == Phase::AttackWindow) {
             m_phase = Phase::Chase;
             m_sawFallDuringAttack = false;
+            m_sawUpwardMotionDuringAttack = false;
             m_stationaryTicks = 0;
             m_waitForSeparation = false;
             note("target", "target_changed_during_attack_window",
@@ -462,7 +469,8 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         }
 
         if (bedaim::elytramacing::detectedLandingRecovery(
-                true, gliding, m_sawFallDuringAttack,
+                true, gliding,
+                m_sawFallDuringAttack && !m_sawUpwardMotionDuringAttack,
                 m_stationaryTicks, m_landingStableTicks)) {
             startRecoveryLookUpLocked(now);
             return;
@@ -527,6 +535,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
             m_separationDeadline = now + 2500ms;
             m_nextRocket = now;
             m_sawFallDuringAttack = false;
+            m_sawUpwardMotionDuringAttack = false;
             m_stationaryTicks = 0;
             if (!targetValid) setAimSuspendedLocked(false);
             note("recovery", "glide_confirmed", "Recovery rocket is now eligible.");
@@ -685,6 +694,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         m_phase = Phase::AttackWindow;
         m_phaseStarted = now;
         m_sawFallDuringAttack = false;
+        m_sawUpwardMotionDuringAttack = false;
         m_stationaryTicks = 0;
         m_unglideAttempts = 0;
         if (requestKeymapLocked(Action::Unglide, m_unglideKeymapUid, now)) {
