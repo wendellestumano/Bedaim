@@ -283,6 +283,11 @@ bool ElytraMacingModule::requestKeymapLocked(
                 } else if (action == Action::Firework) {
                     m_nextRocket = finishedAt +
                         std::chrono::milliseconds(std::clamp(m_rocketIntervalMs, 100, 1000));
+                    // For an immediate recovery boost, clear the pending flag only
+                    // after the broadcast call succeeds. A failed dispatch keeps it
+                    // armed so the state machine can retry even before target reacquisition.
+                    if (m_boostImmediatelyAfterGlide)
+                        m_boostImmediatelyAfterGlide = false;
                     if (m_aimSuspended) setAimSuspendedLocked(false);
                 }
             }
@@ -607,9 +612,8 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     if (gliding && m_boostImmediatelyAfterGlide && now >= m_nextRocket) {
         if (selectManagedItemLocked(player, "firework_rocket")) {
             if (requestKeymapLocked(Action::Firework, m_fireworkKeymapUid, now)) {
-                m_boostImmediatelyAfterGlide = false;
                 note("rocket", "recovery_boost_requested",
-                     "Boost fired after confirmed glide; target reacquisition can continue afterward.");
+                     "Boost request queued after confirmed glide; retry remains armed until broadcast success.");
                 return;
             }
         }
