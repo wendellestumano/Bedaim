@@ -43,10 +43,14 @@ public:
         if (state == JNI_OK) return;
         if (state != JNI_EDETACHED) {
             m_env = nullptr;
+            m_attachFailed = true;
             return;
         }
         if (m_vm->AttachCurrentThread(&m_env, nullptr) == JNI_OK) m_attached = true;
-        else m_env = nullptr;
+        else {
+            m_env = nullptr;
+            m_attachFailed = true;
+        }
     }
 
     ~JniEnvironment() {
@@ -54,11 +58,13 @@ public:
     }
 
     JNIEnv* get() const noexcept { return m_env; }
+    bool attachFailed() const noexcept { return m_attachFailed; }
 
 private:
     JavaVM* m_vm = nullptr;
     JNIEnv* m_env = nullptr;
     bool m_attached = false;
+    bool m_attachFailed = false;
 };
 
 bool clearException(JNIEnv* env) noexcept {
@@ -122,7 +128,9 @@ KeyMapperDispatchResult dispatchKeyMapperKeymap(std::string_view uid) noexcept {
 
     JniEnvironment jni;
     JNIEnv* env = jni.get();
-    if (!env) return KeyMapperDispatchResult::VmUnavailable;
+    if (!env) return jni.attachFailed()
+        ? KeyMapperDispatchResult::ThreadAttachFailed
+        : KeyMapperDispatchResult::VmUnavailable;
     if (env->PushLocalFrame(32) != JNI_OK) {
         clearException(env);
         return KeyMapperDispatchResult::IntentApiUnavailable;
