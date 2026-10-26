@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 namespace {
 
@@ -544,8 +545,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const auto dispatchStarted = std::chrono::steady_clock::now();
-    AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
-    int remaining = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || m_dispatchInProgress ||
@@ -564,42 +563,69 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
             return;
         }
-        // Reserve one dispatch while locked, then release the mutex before JNI
-        // and sendBroadcast so slow Java work cannot block config/disable callbacks.
+        // Reserve the action, then run JNI off the game tick so a slow Android
+        // broadcast cannot delay the next player update.
         m_dispatchInProgress = true;
     }
 
+    const float reportedDistance = geometry.distance;
+    const float reportedVerticalDifference = geometry.verticalDifference;
+    const auto reportedGlidingState = glidingState;
     try {
-        result = dispatchUnglideKeyMapperKeymap();
+        std::thread([this, target, reportedDistance, reportedVerticalDifference,
+                     reportedGlidingState]() {
+            AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
+            try {
+                result = dispatchUnglideKeyMapperKeymap();
+            } catch (...) {
+                result = AutomationBroadcastResult::BroadcastFailed;
+            }
+
+            int remaining = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                m_dispatchInProgress = false;
+                // Disable/re-enable or a target change may reset the state while
+                // JNI is in flight. A late completion must not overwrite new state.
+                if (m_latchedTarget == target &&
+                    m_triggerState == TriggerState::Triggered) {
+                    const bool sent = result == AutomationBroadcastResult::Sent;
+                    if (sent) --m_burstRemaining;
+                    else m_burstRemaining = 0;
+                    remaining = m_burstRemaining;
+                    m_nextAttempt = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(
+                            sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 100)
+                                 : 500);
+                } else {
+                    remaining = m_burstRemaining;
+                }
+            }
+
+            bedrocktools::diagnostics::probe(
+                result == AutomationBroadcastResult::Sent
+                    ? bedrocktools::diagnostics::Level::Debug
+                    : bedrocktools::diagnostics::Level::Warning,
+                "Unglide", "dispatch", automationBroadcastResultName(result),
+                std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
+                    (reportedGlidingState
+                        ? (*reportedGlidingState ? "true" : "false") : "unavailable") +
+                    "; target_distance=" + std::to_string(reportedDistance) +
+                    ", vertical_difference=" + std::to_string(reportedVerticalDifference) +
+                    ", burst_remaining=" + std::to_string(remaining) +
+                    ", keymap_uid=" + kUnglideKeymapUid);
+        }).detach();
     } catch (...) {
-        result = AutomationBroadcastResult::BroadcastFailed;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_dispatchInProgress = false;
-        // Disable/re-enable may reset the state while the broadcast is in flight.
-        // Do not let a late completion overwrite that newer state.
-        if (m_latchedTarget == target &&
-            m_triggerState == TriggerState::Triggered) {
-            const bool sent = result == AutomationBroadcastResult::Sent;
-            if (sent) --m_burstRemaining;
-            else m_burstRemaining = 0;
-            remaining = m_burstRemaining;
-            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(
-                sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 100) : 500);
-        } else {
-            remaining = m_burstRemaining;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_dispatchInProgress = false;
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
         }
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "Unglide", "dispatch",
+            "thread_creation_failed", "Could not queue the Key Mapper broadcast.");
     }
-
-    report(automationBroadcastResultName(result),
-        std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
-            (glidingState ? (*glidingState ? "true" : "false") : "unavailable") +
-            "; target_distance=" + std::to_string(geometry.distance) +
-            ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
-            ", burst_remaining=" + std::to_string(remaining) +
-            ", keymap_uid=" + kUnglideKeymapUid);
 }
 void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
