@@ -539,7 +539,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
     if (!crosshairConfirmed) {
         reject("crosshair_not_on_target",
-               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
+               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 40);
         return;
     }
 
