@@ -47,7 +47,10 @@ struct CatalogEntry {
     std::string_view displayName;
 };
 
-inline constexpr std::array<CatalogEntry, 25> kWeaponCatalog{{
+inline constexpr std::array<CatalogEntry, 28> kWeaponCatalog{{
+    {"minecraft:sword", "All Swords (category)"},
+    {"minecraft:axe", "All Axes (category)"},
+    {"minecraft:spear", "All Spears (category)"},
     {"minecraft:mace", "Mace"},
     {"minecraft:diamond_sword", "Diamond Sword"},
     {"minecraft:wooden_sword", "Wooden Sword"},
@@ -101,7 +104,24 @@ inline std::string normalizeIdentifier(std::string_view identifier) {
     } else if (!normalized.empty() && normalized.find(':') == std::string::npos) {
         normalized = "minecraft:" + normalized;
     }
+
+    // The rocket's localization key can be exposed as item.fireworks by
+    // Item::getDescriptionId(), while profile configuration uses its registry ID.
+    if (normalized == "minecraft:fireworks" ||
+        normalized == "minecraft:firework" ||
+        normalized == "minecraft:fireworks_rocket" ||
+        normalized == "minecraft:fireworkrocket" ||
+        normalized == "minecraft:rocket") {
+        normalized = "minecraft:firework_rocket";
+    }
     return normalized;
+}
+
+inline bool matchesNormalizedIdentifier(std::string_view configuredIdentifier,
+                                       std::string_view runtimeIdentifier) {
+    const auto configured = normalizeIdentifier(configuredIdentifier);
+    const auto runtime = normalizeIdentifier(runtimeIdentifier);
+    return !configured.empty() && !runtime.empty() && configured == runtime;
 }
 
 inline std::string displayNameForIdentifier(std::string_view identifier) {
@@ -125,7 +145,7 @@ inline std::string displayNameForIdentifier(std::string_view identifier) {
 }
 
 inline float normalizeRange(float range) noexcept {
-    return std::isfinite(range) ? std::clamp(range, 1.0f, 6.0f) : 3.2f;
+    return std::isfinite(range) ? std::clamp(range, 1.0f, 15.0f) : 3.2f;
 }
 
 inline float normalizeNormalCps(float cps) noexcept {
@@ -179,7 +199,17 @@ inline CustomProfile normalizeCustomProfile(CustomProfile profile) {
 
 inline bool matchesIdentifier(const CustomProfile& profile, std::string_view identifier) {
     const auto normalized = normalizeIdentifier(identifier);
-    return !normalized.empty() && profile.identifier == normalized;
+    if (normalized.empty()) return false;
+    // A namespace item whose path is exactly its weapon-family name is a
+    // category alias (minecraft:sword, minecraft:axe, minecraft:bow, etc.).
+    // AutoHit checks exact IDs first, so the vanilla item itself keeps priority.
+    const Class profileClass = classify(profile.identifier);
+    const auto separator = profile.identifier.find(':');
+    if (separator != std::string::npos && profileClass != Class::Unsupported &&
+        profile.identifier.substr(separator + 1) == name(profileClass)) {
+        return classify(normalized) == profileClass;
+    }
+    return profile.identifier == normalized;
 }
 
 inline Profile resolve(Class weapon,

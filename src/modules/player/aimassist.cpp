@@ -1,6 +1,7 @@
 #include "aimassist.hpp"
 #include "AimAssistMath.hpp"
 #include "AimAssistPolicy.hpp"
+#include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
 #include "core/GameHooks.hpp"
@@ -290,15 +291,7 @@ bool isWhitelistedActor(void* actor, bool isPlayer, const std::string& whitelist
 
 using HeldWeapon = bedaim::aimpolicy::HeldWeapon;
 
-HeldWeapon heldWeaponInMainHand(const bedrocktools::sdk::Player* player) {
-    if (!player) return HeldWeapon::None;
-
-    // Use the same selected-hotbar path as the swapper modules. On some
-    // BedrockTools/LeviLamina builds Player::getCarriedItem returns a transient
-    // wrapper that does not describe the currently selected inventory stack;
-    // classifying that wrapper as None made Weapon Filter disable every weapon.
-    const std::string identifier =
-        bedrocktools::core::InventoryAccess::get().selectedHotbarIdentifier(player);
+HeldWeapon heldWeaponFromIdentifier(std::string_view identifier) {
     if (identifier.empty()) return HeldWeapon::None;
     return bedaim::aimpolicy::classifyHeldWeaponIdentifier(identifier);
 }
@@ -351,6 +344,7 @@ void AimAssistModule::resetTrackingState() {
     m_targetPresent = false;
     m_lastTargetIsPlayer = false;
     m_cachedHeldWeaponCode = 0;
+    m_cachedHeldItemIdentifier.clear();
     m_cachedWeaponSlot = -1;
     m_nextHeldWeaponRefresh = {};
     m_weaponFilterAllowsCurrent = true;
@@ -469,6 +463,70 @@ bool AimAssistModule::onMenuConfigChanged(std::string_view key, std::string_view
             return number;
         } catch (...) { return std::nullopt; }
     };
+    if (key == "m_customEquipmentIdentifier") {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_customEquipmentIdentifier = std::string(value.substr(0, 128));
+        return true;
+    }
+    if (key == "m_addCustomEquipmentButton") {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        const std::string identifier = bedaim::autohit::weapon::normalizeIdentifier(m_customEquipmentIdentifier);
+        if (identifier.empty() || identifier.size() > 128 || m_customEquipmentProfiles.size() >= 64) return false;
+        const auto existing = std::find_if(m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
+            [&](const auto& profile) { return profile.identifier == identifier; });
+        if (existing == m_customEquipmentProfiles.end())
+            m_customEquipmentProfiles.push_back({identifier, true, 1.0f, 0.55f});
+        m_customEquipmentIdentifier.clear();
+        resetTrackingState();
+        return true;
+    }
+    auto parseProfileIndex = [&](std::string_view prefix, std::size_t& index) {
+        if (!key.starts_with(prefix)) return false;
+        const std::string suffix(key.substr(prefix.size()));
+        if (suffix.empty()) return false;
+        try {
+            std::size_t consumed = 0;
+            const auto parsedIndex = std::stoull(suffix, &consumed);
+            if (consumed != suffix.size() || parsedIndex >= 64) return false;
+            index = static_cast<std::size_t>(parsedIndex);
+            return true;
+        } catch (...) { return false; }
+    };
+    std::size_t customProfileIndex = 0;
+    if (parseProfileIndex("m_customEquipmentDelete_", customProfileIndex)) {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (customProfileIndex >= m_customEquipmentProfiles.size()) return false;
+        m_customEquipmentProfiles.erase(m_customEquipmentProfiles.begin() +
+            static_cast<std::ptrdiff_t>(customProfileIndex));
+        resetTrackingState();
+        return true;
+    }
+    if (parseProfileIndex("m_customEquipmentEnabled_", customProfileIndex)) {
+        bool enabledValue = false;
+        if (value == "true" || value == "1" || value == "on") enabledValue = true;
+        else if (value == "false" || value == "0" || value == "off") enabledValue = false;
+        else return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (customProfileIndex >= m_customEquipmentProfiles.size()) return false;
+        m_customEquipmentProfiles[customProfileIndex].enabled = enabledValue;
+        resetTrackingState();
+        return true;
+    }
+    const bool customMultiplierKey = parseProfileIndex("m_customEquipmentMultiplier_", customProfileIndex);
+    const bool customPointKey = !customMultiplierKey &&
+        parseProfileIndex("m_customEquipmentPointY_", customProfileIndex);
+    if (customMultiplierKey || customPointKey) {
+        const auto customNumber = parseNumber();
+        if (!customNumber) return false;
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        if (customProfileIndex >= m_customEquipmentProfiles.size()) return false;
+        if (customMultiplierKey)
+            m_customEquipmentProfiles[customProfileIndex].aimMultiplier = std::clamp(*customNumber, 0.2f, 10.0f);
+        else
+            m_customEquipmentProfiles[customProfileIndex].aimPointY = std::clamp(*customNumber, 0.05f, 0.95f);
+        return true;
+    }
+
     const auto parsed = parseNumber();
     if (!parsed) return false;
     const float number = *parsed;
@@ -672,12 +730,33 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     if (selectedWeaponSlot != m_cachedWeaponSlot ||
         m_nextHeldWeaponRefresh.time_since_epoch().count() == 0 ||
         weaponCheckTime >= m_nextHeldWeaponRefresh) {
-        m_cachedHeldWeaponCode = static_cast<int>(heldWeaponInMainHand(player));
+        const std::string rawHeldItemIdentifier = inventory.selectedHotbarIdentifier(player);
+        m_cachedHeldItemIdentifier = bedaim::autohit::weapon::normalizeIdentifier(rawHeldItemIdentifier);
+        m_cachedHeldWeaponCode = static_cast<int>(heldWeaponFromIdentifier(m_cachedHeldItemIdentifier));
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "BedrockAim", "custom_equipment_item",
+            m_cachedHeldItemIdentifier.empty() ? "identifier_unavailable" : "identifier_resolved",
+            "raw=" + (rawHeldItemIdentifier.empty() ? std::string("<empty>") : rawHeldItemIdentifier) +
+                "; normalized=" + (m_cachedHeldItemIdentifier.empty() ? std::string("<empty>") : m_cachedHeldItemIdentifier));
         m_cachedWeaponSlot = selectedWeaponSlot;
         m_nextHeldWeaponRefresh = weaponCheckTime + std::chrono::milliseconds(100);
     }
     const HeldWeapon heldWeapon = static_cast<HeldWeapon>(m_cachedHeldWeaponCode);
-    m_weaponFilterAllowsCurrent = !m_weaponOnly ||
+    const auto customEquipment = std::find_if(
+        m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
+        [&](const auto& profile) {
+            return profile.enabled &&
+                bedaim::autohit::weapon::matchesNormalizedIdentifier(
+                    profile.identifier, m_cachedHeldItemIdentifier);
+        });
+    const bool customEquipmentAllowed = customEquipment != m_customEquipmentProfiles.end();
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+        "BedrockAim", "custom_equipment_match",
+        customEquipmentAllowed ? "profile_matched" : "no_profile_match",
+        "item=" + (m_cachedHeldItemIdentifier.empty() ? std::string("<empty>") : m_cachedHeldItemIdentifier) +
+            "; profiles=" + std::to_string(m_customEquipmentProfiles.size()) +
+            "; weapon_only=" + std::string(m_weaponOnly ? "true" : "false"));
+    m_weaponFilterAllowsCurrent = !m_weaponOnly || customEquipmentAllowed ||
         weaponAllowed(heldWeapon, m_weaponSword, m_weaponAxe, m_weaponMace,
             m_weaponBow, m_weaponCrossbow, m_weaponTrident, m_weaponSpear, m_weaponOtherMelee);
     // Keep target geometry fresh for Sword/Mace Swapper even when the currently
@@ -1210,6 +1289,15 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         case HeldWeapon::Tool:
         case HeldWeapon::None: break;
     }
+    const auto customEquipmentForAim = std::find_if(
+        m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
+        [&](const auto& profile) {
+            return profile.enabled &&
+                bedaim::autohit::weapon::matchesNormalizedIdentifier(
+                    profile.identifier, m_cachedHeldItemIdentifier);
+        });
+    if (customEquipmentForAim != m_customEquipmentProfiles.end())
+        aimPointY = customEquipmentForAim->aimPointY;
     aimPointY = std::clamp(std::isfinite(aimPointY) ? aimPointY : 0.55f, 0.05f, 0.95f);
     const bedaim::aimmath::Bounds nativeAimMathBounds{
         {targetAimBounds.min.x, targetAimBounds.min.y, targetAimBounds.min.z},
@@ -1362,6 +1450,15 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         case HeldWeapon::Tool: weaponAimMultiplier = 1.0f; break;
         case HeldWeapon::None: break;
     }
+    const auto customEquipmentMultiplier = std::find_if(
+        m_customEquipmentProfiles.begin(), m_customEquipmentProfiles.end(),
+        [&](const auto& profile) {
+            return profile.enabled &&
+                bedaim::autohit::weapon::matchesNormalizedIdentifier(
+                    profile.identifier, m_cachedHeldItemIdentifier);
+        });
+    if (customEquipmentMultiplier != m_customEquipmentProfiles.end())
+        weaponAimMultiplier = customEquipmentMultiplier->aimMultiplier;
     weaponAimMultiplier = std::clamp(weaponAimMultiplier, 0.2f, 10.0f);
     const float aimSpeed = std::clamp(m_aimSpeed * weaponAimMultiplier, 0.1f, 100.0f);
     const float rotationSpeed = std::clamp(m_rotationSpeed, 0.1f, 1000.0f);
@@ -1550,6 +1647,28 @@ void AimAssistModule::loadConfig(const nlohmann::json& j) {
     m_spearAimMultiplier = std::clamp(j.value("m_spearAimMultiplier", m_spearAimMultiplier), 0.2f, 10.0f);
     m_otherMeleeAimMultiplier = std::clamp(j.value("m_otherMeleeAimMultiplier", m_otherMeleeAimMultiplier), 0.2f, 10.0f);
     m_whitelistNames = j.value("m_whitelistNames", m_whitelistNames);
+    m_customEquipmentIdentifier = j.value("m_customEquipmentIdentifier", m_customEquipmentIdentifier);
+    if (m_customEquipmentIdentifier.size() > 128) m_customEquipmentIdentifier.resize(128);
+    m_customEquipmentProfiles.clear();
+    const auto customProfilesIt = j.find("m_customEquipmentProfiles");
+    if (customProfilesIt != j.end() && customProfilesIt->is_array()) {
+        for (const auto& item : *customProfilesIt) {
+            if (!item.is_object() || m_customEquipmentProfiles.size() >= 64) continue;
+            CustomEquipmentProfile profile;
+            profile.identifier = bedaim::autohit::weapon::normalizeIdentifier(
+                item.value("identifier", std::string{}));
+            if (profile.identifier.empty() || profile.identifier.size() > 128) continue;
+            const auto duplicate = std::find_if(m_customEquipmentProfiles.begin(),
+                m_customEquipmentProfiles.end(), [&](const auto& existing) {
+                    return existing.identifier == profile.identifier;
+                });
+            if (duplicate != m_customEquipmentProfiles.end()) continue;
+            profile.enabled = item.value("enabled", true);
+            profile.aimMultiplier = std::clamp(item.value("aimMultiplier", 1.0f), 0.2f, 10.0f);
+            profile.aimPointY = std::clamp(item.value("aimPointY", 0.55f), 0.05f, 0.95f);
+            m_customEquipmentProfiles.push_back(std::move(profile));
+        }
+    }
 }
 
 void AimAssistModule::saveConfig(nlohmann::json& j) {
@@ -1605,6 +1724,17 @@ void AimAssistModule::saveConfig(nlohmann::json& j) {
     j["m_predictionMode"] = m_predictionMode;
     j["m_predictionLeadMs"] = m_predictionLeadMs;
     j["m_whitelistNames"] = m_whitelistNames;
+    j["m_customEquipmentIdentifier"] = m_customEquipmentIdentifier;
+    auto customEquipmentProfiles = nlohmann::json::array();
+    for (const auto& profile : m_customEquipmentProfiles) {
+        customEquipmentProfiles.push_back({
+            {"identifier", profile.identifier},
+            {"enabled", profile.enabled},
+            {"aimMultiplier", profile.aimMultiplier},
+            {"aimPointY", profile.aimPointY}
+        });
+    }
+    j["m_customEquipmentProfiles"] = std::move(customEquipmentProfiles);
 }
 
  

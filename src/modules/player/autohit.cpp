@@ -424,10 +424,15 @@ void AutoHitModule::processPlayerTick(Player* player) {
     std::optional<WeaponCustomProfile> customProfile;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        const auto found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
-            [&](const auto& item) {
-                return item.identifier == normalizedItem;
-            });
+        // Prefer an exact item profile. Category aliases are fallback profiles.
+        auto found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+            [&](const auto& item) { return item.identifier == normalizedItem; });
+        if (found == m_customWeaponProfiles.end()) {
+            found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+                [&](const auto& item) {
+                    return bedaim::autohit::weapon::matchesIdentifier(item, normalizedItem);
+                });
+        }
         if (found != m_customWeaponProfiles.end()) customProfile = *found;
 
         // A switch to a different held item breaks the old burst cycle immediately.
@@ -535,7 +540,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
     }
     // The per-item profile provides its own maximum; current Aim Assist tracking
     // range remains an independent upper bound.
-    const float maxRange = std::clamp(std::min(configuredRange, aimRange), 1.0f, 6.0f);
+    const float maxRange = std::clamp(std::min(configuredRange, aimRange), 1.0f, 15.0f);
     if (!finiteVec(hitPoint) || !std::isfinite(distanceSq) || distanceSq > maxRange * maxRange) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);
@@ -630,7 +635,7 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
     // item profile is first introduced. They are no longer exposed as global
     // per-class toggles in the UI.
     m_requireAttackInput = json.value("m_requireAttackInput", m_requireAttackInput);
-    m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 6.0f);
+    m_attackRange = std::clamp(json.value("m_attackRange", m_attackRange), 2.0f, 15.0f);
     m_touchRepeatEnabled = json.value("m_touchRepeatEnabled", m_touchRepeatEnabled);
     m_touchRepeatWindowMs = std::clamp(json.value("m_touchRepeatWindowMs", m_touchRepeatWindowMs), 100, 1000);
     m_swordEnabled = json.value("m_swordEnabled", m_swordEnabled);
@@ -660,6 +665,43 @@ void AutoHitModule::loadConfig(const nlohmann::json& json) {
             if (profile.identifier.empty() || !seen.insert(profile.identifier).second) continue;
             m_customWeaponProfiles.push_back(std::move(profile));
         }
+
+        // Migrate legacy per-material profiles to family profiles, so an existing
+        // saved config actually gets the new category behavior rather than only
+        // seeing category entries in the chooser. Keep unrelated items untouched.
+        const auto ensureFamilyProfile = [&](std::string_view familyId) {
+            const std::string family(familyId);
+            const auto found = std::find_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+                [&](const auto& profile) { return profile.identifier == family; });
+            if (found != m_customWeaponProfiles.end()) return;
+            const auto catalog = std::find_if(bedaim::autohit::weapon::kWeaponCatalog.begin(),
+                bedaim::autohit::weapon::kWeaponCatalog.end(),
+                [&](const auto& entry) { return entry.identifier == family; });
+            if (catalog == bedaim::autohit::weapon::kWeaponCatalog.end()) return;
+            m_customWeaponProfiles.push_back(makeLegacyProfile(
+                *catalog, m_attackRange, m_swordEnabled, m_swordCps,
+                m_axeEnabled, m_axeCps, m_maceEnabled, m_maceCps,
+                m_tridentEnabled, m_tridentCps));
+        };
+        ensureFamilyProfile("minecraft:sword");
+        ensureFamilyProfile("minecraft:axe");
+        ensureFamilyProfile("minecraft:spear");
+        // Remove vanilla material-specific entries from the profile bench. Their
+        // category profiles now own those families; unrelated/custom IDs remain.
+        m_customWeaponProfiles.erase(
+            std::remove_if(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+                [](const auto& profile) {
+                    const auto type = bedaim::autohit::weapon::classify(profile.identifier);
+                    const auto colon = profile.identifier.find(':');
+                    const bool isVanilla = colon != std::string::npos &&
+                        profile.identifier.substr(0, colon) == "minecraft";
+                    const bool isFamilyAlias = colon != std::string::npos &&
+                        profile.identifier.substr(colon + 1) == bedaim::autohit::weapon::name(type);
+                    return isVanilla && !isFamilyAlias &&
+                        (type == bedaim::autohit::weapon::Class::Sword ||
+                         type == bedaim::autohit::weapon::Class::Axe ||
+                         type == bedaim::autohit::weapon::Class::Spear);
+                }), m_customWeaponProfiles.end());
     } else {
         // One-time migration from the former sword/axe/mace/trident settings.
         // Expand each class default into individual item IDs so every weapon can
@@ -770,8 +812,19 @@ void AutoHitModule::onMenuRegistered() {
     weaponChoice.hasCurrentValue = true;
     weaponChoice.searchable = true;
     for (const auto& entry : bedaim::autohit::weapon::kWeaponCatalog) {
+        const std::string identifier(entry.identifier);
+        const auto weaponClass = bedaim::autohit::weapon::classify(identifier);
+        const auto colon = identifier.find(':');
+        const bool isFamilyAlias = colon != std::string::npos &&
+            identifier.substr(colon + 1) == bedaim::autohit::weapon::name(weaponClass);
+        // Use one profile per family for swords, axes and spears rather than
+        // forcing users to configure each vanilla material separately.
+        if (!isFamilyAlias &&
+            (weaponClass == bedaim::autohit::weapon::Class::Sword ||
+             weaponClass == bedaim::autohit::weapon::Class::Axe ||
+             weaponClass == bedaim::autohit::weapon::Class::Spear)) continue;
         ConfigOptionV2 option;
-        option.value = std::string(entry.identifier);
+        option.value = identifier;
         option.label = std::string(entry.displayName);
         weaponChoice.options.push_back(std::move(option));
     }
@@ -866,7 +919,7 @@ void AutoHitModule::onMenuRegistered() {
     defaultRangeNode.currentValue = std::to_string(defaultRange);
     defaultRangeNode.hasCurrentValue = true;
     defaultRangeNode.minValue = "2";
-    defaultRangeNode.maxValue = "6";
+    defaultRangeNode.maxValue = "15";
     defaultRangeNode.step = "0.1";
     defaultRangeNode.unit = " blocks";
     schema.node(std::move(defaultRangeNode));
@@ -911,7 +964,7 @@ void AutoHitModule::onMenuRegistered() {
             node.unit = unit;
             schema.node(std::move(node));
         };
-        addProfileSlider("m_selected_profile_range", "Attack range", "1", "6", "0.1",
+        addProfileSlider("m_selected_profile_range", "Attack range", "1", "15", "0.1",
                          " blocks", std::to_string(selected->range),
                          "This item's range is additionally limited by the current Aim Assist tracking range.");
         addProfileSlider("m_selected_profile_cps", "Normal CPS", "1", "12", "0.5",
@@ -1091,7 +1144,7 @@ bool AutoHitModule::onMenuConfigChanged(std::string_view key, std::string_view v
             while (parsed < raw.size() && std::isspace(static_cast<unsigned char>(raw[parsed]))) ++parsed;
             if (parsed != raw.size() || !std::isfinite(number)) return false;
             std::lock_guard<std::mutex> lock(m_stateMutex);
-            m_attackRange = std::clamp(number, 2.0f, 6.0f);
+            m_attackRange = std::clamp(number, 2.0f, 15.0f);
             return true;
         } catch (...) { return false; }
     }

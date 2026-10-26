@@ -1,3 +1,18 @@
+## 2026-10-25 — Firework equipment matching and Unglide gate
+
+- Canonicalize additional firework-rocket identifier aliases and compare configured/runtime custom-equipment IDs after normalization, including older saved profile identifiers.
+- Make Unglide's unreliable native Elytra/gliding flag diagnostic-only instead of a hard blocker; target freshness, player type, bounds, crosshair, distance, and height checks remain required.
+- Include the observed gliding-state result in Unglide dispatch diagnostics to help validate runtime behavior.
+
+## 2026-10-25 — AutoHit category profiles and Aim Assist custom equipment
+
+- Added AutoHit category aliases such as `minecraft:sword`, `minecraft:axe`, and `minecraft:spear`; exact item profiles take precedence over category profiles.
+- Added an Aim Assist Custom Equipment section with per-item enable switch, aim-speed multiplier, and vertical aim point.
+- Custom equipment IDs are normalized and persisted in config, so identifiers such as `Minecraft:firework_rocket` can be added without hardcoding the item into the weapon catalog.
+- Canonicalized the firework rocket localization key (`item.fireworks`) to `minecraft:firework_rocket` and added diagnostic probes for Aim Assist custom-equipment ID matching.
+- Increased AutoHit default and per-item profile range limits from 6 to 15 blocks, including runtime validation and UI sliders.
+- Added regression tests for category profile matching. CI and in-game verification are still required.
+
 ## 2026-10-25 — Restore AutoHit and Hitbox Extender
 
 - Restored the AutoHit implementation and its guard/weapon-profile support files from the last pre-cleanup revision.
