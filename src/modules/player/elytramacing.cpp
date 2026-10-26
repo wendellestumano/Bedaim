@@ -131,6 +131,8 @@ void ElytraMacingModule::onInit() {
 }
 
 void ElytraMacingModule::onEnable() {
+    if (auto* base = ModuleRegistry::get().find("bedrocktools.Aim Assist"))
+        static_cast<AimAssistModule*>(base)->setExternalAimOffsetY(0.0f);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     // Leave slot ownership intact if a disable/enable happened before the next tick;
     // the pending cleanup will safely restore the slot against a live player pointer.
@@ -167,9 +169,10 @@ void ElytraMacingModule::onDisable() {
         m_boostImmediatelyAfterGlide = false;
         m_waitForSeparation = false;
     }
-    if (wasSuspended) {
-        auto* base = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-        if (base) static_cast<AimAssistModule*>(base)->setExternalControlSuspended(false);
+    if (auto* base = ModuleRegistry::get().find("bedrocktools.Aim Assist")) {
+        auto* aim = static_cast<AimAssistModule*>(base);
+        aim->setExternalAimOffsetY(0.0f);
+        if (wasSuspended) aim->setExternalControlSuspended(false);
     }
     note("lifecycle", "disabled", "Slot restoration is deferred to a live player tick.");
 }
@@ -410,6 +413,12 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         ? distanceToBounds(player, targetBounds)
         : std::numeric_limits<float>::infinity();
     targetValid = targetValid && std::isfinite(targetDistance);
+
+    const bool shouldAimAbove = bedaim::elytramacing::shouldAimAboveTarget(
+        enabled, gliding, targetValid, targetDistance, m_engageDistance,
+        m_phase == Phase::Chase && !m_waitForSeparation);
+    aim->setExternalAimOffsetY(shouldAimAbove
+        ? std::clamp(m_approachAimOffsetY, 0.0f, 8.0f) : 0.0f);
 
     if (targetValid) {
         if (m_cycleTarget && m_cycleTarget != target &&
@@ -700,6 +709,8 @@ void ElytraMacingModule::loadConfig(const nlohmann::json& j) {
     if (!validUid(m_lookUpKeymapUid)) m_lookUpKeymapUid.clear();
     if (!validUid(m_unglideKeymapUid)) m_unglideKeymapUid.clear();
     m_engageDistance = bedaim::elytramacing::normalizeEngageDistance(j.value("m_engageDistance", m_engageDistance));
+    const float aimOffset = j.value("m_approachAimOffsetY", m_approachAimOffsetY);
+    m_approachAimOffsetY = std::isfinite(aimOffset) ? std::clamp(aimOffset, 0.0f, 8.0f) : 2.5f;
     const float rise = j.value("m_windBurstRiseThreshold", m_windBurstRiseThreshold);
     m_windBurstRiseThreshold = std::isfinite(rise) ? std::clamp(rise, 0.02f, 1.0f) : 0.08f;
     m_rocketIntervalMs = std::clamp(j.value("m_rocketIntervalMs", m_rocketIntervalMs), 100, 1000);
@@ -717,6 +728,7 @@ void ElytraMacingModule::saveConfig(nlohmann::json& j) {
     j["m_lookUpKeymapUid"] = m_lookUpKeymapUid;
     j["m_unglideKeymapUid"] = m_unglideKeymapUid;
     j["m_engageDistance"] = m_engageDistance;
+    j["m_approachAimOffsetY"] = m_approachAimOffsetY;
     j["m_windBurstRiseThreshold"] = m_windBurstRiseThreshold;
     j["m_rocketIntervalMs"] = m_rocketIntervalMs;
     j["m_recoveryLookUpWaitMs"] = m_recoveryLookUpWaitMs;
@@ -792,6 +804,7 @@ void ElytraMacingModule::onMenuRegistered() {
     };
 
     slider("m_engageDistance", "Mace engagement distance", "2", "10", "0.1", " blocks", "flight", "4.5");
+    slider("m_approachAimOffsetY", "Aim above target while gliding", "0", "8", "0.25", " blocks", "flight", "2.5");
     slider("m_rocketIntervalMs", "Rocket interval", "100", "1000", "25", " ms", "flight", "250");
     slider("m_windBurstRiseThreshold", "Wind Burst rise threshold", "0.02", "1.0", "0.02", " blocks/tick", "recovery", "0.08");
     slider("m_recoveryLookUpWaitMs", "Wait after look-up macro", "100", "1000", "25", " ms", "recovery", "300");
@@ -837,6 +850,8 @@ bool ElytraMacingModule::onMenuConfigChanged(std::string_view key, std::string_v
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (key == "m_engageDistance")
             m_engageDistance = bedaim::elytramacing::normalizeEngageDistance(number);
+        else if (key == "m_approachAimOffsetY")
+            m_approachAimOffsetY = std::clamp(number, 0.0f, 8.0f);
         else if (key == "m_windBurstRiseThreshold")
             m_windBurstRiseThreshold = std::clamp(number, 0.02f, 1.0f);
         else if (key == "m_rocketIntervalMs")
