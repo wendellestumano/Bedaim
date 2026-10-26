@@ -414,6 +414,10 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     auto* aim = static_cast<AimAssistModule*>(aimBase);
     const auto glidingState = UnglideModule::queryGlidingState(player);
     const bool gliding = glidingState.value_or(aim->localPlayerIsGliding());
+    // Ground launch is intentional: the start-glide keymap performs the initial
+    // jump sequence. Do not infer grounded state from a near-zero Y delta, which
+    // would also misfire at an airborne apex after Wind Burst.
+    const bool grounded = player->isOnGround();
 
     void* target = nullptr;
     AABB targetBounds{};
@@ -633,8 +637,8 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     // When no launch is in progress, a falling player gets one start-glide attempt
     // before target-dependent chase/attack decisions are considered.
     if (!gliding && bedaim::elytramacing::shouldRequestGlide(
-            true, false, m_verticalDelta, !m_startGlideKeymapUid.empty(),
-            now >= m_nextGlideAttempt)) {
+            true, false, grounded, m_verticalDelta,
+            !m_startGlideKeymapUid.empty(), now >= m_nextGlideAttempt)) {
         m_phase = Phase::AwaitingGlide;
         m_phaseStarted = now;
         m_glideAttempts = 0;
