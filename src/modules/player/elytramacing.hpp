@@ -74,6 +74,7 @@ private:
     bool m_hasLastPlayerY = false;
     float m_verticalDelta = 0.0f;
     bool m_sawFallDuringAttack = false;
+    bool m_sawUpwardMotionDuringAttack = false;
     int m_stationaryTicks = 0;
     int m_glideAttempts = 0;
     int m_recoveryGlideAttempts = 0;
