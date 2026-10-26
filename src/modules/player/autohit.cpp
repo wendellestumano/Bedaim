@@ -351,6 +351,17 @@ void AutoHitModule::onEnable() {
         "AutoHit", "activation_mode", m_requireAttackInput ? "input_required" : "automatic_when_enabled");
 }
 
+bool AutoHitModule::hasEnabledProfileFor(std::string_view identifier) {
+    if (identifier.empty()) return false;
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    return std::any_of(m_customWeaponProfiles.begin(), m_customWeaponProfiles.end(),
+        [&](const auto& profile) {
+            return profile.enabled &&
+                bedaim::autohit::weapon::matchesNormalizedIdentifier(
+                    profile.identifier, identifier);
+        });
+}
+
 void AutoHitModule::onDisable() {
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_attackHeld = false;
