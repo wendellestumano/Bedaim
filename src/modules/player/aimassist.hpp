@@ -32,6 +32,9 @@ public:
     void processPlayerTick(bedrocktools::sdk::Player* player);
     void processPlayerFrame();
     bool localPlayerIsGliding();
+    // Temporarily stop camera corrections while a trusted external Key Mapper
+    // recovery macro looks upward; target acquisition/snapshots remain active.
+    void setExternalControlSuspended(bool suspended) noexcept;
     bool currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range);
     bool currentTargetIsPlayerSnapshot(void* desiredTarget);
     bool targetBoundsSnapshot(void* desiredTarget, bedrocktools::sdk::AABB& bounds, float& range);
@@ -102,6 +105,7 @@ private:
     void applyAimStepLocked(bedrocktools::sdk::Player* player);
     std::mutex m_stateMutex;
     std::atomic_bool m_numericSettingsRegistered{false};
+    std::atomic_bool m_externalControlSuspended{false};
     bedrocktools::sdk::Player* m_lastPlayer = nullptr;
     void* m_lastTarget = nullptr;
     bool m_lastTargetIsPlayer = false;
