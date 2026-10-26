@@ -91,9 +91,9 @@ private:
     int m_ownedSlot = -1;
 
     // Key Mapper UID fields are editable in the module's separate settings page.
-    std::string m_startGlideKeymapUid;
-    std::string m_fireworkKeymapUid;
-    std::string m_lookUpKeymapUid;
+    std::string m_startGlideKeymapUid = "587f1cfd-e4cf-475c-b868-08d15f55f649";
+    std::string m_fireworkKeymapUid = "29bcde0c-ab40-4e6e-91e4-27cc373c3709";
+    std::string m_lookUpKeymapUid = "894975b5-38a1-4072-8964-6b83c0ae6f61";
     std::string m_unglideKeymapUid =
         "e2225852-1df2-4232-bb26-606f11fc8745";
 
