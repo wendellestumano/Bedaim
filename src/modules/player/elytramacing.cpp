@@ -17,6 +17,8 @@
 #include <atomic>
 #include <cmath>
 #include <cctype>
+#include <dlfcn.h>
+#include <optional>
 #include <limits>
 #include <string>
 #include <thread>
@@ -28,6 +30,28 @@ using bedrocktools::sdk::Player;
 using bedrocktools::sdk::Vec3;
 using bedrocktools::core::KeyMapperDispatchResult;
 using Clock = std::chrono::steady_clock;
+
+using ActorIsOnGroundFn = bool (*)(const void*);
+
+std::optional<bool> queryGroundedState(Player* player) {
+    if (!player) return std::nullopt;
+    static ActorIsOnGroundFn isOnGround = []() -> ActorIsOnGroundFn {
+        constexpr const char* symbol = "_ZNK5Actor10isOnGroundEv";
+        void* address = dlsym(RTLD_DEFAULT, symbol);
+        if (!address) {
+            static void* minecraftHandle =
+                dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+            if (minecraftHandle) address = dlsym(minecraftHandle, symbol);
+        }
+        return reinterpret_cast<ActorIsOnGroundFn>(address);
+    }();
+    if (!isOnGround) return std::nullopt;
+    try {
+        return isOnGround(player);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 bool finiteVec(const Vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
@@ -417,7 +441,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     // Ground launch is intentional: the start-glide keymap performs the initial
     // jump sequence. Do not infer grounded state from a near-zero Y delta, which
     // would also misfire at an airborne apex after Wind Burst.
-    const bool grounded = player->isOnGround();
+    const bool grounded = queryGroundedState(player).value_or(false);
 
     void* target = nullptr;
     AABB targetBounds{};
