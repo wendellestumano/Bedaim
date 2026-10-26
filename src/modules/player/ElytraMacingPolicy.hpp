@@ -13,6 +13,14 @@ inline float normalizeEngageDistance(float value) noexcept {
     return std::isfinite(value) ? std::clamp(value, 2.0f, 10.0f) : 4.5f;
 }
 
+inline bool shouldAimAboveTarget(bool enabled, bool gliding, bool targetValid,
+                                 float targetDistance, float engageDistance,
+                                 bool chasing) noexcept {
+    if (!enabled || !gliding || !targetValid || !chasing ||
+        !finiteDistance(targetDistance)) return false;
+    return targetDistance > normalizeEngageDistance(engageDistance);
+}
+
 inline bool shouldBoostTowardTarget(bool enabled, bool gliding, bool targetValid,
                                     float targetDistance, float engageDistance,
                                     bool cooldownReady) noexcept {
