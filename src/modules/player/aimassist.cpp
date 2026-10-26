@@ -420,11 +420,13 @@ void AimAssistModule::onInit() {
 }
 
 void AimAssistModule::onEnable() {
+    m_externalControlSuspended.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
 
 void AimAssistModule::onDisable() {
+    m_externalControlSuspended.store(false, std::memory_order_release);
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     resetTrackingState();
 }
@@ -1141,6 +1143,10 @@ bool AimAssistModule::localPlayerIsGliding() {
     return m_lastPlayer && actorIsGliding(m_lastPlayer);
 }
 
+void AimAssistModule::setExternalControlSuspended(bool suspended) noexcept {
+    m_externalControlSuspended.store(suspended, std::memory_order_release);
+}
+
 void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     auto* player = m_lastPlayer;
@@ -1165,6 +1171,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
 
     if (!enabled || !player) return;
+    if (m_externalControlSuspended.load(std::memory_order_acquire)) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
     // Preserve actual gliding state for target selection; Elytra mode and Sticky
     // are separate gates for the special aim-point dislocation below.
