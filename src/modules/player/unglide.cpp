@@ -384,8 +384,8 @@ std::optional<bool> UnglideModule::queryGlidingState(void* player) {
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
-void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);++m_dispatchToken;m_dispatchInProgress=false;m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);++m_dispatchToken;m_dispatchInProgress=false;m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
@@ -545,6 +545,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const auto dispatchStarted = std::chrono::steady_clock::now();
+    std::uint64_t dispatchToken = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || m_dispatchInProgress ||
@@ -566,13 +567,14 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         // Reserve the action, then run JNI off the game tick so a slow Android
         // broadcast cannot delay the next player update.
         m_dispatchInProgress = true;
+        dispatchToken = ++m_dispatchToken;
     }
 
     const float reportedDistance = geometry.distance;
     const float reportedVerticalDifference = geometry.verticalDifference;
     const auto reportedGlidingState = glidingState;
     try {
-        std::thread([this, target, reportedDistance, reportedVerticalDifference,
+        std::thread([this, target, dispatchToken, reportedDistance, reportedVerticalDifference,
                      reportedGlidingState]() {
             AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
             try {
@@ -584,9 +586,11 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             int remaining = 0;
             {
                 std::lock_guard<std::mutex> lock(m_stateMutex);
+                // Ignore completion from a dispatch invalidated by disable/re-enable.
+                if (dispatchToken != m_dispatchToken) return;
                 m_dispatchInProgress = false;
-                // Disable/re-enable or a target change may reset the state while
-                // JNI is in flight. A late completion must not overwrite new state.
+                // A target change may reset the state while JNI is in flight; a late
+                // completion must not overwrite that newer target state.
                 if (m_latchedTarget == target &&
                     m_triggerState == TriggerState::Triggered) {
                     const bool sent = result == AutomationBroadcastResult::Sent;
