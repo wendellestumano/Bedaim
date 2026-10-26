@@ -64,15 +64,19 @@ int main() {
     check(!shouldDisengageForMace(true, true, true, 5.0f, 4.5f, true, true),
           "mace engagement waits until the configured distance");
 
-    check(shouldRequestGlide(true, false, -0.2f, true, true),
+    check(shouldRequestGlide(true, false, false, -0.2f, true, true),
           "falling player can request the double-jump glide macro");
-    check(!shouldRequestGlide(true, false, 0.0f, true, true),
-          "level/stationary player does not trigger normal fall recovery");
-    check(!shouldRequestGlide(true, true, -0.2f, true, true),
+    check(shouldRequestGlide(true, false, true, 0.0f, true, true),
+          "grounded player can start the launch sequence without waiting to fall");
+    check(!shouldRequestGlide(true, false, false, 0.0f, true, true),
+          "level/stationary airborne player does not trigger launch or fall recovery");
+    check(!shouldRequestGlide(true, false, false, 0.2f, true, true),
+          "upward airborne motion does not trigger a false launch at the apex");
+    check(!shouldRequestGlide(true, true, true, -0.2f, true, true),
           "already-gliding player does not retrigger start-glide macro");
-    check(!shouldRequestGlide(true, false, -0.2f, false, true),
+    check(!shouldRequestGlide(true, false, true, 0.0f, false, true),
           "start-glide action requires a configured keymap");
-    check(!shouldRequestGlide(true, false, -0.2f, true, false),
+    check(!shouldRequestGlide(true, false, true, 0.0f, true, false),
           "glide retry cooldown is respected");
 
     check(detectedWindBurstRise(true, false, 0.2f),
