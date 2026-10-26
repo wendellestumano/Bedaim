@@ -416,7 +416,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
 
     const bool shouldAimAbove = bedaim::elytramacing::shouldAimAboveTarget(
         enabled, gliding, targetValid, targetDistance, m_engageDistance,
-        m_phase == Phase::Chase && !m_waitForSeparation);
+        m_phase == Phase::Chase);
     aim->setExternalAimOffsetY(shouldAimAbove
         ? std::clamp(m_approachAimOffsetY, 0.0f, 8.0f) : 0.0f);
 
