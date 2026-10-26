@@ -575,7 +575,10 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
     // change. Debounce continuous sliders and give the whitelist editor more time
     // so one character/drag does not reset the active widget mid-interaction.
-    const auto delay = key == "m_whitelistNames"
+    const bool editingKeyMapperUid =
+        key == "m_startGlideKeymapUid" || key == "m_fireworkKeymapUid" ||
+        key == "m_lookUpKeymapUid" || key == "m_unglideKeymapUid";
+    const auto delay = (key == "m_whitelistNames" || editingKeyMapperUid)
         ? std::chrono::milliseconds(3000)
         : std::chrono::milliseconds(1200);
     static ModuleConfigSchemaRefreshQueue queue;
