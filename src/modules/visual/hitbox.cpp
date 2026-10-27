@@ -157,7 +157,8 @@ static bool validRenderBounds(const AABB& b) {
 }
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
  espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
- espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false};
+ espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false},
+ espLoggedOverlayBias{false};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -375,7 +376,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             // projection keeps the same screen x/y for points on the same ray,
             // while their depth becomes nearer than the opaque blocks in front.
             if (throughWalls) {
-                constexpr float overlayRadius = 0.20f;
+                espLogOnce(espLoggedOverlayBias, bedrocktools::diagnostics::Level::Info,
+                           "ore_overlay=radial_depth_bias; camera-ray target radius=0.20 blocks");
                 auto pullTowardCamera = [](bedrocktools::sdk::Vec3& point) {
                     const float distanceSquared =
                         point.x * point.x + point.y * point.y + point.z * point.z;
@@ -391,7 +393,6 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                     point.y *= scale;
                     point.z *= scale;
                 };
-                (void)overlayRadius;
                 pullTowardCamera(p1);
                 pullTowardCamera(p2);
             }
