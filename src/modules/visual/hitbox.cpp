@@ -8,7 +8,6 @@
 #include <bedrocktools/memory/Signatures.hpp>
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/sdk/Memory.hpp>
-#include <GLES2/gl2.h>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <cmath>
@@ -139,6 +138,10 @@ static Actor_isInvisible_t                s_actorIsInvisible = nullptr;
 static Actor_fetchNearbyActorsSorted_t    s_actorFetchNearby = nullptr;
 
 static MaterialPtr s_matSelection;
+// Existing vanilla RenderDragon material whose source definition disables depth testing.
+static MaterialPtr s_matThroughWalls;
+static const char* s_throughWallsMaterialName = nullptr;
+static bool s_throughWallsMaterialChecked = false;
 static uintptr_t    s_renderMaterialGroup = 0;
 
 static void (*_renderLevel_orig)(void* _this, void* screenContext, void* a3);
@@ -158,7 +161,7 @@ static bool validRenderBounds(const AABB& b) {
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
  espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
  espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false},
- espLoggedOverlayBias{false};
+ espLoggedOverlayMaterial{false},espLoggedOverlayUnavailable{false};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -185,17 +188,40 @@ static MaterialPtr getMaterial(const char* name) {
 }
 
 static void ensureMaterials() {
-    if (s_matSelection) return;
     if (!s_renderMaterialGroup) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning, "Ore ESP",
-            "material_group", "missing", "render material group is unresolved; using LevelRendererPlayer fallback");
+            "material_group", "missing", "render material group is unresolved; material lookups will retry");
         return;
     }
 
-    s_matSelection = getMaterial("selection_box");
-    bedrocktools::diagnostics::probe(s_matSelection ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
-        "Ore ESP", "selection_material", s_matSelection ? "resolved" : "missing",
-        s_matSelection ? "selection_box ready" : "selection_box unavailable; using LevelRendererPlayer fallback");
+    if (!s_matSelection) {
+        s_matSelection = getMaterial("selection_box");
+        bedrocktools::diagnostics::probe(s_matSelection ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+            "Ore ESP", "selection_material", s_matSelection ? "resolved" : "missing",
+            s_matSelection ? "selection_box ready" : "selection_box unavailable; using LevelRendererPlayer fallback");
+    }
+
+    if (!s_throughWallsMaterialChecked) {
+        // Vanilla hologram.material defines this with DisableDepthTest + Blending
+        // and supports both MSAA and non-MSAA.
+        s_matThroughWalls = getMaterial("reality_frame_skyfill");
+        if (s_matThroughWalls) {
+            s_throughWallsMaterialName = "reality_frame_skyfill";
+        } else {
+            // Available in the same source material set on MSAA configurations.
+            s_matThroughWalls = getMaterial("hologram_hit_effect");
+            if (s_matThroughWalls)
+                s_throughWallsMaterialName = "hologram_hit_effect";
+        }
+        s_throughWallsMaterialChecked = true;
+        bedrocktools::diagnostics::probe(
+            s_matThroughWalls ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+            "Ore ESP", "through_walls_material",
+            s_matThroughWalls ? s_throughWallsMaterialName : "unresolved",
+            s_matThroughWalls
+                ? "depth-test-disabled RenderDragon material resolved"
+                : "no loaded vanilla depth-test-disabled material; Ore ESP remains depth-tested");
+    }
 }
 
 static AABB getActorAABB(void* actor) {
@@ -369,62 +395,43 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             p1.x -= camX; p1.y -= camY; p1.z -= camZ;
             p2.x -= camX; p2.y -= camY; p2.z -= camZ;
 
-            // RenderDragon reapplies the depth state from the material inside
-            // renderMeshImmediately, so changing GL_DEPTH_TEST around the call
-            // alone cannot guarantee an x-ray overlay. Instead, pull each ore
-            // vertex along its camera ray to a small virtual radius. Perspective
-            // projection keeps the same screen x/y for points on the same ray,
-            // while their depth becomes nearer than the opaque blocks in front.
-            if (throughWalls) {
-                espLogOnce(espLoggedOverlayBias, bedrocktools::diagnostics::Level::Info,
-                           "ore_overlay=radial_depth_bias; camera-ray target radius=0.20 blocks");
-                auto pullTowardCamera = [](bedrocktools::sdk::Vec3& point) {
-                    const float distanceSquared =
-                        point.x * point.x + point.y * point.y + point.z * point.z;
-                    constexpr float targetRadius = 0.20f;
-                    if (!std::isfinite(distanceSquared) ||
-                        distanceSquared <= targetRadius * targetRadius) {
-                        return;
-                    }
-                    const float distance = std::sqrt(distanceSquared);
-                    if (distance <= 0.0001f) return;
-                    const float scale = targetRadius / distance;
-                    point.x *= scale;
-                    point.y *= scale;
-                    point.z *= scale;
-                };
-                pullTowardCamera(p1);
-                pullTowardCamera(p2);
-            }
-
             s_tessVertex(tessellator, p1.x, p1.y, p1.z);
             s_tessVertex(tessellator, p2.x, p2.y, p2.z);
         }
 
         char pad[0x58];
         memset(pad, 0, sizeof(pad));
-        // Ore outlines are an overlay: bypass depth rejection for this mesh only,
-        // then restore the caller's state so the rest of Minecraft renders normally.
-        GLboolean previousDepthTest = GL_FALSE;
-        GLboolean previousDepthMask = GL_TRUE;
-        GLint previousDepthFunc = GL_LESS;
-        if (throughWalls) {
-            previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
-            glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
-            glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunc);
-            // RenderDragon may leave a restrictive depth function active even when
-            // ordinary GL depth testing is enabled. Use both controls for this
-            // overlay submission, then restore the exact state we received.
-            glDisable(GL_DEPTH_TEST);
-            glDepthFunc(GL_ALWAYS);
-            glDepthMask(GL_FALSE);
+        // Use a native RenderDragon material with DisableDepthTest instead of
+        // mutating GL state before submission (the material pipeline overrides it).
+        const bool useThroughWallsMaterial = throughWalls && s_matThroughWalls && colorHolder;
+        void* materialForBatch = useThroughWallsMaterial
+            ? static_cast<void*>(&s_matThroughWalls)
+            : matInner;
+        float previousBatchColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        if (useThroughWallsMaterial) {
+            previousBatchColor[0] = colorHolder[0];
+            previousBatchColor[1] = colorHolder[1];
+            previousBatchColor[2] = colorHolder[2];
+            previousBatchColor[3] = colorHolder[3];
+            // current_color.fragment reads ScreenContext's CURRENT_COLOR constant.
+            colorHolder[0] = r;
+            colorHolder[1] = g;
+            colorHolder[2] = b;
+            colorHolder[3] = a;
+            espLogOnce(espLoggedOverlayMaterial, bedrocktools::diagnostics::Level::Info,
+                       "ore_overlay=material; native DisableDepthTest material used");
+        } else if (throughWalls) {
+            espLogOnce(espLoggedOverlayUnavailable, bedrocktools::diagnostics::Level::Warning,
+                       "ore_overlay=depth_tested_fallback; no compatible no-depth material or color holder");
         }
-        s_renderMesh(screenContext, tessellator, matInner, pad);
-        if (throughWalls) {
-            glDepthMask(previousDepthMask);
-            glDepthFunc(static_cast<GLenum>(previousDepthFunc));
-            if (previousDepthTest == GL_TRUE) glEnable(GL_DEPTH_TEST);
-            else glDisable(GL_DEPTH_TEST);
+
+        s_renderMesh(screenContext, tessellator, materialForBatch, pad);
+
+        if (useThroughWallsMaterial) {
+            colorHolder[0] = previousBatchColor[0];
+            colorHolder[1] = previousBatchColor[1];
+            colorHolder[2] = previousBatchColor[2];
+            colorHolder[3] = previousBatchColor[3];
         }
     };
 
