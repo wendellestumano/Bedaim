@@ -45,3 +45,8 @@ Ore outlines are now expanded by 0.006 block units to avoid being coplanar with 
 ## Tessellator vertex signature for Minecraft 1.26.52.3
 
 The former `TessellatorVertex` pattern did not match the ARM64 library packaged with Minecraft 1.26.52.3. The replacement pattern was tested against `lib/arm64-v8a/libminecraftpe.so` from the installed test APK and matched exactly one address: file offset `0xA76F048`. Disassembly of the matched routine and a nearby wrapper that loads a `Vec3` into floating-point argument registers confirm the expected ABI: `Tessellator*` in x0 and x/y/z in s0/s1/s2. Runtime diagnostics now report whether this signature actually resolved when Bedaim initializes.
+
+
+## Through-wall ore rendering: camera-ray depth bias
+
+The screenshot/diagnostic test confirmed that scanning and mesh submission work, but depth-state changes around `renderMeshImmediately` do not bypass the RenderDragon material's own pipeline state. Ore lines now use a geometry-level fallback: each camera-relative endpoint is moved toward the camera along its own ray to a fixed virtual radius of 0.20 blocks. For perspective projection, scaling a point along the camera ray preserves its screen-space x/y while changing its depth, so the line is submitted in front of nearby opaque geometry even if the material re-applies depth testing. This applies only to Ore ESP batches; actor ESP geometry retains its original positions. The visual tradeoff is deliberate: ores hidden behind a wall are projected onto the wall surface. It still needs in-game validation for near-plane clipping at the extreme screen edges and very close walls.

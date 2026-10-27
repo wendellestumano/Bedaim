@@ -367,6 +367,35 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             bedrocktools::sdk::Vec3 p2 = line.second;
             p1.x -= camX; p1.y -= camY; p1.z -= camZ;
             p2.x -= camX; p2.y -= camY; p2.z -= camZ;
+
+            // RenderDragon reapplies the depth state from the material inside
+            // renderMeshImmediately, so changing GL_DEPTH_TEST around the call
+            // alone cannot guarantee an x-ray overlay. Instead, pull each ore
+            // vertex along its camera ray to a small virtual radius. Perspective
+            // projection keeps the same screen x/y for points on the same ray,
+            // while their depth becomes nearer than the opaque blocks in front.
+            if (throughWalls) {
+                constexpr float overlayRadius = 0.20f;
+                auto pullTowardCamera = [](bedrocktools::sdk::Vec3& point) {
+                    const float distanceSquared =
+                        point.x * point.x + point.y * point.y + point.z * point.z;
+                    constexpr float targetRadius = 0.20f;
+                    if (!std::isfinite(distanceSquared) ||
+                        distanceSquared <= targetRadius * targetRadius) {
+                        return;
+                    }
+                    const float distance = std::sqrt(distanceSquared);
+                    if (distance <= 0.0001f) return;
+                    const float scale = targetRadius / distance;
+                    point.x *= scale;
+                    point.y *= scale;
+                    point.z *= scale;
+                };
+                (void)overlayRadius;
+                pullTowardCamera(p1);
+                pullTowardCamera(p2);
+            }
+
             s_tessVertex(tessellator, p1.x, p1.y, p1.z);
             s_tessVertex(tessellator, p2.x, p2.y, p2.z);
         }
