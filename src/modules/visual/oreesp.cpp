@@ -502,7 +502,10 @@ void OreEspModule::onMenuRegistered() {
         ConfigNodeV2 node;
         node.id = key; node.key = key; node.title = title; node.description = description;
         node.category = (std::string_view(key) == "outlineThickness") ? "render" : "scan"; node.type = ConfigControlTypeV2::SliderInt;
-        node.defaultValue = defaultValue; node.currentValue = configText(config, key, defaultValue);
+        node.defaultValue = defaultValue;
+        node.currentValue = (std::string_view(key) == "outlineThickness")
+            ? std::to_string(static_cast<int>(std::lround(outlineThickness * 100.0f)))
+            : configText(config, key, defaultValue);
         node.hasCurrentValue = true; node.minValue = minimum; node.maxValue = maximum;
         node.step = step; node.unit = unit;
         schema.node(std::move(node));
