@@ -40,3 +40,8 @@ The module reuses the existing BedrockTools `BlockSourceGetBlock` signature and 
 The Minecraft 1.26.52.3 ARM64 library contains two functions matching the previous short `RenderLevel` prologue. The hook expects a `LevelRenderer` instance whose `mLevelRendererPlayer` member is at offset `0x420`; the signature is extended with instructions that uniquely identify that candidate in the tested library. This was validated by scanning the local 1.26.52.3 APK: the updated pattern matched exactly one location, at file offset `0xB318478`.
 
 Ore outlines are now expanded by 0.006 block units to avoid being coplanar with block surfaces. During ore mesh submission, the renderer temporarily disables depth testing and depth writes, then restores both states. This is intended to make the bright colored wireframe visible through opaque blocks; it still requires in-game confirmation with the active RenderDragon backend. Diagnostics now distinguish unresolved block queries, missing render materials, an entered renderer hook, and an empty/non-empty cache snapshot.
+
+
+## Tessellator vertex signature for Minecraft 1.26.52.3
+
+The former `TessellatorVertex` pattern did not match the ARM64 library packaged with Minecraft 1.26.52.3. The replacement pattern was tested against `lib/arm64-v8a/libminecraftpe.so` from the installed test APK and matched exactly one address: file offset `0xA76F048`. Disassembly of the matched routine and a nearby wrapper that loads a `Vec3` into floating-point argument registers confirm the expected ABI: `Tessellator*` in x0 and x/y/z in s0/s1/s2. Runtime diagnostics now report whether this signature actually resolved when Bedaim initializes.

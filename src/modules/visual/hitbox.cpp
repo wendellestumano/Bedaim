@@ -736,7 +736,15 @@ void HitboxModule::onInit() {
     if (tc) { m_tessColorAddr = (void*)tc; s_tessColor = (Tessellator_color_t)tc; }
 
     uintptr_t tv = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorVertex);
-    if (tv) { m_tessVertexAddr = (void*)tv; s_tessVertex = (Tessellator_vertex_t)tv; }
+    if (tv) {
+        m_tessVertexAddr = (void*)tv;
+        s_tessVertex = (Tessellator_vertex_t)tv;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info, "ESP",
+            "tessellator_vertex", "resolved", "3D vertex routine resolved; ABI is Tessellator* plus x/y/z float arguments");
+    } else {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning, "ESP",
+            "tessellator_vertex", "unresolved", "TessellatorVertex signature did not match the loaded Minecraft library");
+    }
 
     uintptr_t rm = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately2);
     if (rm) {
