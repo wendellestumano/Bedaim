@@ -377,15 +377,22 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         // then restore the caller's state so the rest of Minecraft renders normally.
         GLboolean previousDepthTest = GL_FALSE;
         GLboolean previousDepthMask = GL_TRUE;
+        GLint previousDepthFunc = GL_LESS;
         if (throughWalls) {
             previousDepthTest = glIsEnabled(GL_DEPTH_TEST);
             glGetBooleanv(GL_DEPTH_WRITEMASK, &previousDepthMask);
+            glGetIntegerv(GL_DEPTH_FUNC, &previousDepthFunc);
+            // RenderDragon may leave a restrictive depth function active even when
+            // ordinary GL depth testing is enabled. Use both controls for this
+            // overlay submission, then restore the exact state we received.
             glDisable(GL_DEPTH_TEST);
+            glDepthFunc(GL_ALWAYS);
             glDepthMask(GL_FALSE);
         }
         s_renderMesh(screenContext, tessellator, matInner, pad);
         if (throughWalls) {
             glDepthMask(previousDepthMask);
+            glDepthFunc(static_cast<GLenum>(previousDepthFunc));
             if (previousDepthTest == GL_TRUE) glEnable(GL_DEPTH_TEST);
             else glDisable(GL_DEPTH_TEST);
         }
