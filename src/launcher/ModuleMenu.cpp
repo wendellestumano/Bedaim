@@ -33,8 +33,19 @@ static void persistModuleConfig() {
 
 static void onModuleToggle(std::string_view module_id, bool enabled) {
     auto* mod = ModuleRegistry::get().find(module_id);
-    if (!mod) return;
+    if (!mod) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "ModuleMenu", std::string("toggle target not found: ") + std::string(module_id));
+        return;
+    }
     mod->setMasterEnabled(enabled);
+    if (module_id == "bedrocktools.Ore ESP") {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Ore ESP",
+            std::string("menu_toggle requested=") + (enabled ? "on" : "off") +
+            " master=" + (mod->masterEnabled ? "on" : "off") +
+            " keybind=" + (mod->keybindActive ? "on" : "off") +
+            " effective=" + (mod->enabled ? "on" : "off"));
+    }
     persistModuleConfig();
 }
 

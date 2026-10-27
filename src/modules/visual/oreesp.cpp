@@ -447,6 +447,9 @@ void OreEspModule::eraseCachedPosition(const bedrocktools::sdk::BlockPos& pos) {
 void OreEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosition,
                                      std::vector<Outline>& output) const {
     output.clear();
+    // Defensive render gate: never expose cached ore geometry if the module's
+    // effective state is off, even if a stale cache or hook survives a toggle.
+    if (!enabled || !masterEnabled || !keybindActive) return;
     constexpr std::size_t maxRenderedOres = 768;
     output.reserve(maxRenderedOres);
     const int rx = std::clamp(horizontalRadius, 4, 48);

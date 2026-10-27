@@ -317,7 +317,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
     auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
     const bool espEnabled = esp && esp->enabled;
-    const bool oreEspEnabled = oreEsp && oreEsp->enabled;
+    // Require the complete effective state, not just the cached enabled flag.
+    // The shared renderer hook can remain installed while individual modules toggle.
+    const bool oreEspEnabled = oreEsp && oreEsp->enabled &&
+                               oreEsp->masterEnabled && oreEsp->keybindActive;
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
     const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled;
