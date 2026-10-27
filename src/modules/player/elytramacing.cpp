@@ -3,7 +3,7 @@
 #include "ElytraMacingPolicy.hpp"
 #include "aimassist.hpp"
 #include "autohit.hpp"
-#include "../../config/ConfigManager.hpp"
+#include "unglide.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/InventoryAccess.hpp"
 #include "../../core/KeyMapperBridge.hpp"
@@ -17,6 +17,8 @@
 #include <atomic>
 #include <cmath>
 #include <cctype>
+#include <dlfcn.h>
+#include <optional>
 #include <limits>
 #include <string>
 #include <thread>
@@ -28,6 +30,28 @@ using bedrocktools::sdk::Player;
 using bedrocktools::sdk::Vec3;
 using bedrocktools::core::KeyMapperDispatchResult;
 using Clock = std::chrono::steady_clock;
+
+using ActorIsOnGroundFn = bool (*)(const void*);
+
+std::optional<bool> queryGroundedState(Player* player) {
+    if (!player) return std::nullopt;
+    static ActorIsOnGroundFn isOnGround = []() -> ActorIsOnGroundFn {
+        constexpr const char* symbol = "_ZNK5Actor10isOnGroundEv";
+        void* address = dlsym(RTLD_DEFAULT, symbol);
+        if (!address) {
+            static void* minecraftHandle =
+                dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+            if (minecraftHandle) address = dlsym(minecraftHandle, symbol);
+        }
+        return reinterpret_cast<ActorIsOnGroundFn>(address);
+    }();
+    if (!isOnGround) return std::nullopt;
+    try {
+        return isOnGround(player);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
 
 bool finiteVec(const Vec3& v) {
     return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
@@ -412,7 +436,12 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         return;
     }
     auto* aim = static_cast<AimAssistModule*>(aimBase);
-    const bool gliding = aim->localPlayerIsGliding();
+    const auto glidingState = UnglideModule::queryGlidingState(player);
+    const bool gliding = glidingState.value_or(aim->localPlayerIsGliding());
+    // Ground launch is intentional: the start-glide keymap performs the initial
+    // jump sequence. Do not infer grounded state from a near-zero Y delta, which
+    // would also misfire at an airborne apex after Wind Burst.
+    const bool grounded = queryGroundedState(player).value_or(false);
 
     void* target = nullptr;
     AABB targetBounds{};
@@ -632,8 +661,8 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
     // When no launch is in progress, a falling player gets one start-glide attempt
     // before target-dependent chase/attack decisions are considered.
     if (!gliding && bedaim::elytramacing::shouldRequestGlide(
-            true, false, m_verticalDelta, !m_startGlideKeymapUid.empty(),
-            now >= m_nextGlideAttempt)) {
+            true, false, grounded, m_verticalDelta,
+            !m_startGlideKeymapUid.empty(), now >= m_nextGlideAttempt)) {
         m_phase = Phase::AwaitingGlide;
         m_phaseStarted = now;
         m_glideAttempts = 0;
@@ -722,6 +751,14 @@ void ElytraMacingModule::loadConfig(const nlohmann::json& j) {
     m_startGlideKeymapUid = j.value("m_startGlideKeymapUid", m_startGlideKeymapUid);
     m_fireworkKeymapUid = j.value("m_fireworkKeymapUid", m_fireworkKeymapUid);
     m_lookUpKeymapUid = j.value("m_lookUpKeymapUid", m_lookUpKeymapUid);
+    // Migrate earlier configs that stored empty values before these device UIDs
+    // were supplied. Explicit non-empty user values remain untouched.
+    if (m_startGlideKeymapUid.empty())
+        m_startGlideKeymapUid = "587f1cfd-e4cf-475c-b868-08d15f55f649";
+    if (m_fireworkKeymapUid.empty())
+        m_fireworkKeymapUid = "29bcde0c-ab40-4e6e-91e4-27cc373c3709";
+    if (m_lookUpKeymapUid.empty())
+        m_lookUpKeymapUid = "894975b5-38a1-4072-8964-6b83c0ae6f61";
     m_unglideKeymapUid = j.value("m_unglideKeymapUid", m_unglideKeymapUid);
     if (!validUid(m_startGlideKeymapUid)) m_startGlideKeymapUid.clear();
     if (!validUid(m_fireworkKeymapUid)) m_fireworkKeymapUid.clear();
@@ -758,35 +795,6 @@ void ElytraMacingModule::saveConfig(nlohmann::json& j) {
 
 void ElytraMacingModule::onMenuRegistered() {
     using namespace pl::modmenu;
-    static std::atomic<bool> uidSettingsRegistered{false};
-    bool expected = false;
-    if (uidSettingsRegistered.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-        nlohmann::json config;
-        saveConfig(config);
-        auto value = [&](const char* key, const char* fallback) -> std::string {
-            const auto it = config.find(key);
-            if (it == config.end() || it->is_null()) return fallback;
-            return it->is_string() ? it->get<std::string>() : it->dump();
-        };
-        ModuleBuilder settings("bedrocktools.elytramacing.keymap_settings", "ElytraMacing Keymapper UIDs");
-        settings.modId("Bedaim")
-            .description("Paste the UUID of each Key Mapper keymap. Empty UIDs disable that action.")
-            .defaultEnabled(true)
-            .config("m_startGlideKeymapUid", "Start glide keymap UID (double jump)", ConfigType::Text,
-                    value("m_startGlideKeymapUid", ""))
-            .config("m_fireworkKeymapUid", "Firework use keymap UID", ConfigType::Text,
-                    value("m_fireworkKeymapUid", ""))
-            .config("m_lookUpKeymapUid", "Recovery look-up keymap UID", ConfigType::Text,
-                    value("m_lookUpKeymapUid", ""))
-            .config("m_unglideKeymapUid", "Stop gliding keymap UID", ConfigType::Text,
-                    value("m_unglideKeymapUid", "e2225852-1df2-4232-bb26-606f11fc8745"))
-            .onConfigChanged([this](std::string_view, std::string_view key, std::string_view item) {
-                if (onMenuConfigChanged(key, item))
-                    bedrocktools::config::ConfigManager::get().save();
-            });
-        if (!settings.registerModule()) uidSettingsRegistered.store(false, std::memory_order_release);
-    }
-
     ConfigSchemaBuilder schema;
     nlohmann::json config;
     saveConfig(config);
@@ -821,6 +829,30 @@ void ElytraMacingModule::onMenuRegistered() {
         n.hasCurrentValue = true;
         schema.node(std::move(n));
     };
+    auto textInput = [&](const char* key, const char* title, const char* category,
+                         const char* description, const char* fallback) {
+        ConfigNodeV2 n;
+        n.id = key; n.key = key; n.title = title; n.category = category;
+        n.description = description;
+        n.type = ConfigControlTypeV2::Text;
+        n.defaultValue = fallback;
+        n.currentValue = valueString(key, fallback);
+        n.hasCurrentValue = true;
+        schema.node(std::move(n));
+    };
+
+    textInput("m_startGlideKeymapUid", "Start glide keymap UID", "flight",
+              "Key Mapper UUID for the double-jump Elytra activation macro.",
+              "587f1cfd-e4cf-475c-b868-08d15f55f649");
+    textInput("m_fireworkKeymapUid", "Firework use keymap UID", "flight",
+              "Key Mapper UUID for using the selected firework rocket.",
+              "29bcde0c-ab40-4e6e-91e4-27cc373c3709");
+    textInput("m_unglideKeymapUid", "Stop gliding keymap UID", "flight",
+              "Key Mapper UUID for the glide-stop/Space macro.",
+              "e2225852-1df2-4232-bb26-606f11fc8745");
+    textInput("m_lookUpKeymapUid", "Recovery look-up keymap UID", "recovery",
+              "Key Mapper UUID for the upward camera swipe used during landing recovery.",
+              "894975b5-38a1-4072-8964-6b83c0ae6f61");
 
     slider("m_engageDistance", "Mace engagement distance", "2", "10", "0.1", " blocks", "flight", "4.5");
     slider("m_approachAimOffsetY", "Aim above target while gliding", "0", "8", "0.25", " blocks", "flight", "2.5");

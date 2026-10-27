@@ -5,8 +5,11 @@
 #include "player/autohit.hpp"
 #include "player/maceswapper.hpp"
 #include "player/unglide.hpp"
+#include "player/elytramacing.hpp"
 #include "player/swordswapper.hpp"
 #include "visual/esp.hpp"
+#include "visual/hitbox.hpp"
+#include "visual/oreesp.hpp"
 #include "hud/ultrakillhud.hpp"
 #include "misc/modulediagnostics.hpp"
 
@@ -66,7 +69,10 @@ void registerAllModules() {
     registry.emplace<UnglideModule>();
     registry.emplace<SwordSwapperModule>();
     registry.emplace<HitboxExpanderModule>();
+    registry.emplace<HitboxModule>(); // Shared RenderLevel renderer used by ESP and Ore ESP.
     registry.emplace<EspModule>();
+    registry.emplace<OreEspModule>();
     registry.emplace<UltrakillHudModule>();
     registry.emplace<ModuleDiagnosticsModule>();
+    registry.emplace<ElytraMacingModule>();
 }

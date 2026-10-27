@@ -24,6 +24,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 namespace {
 
@@ -377,12 +378,14 @@ std::optional<bool> playerIsGlidingForUnglide(void* player) {
 
 }
 
-
+std::optional<bool> UnglideModule::queryGlidingState(void* player) {
+    return playerIsGlidingForUnglide(player);
+}
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
 void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
-void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);++m_dispatchToken;m_dispatchInProgress=false;m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);++m_dispatchToken;m_dispatchInProgress=false;m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
 void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
@@ -510,7 +513,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 m_triggerState = TriggerState::Tracking;
             }
             m_burstRemaining = 0;
-            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
         }
         report("tracking_out_of_range",
             std::string("target_distance=") + std::to_string(geometry.distance) +
@@ -528,7 +531,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 m_triggerState = TriggerState::Tracking;
             }
             m_burstRemaining = 0;
-            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
         }
         report("tracking_height_out_of_range",
             std::string("vertical_difference=") + std::to_string(geometry.verticalDifference) +
@@ -537,13 +540,12 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
     if (!crosshairConfirmed) {
         reject("crosshair_not_on_target",
-               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
+               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 40);
         return;
     }
 
     const auto dispatchStarted = std::chrono::steady_clock::now();
-    AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
-    int remaining = 0;
+    std::uint64_t dispatchToken = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || m_dispatchInProgress ||
@@ -559,88 +561,143 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (!bedaim::macefall::shouldBeginUnglideDispatch(
                 enabled && m_unglideEnabled, m_dispatchInProgress,
                 m_triggerState == TriggerState::Triggered, m_burstRemaining)) {
-            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(40);
             return;
         }
-        // Reserve one dispatch while locked, then release the mutex before JNI
-        // and sendBroadcast so slow Java work cannot block config/disable callbacks.
+        // Reserve the action, then run JNI off the game tick so a slow Android
+        // broadcast cannot delay the next player update.
         m_dispatchInProgress = true;
+        dispatchToken = ++m_dispatchToken;
     }
 
+    const float reportedDistance = geometry.distance;
+    const float reportedVerticalDifference = geometry.verticalDifference;
+    const auto reportedGlidingState = glidingState;
     try {
-        result = dispatchUnglideKeyMapperKeymap();
+        std::thread([this, target, dispatchToken, reportedDistance, reportedVerticalDifference,
+                     reportedGlidingState]() {
+            AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
+            try {
+                result = dispatchUnglideKeyMapperKeymap();
+            } catch (...) {
+                result = AutomationBroadcastResult::BroadcastFailed;
+            }
+
+            int remaining = 0;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                // Ignore completion from a dispatch invalidated by disable/re-enable.
+                if (dispatchToken != m_dispatchToken) return;
+                m_dispatchInProgress = false;
+                // A target change may reset the state while JNI is in flight; a late
+                // completion must not overwrite that newer target state.
+                if (m_latchedTarget == target &&
+                    m_triggerState == TriggerState::Triggered) {
+                    const bool sent = result == AutomationBroadcastResult::Sent;
+                    if (sent) --m_burstRemaining;
+                    else m_burstRemaining = 0;
+                    remaining = m_burstRemaining;
+                    m_nextAttempt = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(
+                            sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 100)
+                                 : 500);
+                } else {
+                    remaining = m_burstRemaining;
+                }
+            }
+
+            bedrocktools::diagnostics::probe(
+                result == AutomationBroadcastResult::Sent
+                    ? bedrocktools::diagnostics::Level::Debug
+                    : bedrocktools::diagnostics::Level::Warning,
+                "Unglide", "dispatch", automationBroadcastResultName(result),
+                std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
+                    (reportedGlidingState
+                        ? (*reportedGlidingState ? "true" : "false") : "unavailable") +
+                    "; target_distance=" + std::to_string(reportedDistance) +
+                    ", vertical_difference=" + std::to_string(reportedVerticalDifference) +
+                    ", burst_remaining=" + std::to_string(remaining) +
+                    ", keymap_uid=" + kUnglideKeymapUid);
+        }).detach();
     } catch (...) {
-        result = AutomationBroadcastResult::BroadcastFailed;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_dispatchInProgress = false;
-        // Disable/re-enable may reset the state while the broadcast is in flight.
-        // Do not let a late completion overwrite that newer state.
-        if (m_latchedTarget == target &&
-            m_triggerState == TriggerState::Triggered) {
-            const bool sent = result == AutomationBroadcastResult::Sent;
-            if (sent) --m_burstRemaining;
-            else m_burstRemaining = 0;
-            remaining = m_burstRemaining;
-            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(
-                sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 160) : 500);
-        } else {
-            remaining = m_burstRemaining;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_dispatchInProgress = false;
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
         }
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "Unglide", "dispatch",
+            "thread_creation_failed", "Could not queue the Key Mapper broadcast.");
     }
-
-    report(automationBroadcastResultName(result),
-        std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
-            (glidingState ? (*glidingState ? "true" : "false") : "unavailable") +
-            "; target_distance=" + std::to_string(geometry.distance) +
-            ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
-            ", burst_remaining=" + std::to_string(remaining) +
-            ", keymap_uid=" + kUnglideKeymapUid);
 }
 void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
-void UnglideModule::onMenuRegistered(){
- using namespace pl::modmenu;
- // Launcher-owned fields provide a persistent edit path; the compact slider
- // schema below remains available in the Unglide module page.
- static std::atomic<bool> persistentSettingsRegistered{false};
- bool expected = false;
- if (persistentSettingsRegistered.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-   nlohmann::json persistentConfig;
-   saveConfig(persistentConfig);
-   auto persistentValue = [&](const char* key, const char* fallback) {
-     const auto it = persistentConfig.find(key);
-     if (it == persistentConfig.end() || it->is_null()) return std::string(fallback);
-     if (it->is_string()) return it->get<std::string>();
-     if (it->is_boolean()) return it->get<bool>() ? std::string("true") : std::string("false");
-     return it->dump();
-   };
-   ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
-   settings.modId("Bedaim")
-     .description("Persistent Unglide controls; values apply immediately.")
-     .defaultEnabled(true)
-     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, persistentValue("m_unglideEnabled", "false"))
-     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, persistentValue("m_unglideTargetDistance", "8.0"))
-     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, persistentValue("m_unglideMaxVerticalDifference", "4.0"))
-     .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
-     .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
-     .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-       if (onMenuConfigChanged(key, value)) {
-         // This custom ModuleBuilder callback bypasses ModuleMenu.cpp's normal
-         // persistence callback, so explicitly enqueue the updated module config.
-         bedrocktools::config::ConfigManager::get().save();
-       }
-     });
-   if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
- }
- using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
- s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
- ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
- auto sl=[&](const char*k,const char*title,const char*mn,const char*mx,const char*step,const char*unit,const char*def){ConfigNodeV2 n;n.id=k;n.key=k;n.title=title;n.category="special";n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=def;n.currentValue=vs(k,def);n.hasCurrentValue=true;n.minValue=mn;n.maxValue=mx;n.step=step;n.unit=unit;s.node(std::move(n));};
- sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
- ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
+void UnglideModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+
+    ConfigSchemaBuilder schema;
+    nlohmann::json config;
+    saveConfig(config);
+    auto currentValue = [&](const char* key, const char* fallback) -> std::string {
+        const auto it = config.find(key);
+        if (it == config.end() || it->is_null()) return fallback;
+        if (it->is_string()) return it->get<std::string>();
+        if (it->is_boolean()) return it->get<bool>() ? "true" : "false";
+        return it->dump();
+    };
+
+    schema.defaultCategory("special")
+        .category("special", "Special", "Independent Unglide trigger");
+
+    ConfigNodeV2 enabledNode;
+    enabledNode.id = "m_unglideEnabled";
+    enabledNode.key = enabledNode.id;
+    enabledNode.title = "Enable Unglide";
+    enabledNode.category = "special";
+    enabledNode.type = ConfigControlTypeV2::Toggle;
+    enabledNode.defaultValue = "false";
+    enabledNode.currentValue = currentValue("m_unglideEnabled", "false");
+    enabledNode.hasCurrentValue = true;
+    schema.node(std::move(enabledNode));
+
+    auto slider = [&](const char* key, const char* title, const char* minimum,
+                      const char* maximum, const char* step, const char* unit,
+                      const char* fallback) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.category = "special";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.defaultValue = fallback;
+        node.currentValue = currentValue(key, fallback);
+        node.hasCurrentValue = true;
+        node.minValue = minimum;
+        node.maxValue = maximum;
+        node.step = step;
+        node.unit = unit;
+        schema.node(std::move(node));
+    };
+
+    slider("m_unglideTargetDistance", "Target distance", "1", "32", "0.5",
+           " blocks", "8.0");
+    slider("m_unglideMaxVerticalDifference", "Maximum height difference",
+           "0.5", "16", "0.5", " blocks", "4.0");
+    slider("m_unglideBurstCount", "Burst presses", "1", "10", "1", "",
+           "3");
+    slider("m_unglidePressIntervalMs", "Time between presses", "50", "1000",
+           "10", " ms", "80");
+
+    ConfigNodeV2 keybindNode;
+    keybindNode.id = "keybind";
+    keybindNode.key = "keybind";
+    keybindNode.title = "Keybind";
+    keybindNode.category = "special";
+    keybindNode.type = ConfigControlTypeV2::Keybind;
+    schema.node(std::move(keybindNode));
+
+    setConfigSchemaJson(moduleId, schema.toJson());
 }
 bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
  if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
