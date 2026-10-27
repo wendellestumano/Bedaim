@@ -444,7 +444,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
     };
 
-    auto drawBox = [&](const AABB& aabb, uint32_t color) {
+    auto drawBox = [&](const AABB& aabb, uint32_t color, bool throughWalls) {
         // RenderLevel may visit many actors every frame. Reuse this small buffer
         // instead of allocating a fresh vector for every box submission.
         using Line = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
@@ -469,7 +469,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mx.z}});
         lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mx.z}});
 
-        drawLines(lines, color);
+        drawLines(lines, color, throughWalls);
     };
 
     if (oreEspEnabled && oreEsp) {
@@ -637,8 +637,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             innerLines.push_back({pointAt(radius * 0.39f, a0), pointAt(radius * 0.39f, a1)});
         }
 
-        drawLines(outerLines, 0xFF7247FFu); // violet
-        drawLines(innerLines, 0xFF405DFFu); // electric blue
+        drawLines(outerLines, 0xFF7247FFu, true); // violet, through walls
+        drawLines(innerLines, 0xFF405DFFu, true); // electric blue, through walls
     };
 
     void* selectedEntity = nullptr;
@@ -675,7 +675,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            drawBox(aabb,color);
+            drawBox(aabb,color,true);
             if (esp->showLockInAim) drawTargetRing(aabb);
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
@@ -688,7 +688,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const uint32_t boxColor = g_hitboxMod ? g_hitboxMod->hitboxColor : 0xFF00FFFF;
         // Do not repaint the same native player bounds over an ESP game-mode color.
         // Expanded bounds remain separately visible when Bedrock Bounds is enabled.
-        if (!wantsEsp || isExpandedTarget) drawBox(aabb, boxColor);
+        if (!wantsEsp || isExpandedTarget) drawBox(aabb, boxColor, false);
 
         if (!nativeHitboxesEnabled) return;
         if (g_hitboxMod->showEyeLine) {

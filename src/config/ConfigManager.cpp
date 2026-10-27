@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string_view>
+#include <stdexcept>
 
 namespace bedrocktools::config {
 

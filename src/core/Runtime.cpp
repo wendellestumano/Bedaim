@@ -137,7 +137,7 @@ bool Runtime::load(pl::mod::ModContext& context) {
                          : "Preloader ModContext provided a null JavaVM");
     mResourceDirectory = context.resourceDir();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "Bedaim load requested");
-    bedrocktools::config::ConfigManager::get().setConfigPath((context.configDir() / "config.json").string());
+    bedrocktools::config::ConfigManager::get().setConfigPath((context.configDir() / "Configs.json").string());
     if (!launcherContext()) return true;
     void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
     if (minecraft) {
