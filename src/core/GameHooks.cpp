@@ -200,9 +200,10 @@ public:
         --gameModeActionDepth;
     }
 
-    void publish(GameModeAction action, bool hasResult = false, bool result = false) const {
+    void publish(GameModeAction action, bool hasResult = false, bool result = false,
+                  const bedrocktools::sdk::BlockPos* position = nullptr) const {
         if (!mOuter) return;
-        GameModeActionEvent event{mModeKind, action, mGameMode, hasResult, result};
+        GameModeActionEvent event{mModeKind, action, mGameMode, hasResult, result, position};
         bus().publish(event);
     }
 
@@ -588,14 +589,16 @@ void tickDetour(void* actor) {
 bool gameModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
     GameModeActionScope scope{GameModeType::GameMode, gameMode};
     const bool result = gameModeStartDestroyBlockOriginal ? gameModeStartDestroyBlockOriginal(gameMode, position, face, destroyed) : false;
-    scope.publish(GameModeAction::StartDestroyBlock);
+    scope.publish(GameModeAction::StartDestroyBlock, true, result,
+                  reinterpret_cast<const bedrocktools::sdk::BlockPos*>(position));
     return result;
 }
 
 bool survivalModeStartDestroyBlockDetour(void* gameMode, const void* position, std::uint8_t face, bool* destroyed) {
     GameModeActionScope scope{GameModeType::SurvivalMode, gameMode};
     const bool result = survivalModeStartDestroyBlockOriginal ? survivalModeStartDestroyBlockOriginal(gameMode, position, face, destroyed) : false;
-    scope.publish(GameModeAction::StartDestroyBlock);
+    scope.publish(GameModeAction::StartDestroyBlock, true, result,
+                  reinterpret_cast<const bedrocktools::sdk::BlockPos*>(position));
     return result;
 }
 
@@ -603,7 +606,8 @@ void gameModeStopDestroyBlockDetour(void* gameMode, const void* position) {
     if (gameMode) currentGameMode.store(gameMode, std::memory_order_release);
     const auto modeKind = attackKindFor(gameMode) == AttackKind::SurvivalMode ? GameModeType::SurvivalMode : GameModeType::GameMode;
     if (gameModeStopDestroyBlockOriginal) gameModeStopDestroyBlockOriginal(gameMode, position);
-    GameModeActionEvent event{modeKind, GameModeAction::StopDestroyBlock, gameMode};
+    GameModeActionEvent event{modeKind, GameModeAction::StopDestroyBlock, gameMode, false, false,
+                               reinterpret_cast<const bedrocktools::sdk::BlockPos*>(position)};
     bus().publish(event);
 }
 

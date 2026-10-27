@@ -1,5 +1,6 @@
 #include "hitbox.hpp"
 #include "esp.hpp"
+#include "oreesp.hpp"
 #include "core/GameHooks.hpp"
 #include "core/Diagnostics.hpp"
 #include "../ModuleRegistry.hpp"
@@ -16,6 +17,7 @@
 #include <string>
 #include <cstring>
 #include <vector>
+#include <array>
 #include <utility>
 
 typedef void (*Tessellator_begin_t)(void* tessellator, void* debugCallback, int primitiveMode, int vertexCount, int noIndices);
@@ -272,20 +274,23 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     auto* expander = static_cast<HitboxExpanderModule*>(
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
+    auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
     const bool espEnabled = esp && esp->enabled;
+    const bool oreEspEnabled = oreEsp && oreEsp->enabled;
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
-    if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
+    const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled;
+    if (!actorVisualsEnabled && !oreEspEnabled) return;
     if (!g_localPlayerPtr) { if(espEnabled)espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
 
     // Fetch the native actor vector once per RenderLevel call and reuse it for both
     // off-screen HUD targeting and 3D ESP/Hitbox rendering.
     const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
-    const float queryRange = std::max(30.0f, espRange);
+    const float queryRange = actorVisualsEnabled ? std::max(30.0f, espRange) : 0.0f;
     ActorVec actors{};
     bool actorSnapshotValid = false;
     bool actorSnapshotEmpty = true;
-    if (s_actorFetchNearby) {
+    if (actorVisualsEnabled && s_actorFetchNearby) {
         bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
         actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
         const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
@@ -376,6 +381,45 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
         drawLines(lines, color);
     };
+
+    if (oreEspEnabled && oreEsp) {
+        static std::vector<OreEspModule::Outline> outlines;
+        outlines.clear();
+        oreEsp->getRenderSnapshot(g_playerPos, outlines);
+        using Line = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+        static std::array<std::vector<Line>, 12> linesByKind;
+        for (auto& lines : linesByKind) lines.clear();
+        for (const auto& ore : outlines) {
+            const auto kindIndex = static_cast<std::size_t>(ore.kind);
+            if (kindIndex == 0 || kindIndex >= linesByKind.size()) continue;
+            const float x0 = static_cast<float>(ore.position.x);
+            const float y0 = static_cast<float>(ore.position.y);
+            const float z0 = static_cast<float>(ore.position.z);
+            const float x1 = x0 + 1.0f;
+            const float y1 = y0 + 1.0f;
+            const float z1 = z0 + 1.0f;
+            auto& lines = linesByKind[kindIndex];
+            lines.reserve(lines.size() + 12);
+            // Bottom, top, then four vertical edges. One mesh submission per ore color.
+            lines.push_back({{x0,y0,z0},{x1,y0,z0}});
+            lines.push_back({{x1,y0,z0},{x1,y0,z1}});
+            lines.push_back({{x1,y0,z1},{x0,y0,z1}});
+            lines.push_back({{x0,y0,z1},{x0,y0,z0}});
+            lines.push_back({{x0,y1,z0},{x1,y1,z0}});
+            lines.push_back({{x1,y1,z0},{x1,y1,z1}});
+            lines.push_back({{x1,y1,z1},{x0,y1,z1}});
+            lines.push_back({{x0,y1,z1},{x0,y1,z0}});
+            lines.push_back({{x0,y0,z0},{x0,y1,z0}});
+            lines.push_back({{x1,y0,z0},{x1,y1,z0}});
+            lines.push_back({{x1,y0,z1},{x1,y1,z1}});
+            lines.push_back({{x0,y0,z1},{x0,y1,z1}});
+        }
+        for (std::size_t kindIndex = 1; kindIndex < linesByKind.size(); ++kindIndex) {
+            auto& lines = linesByKind[kindIndex];
+            if (lines.empty()) continue;
+            drawLines(lines, bedaim::xray::colorForOreKind(static_cast<bedaim::xray::OreKind>(kindIndex)));
+        }
+    }
 
     // Reference-style reticle above each ESP player. It lives in world space and
     // uses only that actor's current AABB, so Aim Assist never gates the ring.
@@ -594,9 +638,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 }
 
 HitboxModule::HitboxModule()
-    : Module("Hitbox", "Displays hitboxes of entities.") {
+    : Module("Hitbox", "Internal shared renderer for ESP overlays.") {
 
-    showInMenu = true;
+    showInMenu = false;
+    hideInHudEditor = true;
 
     m_patched = false;
     m_patchTarget = nullptr;
