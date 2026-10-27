@@ -49,9 +49,10 @@ public:
     bool showCoal = false;
     bool showAncientDebris = true;
     bool showOtherOres = true;
-    int horizontalRadius = 16;
-    int verticalRadius = 8;
-    int scanBudgetPerTick = 256;
+    int horizontalRadius = 48;
+    int verticalRadius = 24;
+    int scanBudgetPerTick = 512;
+    float outlineThickness = 0.04f;
 
 private:
     struct PositionKey {

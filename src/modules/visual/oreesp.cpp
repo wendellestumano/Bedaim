@@ -21,10 +21,10 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_getBlock{nullptr};
-constexpr std::size_t kMaxCachedOres = 4096;
+constexpr std::size_t kMaxCachedOres = 8192;
 constexpr std::size_t kMaxPendingBreaks = 16;
 constexpr std::size_t kMaxQueuedScans = 8;
-constexpr std::size_t kMaxRenderedOres = 384;
+constexpr std::size_t kMaxRenderedOres = 768;
 
 bool parseBool(std::string_view value, bool& result) {
     if (value == "true" || value == "1" || value == "on") { result = true; return true; }
@@ -304,8 +304,8 @@ void OreEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
             const int dx = playerBlock.x - m_lastAutoScanCenter.x;
             const int dy = playerBlock.y - m_lastAutoScanCenter.y;
             const int dz = playerBlock.z - m_lastAutoScanCenter.z;
-            const int horizontalStep = std::max(4, std::clamp(horizontalRadius, 4, 32) / 2);
-            const int verticalStep = std::max(2, std::clamp(verticalRadius, 2, 16) / 2);
+            const int horizontalStep = std::max(4, std::clamp(horizontalRadius, 4, 48) / 2);
+            const int verticalStep = std::max(2, std::clamp(verticalRadius, 2, 24) / 2);
             if (dx * dx + dz * dz >= horizontalStep * horizontalStep ||
                 std::abs(dy) >= verticalStep) {
                 queueScan(playerBlock);
@@ -358,8 +358,8 @@ void OreEspModule::startNextScan() {
     if (m_scanActive || m_scanQueue.empty()) return;
     m_scanCenter = m_scanQueue.front().center;
     m_scanQueue.pop_front();
-    m_scanRadiusHorizontal = std::clamp(horizontalRadius, 4, 32);
-    m_scanRadiusVertical = std::clamp(verticalRadius, 2, 16);
+    m_scanRadiusHorizontal = std::clamp(horizontalRadius, 4, 48);
+    m_scanRadiusVertical = std::clamp(verticalRadius, 2, 24);
     const std::size_t diameter = static_cast<std::size_t>(2 * m_scanRadiusHorizontal + 1);
     const std::size_t height = static_cast<std::size_t>(2 * m_scanRadiusVertical + 1);
     m_scanTotal = diameter * diameter * height;
@@ -386,7 +386,7 @@ void OreEspModule::startNextScan() {
     }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug, "Ore ESP",
         "scan_started; positions=" + std::to_string(m_scanTotal) +
-        "; budget_per_tick=" + std::to_string(std::clamp(scanBudgetPerTick, 64, 1024)));
+        "; budget_per_tick=" + std::to_string(std::clamp(scanBudgetPerTick, 64, 2048)));
 }
 
 void OreEspModule::processScanBatch(bedrocktools::sdk::BlockSource* source) {
@@ -447,10 +447,10 @@ void OreEspModule::eraseCachedPosition(const bedrocktools::sdk::BlockPos& pos) {
 void OreEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosition,
                                      std::vector<Outline>& output) const {
     output.clear();
-    constexpr std::size_t maxRenderedOres = 384;
+    constexpr std::size_t maxRenderedOres = 768;
     output.reserve(maxRenderedOres);
-    const int rx = std::clamp(horizontalRadius, 4, 32);
-    const int ry = std::clamp(verticalRadius, 2, 16);
+    const int rx = std::clamp(horizontalRadius, 4, 48);
+    const int ry = std::clamp(verticalRadius, 2, 24);
     const float maxHorizontalSq = static_cast<float>(rx * rx);
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     for (const auto& [key, outline] : m_oreCache) {
@@ -472,7 +472,8 @@ void OreEspModule::onMenuRegistered() {
     saveConfig(config);
     schema.defaultCategory("ores")
         .category("ores", "Ore types", "Select which ore outlines are visible.")
-        .category("scan", "Scan limits", "An initial scan is spread across ticks. Later scans are triggered by confirmed block changes, meaningful movement, or radius changes.");
+        .category("scan", "Scan limits", "An initial scan is spread across ticks. Later scans are triggered by confirmed block changes, meaningful movement, or radius changes.")
+        .category("render", "Outline rendering", "Adjust the visual thickness of ore outlines.");
 
     auto toggle = [&](const char* key, const char* title, const char* description, bool defaultValue) {
         ConfigNodeV2 node;
@@ -500,15 +501,16 @@ void OreEspModule::onMenuRegistered() {
                       const char* unit, const char* defaultValue) {
         ConfigNodeV2 node;
         node.id = key; node.key = key; node.title = title; node.description = description;
-        node.category = "scan"; node.type = ConfigControlTypeV2::SliderInt;
+        node.category = (std::string_view(key) == "outlineThickness") ? "render" : "scan"; node.type = ConfigControlTypeV2::SliderInt;
         node.defaultValue = defaultValue; node.currentValue = configText(config, key, defaultValue);
         node.hasCurrentValue = true; node.minValue = minimum; node.maxValue = maximum;
         node.step = step; node.unit = unit;
         schema.node(std::move(node));
     };
-    slider("horizontalRadius", "Horizontal radius", "Scan/draw radius across X/Z.", "4", "32", "1", " blocks", "16");
-    slider("verticalRadius", "Vertical radius", "Scan/draw radius across Y.", "2", "16", "1", " blocks", "8");
-    slider("scanBudgetPerTick", "Scan budget", "Maximum blocks queried per game tick; lower values reduce spikes but take longer.", "64", "1024", "64", " blocks/tick", "256");
+    slider("horizontalRadius", "Horizontal radius", "Scan/draw radius across X/Z (3× previous default).", "4", "48", "1", " blocks", "48");
+    slider("verticalRadius", "Vertical radius", "Scan/draw radius across Y (3× previous default).", "2", "24", "1", " blocks", "24");
+    slider("scanBudgetPerTick", "Scan budget", "Maximum blocks queried per game tick; lower values reduce spikes but take longer.", "64", "2048", "64", " blocks/tick", "512");
+    slider("outlineThickness", "Outline thickness", "Increase the spacing of parallel edge strokes for a bolder outline.", "1", "10", "1", " units", "4");
     setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -530,21 +532,25 @@ bool OreEspModule::onMenuConfigChanged(std::string_view key, std::string_view va
         else if (key == "showCoal") showCoal = parsed;
         else if (key == "showAncientDebris") showAncientDebris = parsed;
         else showOtherOres = parsed;
+        onMenuRegistered(); // Rebuild currentValue fields so reopening the menu reflects the changed settings.
         return true;
     }
     int parsed = 0;
     if (!parseInteger(value, parsed)) return false;
     if (key == "horizontalRadius") {
-        horizontalRadius = std::clamp(parsed, 4, 32);
+        horizontalRadius = std::clamp(parsed, 4, 48);
         if (enabled && (m_scanActive || m_hasScannedAtLeastOnce)) m_rescanRequested = true;
     } else if (key == "verticalRadius") {
-        verticalRadius = std::clamp(parsed, 2, 16);
+        verticalRadius = std::clamp(parsed, 2, 24);
         if (enabled && (m_scanActive || m_hasScannedAtLeastOnce)) m_rescanRequested = true;
     } else if (key == "scanBudgetPerTick") {
-        scanBudgetPerTick = std::clamp(parsed, 64, 1024);
+        scanBudgetPerTick = std::clamp(parsed, 64, 2048);
+    } else if (key == "outlineThickness") {
+        outlineThickness = std::clamp(static_cast<float>(parsed) / 100.0f, 0.01f, 0.10f);
     } else {
         return false;
     }
+    onMenuRegistered(); // Keep menu values in sync after sliders change.
     return true;
 }
 
@@ -562,8 +568,9 @@ void OreEspModule::loadConfig(const nlohmann::json& json) {
     showAncientDebris = json.value("showAncientDebris", showAncientDebris);
     showOtherOres = json.value("showOtherOres", showOtherOres);
     horizontalRadius = std::clamp(json.value("horizontalRadius", horizontalRadius), 4, 32);
-    verticalRadius = std::clamp(json.value("verticalRadius", verticalRadius), 2, 16);
-    scanBudgetPerTick = std::clamp(json.value("scanBudgetPerTick", scanBudgetPerTick), 64, 1024);
+    verticalRadius = std::clamp(json.value("verticalRadius", verticalRadius), 2, 24);
+    scanBudgetPerTick = std::clamp(json.value("scanBudgetPerTick", scanBudgetPerTick), 64, 2048);
+    outlineThickness = std::clamp(json.value("outlineThickness", outlineThickness), 0.01f, 0.10f);
 }
 
 void OreEspModule::saveConfig(nlohmann::json& json) {
@@ -580,6 +587,7 @@ void OreEspModule::saveConfig(nlohmann::json& json) {
     json["showAncientDebris"] = showAncientDebris;
     json["showOtherOres"] = showOtherOres;
     json["horizontalRadius"] = std::clamp(horizontalRadius, 4, 32);
-    json["verticalRadius"] = std::clamp(verticalRadius, 2, 16);
-    json["scanBudgetPerTick"] = std::clamp(scanBudgetPerTick, 64, 1024);
+    json["verticalRadius"] = std::clamp(verticalRadius, 2, 24);
+    json["scanBudgetPerTick"] = std::clamp(scanBudgetPerTick, 64, 2048);
+    json["outlineThickness"] = std::clamp(outlineThickness, 0.01f, 0.10f);
 }

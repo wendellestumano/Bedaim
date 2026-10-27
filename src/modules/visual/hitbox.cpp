@@ -490,7 +490,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         for (std::size_t kindIndex = 1; kindIndex < linesByKind.size(); ++kindIndex) {
             auto& lines = linesByKind[kindIndex];
             lines.clear();
-            const std::size_t required = oreCounts[kindIndex] * 12;
+            const std::size_t required = oreCounts[kindIndex] * 60;
             if (lines.capacity() < required) lines.reserve(required);
         }
         for (const auto& ore : outlines) {
@@ -505,19 +505,34 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             const float y1 = static_cast<float>(ore.position.y + 1) + outlineExpansion;
             const float z1 = static_cast<float>(ore.position.z + 1) + outlineExpansion;
             auto& lines = linesByKind[kindIndex];
-            // Bottom, top, then four vertical edges. One mesh submission per ore color.
-            lines.push_back({{x0,y0,z0},{x1,y0,z0}});
-            lines.push_back({{x1,y0,z0},{x1,y0,z1}});
-            lines.push_back({{x1,y0,z1},{x0,y0,z1}});
-            lines.push_back({{x0,y0,z1},{x0,y0,z0}});
-            lines.push_back({{x0,y1,z0},{x1,y1,z0}});
-            lines.push_back({{x1,y1,z0},{x1,y1,z1}});
-            lines.push_back({{x1,y1,z1},{x0,y1,z1}});
-            lines.push_back({{x0,y1,z1},{x0,y1,z0}});
-            lines.push_back({{x0,y0,z0},{x0,y1,z0}});
-            lines.push_back({{x1,y0,z0},{x1,y1,z0}});
-            lines.push_back({{x1,y0,z1},{x1,y1,z1}});
-            lines.push_back({{x0,y0,z1},{x0,y1,z1}});
+            // Draw the original 12 edges plus four parallel strokes around each edge.
+            // This increases visible world-space thickness without relying on driver line-width support.
+            const float t = std::clamp(oreEsp->outlineThickness, 0.01f, 0.10f);
+            auto thickEdge = [&](bedrocktools::sdk::Vec3 a, bedrocktools::sdk::Vec3 b,
+                                 bedrocktools::sdk::Vec3 offA, bedrocktools::sdk::Vec3 offB) {
+                lines.push_back({a, b});
+                lines.push_back({{a.x + offA.x, a.y + offA.y, a.z + offA.z},
+                                 {b.x + offA.x, b.y + offA.y, b.z + offA.z}});
+                lines.push_back({{a.x - offA.x, a.y - offA.y, a.z - offA.z},
+                                 {b.x - offA.x, b.y - offA.y, b.z - offA.z}});
+                lines.push_back({{a.x + offB.x, a.y + offB.y, a.z + offB.z},
+                                 {b.x + offB.x, b.y + offB.y, b.z + offB.z}});
+                lines.push_back({{a.x - offB.x, a.y - offB.y, a.z - offB.z},
+                                 {b.x - offB.x, b.y - offB.y, b.z - offB.z}});
+            };
+            // Horizontal edges use the two perpendicular axes; vertical edges use X/Z.
+            thickEdge({x0,y0,z0},{x1,y0,z0},{0,0,t},{0,t,0});
+            thickEdge({x1,y0,z0},{x1,y0,z1},{t,0,0},{0,t,0});
+            thickEdge({x1,y0,z1},{x0,y0,z1},{0,0,t},{0,t,0});
+            thickEdge({x0,y0,z1},{x0,y0,z0},{t,0,0},{0,t,0});
+            thickEdge({x0,y1,z0},{x1,y1,z0},{0,0,t},{0,t,0});
+            thickEdge({x1,y1,z0},{x1,y1,z1},{t,0,0},{0,t,0});
+            thickEdge({x1,y1,z1},{x0,y1,z1},{0,0,t},{0,t,0});
+            thickEdge({x0,y1,z1},{x0,y1,z0},{t,0,0},{0,t,0});
+            thickEdge({x0,y0,z0},{x0,y1,z0},{t,0,0},{0,0,t});
+            thickEdge({x1,y0,z0},{x1,y1,z0},{t,0,0},{0,0,t});
+            thickEdge({x1,y0,z1},{x1,y1,z1},{t,0,0},{0,0,t});
+            thickEdge({x0,y0,z1},{x0,y1,z1},{t,0,0},{0,0,t});
         }
         for (std::size_t kindIndex = 1; kindIndex < linesByKind.size(); ++kindIndex) {
             auto& lines = linesByKind[kindIndex];
