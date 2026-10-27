@@ -71,6 +71,9 @@ bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& 
     ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    // ActorFetchNearbyActorsSorted can represent an empty result as {nullptr, nullptr}.
+    // Treat that as a successful empty snapshot, not a malformed vector.
+    if (begin == 0 && end == 0) return true;
     if (!begin || !end || end < begin ||
         (end - begin) % sizeof(DistanceSortedActor) != 0 ||
         (end - begin) / sizeof(DistanceSortedActor) > 16384) return false;
@@ -1852,7 +1855,11 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
         missingActorsResolved = !hasMissingTrackedActor();
         if (!missingActorsResolved) {
             if (!collectNearbyActors(player, 512.0f, liveActors)) return;
-            missingActorsResolved = true;
+            // Do not discard the original AABB snapshot just because an actor was
+            // absent from a broad query. If the query temporarily omits a still-live
+            // actor, dropping its snapshot would make an expanded hitbox impossible
+            // to restore when that actor is encountered again.
+            missingActorsResolved = !hasMissingTrackedActor();
         }
     }
 
@@ -1932,6 +1939,11 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (begin == 0 && end == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "HitboxExpander", "actor_snapshot", "empty");
+        return;
+    }
     if (!begin || !end || end < begin ||
         (end - begin) % sizeof(DistanceSortedActor) != 0 ||
         (end - begin) / sizeof(DistanceSortedActor) > 8192) {
