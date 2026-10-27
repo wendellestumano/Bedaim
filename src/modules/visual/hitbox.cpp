@@ -1,5 +1,6 @@
 #include "hitbox.hpp"
 #include "esp.hpp"
+#include "oreesp.hpp"
 #include "core/GameHooks.hpp"
 #include "core/Diagnostics.hpp"
 #include "../ModuleRegistry.hpp"
@@ -16,6 +17,7 @@
 #include <string>
 #include <cstring>
 #include <vector>
+#include <array>
 #include <utility>
 
 typedef void (*Tessellator_begin_t)(void* tessellator, void* debugCallback, int primitiveMode, int vertexCount, int noIndices);
@@ -136,6 +138,10 @@ static Actor_isInvisible_t                s_actorIsInvisible = nullptr;
 static Actor_fetchNearbyActorsSorted_t    s_actorFetchNearby = nullptr;
 
 static MaterialPtr s_matSelection;
+// Existing vanilla RenderDragon material whose source definition disables depth testing.
+static MaterialPtr s_matThroughWalls;
+static const char* s_throughWallsMaterialName = nullptr;
+static bool s_throughWallsMaterialChecked = false;
 static uintptr_t    s_renderMaterialGroup = 0;
 
 static void (*_renderLevel_orig)(void* _this, void* screenContext, void* a3);
@@ -154,7 +160,8 @@ static bool validRenderBounds(const AABB& b) {
 }
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
  espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
- espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false};
+ espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false},
+ espLoggedOverlayMaterial{false},espLoggedOverlayUnavailable{false};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -181,10 +188,46 @@ static MaterialPtr getMaterial(const char* name) {
 }
 
 static void ensureMaterials() {
-    if (s_matSelection) return;
-    if (!s_renderMaterialGroup) return;
+    if (!s_renderMaterialGroup) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning, "Ore ESP",
+            "material_group", "missing", "render material group is unresolved; material lookups will retry");
+        return;
+    }
 
-    if (!s_matSelection) s_matSelection = getMaterial("selection_box");
+    if (!s_matSelection) {
+        s_matSelection = getMaterial("selection_box");
+        bedrocktools::diagnostics::probe(s_matSelection ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+            "Ore ESP", "selection_material", s_matSelection ? "resolved" : "missing",
+            s_matSelection ? "selection_box ready" : "selection_box unavailable; using LevelRendererPlayer fallback");
+    }
+
+    if (!s_throughWallsMaterialChecked) {
+        // ui3D.material is loaded from common.json. Its base name_tag material
+        // uses depthFunc=Always and DisableDepthWrite, so it is not gated by Fancy
+        // graphics and cannot occlude later world draws with its own depth.
+        s_matThroughWalls = getMaterial("name_tag");
+        if (s_matThroughWalls) {
+            s_throughWallsMaterialName = "name_tag";
+        } else {
+            // Hologram materials are alternatives when the active pack loads them.
+            s_matThroughWalls = getMaterial("reality_frame_skyfill");
+            if (s_matThroughWalls) {
+                s_throughWallsMaterialName = "reality_frame_skyfill";
+            } else {
+                s_matThroughWalls = getMaterial("hologram_hit_effect");
+                if (s_matThroughWalls)
+                    s_throughWallsMaterialName = "hologram_hit_effect";
+            }
+        }
+        s_throughWallsMaterialChecked = true;
+        bedrocktools::diagnostics::probe(
+            s_matThroughWalls ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+            "Ore ESP", "through_walls_material",
+            s_matThroughWalls ? s_throughWallsMaterialName : "unresolved",
+            s_matThroughWalls
+                ? "depth-test-disabled RenderDragon material resolved"
+                : "no loaded vanilla depth-test-disabled material; Ore ESP remains depth-tested");
+    }
 }
 
 static AABB getActorAABB(void* actor) {
@@ -272,20 +315,27 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     auto* expander = static_cast<HitboxExpanderModule*>(
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
+    auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
     const bool espEnabled = esp && esp->enabled;
+    // Require the complete effective state, not just the cached enabled flag.
+    // The shared renderer hook can remain installed while individual modules toggle.
+    const bool oreEspEnabled = oreEsp && oreEsp->enabled &&
+                               oreEsp->masterEnabled && oreEsp->keybindActive;
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
-    if (!nativeHitboxesEnabled && !showExpandedHitboxes && !espEnabled) return;
-    if (!g_localPlayerPtr) { if(espEnabled)espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
+    const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled;
+    const bool overlayVisualsEnabled = actorVisualsEnabled || oreEspEnabled;
+    if (!overlayVisualsEnabled) return;
+    if (!g_localPlayerPtr) { espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
 
     // Fetch the native actor vector once per RenderLevel call and reuse it for both
     // off-screen HUD targeting and 3D ESP/Hitbox rendering.
     const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
-    const float queryRange = std::max(30.0f, espRange);
+    const float queryRange = actorVisualsEnabled ? std::max(30.0f, espRange) : 0.0f;
     ActorVec actors{};
     bool actorSnapshotValid = false;
     bool actorSnapshotEmpty = true;
-    if (s_actorFetchNearby) {
+    if (actorVisualsEnabled && s_actorFetchNearby) {
         bedrocktools::sdk::Vec3 extent{queryRange, queryRange, queryRange};
         actors = s_actorFetchNearby(g_localPlayerPtr, &extent, 1);
         const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
@@ -300,15 +350,15 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
                                   actors, actorSnapshotValid, actorSnapshotEmpty, espRange);
     }
-    if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
-    if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(espEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
+    if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(overlayVisualsEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
+    if (!screenContext || reinterpret_cast<std::uintptr_t>(screenContext)<0x1000) { if(overlayVisualsEnabled)espLogOnce(espLoggedContext,bedrocktools::diagnostics::Level::Warning,"render_gate=screen_context_unavailable"); return; }
 
     uintptr_t tessellatorPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mTessellator);
-    if (!tessellatorPtr || tessellatorPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=tessellator_unavailable"); return; }
+    if (!tessellatorPtr || tessellatorPtr < 0x1000) { if(overlayVisualsEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=tessellator_unavailable"); return; }
     void* tessellator = (void*)tessellatorPtr;
 
     uintptr_t lrpPtr = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer);
-    if (!lrpPtr || lrpPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=level_renderer_player_unavailable"); return; }
+    if (!lrpPtr || lrpPtr < 0x1000) { if(overlayVisualsEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=level_renderer_player_unavailable"); return; }
 
     float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
     float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
@@ -320,16 +370,24 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                                     : (void*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mSelectionOverlayMaterial);
 
     uintptr_t colorHolderPtr = *(uintptr_t*)((uintptr_t)screenContext + bedrocktools::sdk::offsets::ScreenContext::mColorHolder);
-    if (!colorHolderPtr || colorHolderPtr < 0x1000) { if(espEnabled)espLogOnce(espLoggedColor,bedrocktools::diagnostics::Level::Warning,"render_gate=color_holder_unavailable"); return; }
-    float* colorHolder = (float*)colorHolderPtr;
+    float* colorHolder = nullptr;
+    float savedColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    if (colorHolderPtr > 0x1000) {
+        colorHolder = reinterpret_cast<float*>(colorHolderPtr);
+        savedColor[0] = colorHolder[0];
+        savedColor[1] = colorHolder[1];
+        savedColor[2] = colorHolder[2];
+        savedColor[3] = colorHolder[3];
+        colorHolder[0] = 1.0f;
+        colorHolder[1] = 1.0f;
+        colorHolder[2] = 1.0f;
+        colorHolder[3] = 1.0f;
+    } else {
+        espLogOnce(espLoggedColor, bedrocktools::diagnostics::Level::Warning,
+                   "render_gate=color_holder_unavailable; continuing with explicit vertex colors");
+    }
 
-    float savedColor[4] = { colorHolder[0], colorHolder[1], colorHolder[2], colorHolder[3] };
-    colorHolder[0] = 1.0f;
-    colorHolder[1] = 1.0f;
-    colorHolder[2] = 1.0f;
-    colorHolder[3] = 1.0f;
-
-    auto drawLines = [&](const std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>>& lines, uint32_t color) {
+    auto drawLines = [&](const std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>>& lines, uint32_t color, bool throughWalls = false) {
         if (lines.empty()) return;
         float r = ((color >> 16) & 0xFF) / 255.0f;
         float g = ((color >>  8) & 0xFF) / 255.0f;
@@ -345,17 +403,54 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             bedrocktools::sdk::Vec3 p2 = line.second;
             p1.x -= camX; p1.y -= camY; p1.z -= camZ;
             p2.x -= camX; p2.y -= camY; p2.z -= camZ;
+
             s_tessVertex(tessellator, p1.x, p1.y, p1.z);
             s_tessVertex(tessellator, p2.x, p2.y, p2.z);
         }
 
         char pad[0x58];
         memset(pad, 0, sizeof(pad));
-        s_renderMesh(screenContext, tessellator, matInner, pad);
+        // Use a native RenderDragon material with DisableDepthTest instead of
+        // mutating GL state before submission (the material pipeline overrides it).
+        const bool useThroughWallsMaterial = throughWalls && s_matThroughWalls && colorHolder;
+        void* materialForBatch = useThroughWallsMaterial
+            ? static_cast<void*>(&s_matThroughWalls)
+            : matInner;
+        float previousBatchColor[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        if (useThroughWallsMaterial) {
+            previousBatchColor[0] = colorHolder[0];
+            previousBatchColor[1] = colorHolder[1];
+            previousBatchColor[2] = colorHolder[2];
+            previousBatchColor[3] = colorHolder[3];
+            // current_color.fragment reads ScreenContext's CURRENT_COLOR constant.
+            colorHolder[0] = r;
+            colorHolder[1] = g;
+            colorHolder[2] = b;
+            colorHolder[3] = a;
+            espLogOnce(espLoggedOverlayMaterial, bedrocktools::diagnostics::Level::Info,
+                       "ore_overlay=material; native DisableDepthTest material used");
+        } else if (throughWalls) {
+            espLogOnce(espLoggedOverlayUnavailable, bedrocktools::diagnostics::Level::Warning,
+                       "ore_overlay=depth_tested_fallback; no compatible no-depth material or color holder");
+        }
+
+        s_renderMesh(screenContext, tessellator, materialForBatch, pad);
+
+        if (useThroughWallsMaterial) {
+            colorHolder[0] = previousBatchColor[0];
+            colorHolder[1] = previousBatchColor[1];
+            colorHolder[2] = previousBatchColor[2];
+            colorHolder[3] = previousBatchColor[3];
+        }
     };
 
     auto drawBox = [&](const AABB& aabb, uint32_t color) {
-        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> lines;
+        // RenderLevel may visit many actors every frame. Reuse this small buffer
+        // instead of allocating a fresh vector for every box submission.
+        using Line = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+        static std::vector<Line> lines;
+        lines.clear();
+        if (lines.capacity() < 12) lines.reserve(12);
         bedrocktools::sdk::Vec3 mn = aabb.min;
         bedrocktools::sdk::Vec3 mx = aabb.max;
 
@@ -376,6 +471,78 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
         drawLines(lines, color);
     };
+
+    if (oreEspEnabled && oreEsp) {
+        static std::vector<OreEspModule::Outline> outlines;
+        outlines.clear();
+        oreEsp->getRenderSnapshot(g_playerPos, outlines);
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info, "Ore ESP",
+            "renderer_hook", "entered", "shared RenderLevel hook reached with Ore ESP enabled");
+        bedrocktools::diagnostics::probe(outlines.empty() ? bedrocktools::diagnostics::Level::Debug : bedrocktools::diagnostics::Level::Info,
+            "Ore ESP", "render_snapshot", outlines.empty() ? "empty" : "nonempty",
+            "cached outlines submitted=" + std::to_string(outlines.size()));
+        using Line = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+        static std::array<std::vector<Line>, 12> linesByKind;
+        std::array<std::size_t, 12> oreCounts{};
+        for (const auto& ore : outlines) {
+            const auto kindIndex = static_cast<std::size_t>(ore.kind);
+            if (kindIndex > 0 && kindIndex < oreCounts.size()) ++oreCounts[kindIndex];
+        }
+        // Reserve once per ore kind. Calling reserve(size + 12) for every ore
+        // can force repeated reallocations and quadratic copying as the cache grows.
+        for (std::size_t kindIndex = 1; kindIndex < linesByKind.size(); ++kindIndex) {
+            auto& lines = linesByKind[kindIndex];
+            lines.clear();
+            const std::size_t required = oreCounts[kindIndex] * 60;
+            if (lines.capacity() < required) lines.reserve(required);
+        }
+        for (const auto& ore : outlines) {
+            const auto kindIndex = static_cast<std::size_t>(ore.kind);
+            if (kindIndex == 0 || kindIndex >= linesByKind.size()) continue;
+            // Expand slightly outside the block to avoid z-fighting with coplanar faces.
+            constexpr float outlineExpansion = 0.006f;
+            const float x0 = static_cast<float>(ore.position.x) - outlineExpansion;
+            const float y0 = static_cast<float>(ore.position.y) - outlineExpansion;
+            const float z0 = static_cast<float>(ore.position.z) - outlineExpansion;
+            const float x1 = static_cast<float>(ore.position.x + 1) + outlineExpansion;
+            const float y1 = static_cast<float>(ore.position.y + 1) + outlineExpansion;
+            const float z1 = static_cast<float>(ore.position.z + 1) + outlineExpansion;
+            auto& lines = linesByKind[kindIndex];
+            // Draw the original 12 edges plus four parallel strokes around each edge.
+            // This increases visible world-space thickness without relying on driver line-width support.
+            const float t = std::clamp(oreEsp->outlineThickness, 0.01f, 0.10f);
+            auto thickEdge = [&](bedrocktools::sdk::Vec3 a, bedrocktools::sdk::Vec3 b,
+                                 bedrocktools::sdk::Vec3 offA, bedrocktools::sdk::Vec3 offB) {
+                lines.push_back({a, b});
+                lines.push_back({{a.x + offA.x, a.y + offA.y, a.z + offA.z},
+                                 {b.x + offA.x, b.y + offA.y, b.z + offA.z}});
+                lines.push_back({{a.x - offA.x, a.y - offA.y, a.z - offA.z},
+                                 {b.x - offA.x, b.y - offA.y, b.z - offA.z}});
+                lines.push_back({{a.x + offB.x, a.y + offB.y, a.z + offB.z},
+                                 {b.x + offB.x, b.y + offB.y, b.z + offB.z}});
+                lines.push_back({{a.x - offB.x, a.y - offB.y, a.z - offB.z},
+                                 {b.x - offB.x, b.y - offB.y, b.z - offB.z}});
+            };
+            // Horizontal edges use the two perpendicular axes; vertical edges use X/Z.
+            thickEdge({x0,y0,z0},{x1,y0,z0},{0,0,t},{0,t,0});
+            thickEdge({x1,y0,z0},{x1,y0,z1},{t,0,0},{0,t,0});
+            thickEdge({x1,y0,z1},{x0,y0,z1},{0,0,t},{0,t,0});
+            thickEdge({x0,y0,z1},{x0,y0,z0},{t,0,0},{0,t,0});
+            thickEdge({x0,y1,z0},{x1,y1,z0},{0,0,t},{0,t,0});
+            thickEdge({x1,y1,z0},{x1,y1,z1},{t,0,0},{0,t,0});
+            thickEdge({x1,y1,z1},{x0,y1,z1},{0,0,t},{0,t,0});
+            thickEdge({x0,y1,z1},{x0,y1,z0},{t,0,0},{0,t,0});
+            thickEdge({x0,y0,z0},{x0,y1,z0},{t,0,0},{0,0,t});
+            thickEdge({x1,y0,z0},{x1,y1,z0},{t,0,0},{0,0,t});
+            thickEdge({x1,y0,z1},{x1,y1,z1},{t,0,0},{0,0,t});
+            thickEdge({x0,y0,z1},{x0,y1,z1},{t,0,0},{0,0,t});
+        }
+        for (std::size_t kindIndex = 1; kindIndex < linesByKind.size(); ++kindIndex) {
+            auto& lines = linesByKind[kindIndex];
+            if (lines.empty()) continue;
+            drawLines(lines, bedaim::xray::colorForOreKind(static_cast<bedaim::xray::OreKind>(kindIndex)), true);
+        }
+    }
 
     // Reference-style reticle above each ESP player. It lives in world space and
     // uses only that actor's current AABB, so Aim Assist never gates the ring.
@@ -411,10 +578,14 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled, tau));
         const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
         const float radius = std::clamp(std::max(width * 1.02f, 0.42f) * sizeScale, 0.22f, 1.20f);
-        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> outerLines;
-        std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> innerLines;
-        outerLines.reserve(88);
-        innerLines.reserve(76);
+        using RingLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+        // Reuse ring buffers across actors and frames; this path runs every frame.
+        static std::vector<RingLine> outerLines;
+        static std::vector<RingLine> innerLines;
+        outerLines.clear();
+        innerLines.clear();
+        if (outerLines.capacity() < 88) outerLines.reserve(88);
+        if (innerLines.capacity() < 76) innerLines.reserve(76);
         auto pointAt = [&](float r, float angle) {
             return bedrocktools::sdk::Vec3{
                 center.x + rx * std::cos(angle) * r + ux * std::sin(angle) * r,
@@ -529,7 +700,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             float entityHeight = aabb.max.y - aabb.min.y;
             float eyeHeight = aabb.min.y + entityHeight * 0.85f;
 
-            std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> eyeLines;
+            using ActorLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+            static std::vector<ActorLine> eyeLines;
+            eyeLines.clear();
+            if (eyeLines.capacity() < 4) eyeLines.reserve(4);
             eyeLines.push_back({bedrocktools::sdk::Vec3{minX, eyeHeight, minZ}, bedrocktools::sdk::Vec3{maxX, eyeHeight, minZ}});
             eyeLines.push_back({bedrocktools::sdk::Vec3{maxX, eyeHeight, minZ}, bedrocktools::sdk::Vec3{maxX, eyeHeight, maxZ}});
             eyeLines.push_back({bedrocktools::sdk::Vec3{maxX, eyeHeight, maxZ}, bedrocktools::sdk::Vec3{minX, eyeHeight, maxZ}});
@@ -557,7 +731,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             float lineLen = g_hitboxMod->lookLineLength;
             bedrocktools::sdk::Vec3 end = {start.x + dirX * lineLen, start.y + dirY * lineLen, start.z + dirZ * lineLen};
 
-            std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> lookLines;
+            using ActorLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+            static std::vector<ActorLine> lookLines;
+            lookLines.clear();
+            if (lookLines.capacity() < 1) lookLines.reserve(1);
             lookLines.push_back({start, end});
             drawLines(lookLines, g_hitboxMod->lookLineColor);
         }
@@ -587,16 +764,19 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         espLogOnce(espLoggedQuery,bedrocktools::diagnostics::Level::Warning,"actor_query=signature_unavailable; ESP cannot enumerate nearby players");
     }
 
-    colorHolder[0] = savedColor[0];
-    colorHolder[1] = savedColor[1];
-    colorHolder[2] = savedColor[2];
-    colorHolder[3] = savedColor[3];
+    if (colorHolder) {
+        colorHolder[0] = savedColor[0];
+        colorHolder[1] = savedColor[1];
+        colorHolder[2] = savedColor[2];
+        colorHolder[3] = savedColor[3];
+    }
 }
 
 HitboxModule::HitboxModule()
-    : Module("Hitbox", "Displays hitboxes of entities.") {
+    : Module("Hitbox", "Internal shared renderer for ESP overlays.") {
 
-    showInMenu = true;
+    showInMenu = false;
+    hideInHudEditor = true;
 
     m_patched = false;
     m_patchTarget = nullptr;
@@ -624,7 +804,15 @@ void HitboxModule::onInit() {
     if (tc) { m_tessColorAddr = (void*)tc; s_tessColor = (Tessellator_color_t)tc; }
 
     uintptr_t tv = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorVertex);
-    if (tv) { m_tessVertexAddr = (void*)tv; s_tessVertex = (Tessellator_vertex_t)tv; }
+    if (tv) {
+        m_tessVertexAddr = (void*)tv;
+        s_tessVertex = (Tessellator_vertex_t)tv;
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info, "ESP",
+            "tessellator_vertex", "resolved", "3D vertex routine resolved; ABI is Tessellator* plus x/y/z float arguments");
+    } else {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning, "ESP",
+            "tessellator_vertex", "unresolved", "TessellatorVertex signature did not match the loaded Minecraft library");
+    }
 
     uintptr_t rm = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately2);
     if (rm) {
