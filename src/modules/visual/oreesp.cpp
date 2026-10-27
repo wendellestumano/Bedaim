@@ -80,8 +80,11 @@ void resolveGetBlock() {
     const auto address = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceGetBlock);
     if (address) {
         g_getBlock.store(reinterpret_cast<BlockSourceGetBlockFn>(address), std::memory_order_release);
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Ore ESP",
-            "block_query=resolved; scanning will be event-driven and budgeted");
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info, "Ore ESP",
+            "block_query", "resolved", "BlockSourceGetBlock signature resolved; scanning enabled");
+    } else {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning, "Ore ESP",
+            "block_query", "unresolved", "BlockSourceGetBlock signature did not match this Minecraft build; Ore ESP cannot scan yet");
     }
 }
 }

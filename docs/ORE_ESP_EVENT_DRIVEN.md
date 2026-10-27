@@ -34,3 +34,9 @@ The module reuses the existing BedrockTools `BlockSourceGetBlock` signature and 
 - C++20 syntax checks passed for `hitbox.cpp`, `oreesp.cpp`, `ModuleRegistry.cpp`, `KeyMapperBridge.cpp`, `elytramacing.cpp`, `aimassist.cpp`, `autohit.cpp`, and `unglide.cpp`.
 - A direct Termux syntax check of `GameHooks.cpp` could not run because the Android NDK `EGL/egl.h` headers are unavailable locally.
 - A full Android ARM64 build/package and in-game visual test are still required before calling this feature stable.
+
+## Render-hook disambiguation and overlay depth behavior
+
+The Minecraft 1.26.52.3 ARM64 library contains two functions matching the previous short `RenderLevel` prologue. The hook expects a `LevelRenderer` instance whose `mLevelRendererPlayer` member is at offset `0x420`; the signature is extended with instructions that uniquely identify that candidate in the tested library. This was validated by scanning the local 1.26.52.3 APK: the updated pattern matched exactly one location, at file offset `0xB318478`.
+
+Ore outlines are now expanded by 0.006 block units to avoid being coplanar with block surfaces. During ore mesh submission, the renderer temporarily disables depth testing and depth writes, then restores both states. This is intended to make the bright colored wireframe visible through opaque blocks; it still requires in-game confirmation with the active RenderDragon backend. Diagnostics now distinguish unresolved block queries, missing render materials, an entered renderer hook, and an empty/non-empty cache snapshot.
