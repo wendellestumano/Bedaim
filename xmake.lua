@@ -23,6 +23,10 @@ target("BedrockTools")
     set_languages("c++20")
     set_strip("all")
     add_files("src/main.cpp", "src/core/**.cpp", "src/config/*.cpp", "src/launcher/*.cpp", "src/modules/**.cpp")
+    -- ElytraMacing is not registered in main and its experimental source currently
+    -- targets AimAssist APIs that are not present in main. Keep it out of release
+    -- builds until that module's complete dependency change is migrated separately.
+    remove_files("src/modules/player/elytramacing.cpp")
     add_includedirs("include", {public = true})
     add_includedirs("src", "third_party")
     add_packages("preloader", "nlohmann_json", "glm", "entt", "fmt")
