@@ -202,16 +202,22 @@ static void ensureMaterials() {
     }
 
     if (!s_throughWallsMaterialChecked) {
-        // Vanilla hologram.material defines this with DisableDepthTest + Blending
-        // and supports both MSAA and non-MSAA.
-        s_matThroughWalls = getMaterial("reality_frame_skyfill");
+        // ui3D.material is loaded from common.json. Its base name_tag material
+        // uses depthFunc=Always and DisableDepthWrite, so it is not gated by Fancy
+        // graphics and cannot occlude later world draws with its own depth.
+        s_matThroughWalls = getMaterial("name_tag");
         if (s_matThroughWalls) {
-            s_throughWallsMaterialName = "reality_frame_skyfill";
+            s_throughWallsMaterialName = "name_tag";
         } else {
-            // Available in the same source material set on MSAA configurations.
-            s_matThroughWalls = getMaterial("hologram_hit_effect");
-            if (s_matThroughWalls)
-                s_throughWallsMaterialName = "hologram_hit_effect";
+            // Hologram materials are alternatives when the active pack loads them.
+            s_matThroughWalls = getMaterial("reality_frame_skyfill");
+            if (s_matThroughWalls) {
+                s_throughWallsMaterialName = "reality_frame_skyfill";
+            } else {
+                s_matThroughWalls = getMaterial("hologram_hit_effect");
+                if (s_matThroughWalls)
+                    s_throughWallsMaterialName = "hologram_hit_effect";
+            }
         }
         s_throughWallsMaterialChecked = true;
         bedrocktools::diagnostics::probe(
