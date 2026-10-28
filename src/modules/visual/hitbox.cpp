@@ -808,7 +808,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         // Increase visible ring thickness using near-parallel world-space strokes.
         // The target's native AABB is supplied by renderActor so BedrockBounds cannot
         // enlarge the marker along with its expanded collision/query bounds.
-        const int ringLayers = esp ? static_cast<int>(std::clamp(std::round(esp->targetThickness), 1.0f, 5.0f)) : 1;
+        const int ringLayers = esp ? static_cast<int>(std::clamp(std::round(esp->ring2D ? esp->boxes2DThickness : esp->targetThickness), 1.0f, 6.0f)) : 1;
         static std::vector<RingLine> thickOuterLines;
         static std::vector<RingLine> thickInnerLines;
         auto makeThick = [&](const std::vector<RingLine>& source, std::vector<RingLine>& output) {
