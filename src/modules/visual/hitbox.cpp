@@ -869,11 +869,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             return;
         }
         const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
-        AABB espBounds = aabb;
-        if (expander) {
-            const auto native = expander->nativeBoundsForActor(ent, {aabb.min, aabb.max});
-            espBounds = {native.min, native.max};
-        }
+        // ESP describes the actor's actual rendered body, not its expanded
+        // collision/query bounds. Reusing Hitbox Expander's bounds makes the 2D
+        // rectangle grow and drift away from the player when BedrockBounds is on.
+        const AABB espBounds = aabb;
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
         if(wantsEsp){
             std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
