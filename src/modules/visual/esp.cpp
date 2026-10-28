@@ -142,36 +142,34 @@ void EspModule::beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition
 
 void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,float distance){
     if(!std::isfinite(targetCenter.x)||!std::isfinite(targetCenter.y)||!std::isfinite(targetCenter.z)||
-       !std::isfinite(distance)||distance<0.0f||distance>(infiniteRange?100000.0f:std::clamp(range,8.0f,80.0f)))return;
+       !std::isfinite(distance)||distance<0.0f||
+       distance>(infiniteRange?100000.0f:std::clamp(range,8.0f,80.0f)))return;
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
 
-    // Choose the nearest target that is actually outside the current locator
-    // viewport. Selecting the nearest actor first (even if visible) caused the
-    // HUD to suppress the arrow and ignore other off-screen players.
+    // Restore the original stable yaw/pitch decision used by the previously
+    // functional locator. Do not select candidates from a camera-space projection:
+    // the render camera position and actor rotation are not always from the same
+    // interpolation phase on mobile.
     const float dx=targetCenter.x-m_hudLocalPosition.x;
-    const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
     const float dz=targetCenter.z-m_hudLocalPosition.z;
-    constexpr float kDegToRad=0.01745329251994329577f;
-    const float yaw=m_hudLocalRotation.y*kDegToRad;
-    const float pitch=m_hudLocalRotation.x*kDegToRad;
-    const float sy=std::sin(yaw),cy=std::cos(yaw);
-    const float sp=std::sin(pitch),cp=std::cos(pitch);
-    const float cameraX=dx*cy+dz*sy;
-    const float cameraY=dx*(-sy*sp)+dy*cp+dz*(cy*sp);
-    const float cameraDepth=dx*(-sy*cp)+dy*(-sp)+dz*(cy*cp);
-    const float tanHalf=std::tan(std::clamp(locatorFov,30.0f,150.0f)*0.5f*kDegToRad);
+    const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
+    const float horizontal=std::sqrt(dx*dx+dz*dz);
+    constexpr float kRadToDeg=57.29577951308232f;
+    const float targetYaw=horizontal<0.001f
+        ? m_hudLocalRotation.y : std::atan2(-dx,dz)*kRadToDeg;
+    const float yawDelta=normalizeDegrees(targetYaw-m_hudLocalRotation.y);
+    const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
+    const float pitchDelta=targetPitch-m_hudLocalRotation.x;
+    const float halfVertical=std::clamp(locatorFov,60.0f,140.0f)*0.5f+1.5f;
     const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
-    const bool inViewport=cameraDepth>0.05f&&std::isfinite(tanHalf)&&tanHalf>0.001f&&
-        std::fabs(cameraX/cameraDepth)<=tanHalf*aspect&&
-        std::fabs(cameraY/cameraDepth)<=tanHalf;
-    if(inViewport)return;
+    const float halfHorizontal=std::atan(std::tan(halfVertical/kRadToDeg)*aspect)*kRadToDeg+2.0f;
+    if(std::fabs(yawDelta)<=halfHorizontal&&std::fabs(pitchDelta)<=halfVertical)return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
     m_offscreenTargetValid=true;
 }
-
 bool EspModule::offscreenTargetSnapshot(bedrocktools::sdk::Vec3& targetCenter,
                                         bedrocktools::sdk::Vec3& localPosition,
                                         bedrocktools::sdk::Vec2& localRotation,
@@ -252,49 +250,34 @@ void EspModule::onFrame(){
         bedrocktools::sdk::Vec2 rotation{};
         float distance=0.0f;
         if(offscreenTargetSnapshot(target,local,rotation,distance)){
-            float dx=target.x-local.x;
-            float dy=target.y-(local.y+1.62f);
-            float dz=target.z-local.z;
+            const float dx=target.x-local.x;
+            const float dy=target.y-(local.y+1.62f);
+            const float dz=target.z-local.z;
             const float horizontal=std::sqrt(dx*dx+dz*dz);
+            constexpr float kRadToDeg=57.29577951308232f;
             constexpr float kDegToRad=0.01745329251994329577f;
             if(std::sqrt(dx*dx+dy*dy+dz*dz)>0.001f){
-                // Project the target vector through the same camera basis used by the
-                // 2D box renderer. This avoids yaw/pitch sign flips and tracks the
-                // actual on-screen bearing even for targets above, below, or behind.
-                const float yaw=rotation.y*kDegToRad;
-                const float pitch=rotation.x*kDegToRad;
-                const float sy=std::sin(yaw),cy=std::cos(yaw);
-                const float sp=std::sin(pitch),cp=std::cos(pitch);
-                const float cameraX=dx*cy+dz*sy;
-                const float cameraY=dx*(-sy*sp)+dy*cp+dz*(cy*sp);
-                const float cameraDepth=dx*(-sy*cp)+dy*(-sp)+dz*(cy*cp);
-                const float aspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
-                const float tanHalfVertical=std::tan(std::clamp(locatorFov,60.0f,140.0f)*0.5f*kDegToRad);
-                const bool inFront=cameraDepth>0.05f;
-                const float safeDepth=std::max(0.05f,cameraDepth);
-                const float projectedX=cameraX/(safeDepth*std::max(0.001f,tanHalfVertical)*aspect);
-                const float projectedY=-cameraY/(safeDepth*std::max(0.001f,tanHalfVertical));
-                const bool projectionValid=std::isfinite(projectedX)&&std::isfinite(projectedY);
-                // Candidates have already been filtered against the locator viewport
-                // during collection. Always place the selected arrow on the edge; a
-                // second threshold test here could hide it due to frame/aspect timing.
-                {
-                float dirX=0.0f,dirY=0.0f;
-                if(inFront&&projectionValid){
-                    dirX=projectedX;
-                    dirY=projectedY;
-                }else{
-                    // Keep a finite bearing even when projection depth/FOV is invalid.
-                    // Invalid projection must not silently suppress the locator arrow.
-                    dirX=cameraX;
-                    dirY=-cameraY;
-                }
+                // This is the previously working locator bearing calculation.
+                // Keep the arrow tied to relative yaw/pitch instead of dividing a
+                // target vector by camera depth, which flipped/centered rear targets.
+                const float targetYaw=horizontal<0.001f
+                    ? rotation.y : std::atan2(-dx,dz)*kRadToDeg;
+                const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
+                const float yawDelta=normalizeDegrees(targetYaw-rotation.y);
+                const float pitchDelta=targetPitch-rotation.x;
+                const float yawRadians=yawDelta*kDegToRad;
+                const float pitchRadians=pitchDelta*kDegToRad;
+                float dirX=-std::sin(yawRadians);
+                float dirY=std::sin(pitchRadians)*std::cos(yawRadians);
                 float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(!std::isfinite(directionLength)||directionLength<0.0001f){
-                    // A target almost exactly behind the player has no stable
-                    // 2D projection. Choose the corresponding horizontal edge.
-                    dirX=1.0f;
-                    dirY=0.0f;
+                    if(std::fabs(yawDelta)>90.0f){
+                        dirX=yawDelta>=0.0f?1.0f:-1.0f;
+                        dirY=0.0f;
+                    }else{
+                        dirX=0.0f;
+                        dirY=pitchDelta>=0.0f?1.0f:-1.0f;
+                    }
                 }else{
                     dirX/=directionLength;
                     dirY/=directionLength;
@@ -315,14 +298,13 @@ void EspModule::onFrame(){
 
                 float angle=std::atan2(dirY,dirX)*kRadToDeg;
                 if(angle<0.0f)angle+=360.0f;
-                int sprite=static_cast<int>(std::lround(angle/22.5f))%16;
+                const int sprite=static_cast<int>(std::lround(angle/22.5f))%16;
                 pl::modmenu::DrawCommand arrow{};
                 arrow.type=pl::modmenu::DrawCommandType::Image;
                 arrow.x=px;arrow.y=py;arrow.w=size;arrow.h=size;
                 arrow.color=0xFFFFFFFFu;
                 arrow.imageId="bedaim.esp.arrow."+std::to_string(sprite);
                 commands.push_back(std::move(arrow));
-                }
             }
         }
     }
