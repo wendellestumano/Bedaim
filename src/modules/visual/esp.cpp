@@ -374,6 +374,7 @@ void EspModule::onMenuRegistered(){
  slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
+ slider("boxes2DThickness","2D boxes thickness","Line thickness for 2D ESP boxes and target rings.", "appearance",2.0f,1.0f,6.0f,0.5f," px");
  slider("outlineThickness","ESP box thickness","Approximate outline thickness for normal player ESP boxes. Zero uses one line.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
@@ -408,12 +409,13 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  if(key=="locatorSize"){float f=0;if(!parseFloat(value,f))return false;locatorSize=std::clamp(f,24.0f,160.0f);return true;}
  if(key=="locatorFov"){float f=0;if(!parseFloat(value,f))return false;locatorFov=std::clamp(f,60.0f,140.0f);return true;}
  if(key=="projectionFov"){float f=0;if(!parseFloat(value,f))return false;projectionFov=std::clamp(f,40.0f,120.0f);return true;}
- if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
+ if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||key=="boxes2DThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
   if(key=="targetYOffset")targetYOffset=std::clamp(f,-1.5f,1.5f);
   else if(key=="targetSpeed")targetSpeed=std::clamp(f,0.1f,4.0f);
   else if(key=="targetThickness")targetThickness=std::clamp(std::round(f),1.0f,5.0f);
+  else if(key=="boxes2DThickness")boxes2DThickness=std::clamp(f,1.0f,6.0f);
   else if(key=="outlineThickness")outlineThickness=std::clamp(f,0.0f,0.10f);
   else hitboxThickness=std::clamp(f,0.0f,0.10f);
   return true;
@@ -437,6 +439,7 @@ void EspModule::loadConfig(const nlohmann::json& j){
  targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
  targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
  targetThickness=std::clamp(std::round(j.value("targetThickness",targetThickness)),1.0f,5.0f);
+ boxes2DThickness=std::clamp(j.value("boxes2DThickness",boxes2DThickness),1.0f,6.0f);
  outlineThickness=std::clamp(j.value("outlineThickness",outlineThickness),0.0f,0.10f);
  hitboxThickness=std::clamp(j.value("hitboxThickness",hitboxThickness),0.0f,0.10f);
  range=std::clamp(j.value("range",range),8.0f,80.0f);
@@ -454,6 +457,7 @@ void EspModule::saveConfig(nlohmann::json& j){
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
  j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
  j["targetThickness"]=std::clamp(std::round(targetThickness),1.0f,5.0f);
+ j["boxes2DThickness"]=std::clamp(boxes2DThickness,1.0f,6.0f);
  j["outlineThickness"]=std::clamp(outlineThickness,0.0f,0.10f);
  j["hitboxThickness"]=std::clamp(hitboxThickness,0.0f,0.10f);
  j["range"]=std::clamp(range,8.0f,80.0f);
