@@ -5,6 +5,7 @@
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <filesystem>
+#include <fstream>
 #include "launcher/ModuleMenu.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "core/memory/Hooks.hpp"
@@ -154,24 +155,59 @@ bool Runtime::load(pl::mod::ModContext& context) {
                          : "Preloader ModContext provided a null JavaVM");
     mResourceDirectory = context.resourceDir();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "Bedaim load requested");
-    // Prefer the user's requested public Downloads/BEDAIM folder, while also
-    // recognizing Android's conventional singular Download directory if it
-    // already contains the config.
-    const std::filesystem::path pluralDownloads("/sdcard/Downloads/BEDAIM/config.json");
-    const std::filesystem::path conventionalDownload("/sdcard/Download/BEDAIM/config.json");
-    const std::filesystem::path sharedStorageDownload("/storage/emulated/0/Download/BEDAIM/config.json");
+    // Android's public Downloads directory is normally exposed as "Download"
+    // on disk. Prefer any existing config so upgrades do not silently switch files.
+    const std::filesystem::path pluralDownloads("/storage/emulated/0/Downloads/BEDAIM/config.json");
+    const std::filesystem::path sdcardPluralDownloads("/sdcard/Downloads/BEDAIM/config.json");
+    const std::filesystem::path conventionalDownload("/storage/emulated/0/Download/BEDAIM/config.json");
+    const std::filesystem::path sdcardDownload("/sdcard/Download/BEDAIM/config.json");
     std::error_code configPathError;
-    std::filesystem::path configPath = pluralDownloads;
-    if (std::filesystem::exists(pluralDownloads, configPathError)) {
-        configPath = pluralDownloads;
-    } else if (std::filesystem::exists(conventionalDownload, configPathError)) {
-        configPath = conventionalDownload;
-    } else if (std::filesystem::exists(sharedStorageDownload, configPathError)) {
-        configPath = sharedStorageDownload;
+    std::filesystem::path configPath = conventionalDownload;
+    for (const auto& candidate : {pluralDownloads, sdcardPluralDownloads, conventionalDownload, sdcardDownload}) {
+        configPathError.clear();
+        if (std::filesystem::exists(candidate, configPathError) && !configPathError) {
+            configPath = candidate;
+            break;
+        }
+    }
+
+    // Confirm the selected public folder is actually writable by the game process.
+    // Scoped-storage restrictions can make Downloads inaccessible even when the path
+    // exists; in that case use the launcher's private config directory rather than
+    // silently losing every save. Keep the selected path in diagnostics.
+    auto canWriteBesideConfig = [](const std::filesystem::path& config) {
+        std::error_code ec;
+        std::filesystem::create_directories(config.parent_path(), ec);
+        if (ec) return false;
+        const auto probe = config.parent_path() / ".bedaim_write_test.tmp";
+        {
+            std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+            if (!out) return false;
+            out << "ok";
+            out.flush();
+            if (!out.good()) {
+                out.close();
+                std::filesystem::remove(probe, ec);
+                return false;
+            }
+        }
+        std::filesystem::remove(probe, ec);
+        return !ec;
+    };
+    if (!canWriteBesideConfig(configPath)) {
+        const auto privateConfig = context.configDir() / "BEDAIM" / "config.json";
+        if (canWriteBesideConfig(privateConfig)) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "Config",
+                "Downloads is not writable by the game process; using launcher's private config directory");
+            configPath = privateConfig;
+        } else {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+                "neither Downloads nor launcher's private config directory is writable");
+        }
     }
     bedrocktools::config::ConfigManager::get().setConfigPath(configPath.string());
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Config",
-        "external config path set to " + configPath.string());
+        "active config path: " + configPath.string());
     if (!launcherContext()) return true;
     void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
     if (minecraft) {
