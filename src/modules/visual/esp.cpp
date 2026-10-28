@@ -340,7 +340,8 @@ void EspModule::onMenuRegistered(){
  slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
- slider("outlineThickness","ESP box thickness","Approximate outline thickness for normal player ESP boxes. Zero uses one line.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
+ slider("outlineThickness","ESP box thickness","World-space outline thickness for normal 3D player ESP boxes.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
+ slider("box2DThickness","2D boxes thickness","Actual screen-space stroke width for 2D ESP boxes.", "appearance",2.0f,1.0f,10.0f,0.5f," px");
  slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
  r.category="players";r.type=ConfigControlTypeV2::SliderFloat;r.defaultValue="30";r.currentValue=cfgText(config,"range","30");
@@ -373,8 +374,9 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  if(key=="locatorSize"){float f=0;if(!parseFloat(value,f))return false;locatorSize=std::clamp(f,24.0f,160.0f);return true;}
  if(key=="locatorFov"){float f=0;if(!parseFloat(value,f))return false;locatorFov=std::clamp(f,60.0f,140.0f);return true;}
  if(key=="projectionFov"){float f=0;if(!parseFloat(value,f))return false;projectionFov=std::clamp(f,40.0f,120.0f);return true;}
- if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
-    key=="outlineThickness"||key=="hitboxThickness"){
+ if(key=="box2DThickness"){float f=0;if(!parseFloat(value,f))return false;box2DThickness=std::clamp(f,1.0f,10.0f);return true;}
+  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
+     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
   if(key=="targetYOffset")targetYOffset=std::clamp(f,-1.5f,1.5f);
   else if(key=="targetSpeed")targetSpeed=std::clamp(f,0.1f,4.0f);
