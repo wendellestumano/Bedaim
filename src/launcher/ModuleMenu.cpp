@@ -676,6 +676,35 @@ void registerModulesWithLauncher() {
     };
     for (const auto id : legacyModuleIds) retireLegacyModuleRegistration(id);
 
+    // The installer may register modules after the lifecycle owner's scope has
+    // ended. In that case the Preloader cannot associate them with the owner for
+    // automatic cleanup on unload. Old bedaim.* registrations can therefore
+    // survive a .levipack reload and make every new registerModule() fail as a
+    // duplicate. Explicitly retire our own stable IDs before rebuilding them.
+    static constexpr std::string_view staleBedaimModuleIds[] = {
+        "bedaim.Aim Assist",
+        "bedaim.Auto Hit",
+        "bedaim.Mace Swapper",
+        "bedaim.Unglide",
+        "bedaim.Sword Swapper",
+        "bedaim.Hitbox Expander",
+        "bedaim.Hitbox",
+        "bedaim.ESP",
+        "bedaim.Ore ESP",
+        "bedaim.ULTRAKILL HUD",
+        "bedaim.Module Diagnostics",
+        "bedaim.GameMode Checker",
+        "bedaim.Xray"
+    };
+    for (const auto id : staleBedaimModuleIds) {
+        pl::modmenu::setModuleEnabled(id, false);
+        pl::modmenu::submitDrawCommands(
+            id, std::span<const pl::modmenu::DrawCommand>{});
+        pl::modmenu::unregisterModule(id);
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Debug,
+            "ModuleMenu", std::string("cleared stale Bedaim registration: ") + std::string(id));
+    }
+
     auto& modules = ModuleRegistry::get().modules();
 
     for (auto* mod : modules) {
