@@ -282,12 +282,21 @@ void EspModule::onFrame(){
                 float dirX=-std::sin(yawRadians);
                 float dirY=std::sin(pitchRadians)*std::cos(yawRadians);
                 float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
-                if(!std::isfinite(directionLength)||directionLength<0.0001f){
-                    // A target directly behind has no stable perspective direction.
-                    // Keep it on a horizontal edge rather than letting (0,0) place
-                    // the locator in the center of the screen.
+                // A target behind the camera has no useful vertical screen bearing:
+                // the cosine term flips its pitch and used to pin the arrow at the
+                // top/bottom center. Force rear targets to a horizontal screen edge.
+                if(std::fabs(yawDelta)>=90.0f){
                     dirX=(yawDelta<0.0f)?1.0f:-1.0f;
                     dirY=0.0f;
+                    directionLength=1.0f;
+                }else if(!std::isfinite(directionLength)||directionLength<0.0001f){
+                    if(std::fabs(pitchDelta)>0.5f){
+                        dirX=0.0f;
+                        dirY=pitchDelta<0.0f?-1.0f:1.0f;
+                    }else{
+                        dirX=(yawDelta<0.0f)?1.0f:-1.0f;
+                        dirY=0.0f;
+                    }
                     directionLength=1.0f;
                 }
                 dirX/=directionLength;
