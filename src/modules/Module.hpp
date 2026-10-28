@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <atomic>
 #include "../core/Diagnostics.hpp"
 #include <string>
 #include <string_view>
@@ -11,9 +12,11 @@ public:
     const char* name;
     const char* description;
     std::string moduleId;
-    bool masterEnabled = false;
-    bool keybindActive = true;
-    bool enabled = false;
+    // Menu callbacks may run on the UI thread while RenderLevel/events read the
+    // state on game threads. Atomics make OFF transitions visible without a data race.
+    std::atomic_bool masterEnabled{false};
+    std::atomic_bool keybindActive{true};
+    std::atomic_bool enabled{false};
     bool showInMenu = true;
     bool hideInHudEditor = false;
     int keybind = 0;
@@ -80,7 +83,7 @@ public:
 
     virtual void saveConfig(nlohmann::json& j) {
         j["keybind"] = keybind;
-        j["keybindActive"] = keybindActive;
-        j["masterEnabled"] = masterEnabled;
+        j["keybindActive"] = keybindActive.load(std::memory_order_acquire);
+        j["masterEnabled"] = masterEnabled.load(std::memory_order_acquire);
     }
 };
