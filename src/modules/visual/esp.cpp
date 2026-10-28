@@ -229,6 +229,14 @@ void EspModule::onMenuRegistered(){
  toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
  toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
+ auto slider=[&](const char* key,const char* title,const char* desc,float def,float min,float max,float step,const char* unit){
+  ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category="indicators";
+  n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=std::to_string(def);n.currentValue=cfgText(config,key,n.defaultValue.c_str());
+  n.hasCurrentValue=true;n.minValue=std::to_string(min);n.maxValue=std::to_string(max);n.step=std::to_string(step);n.unit=unit;schema.node(std::move(n));
+ };
+ slider("indicatorYOffset","Marker Y offset","Vertical offset of the target ring, independent of expanded hitboxes.",0.0f,-2.0f,3.0f,0.1f," blocks");
+ slider("indicatorSpeed","Marker speed","Rotation speed for the target ring and edge arrow.",1.0f,0.1f,3.0f,0.1f,"x");
+ slider("ringThickness","Marker thickness","Visual thickness scale for marker geometry.",1.0f,0.5f,2.0f,0.1f,"x");
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
  size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
@@ -271,6 +279,13 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  }
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,96.0f);return true;}
+ if(key=="indicatorYOffset"||key=="indicatorSpeed"||key=="ringThickness"){
+  float f=0;if(!parseFloat(value,f))return false;
+  if(key=="indicatorYOffset")indicatorYOffset=std::clamp(f,-2.0f,3.0f);
+  else if(key=="indicatorSpeed")indicatorSpeed=std::clamp(f,0.1f,3.0f);
+  else ringThickness=std::clamp(f,0.5f,2.0f);
+  return true;
+ }
  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
@@ -292,6 +307,9 @@ void EspModule::loadConfig(const nlohmann::json& j){
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,96.0f);
+ indicatorYOffset=std::clamp(j.value("indicatorYOffset",indicatorYOffset),-2.0f,3.0f);
+ indicatorSpeed=std::clamp(j.value("indicatorSpeed",indicatorSpeed),0.1f,3.0f);
+ ringThickness=std::clamp(j.value("ringThickness",ringThickness),0.5f,2.0f);
  targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
  targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
  targetThickness=std::clamp(std::round(j.value("targetThickness",targetThickness)),1.0f,5.0f);
@@ -305,6 +323,9 @@ void EspModule::saveConfig(nlohmann::json& j){
  Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
+ j["indicatorYOffset"]=std::clamp(indicatorYOffset,-2.0f,3.0f);
+ j["indicatorSpeed"]=std::clamp(indicatorSpeed,0.1f,3.0f);
+ j["ringThickness"]=std::clamp(ringThickness,0.5f,2.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
  j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
  j["targetThickness"]=std::clamp(std::round(targetThickness),1.0f,5.0f);
