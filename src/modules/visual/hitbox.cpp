@@ -196,7 +196,17 @@ static bool projectAabbToScreen(const AABB& box,
                                 const bedrocktools::sdk::Vec2& rotation,
                                 float width, float height, float verticalFov,
                                 ScreenBounds& out) {
-    if (!validRenderBounds(box)) return false;
+    if (!validRenderBounds(box) || width < 64.0f || height < 64.0f) return false;
+    const bedrocktools::sdk::Vec3 worldCenter{
+        (box.min.x+box.max.x)*0.5f,
+        (box.min.y+box.max.y)*0.5f,
+        (box.min.z+box.max.z)*0.5f
+    };
+    const CameraPoint centerCamera=toCameraSpace(worldCenter,camera,rotation);
+    // If the actor's center is behind/inside the camera, projecting its few
+    // near-plane corners can expand the box across most of the HUD and produce
+    // giant diagonal-looking edges. Do not publish such an unstable rectangle.
+    if(!std::isfinite(centerCamera.z)||centerCamera.z<0.12f) return false;
     const bedrocktools::sdk::Vec3 corners[8] = {
         {box.min.x,box.min.y,box.min.z},{box.max.x,box.min.y,box.min.z},
         {box.max.x,box.min.y,box.max.z},{box.min.x,box.min.y,box.max.z},
@@ -237,8 +247,13 @@ static bool projectAabbToScreen(const AABB& box,
     }
     minX=std::clamp(minX,0.0f,width);maxX=std::clamp(maxX,0.0f,width);
     minY=std::clamp(minY,0.0f,height);maxY=std::clamp(maxY,0.0f,height);
-    if(maxX-minX<2.0f||maxY-minY<2.0f) return false;
-    out={minX,minY,maxX-minX,maxY-minY};
+    const float projectedWidth=maxX-minX, projectedHeight=maxY-minY;
+    if(projectedWidth<2.0f||projectedHeight<2.0f) return false;
+    // Reject pathological full-screen boxes caused by a mismatched camera basis or
+    // an AABB crossing the near plane. Normal player boxes remain far below this cap.
+    if(centerCamera.z>1.5f &&
+       (projectedWidth>width*0.88f || projectedHeight>height*0.94f)) return false;
+    out={minX,minY,projectedWidth,projectedHeight};
     return true;
 }
 
