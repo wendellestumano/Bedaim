@@ -41,6 +41,8 @@ public:
         std::uint32_t color = 0xFFFFFFFFu;
     };
     void beginScreenFrame();
+    // Publish a completed set of HUD overlays atomically at the end of each render pass.
+    void endScreenFrame();
     void addScreenBox(float x, float y, float w, float h, std::uint32_t color, float thickness);
     void addScreenRing(float x, float y, float radius, std::uint32_t color, float thickness);
     std::vector<ScreenOverlay> screenOverlaySnapshot() const;
@@ -79,4 +81,5 @@ private:
     std::chrono::steady_clock::time_point m_offscreenFrameTime{};
     mutable std::mutex m_screenOverlayMutex;
     std::vector<ScreenOverlay> m_screenOverlays;
+    std::vector<ScreenOverlay> m_screenBuildingOverlays;
 };
