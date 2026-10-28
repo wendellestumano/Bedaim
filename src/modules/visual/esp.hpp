@@ -42,7 +42,7 @@ public:
     };
     void beginScreenFrame();
     // Publish a completed set of HUD overlays atomically at the end of each render pass.
-    void endScreenFrame();
+    void endScreenFrame(bool publish = true);
     void addScreenBox(float x, float y, float w, float h, std::uint32_t color, float thickness);
     void addScreenRing(float x, float y, float radius, std::uint32_t color, float thickness);
     std::vector<ScreenOverlay> screenOverlaySnapshot() const;
