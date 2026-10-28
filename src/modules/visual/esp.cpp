@@ -257,19 +257,22 @@ void EspModule::onFrame(){
                 const float safeDepth=std::max(0.05f,cameraDepth);
                 const float projectedX=cameraX/(safeDepth*std::max(0.001f,tanHalfVertical)*aspect);
                 const float projectedY=-cameraY/(safeDepth*std::max(0.001f,tanHalfVertical));
-                const bool targetOnScreen=inFront&&std::isfinite(projectedX)&&std::isfinite(projectedY)&&
+                const bool projectionValid=std::isfinite(projectedX)&&std::isfinite(projectedY);
+                const bool targetOnScreen=inFront&&projectionValid&&
                                           std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f;
                 if(!targetOnScreen){
                 float dirX=0.0f,dirY=0.0f;
-                if(inFront){
+                if(inFront&&projectionValid){
                     dirX=projectedX;
                     dirY=projectedY;
                 }else{
+                    // Keep a finite bearing even when projection depth/FOV is invalid.
+                    // Invalid projection must not silently suppress the locator arrow.
                     dirX=cameraX;
                     dirY=-cameraY;
                 }
-                const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
-                if(directionLength<0.0001f){
+                float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
+                if(!std::isfinite(directionLength)||directionLength<0.0001f){
                     // A target almost exactly behind the player has no stable
                     // 2D projection. Choose the corresponding horizontal edge.
                     dirX=1.0f;
