@@ -1,4 +1,5 @@
 #include "ModuleMenu.hpp"
+#include "core/Diagnostics.hpp"
 #include "MenuConfigValue.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "config/ConfigManager.hpp"
@@ -32,9 +33,37 @@ static void persistModuleConfig() {
 }
 
 static void onModuleToggle(std::string_view module_id, bool enabled) {
+    // Clear HUD draw commands before looking up the module. This is deliberately
+    // done at the launcher callback boundary so stale screen-space ESP commands
+    // cannot survive a toggle even if the module instance has already transitioned.
+    if (!enabled) {
+        pl::modmenu::submitDrawCommands(
+            module_id, std::span<const pl::modmenu::DrawCommand>{});
+    }
     auto* mod = ModuleRegistry::get().find(module_id);
-    if (!mod) return;
+    if (!mod) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "ModuleMenu", std::string("toggle callback could not resolve module: ") +
+            std::string(module_id));
+        return;
+    }
     mod->setMasterEnabled(enabled);
+    const std::string moduleName = mod->name ? mod->name : "";
+    const bool isEspModule = module_id == "bedrocktools.ESP" || moduleName == "ESP";
+    const bool isBoundsModule =
+        module_id.find("Hitbox Expander") != std::string_view::npos ||
+        module_id.find("BedrockBounds") != std::string_view::npos ||
+        moduleName.find("BedrockBounds") != std::string::npos;
+    if (!enabled && (isEspModule || isBoundsModule)) {
+        // Explicitly force the effective state off and run idempotent cleanup even
+        // when the launcher repeats an OFF event after an earlier stale transition.
+        mod->masterEnabled = false;
+        mod->enabled = false;
+        mod->onDisable();
+    }
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "ModuleMenu", std::string("toggle applied: ") + std::string(module_id) +
+        (enabled ? " enabled" : " disabled"));
     persistModuleConfig();
 }
 

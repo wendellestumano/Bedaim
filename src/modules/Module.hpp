@@ -41,27 +41,24 @@ public:
     }
 
     void setMasterEnabled(bool state) {
-        if (masterEnabled == state) return;
         masterEnabled = state;
         updateEnabledState();
     }
 
     void setKeybindActive(bool state) {
-        if (keybindActive == state) return;
         keybindActive = state;
         updateEnabledState();
     }
 
     void updateEnabledState() {
-        bool newState = masterEnabled && keybindActive;
-        if (newState != enabled) {
-            enabled = newState;
-            bedrocktools::diagnostics::log(
-                bedrocktools::diagnostics::Level::Info,
-                moduleId, enabled ? "module enabled" : "module disabled");
-            if (enabled) onEnable();
-            else onDisable();
-        }
+        const bool newState = masterEnabled && keybindActive;
+        if (newState == enabled) return;
+        enabled = newState;
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Info,
+            moduleId, enabled ? "module enabled" : "module disabled");
+        if (enabled) onEnable();
+        else onDisable();
     }
 
     virtual void loadConfig(const nlohmann::json& j) {

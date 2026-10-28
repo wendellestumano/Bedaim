@@ -943,16 +943,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         };
         const float selectionDistanceSq = distanceSquared(eyePosition, nearestOnSelection);
 
-        // Fail closed when the visibility signature or block source is unavailable.
-        // hasClearLineOfSight() returns false if it cannot safely perform the check.
-        // If the LOS signature is unavailable for this Minecraft build, don't
-        // silently discard every candidate. Enforce LOS only when the checker is live.
-        if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
-            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
-
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
-        // Range checks use the nearest point on the selected hitbox geometry, not
-        // its center; the box itself still cannot exceed the configured size limits.
+        // Do cheap range/angle rejection before ray-marching blocks. On mobile,
+        // doing a voxel DDA for every actor in an 80-block scan was a major CPU spike.
         const bool inAimAssistRange = std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxDistanceSq;
         if (!std::isfinite(d2) || !inAimAssistRange) continue;
@@ -999,6 +992,12 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // during the fast vertical movement of a slam.
         if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer &&
             !rayHitsExpandedTarget) continue;
+
+        // Only candidates that survive cheap geometry/FOV checks need an occlusion
+        // query. This preserves the LOS policy while avoiding a DDA walk for every
+        // nearby actor, including actors far outside the configured aim cone.
+        if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
+            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         // A ray through the expanded box is a high-confidence crosshair match,
         // not an angle-only candidate that happens to fall inside the FOV.
@@ -1817,8 +1816,11 @@ void HitboxExpanderModule::onInit() {
 }
 
 void HitboxExpanderModule::onDisable() {
-    // Avoid dereferencing a cached actor from a menu callback. The persistent pre-tick
-    // listener restores any active snapshots on the next valid in-world tick.
+    // The render/menu callback may not safely dereference actors. Mark a restore-all
+    // request and keep it pending until the next valid pre-tick restores every tracked AABB.
+    m_restoreAllPending.store(true, std::memory_order_release);
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "HitboxExpander", "restore_all", "pending_next_valid_tick");
 }
 
 void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
@@ -1829,15 +1831,33 @@ void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
             "HitboxExpander", "player", "missing");
         return;
     }
+    const bool effectiveEnabled = enabled && masterEnabled && keybindActive;
+    const bool restorePending = m_restoreAllPending.load(std::memory_order_acquire);
+    const bool restoreAll = !effectiveEnabled || restorePending;
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "restore_policy", enabled ? "restore_stale_only" : "restore_all");
-    restoreNativeBounds(player, enabled);
+        "HitboxExpander", "restore_policy",
+        restoreAll ? (restorePending ? "restore_all_pending" : "restore_all") : "restore_stale_only");
+    restoreNativeBounds(player, !restoreAll);
+    if (restoreAll) {
+        bool snapshotsEmpty = false;
+        {
+            std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+            snapshotsEmpty = m_nativeBoundsOriginal.empty();
+        }
+        if (snapshotsEmpty) {
+            m_restoreAllPending.store(false, std::memory_order_release);
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "HitboxExpander", "restore_all", "completed");
+        }
+    }
 }
 
 void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
-    if (!enabled) {
+    if (!enabled || !masterEnabled || !keybindActive ||
+        m_restoreAllPending.load(std::memory_order_acquire)) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "HitboxExpander", "state", "disabled");
+            "HitboxExpander", "state",
+            m_restoreAllPending.load(std::memory_order_relaxed) ? "waiting_for_restore_before_reapply" : "disabled");
         return;
     }
     if (!player) {
@@ -1957,7 +1977,8 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
         // Keep the first unexpanded snapshot while enabled. Re-capturing the box
         // after each movement tick would bake any stale world position into the
         // next snapshot and make the hitbox lag behind the actor.
-        if (enabled && !onlyStale) ++it;
+        if (enabled && !onlyStale &&
+            !m_restoreAllPending.load(std::memory_order_acquire)) ++it;
         else it = m_nativeBoundsOriginal.erase(it);
     }
 }
@@ -2166,7 +2187,7 @@ bedrocktools::sdk::AABB HitboxExpanderModule::nativeBoundsForActor(
 
 float HitboxExpanderModule::queryExpansionMargin() const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    if (!enabled || (!m_expandPlayers && !m_expandMobs)) return 0.0f;
+    if (!enabled || !masterEnabled || !keybindActive || (!m_expandPlayers && !m_expandMobs)) return 0.0f;
     return std::clamp(0.5f * std::max(
         std::clamp(m_hitboxWidth, 0.6f, 8.0f),
         std::clamp(m_hitboxHeight, 0.6f, 8.0f)), 0.0f, 4.0f);
@@ -2174,17 +2195,17 @@ float HitboxExpanderModule::queryExpansionMargin() const {
 
 bool HitboxExpanderModule::requiresLineOfSight() const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && m_requireLineOfSight;
+    return enabled && masterEnabled && keybindActive && m_requireLineOfSight;
 }
 
 bool HitboxExpanderModule::shouldShowHitbox() const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && m_showHitbox;
+    return enabled && masterEnabled && keybindActive && m_showHitbox;
 }
 
 bool HitboxExpanderModule::expandsType(bool isPlayer) const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && (isPlayer ? m_expandPlayers : m_expandMobs);
+    return enabled && masterEnabled && keybindActive && (isPlayer ? m_expandPlayers : m_expandMobs);
 }
 
 bool HitboxExpanderModule::showInLegacyMenu(std::string_view key) const {
