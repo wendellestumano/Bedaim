@@ -307,7 +307,7 @@ void EspModule::loadConfig(const nlohmann::json& j){
 void EspModule::saveConfig(nlohmann::json& j){
  Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
- j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
+ j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,160.0f);
  j["locatorFov"]=std::clamp(locatorFov,60.0f,140.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
  j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
