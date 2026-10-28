@@ -1749,6 +1749,91 @@ HitboxExpanderModule::HitboxExpanderModule()
     g_hitboxExpander = this;
 }
 
+void HitboxExpanderModule::onMenuRegistered() {
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    nlohmann::json config;
+    saveConfig(config);
+    schema.defaultCategory("bounds")
+        .category("bounds", "Hitbox bounds", "Client-side bounding-box dimensions and display options");
+
+    auto toggle = [&](const char* key, const char* title, const char* description, bool defaultValue) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.description = description;
+        node.category = "bounds";
+        node.type = ConfigControlTypeV2::Toggle;
+        node.defaultValue = defaultValue ? "true" : "false";
+        node.currentValue = config.contains(key) ? config[key].dump() : node.defaultValue;
+        node.hasCurrentValue = true;
+        schema.node(std::move(node));
+    };
+    auto slider = [&](const char* key, const char* title, const char* description,
+                      float defaultValue, float minimum, float maximum, float step) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.description = description;
+        node.category = "bounds";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.defaultValue = std::to_string(defaultValue);
+        node.currentValue = config.contains(key) ? config[key].dump() : node.defaultValue;
+        node.hasCurrentValue = true;
+        node.minValue = std::to_string(minimum);
+        node.maxValue = std::to_string(maximum);
+        node.step = std::to_string(step);
+        node.unit = " blocks";
+        schema.node(std::move(node));
+    };
+
+    toggle("m_expandPlayers", "Expand players", "Apply expanded bounds to other players.", true);
+    toggle("m_expandMobs", "Expand mobs", "Apply expanded bounds to mobs.", false);
+    toggle("m_requireLineOfSight", "Require line of sight", "Keep target queries gated by line of sight where applicable.", true);
+    toggle("m_showHitbox", "Draw expanded hitbox", "Draw the expanded bounds as a separate outline.", false);
+    slider("m_hitboxWidth", "Hitbox width", "Width of expanded player/mob bounds on the X axis.", 1.5f, 0.6f, 8.0f, 0.1f);
+    slider("m_hitboxHeight", "Hitbox height", "Height of expanded player/mob bounds.", 2.5f, 0.6f, 8.0f, 0.1f);
+    setConfigSchemaJson(moduleId, schema.toJson());
+}
+
+bool HitboxExpanderModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    auto parseNumber = [&]() -> std::optional<float> {
+        try {
+            const std::string text(value);
+            std::size_t parsedLength = 0;
+            const float number = std::stof(text, &parsedLength);
+            while (parsedLength < text.size() &&
+                   std::isspace(static_cast<unsigned char>(text[parsedLength]))) ++parsedLength;
+            if (parsedLength != text.size() || !std::isfinite(number)) return std::nullopt;
+            return number;
+        } catch (...) { return std::nullopt; }
+    };
+    bool boolValue = false;
+    const bool booleanKey = key == "m_expandPlayers" || key == "m_expandMobs" ||
+        key == "m_requireLineOfSight" || key == "m_showHitbox";
+    if (booleanKey) {
+        if (value == "true" || value == "1" || value == "on") boolValue = true;
+        else if (value == "false" || value == "0" || value == "off") boolValue = false;
+        else return false;
+        std::lock_guard<std::mutex> lock(m_expandMutex);
+        if (key == "m_expandPlayers") m_expandPlayers = boolValue;
+        else if (key == "m_expandMobs") m_expandMobs = boolValue;
+        else if (key == "m_requireLineOfSight") m_requireLineOfSight = boolValue;
+        else m_showHitbox = boolValue;
+        return true;
+    }
+
+    const auto number = parseNumber();
+    if (!number) return false;
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    if (key == "m_hitboxWidth") m_hitboxWidth = std::clamp(*number, 0.6f, 8.0f);
+    else if (key == "m_hitboxHeight") m_hitboxHeight = std::clamp(*number, 0.6f, 8.0f);
+    else return false;
+    return true;
+}
+
 void HitboxExpanderModule::onInit() {
     if (!g_fetchNearbyActors) {
         g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
@@ -2086,6 +2171,46 @@ bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
         {center.x - half.x, nativeBounds.min.y, center.z - half.z},
         {center.x + half.x, nativeBounds.min.y + height, center.z + half.z}
     };
+}
+
+bedrocktools::sdk::AABB HitboxExpanderModule::nativeBoundsForActor(
+    void* actor, const bedrocktools::sdk::AABB& fallback) {
+    using namespace bedrocktools::sdk;
+    if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000) return fallback;
+
+    NativeBoundsSnapshot snapshot{};
+    {
+        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+        const auto it = m_nativeBoundsOriginal.find(actor);
+        if (it == m_nativeBoundsOriginal.end()) return fallback;
+        snapshot = it->second;
+    }
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
+        offsets::BuiltInActorComponents::mAABBShapeComponent);
+    void* currentComponent = *componentSlot;
+    auto* actorObject = reinterpret_cast<Actor*>(actor);
+    const Vec3 currentPosition = actorObject->position();
+    if (currentComponent != snapshot.component || actorObject->level() != snapshot.level ||
+        reinterpret_cast<std::uintptr_t>(currentComponent) <= 0x1000 ||
+        !finiteVec3(currentPosition) || !finiteVec3(snapshot.originalActorPosition) ||
+        !validBounds(snapshot.originalBounds)) return fallback;
+
+    const Vec3 delta{
+        currentPosition.x - snapshot.originalActorPosition.x,
+        currentPosition.y - snapshot.originalActorPosition.y,
+        currentPosition.z - snapshot.originalActorPosition.z
+    };
+    const AABB translated{
+        {snapshot.originalBounds.min.x + delta.x,
+         snapshot.originalBounds.min.y + delta.y,
+         snapshot.originalBounds.min.z + delta.z},
+        {snapshot.originalBounds.max.x + delta.x,
+         snapshot.originalBounds.max.y + delta.y,
+         snapshot.originalBounds.max.z + delta.z}
+    };
+    return validBounds(translated) ? translated : fallback;
 }
 
 float HitboxExpanderModule::queryExpansionMargin() const {
