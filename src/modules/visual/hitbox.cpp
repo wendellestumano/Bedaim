@@ -853,10 +853,12 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
+            ScreenBounds screenBox{};
+            const bool screenBoxValid=(esp->box2D || (esp->showLockInAim && esp->ring2D)) &&
+                projectAabbToScreen(espBounds,cameraPosition,cameraRotation,hudWidth,hudHeight,
+                                    esp->projectionFov,screenBox);
             if(esp->box2D){
-                ScreenBounds screenBox{};
-                if(projectAabbToScreen(espBounds,cameraPosition,cameraRotation,hudWidth,hudHeight,
-                                       esp->projectionFov,screenBox))
+                if(screenBoxValid)
                     esp->addScreenBox(screenBox.x,screenBox.y,screenBox.w,screenBox.h,
                                       color,std::max(1.0f,esp->outlineThickness*40.0f));
             }else{
@@ -864,15 +866,12 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             }
             if(esp->showLockInAim){
                 if(esp->ring2D){
-                    const bedrocktools::sdk::Vec3 ringCenter{
-                        (espBounds.min.x+espBounds.max.x)*0.5f,
-                        espBounds.min.y+0.90f+esp->targetYOffset,
-                        (espBounds.min.z+espBounds.max.z)*0.5f
-                    };
-                    float screenX=0.0f,screenY=0.0f;
-                    if(projectPointToScreen(ringCenter,cameraPosition,cameraRotation,hudWidth,hudHeight,
-                                            esp->projectionFov,screenX,screenY) &&
-                       screenX>=0.0f&&screenX<hudWidth&&screenY>=0.0f&&screenY<hudHeight){
+                    // Anchor the 2D ring to the same projected actor bounds as the box.
+                    // Projecting an independent world-space point caused visible jitter
+                    // when the camera FOV/rotation and actor bounds updated on different ticks.
+                    if(screenBoxValid){
+                        const float screenX=screenBox.x+screenBox.w*0.5f;
+                        const float screenY=screenBox.y+screenBox.h*0.82f;
                         const float ringRadius=std::clamp(esp->indicatorSize/48.0f*18.0f,8.0f,64.0f);
                         esp->addScreenRing(screenX,screenY,ringRadius,color,
                                            std::clamp(esp->targetThickness,1.0f,5.0f));
