@@ -466,6 +466,13 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
     float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
     float camZ = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 8);
+    const bedrocktools::sdk::Vec3 cameraPosition{camX,camY,camZ};
+    const bedrocktools::sdk::Vec2 cameraRotation=getActorRotation(g_localPlayerPtr);
+    const auto hudSurface=pl::modmenu::getHudSurfaceSize();
+    const float hudWidth=std::isfinite(hudSurface.width)?hudSurface.width:0.0f;
+    const float hudHeight=std::isfinite(hudSurface.height)?hudSurface.height:0.0f;
+    // HUD overlays are regenerated every render frame; disabled modules cannot leave stale boxes/rings.
+    if(esp) esp->beginScreenFrame();
 
     ensureMaterials();
 
@@ -840,8 +847,34 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            drawBox(espBounds,color,true,esp->outlineThickness);
-            if (esp->showLockInAim) drawTargetRing(espBounds);
+            if(esp->box2D){
+                ScreenBounds screenBox{};
+                if(projectAabbToScreen(espBounds,cameraPosition,cameraRotation,hudWidth,hudHeight,
+                                       esp->locatorFov,screenBox))
+                    esp->addScreenBox(screenBox.x,screenBox.y,screenBox.w,screenBox.h,
+                                      color,std::max(1.0f,esp->outlineThickness*40.0f));
+            }else{
+                drawBox(espBounds,color,true,esp->outlineThickness);
+            }
+            if(esp->showLockInAim){
+                if(esp->ring2D){
+                    const bedrocktools::sdk::Vec3 ringCenter{
+                        (espBounds.min.x+espBounds.max.x)*0.5f,
+                        espBounds.min.y+0.90f+esp->targetYOffset,
+                        (espBounds.min.z+espBounds.max.z)*0.5f
+                    };
+                    float screenX=0.0f,screenY=0.0f;
+                    if(projectPointToScreen(ringCenter,cameraPosition,cameraRotation,hudWidth,hudHeight,
+                                            esp->locatorFov,screenX,screenY) &&
+                       screenX>=0.0f&&screenX<hudWidth&&screenY>=0.0f&&screenY<hudHeight){
+                        const float ringRadius=std::clamp(esp->indicatorSize/48.0f*18.0f,8.0f,64.0f);
+                        esp->addScreenRing(screenX,screenY,ringRadius,color,
+                                           std::clamp(esp->targetThickness,1.0f,5.0f));
+                    }
+                }else{
+                    drawTargetRing(espBounds);
+                }
+            }
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
