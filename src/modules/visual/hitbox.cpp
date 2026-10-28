@@ -577,7 +577,6 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     // uses only that actor's current AABB, so Aim Assist never gates the ring.
     auto drawTargetRing = [&](const AABB& aabb) {
         const float width = aabb.max.x - aabb.min.x;
-        const float height = aabb.max.y - aabb.min.y;
         const bedrocktools::sdk::Vec3 center{
             (aabb.min.x + aabb.max.x) * 0.5f,
             (aabb.min.y + aabb.max.y) * 0.5f + (esp ? esp->targetYOffset : 0.0f),
@@ -728,10 +727,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             return;
         }
         const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
-        const AABB espBounds = expander
-            ? [&]() { const auto native = expander->nativeBoundsForActor(ent, {aabb.min, aabb.max});
-                      return AABB{native.min, native.max}; }()
-            : aabb;
+        AABB espBounds = aabb;
+        if (expander) {
+            const auto native = expander->nativeBoundsForActor(ent, {aabb.min, aabb.max});
+            espBounds = {native.min, native.max};
+        }
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
         if(wantsEsp){
             std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
