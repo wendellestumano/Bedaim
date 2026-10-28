@@ -856,7 +856,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             if(esp->box2D){
                 ScreenBounds screenBox{};
                 if(projectAabbToScreen(espBounds,cameraPosition,cameraRotation,hudWidth,hudHeight,
-                                       esp->locatorFov,screenBox))
+                                       esp->projectionFov,screenBox))
                     esp->addScreenBox(screenBox.x,screenBox.y,screenBox.w,screenBox.h,
                                       color,std::max(1.0f,esp->outlineThickness*40.0f));
             }else{
@@ -871,7 +871,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                     };
                     float screenX=0.0f,screenY=0.0f;
                     if(projectPointToScreen(ringCenter,cameraPosition,cameraRotation,hudWidth,hudHeight,
-                                            esp->locatorFov,screenX,screenY) &&
+                                            esp->projectionFov,screenX,screenY) &&
                        screenX>=0.0f&&screenX<hudWidth&&screenY>=0.0f&&screenY<hudHeight){
                         const float ringRadius=std::clamp(esp->indicatorSize/48.0f*18.0f,8.0f,64.0f);
                         esp->addScreenRing(screenX,screenY,ringRadius,color,
