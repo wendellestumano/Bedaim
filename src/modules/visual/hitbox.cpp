@@ -292,8 +292,13 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
             !s_actorIsPlayer(actor)) continue;
         foundPlayer = true;
         if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
-        const AABB bounds = getActorAABB(actor);
+        AABB bounds = getActorAABB(actor);
         if (!validRenderBounds(bounds)) continue;
+        if (auto* expander = static_cast<HitboxExpanderModule*>(
+                ModuleRegistry::get().find("bedrocktools.Hitbox Expander"))) {
+            const auto nativeBounds = expander->nativeBoundsForActor(actor, {bounds.min, bounds.max});
+            bounds = {nativeBounds.min, nativeBounds.max};
+        }
         const bedrocktools::sdk::Vec3 center{
             (bounds.min.x + bounds.max.x) * 0.5f,
             (bounds.min.y + bounds.max.y) * 0.5f,
@@ -444,31 +449,55 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
     };
 
-    auto drawBox = [&](const AABB& aabb, uint32_t color, bool throughWalls) {
-        // RenderLevel may visit many actors every frame. Reuse this small buffer
-        // instead of allocating a fresh vector for every box submission.
+    auto drawBox = [&](const AABB& aabb, uint32_t color, bool throughWalls, float thickness) {
+        // RenderLevel may visit many actors every frame. Reuse this buffer.
         using Line = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
         static std::vector<Line> lines;
         lines.clear();
-        if (lines.capacity() < 12) lines.reserve(12);
-        bedrocktools::sdk::Vec3 mn = aabb.min;
-        bedrocktools::sdk::Vec3 mx = aabb.max;
+        if (lines.capacity() < 60) lines.reserve(60);
+        const bedrocktools::sdk::Vec3 mn = aabb.min;
+        const bedrocktools::sdk::Vec3 mx = aabb.max;
 
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mn.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mn.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mn.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mn.y, mn.z}});
+        lines.push_back({{mn.x, mn.y, mn.z}, {mx.x, mn.y, mn.z}});
+        lines.push_back({{mx.x, mn.y, mn.z}, {mx.x, mn.y, mx.z}});
+        lines.push_back({{mx.x, mn.y, mx.z}, {mn.x, mn.y, mx.z}});
+        lines.push_back({{mn.x, mn.y, mx.z}, {mn.x, mn.y, mn.z}});
+        lines.push_back({{mn.x, mx.y, mn.z}, {mx.x, mx.y, mn.z}});
+        lines.push_back({{mx.x, mx.y, mn.z}, {mx.x, mx.y, mx.z}});
+        lines.push_back({{mx.x, mx.y, mx.z}, {mn.x, mx.y, mx.z}});
+        lines.push_back({{mn.x, mx.y, mx.z}, {mn.x, mx.y, mn.z}});
+        lines.push_back({{mn.x, mn.y, mn.z}, {mn.x, mx.y, mn.z}});
+        lines.push_back({{mx.x, mn.y, mn.z}, {mx.x, mx.y, mn.z}});
+        lines.push_back({{mx.x, mn.y, mx.z}, {mx.x, mx.y, mx.z}});
+        lines.push_back({{mn.x, mn.y, mx.z}, {mn.x, mx.y, mx.z}});
 
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mx.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mx.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mx.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mx.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mn.z}});
-
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mn.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mn.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mx.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mx.x, mx.y, mx.z}});
-        lines.push_back({bedrocktools::sdk::Vec3{mn.x, mn.y, mx.z}, bedrocktools::sdk::Vec3{mn.x, mx.y, mx.z}});
-
+        // Native line-width controls are unreliable across RenderDragon devices.
+        // Approximate thickness with parallel strokes offset around each box edge.
+        const float spread = std::clamp(thickness, 0.0f, 0.10f);
+        if (spread > 0.0001f) {
+            for (std::size_t i = 0; i < 12; ++i) {
+                const Line edge = lines[i];
+                const auto& a = edge.first;
+                const auto& b = edge.second;
+                const float dx = std::fabs(b.x - a.x);
+                const float dy = std::fabs(b.y - a.y);
+                const float dz = std::fabs(b.z - a.z);
+                auto addOffset = [&](float ox, float oy, float oz) {
+                    lines.push_back({{a.x + ox, a.y + oy, a.z + oz},
+                                     {b.x + ox, b.y + oy, b.z + oz}});
+                };
+                if (dx >= dy && dx >= dz) {
+                    addOffset(0, spread, 0); addOffset(0, -spread, 0);
+                    addOffset(0, 0, spread); addOffset(0, 0, -spread);
+                } else if (dy >= dx && dy >= dz) {
+                    addOffset(spread, 0, 0); addOffset(-spread, 0, 0);
+                    addOffset(0, 0, spread); addOffset(0, 0, -spread);
+                } else {
+                    addOffset(spread, 0, 0); addOffset(-spread, 0, 0);
+                    addOffset(0, spread, 0); addOffset(0, -spread, 0);
+                }
+            }
+        }
         drawLines(lines, color, throughWalls);
     };
 
@@ -551,7 +580,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const float height = aabb.max.y - aabb.min.y;
         const bedrocktools::sdk::Vec3 center{
             (aabb.min.x + aabb.max.x) * 0.5f,
-            aabb.max.y + std::max(0.18f, height * 0.14f),
+            (aabb.min.y + aabb.max.y) * 0.5f + (esp ? esp->targetYOffset : 0.0f),
             (aabb.min.z + aabb.max.z) * 0.5f
         };
 
@@ -574,8 +603,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const double seconds = std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const double animationEnabled = (esp && esp->animatedIndicators) ? 1.0 : 0.0;
-        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled, tau));
-        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled, tau));
+        const double targetSpeed = esp ? std::clamp(esp->targetSpeed, 0.1f, 4.0f) : 1.0;
+        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled * targetSpeed, tau));
+        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled * targetSpeed, tau));
         const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
         const float radius = std::clamp(std::max(width * 1.02f, 0.42f) * sizeScale, 0.22f, 1.20f);
         using RingLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
@@ -637,8 +667,38 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             innerLines.push_back({pointAt(radius * 0.39f, a0), pointAt(radius * 0.39f, a1)});
         }
 
-        drawLines(outerLines, 0xFF7247FFu, true); // violet, through walls
-        drawLines(innerLines, 0xFF405DFFu, true); // electric blue, through walls
+        // Increase visible ring thickness using near-parallel world-space strokes.
+        // The target's native AABB is supplied by renderActor so BedrockBounds cannot
+        // enlarge the marker along with its expanded collision/query bounds.
+        const int ringLayers = esp ? static_cast<int>(std::clamp(std::round(esp->targetThickness), 1.0f, 5.0f)) : 1;
+        static std::vector<RingLine> thickOuterLines;
+        static std::vector<RingLine> thickInnerLines;
+        auto makeThick = [&](const std::vector<RingLine>& source, std::vector<RingLine>& output) {
+            output.assign(source.begin(), source.end());
+            if (ringLayers <= 1) return;
+            const std::size_t needed = source.size() * static_cast<std::size_t>(1 + 2 * (ringLayers - 1));
+            if (output.capacity() < needed) output.reserve(needed);
+            auto offsetPoint = [&](const bedrocktools::sdk::Vec3& point, float radialOffset) {
+                const float vx = point.x - center.x;
+                const float vy = point.y - center.y;
+                const float vz = point.z - center.z;
+                const float length = std::sqrt(vx*vx + vy*vy + vz*vz);
+                if (length < 0.001f || length + radialOffset <= 0.001f) return point;
+                const float scale = (length + radialOffset) / length;
+                return bedrocktools::sdk::Vec3{center.x + vx*scale, center.y + vy*scale, center.z + vz*scale};
+            };
+            for (const auto& line : source) {
+                for (int layer = 1; layer < ringLayers; ++layer) {
+                    const float offset = 0.0125f * static_cast<float>(layer);
+                    output.push_back({offsetPoint(line.first, offset), offsetPoint(line.second, offset)});
+                    output.push_back({offsetPoint(line.first, -offset), offsetPoint(line.second, -offset)});
+                }
+            }
+        };
+        makeThick(outerLines, thickOuterLines);
+        makeThick(innerLines, thickInnerLines);
+        drawLines(thickOuterLines, 0xFF7247FFu, true); // violet, through walls
+        drawLines(thickInnerLines, 0xFF405DFFu, true); // electric blue, through walls
     };
 
     void* selectedEntity = nullptr;
@@ -668,6 +728,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             return;
         }
         const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
+        const AABB espBounds = expander
+            ? [&]() { const auto native = expander->nativeBoundsForActor(ent, {aabb.min, aabb.max});
+                      return AABB{native.min, native.max}; }()
+            : aabb;
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
         if(wantsEsp){
             std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
@@ -675,8 +739,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            drawBox(aabb,color,true);
-            if (esp->showLockInAim) drawTargetRing(aabb);
+            drawBox(espBounds,color,true,esp->outlineThickness);
+            if (esp->showLockInAim) drawTargetRing(espBounds);
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
@@ -688,7 +752,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const uint32_t boxColor = g_hitboxMod ? g_hitboxMod->hitboxColor : 0xFF00FFFF;
         // Do not repaint the same native player bounds over an ESP game-mode color.
         // Expanded bounds remain separately visible when Bedrock Bounds is enabled.
-        if (!wantsEsp || isExpandedTarget) drawBox(aabb, boxColor, false);
+        if (!wantsEsp || isExpandedTarget)
+            drawBox(aabb, boxColor, false, esp ? esp->hitboxThickness : 0.025f);
 
         if (!nativeHitboxesEnabled) return;
         if (g_hitboxMod->showEyeLine) {
