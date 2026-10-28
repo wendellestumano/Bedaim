@@ -835,8 +835,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         };
         makeThick(outerLines, thickOuterLines);
         makeThick(innerLines, thickInnerLines);
-        drawLines(thickOuterLines, 0xFF7247FFu, true); // violet, through walls
-        drawLines(thickInnerLines, 0xFF405DFFu, true); // electric blue, through walls
+        const std::uint32_t ringColor = esp ? esp->targetColor : 0xFF7247FFu;
+        drawLines(thickOuterLines, ringColor, true);
+        drawLines(thickInnerLines, ringColor, true);
     };
 
     void* selectedEntity = nullptr;
