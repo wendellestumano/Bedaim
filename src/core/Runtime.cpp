@@ -6,6 +6,7 @@
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <filesystem>
 #include <fstream>
+#include <array>
 #include "launcher/ModuleMenu.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "core/memory/Hooks.hpp"
@@ -162,12 +163,29 @@ bool Runtime::load(pl::mod::ModContext& context) {
     const std::filesystem::path conventionalDownload("/storage/emulated/0/Download/BEDAIM/config.json");
     const std::filesystem::path sdcardDownload("/sdcard/Download/BEDAIM/config.json");
     std::error_code configPathError;
+    const std::array<std::filesystem::path, 4> publicConfigCandidates{
+        pluralDownloads, sdcardPluralDownloads, conventionalDownload, sdcardDownload
+    };
     std::filesystem::path configPath = conventionalDownload;
-    for (const auto& candidate : {pluralDownloads, sdcardPluralDownloads, conventionalDownload, sdcardDownload}) {
+    bool foundExistingConfig = false;
+    for (const auto& candidate : publicConfigCandidates) {
         configPathError.clear();
         if (std::filesystem::exists(candidate, configPathError) && !configPathError) {
             configPath = candidate;
+            foundExistingConfig = true;
             break;
+        }
+    }
+    // If no config exists yet, respect a BEDAIM folder the user already created
+    // under Downloads before defaulting to Android's standard Download directory.
+    if (!foundExistingConfig) {
+        for (const auto& candidate : publicConfigCandidates) {
+            configPathError.clear();
+            if (std::filesystem::is_directory(candidate.parent_path(), configPathError) &&
+                !configPathError) {
+                configPath = candidate;
+                break;
+            }
         }
     }
 
