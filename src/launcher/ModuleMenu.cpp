@@ -1,4 +1,5 @@
 #include "ModuleMenu.hpp"
+#include "core/Diagnostics.hpp"
 #include "MenuConfigValue.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "config/ConfigManager.hpp"
@@ -32,9 +33,24 @@ static void persistModuleConfig() {
 }
 
 static void onModuleToggle(std::string_view module_id, bool enabled) {
+    // Clear HUD draw commands before looking up the module. This is deliberately
+    // done at the launcher callback boundary so stale screen-space ESP commands
+    // cannot survive a toggle even if the module instance has already transitioned.
+    if (!enabled) {
+        pl::modmenu::submitDrawCommands(
+            module_id, std::span<const pl::modmenu::DrawCommand>{});
+    }
     auto* mod = ModuleRegistry::get().find(module_id);
-    if (!mod) return;
+    if (!mod) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "ModuleMenu", std::string("toggle callback could not resolve module: ") +
+            std::string(module_id));
+        return;
+    }
     mod->setMasterEnabled(enabled);
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "ModuleMenu", std::string("toggle applied: ") + std::string(module_id) +
+        (enabled ? " enabled" : " disabled"));
     persistModuleConfig();
 }
 
