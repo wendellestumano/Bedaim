@@ -70,6 +70,7 @@ public:
     std::uint32_t spectatorColor = 0xFFB040FF;
     std::uint32_t adventureColor = 0xFF40D8FF;
     std::uint32_t unknownColor = 0xFFFFD040;
+    std::uint32_t targetColor = 0xFF7247FF;
 
 private:
     mutable std::mutex m_hudTargetMutex;
