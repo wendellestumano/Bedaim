@@ -62,9 +62,42 @@ void EspModule::onEnable() {
 
 void EspModule::onDisable(){
     pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
-    std::lock_guard<std::mutex> lock(m_hudTargetMutex);
-    m_offscreenTargetValid=false;
-    m_offscreenFrameTime={};
+    {
+        std::lock_guard<std::mutex> lock(m_hudTargetMutex);
+        m_offscreenTargetValid=false;
+        m_offscreenFrameTime={};
+    }
+    beginScreenFrame();
+}
+
+void EspModule::beginScreenFrame(){
+    std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+    m_screenOverlays.clear();
+}
+
+void EspModule::addScreenBox(float x,float y,float w,float h,std::uint32_t color,float thickness){
+    if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h)||
+       !std::isfinite(thickness)||w<2.0f||h<2.0f)return;
+    std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+    if(m_screenOverlays.size()>=512)return;
+    ScreenOverlay overlay;overlay.kind=ScreenOverlay::Kind::Box;overlay.x=x;overlay.y=y;
+    overlay.w=w;overlay.h=h;overlay.color=color;overlay.thickness=std::clamp(thickness,1.0f,5.0f);
+    m_screenOverlays.push_back(overlay);
+}
+
+void EspModule::addScreenRing(float x,float y,float radius,std::uint32_t color,float thickness){
+    if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(radius)||
+       !std::isfinite(thickness)||radius<3.0f)return;
+    std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+    if(m_screenOverlays.size()>=512)return;
+    ScreenOverlay overlay;overlay.kind=ScreenOverlay::Kind::Ring;overlay.x=x;overlay.y=y;
+    overlay.radius=std::clamp(radius,3.0f,96.0f);overlay.color=color;
+    overlay.thickness=std::clamp(thickness,1.0f,5.0f);m_screenOverlays.push_back(overlay);
+}
+
+std::vector<EspModule::ScreenOverlay> EspModule::screenOverlaySnapshot() const{
+    std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+    return m_screenOverlays;
 }
 
 void EspModule::beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition,
@@ -97,12 +130,15 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
     const float pitchDelta=targetPitch-m_hudLocalRotation.x;
 
-    // Use a high-end viewport bound, rather than the old 42°/28° thresholds,
-    // so the locator waits until the player's bearing is genuinely off-screen.
-    const float halfVertical=kMaxVerticalFov*0.5f+1.5f;
+    // Use the same perspective test as the on-screen locator projection.
+    // This keeps the arrow hidden while the target bearing still lies in the viewport.
     const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
-    const float halfHorizontal=std::atan(std::tan(kMaxVerticalFov*0.5f/kRadToDeg)*aspect)*kRadToDeg+2.0f;
-    if(std::fabs(yawDelta)<=halfHorizontal&&std::fabs(pitchDelta)<=halfVertical)return;
+    const float tanHalfVertical=std::tan(std::clamp(kMaxVerticalFov,60.0f,140.0f)*0.5f/kRadToDeg);
+    const bool inFront=std::cos(yawDelta/kRadToDeg)>0.0f;
+    const float projectedX=std::tan(yawDelta/kRadToDeg)/(tanHalfVertical*aspect);
+    const float projectedY=-std::tan(pitchDelta/kRadToDeg)/tanHalfVertical;
+    if(inFront&&std::isfinite(projectedX)&&std::isfinite(projectedY)&&
+       std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f)return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
@@ -168,8 +204,16 @@ void EspModule::onFrame(){
                 const float pitchDelta=targetPitch-rotation.x;
                 const float yawRadians=yawDelta*kDegToRad;
                 const float pitchRadians=pitchDelta*kDegToRad;
-                float dirX=-std::sin(yawRadians);
-                float dirY=-std::sin(pitchRadians)*std::cos(yawRadians);
+                const float aspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
+                const float tanHalfVertical=std::tan(std::clamp(locatorFov,60.0f,140.0f)*0.5f*kDegToRad);
+                float dirX=0.0f,dirY=0.0f;
+                if(std::cos(yawRadians)>0.0f){
+                    dirX=std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
+                    dirY=-std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
+                }else{
+                    dirX=-std::sin(yawRadians);
+                    dirY=-std::sin(pitchRadians)*std::cos(yawRadians);
+                }
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(directionLength<0.0001f){
                     // A target almost exactly behind the player has no stable
@@ -186,7 +230,7 @@ void EspModule::onFrame(){
                     dirY/=directionLength;
                 }
 
-                const float size=std::clamp(indicatorSize,24.0f,160.0f)*
+                const float size=std::clamp(locatorSize,24.0f,160.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f*targetSpeed+0.6f):1.0f);
                 const float edgeMargin=size*0.5f+12.0f;
                 const float halfW=std::max(1.0f,cx-edgeMargin);
@@ -211,6 +255,32 @@ void EspModule::onFrame(){
             }
         }
     }
+    for(const auto& overlay:screenOverlaySnapshot()){
+        if(overlay.kind==ScreenOverlay::Kind::Box){
+            pl::modmenu::DrawCommand box{};
+            box.type=pl::modmenu::DrawCommandType::Rect;
+            box.x=overlay.x;box.y=overlay.y;box.w=overlay.w;box.h=overlay.h;
+            box.color=overlay.color;box.size=overlay.thickness;
+            commands.push_back(std::move(box));
+        }else{
+            constexpr int segments=48;
+            const float phase=animatedIndicators?seconds*targetSpeed*0.85f:0.0f;
+            const float tau=6.2831853071795864769f;
+            for(int i=0;i<segments;++i){
+                if((i%12)>=10)continue;
+                const float a0=tau*static_cast<float>(i)/segments+phase;
+                const float a1=tau*static_cast<float>(i+1)/segments+phase;
+                const float r0=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a0-phase)));
+                const float r1=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a1-phase)));
+                pl::modmenu::DrawCommand line{};
+                line.type=pl::modmenu::DrawCommandType::Line;
+                line.x=overlay.x+std::cos(a0)*r0;line.y=overlay.y+std::sin(a0)*r0;
+                line.w=overlay.x+std::cos(a1)*r1;line.h=overlay.y+std::sin(a1)*r1;
+                line.color=overlay.color;line.size=overlay.thickness;
+                commands.push_back(std::move(line));
+            }
+        }
+    }
     pl::modmenu::submitDrawCommands(moduleId,commands);
 }
 
@@ -227,13 +297,15 @@ void EspModule::onMenuRegistered(){
  toggle("showPlayers","Show players","Draw outlines around other players.",true);
  toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
  toggle("infiniteRange","Infinite ESP range","Show ESP and locator targets at any distance among entities loaded by the game.",true,"players");
+ toggle("box2D","2D ESP box","Render the ESP box in screen space. Off renders it in the 3D world.",false,"appearance");
  toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
+ toggle("ring2D","2D target ring","Render the target ring in screen space. Off renders it in the 3D world.",false,"indicators");
  toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
- ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
- size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";
+ ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Target ring size";
+ size.description="Scale of the rotating target ring.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
- size.hasCurrentValue=true;size.minValue="24";size.maxValue="160";size.step="4";size.unit=" px";schema.node(std::move(size));
+ size.hasCurrentValue=true;size.minValue="24";size.maxValue="160";size.step="4";size.unit=" %";schema.node(std::move(size));
  auto slider=[&](const char* key,const char* title,const char* desc,const char* category,
                   float defaultValue,float minimum,float maximum,float step,const char* unit){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;
@@ -243,6 +315,7 @@ void EspModule::onMenuRegistered(){
   n.step=std::to_string(step);n.unit=unit;schema.node(std::move(n));
  };
  slider("locatorFov","Locator FOV","Vertical FOV threshold used to decide when the target is outside the visible area.", "indicators",90.0f,60.0f,140.0f,1.0f,"°");
+ slider("locatorSize","Locator size","Size of the off-screen locator arrow in pixels.","indicators",48.0f,24.0f,160.0f,4.0f," px");
  slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
@@ -262,11 +335,14 @@ void EspModule::onMenuRegistered(){
 }
 bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value){
  if(key=="showPlayers"||key=="showInvisible"||key=="showLockInAim"||
-    key=="showOffscreenIndicators"||key=="animatedIndicators"||key=="infiniteRange"){
+    key=="showOffscreenIndicators"||key=="animatedIndicators"||key=="infiniteRange"||
+    key=="box2D"||key=="ring2D"){
   bool b=false;if(!parseBool(value,b))return false;
   if(key=="showPlayers")showPlayers=b;
   else if(key=="showInvisible")showInvisible=b;
   else if(key=="infiniteRange")infiniteRange=b;
+  else if(key=="box2D")box2D=b;
+  else if(key=="ring2D")ring2D=b;
   else if(key=="showLockInAim")showLockInAim=b;
   else if(key=="showOffscreenIndicators")showOffscreenIndicators=b;
   else animatedIndicators=b;
@@ -274,6 +350,7 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  }
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,160.0f);return true;}
+ if(key=="locatorSize"){float f=0;if(!parseFloat(value,f))return false;locatorSize=std::clamp(f,24.0f,160.0f);return true;}
  if(key=="locatorFov"){float f=0;if(!parseFloat(value,f))return false;locatorFov=std::clamp(f,60.0f,140.0f);return true;}
  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
@@ -295,8 +372,10 @@ void EspModule::loadConfig(const nlohmann::json& j){
  showLockInAim=j.value("showLockInAim",showLockInAim);
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  infiniteRange=j.value("infiniteRange",infiniteRange);
+ box2D=j.value("box2D",box2D);ring2D=j.value("ring2D",ring2D);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,160.0f);
+ locatorSize=std::clamp(j.value("locatorSize",locatorSize),24.0f,160.0f);
  locatorFov=std::clamp(j.value("locatorFov",locatorFov),60.0f,140.0f);
  targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
  targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
@@ -310,8 +389,9 @@ void EspModule::loadConfig(const nlohmann::json& j){
 void EspModule::saveConfig(nlohmann::json& j){
  Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
- j["infiniteRange"]=infiniteRange;
+ j["infiniteRange"]=infiniteRange;j["box2D"]=box2D;j["ring2D"]=ring2D;
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,160.0f);
+ j["locatorSize"]=std::clamp(locatorSize,24.0f,160.0f);
  j["locatorFov"]=std::clamp(locatorFov,60.0f,140.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
  j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
