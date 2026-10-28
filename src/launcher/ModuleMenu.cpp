@@ -48,10 +48,17 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
         return;
     }
     mod->setMasterEnabled(enabled);
-    if (!enabled && (module_id == "bedrocktools.ESP" ||
-                     module_id == "bedrocktools.Hitbox Expander")) {
-        // Repeated OFF events must clear renderer-owned state even when the module's
-        // logical enabled flag was already false due to a previous stale transition.
+    const std::string moduleName = mod->name ? mod->name : "";
+    const bool isEspModule = module_id == "bedrocktools.ESP" || moduleName == "ESP";
+    const bool isBoundsModule =
+        module_id.find("Hitbox Expander") != std::string_view::npos ||
+        module_id.find("BedrockBounds") != std::string_view::npos ||
+        moduleName.find("BedrockBounds") != std::string::npos;
+    if (!enabled && (isEspModule || isBoundsModule)) {
+        // Explicitly force the effective state off and run idempotent cleanup even
+        // when the launcher repeats an OFF event after an earlier stale transition.
+        mod->masterEnabled = false;
+        mod->enabled = false;
         mod->onDisable();
     }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
