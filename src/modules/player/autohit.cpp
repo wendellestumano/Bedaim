@@ -472,7 +472,7 @@ void AutoHitModule::processPlayerTick(Player* player) {
         std::string("item=") + customProfile->identifier + "; cps=" + std::to_string(configuredCps) +
             "; range=" + std::to_string(configuredRange));
 
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    auto* aimBase = ModuleRegistry::get().find("bedaim.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
         {
             std::lock_guard<std::mutex> lock(m_stateMutex);

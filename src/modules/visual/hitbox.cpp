@@ -158,10 +158,118 @@ static bool validRenderBounds(const AABB& b) {
         std::isfinite(b.max.x)&&std::isfinite(b.max.y)&&std::isfinite(b.max.z)&&
         b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
 }
+struct CameraPoint { float x, y, z; };
+struct ScreenBounds { float x, y, w, h; };
+
+static CameraPoint toCameraSpace(const bedrocktools::sdk::Vec3& p,
+                                 const bedrocktools::sdk::Vec3& camera,
+                                 const bedrocktools::sdk::Vec2& rotation) {
+    constexpr float kDegToRad = 0.01745329251994329577f;
+    const float yaw = rotation.y * kDegToRad;
+    const float pitch = rotation.x * kDegToRad;
+    const float sy = std::sin(yaw), cy = std::cos(yaw);
+    const float sp = std::sin(pitch), cp = std::cos(pitch);
+    const float dx = p.x - camera.x, dy = p.y - camera.y, dz = p.z - camera.z;
+    // Minecraft forward is (-sin(yaw), -sin(pitch), cos(yaw)).
+    return {
+        dx * cy + dz * sy,
+        dx * (-sy * sp) + dy * cp + dz * (cy * sp),
+        dx * (-sy * cp) + dy * (-sp) + dz * (cy * cp)
+    };
+}
+
+static bool cameraPointToScreen(const CameraPoint& p, float width, float height,
+                                float verticalFov, float& sx, float& sy) {
+    if (!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)||p.z<=0.05f||
+        width<64.0f||height<64.0f) return false;
+    constexpr float kDegToRad = 0.01745329251994329577f;
+    const float tanHalf = std::tan(std::clamp(verticalFov, 30.0f, 150.0f)*0.5f*kDegToRad);
+    if (!std::isfinite(tanHalf)||tanHalf<0.001f) return false;
+    const float pixelsPerVerticalUnit = height/(2.0f*tanHalf);
+    sx = width*0.5f + (p.x/p.z)*pixelsPerVerticalUnit;
+    sy = height*0.5f - (p.y/p.z)*pixelsPerVerticalUnit;
+    return std::isfinite(sx)&&std::isfinite(sy);
+}
+
+static bool projectAabbToScreen(const AABB& box,
+                                const bedrocktools::sdk::Vec3& camera,
+                                const bedrocktools::sdk::Vec2& rotation,
+                                float width, float height, float verticalFov,
+                                ScreenBounds& out) {
+    if (!validRenderBounds(box) || width < 64.0f || height < 64.0f) return false;
+    const bedrocktools::sdk::Vec3 worldCenter{
+        (box.min.x+box.max.x)*0.5f,
+        (box.min.y+box.max.y)*0.5f,
+        (box.min.z+box.max.z)*0.5f
+    };
+    const CameraPoint centerCamera=toCameraSpace(worldCenter,camera,rotation);
+    // If the actor's center is behind/inside the camera, projecting its few
+    // near-plane corners can expand the box across most of the HUD and produce
+    // giant diagonal-looking edges. Do not publish such an unstable rectangle.
+    if(!std::isfinite(centerCamera.z)||centerCamera.z<0.12f) return false;
+    const bedrocktools::sdk::Vec3 corners[8] = {
+        {box.min.x,box.min.y,box.min.z},{box.max.x,box.min.y,box.min.z},
+        {box.max.x,box.min.y,box.max.z},{box.min.x,box.min.y,box.max.z},
+        {box.min.x,box.max.y,box.min.z},{box.max.x,box.max.y,box.min.z},
+        {box.max.x,box.max.y,box.max.z},{box.min.x,box.max.y,box.max.z}
+    };
+    constexpr int edges[12][2] = {
+        {0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},
+        {0,4},{1,5},{2,6},{3,7}
+    };
+    CameraPoint cameraCorners[8];
+    std::vector<std::pair<float,float>> points;
+    points.reserve(32);
+    for (int i=0;i<8;++i) {
+        cameraCorners[i]=toCameraSpace(corners[i],camera,rotation);
+        float sx=0,sy=0;
+        if(cameraPointToScreen(cameraCorners[i],width,height,verticalFov,sx,sy))
+            points.push_back({sx,sy});
+    }
+    constexpr float kNear=0.06f;
+    for(const auto& edge:edges){
+        const auto& a=cameraCorners[edge[0]];
+        const auto& b=cameraCorners[edge[1]];
+        const bool aFront=a.z>kNear,bFront=b.z>kNear;
+        if(aFront==bFront) continue;
+        const float denominator=b.z-a.z;
+        if(std::fabs(denominator)<1.0e-6f) continue;
+        const float t=std::clamp((kNear-a.z)/denominator,0.0f,1.0f);
+        CameraPoint p{a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,kNear};
+        float sx=0,sy=0;
+        if(cameraPointToScreen(p,width,height,verticalFov,sx,sy)) points.push_back({sx,sy});
+    }
+    if(points.empty()) return false;
+    float minX=points.front().first,maxX=minX,minY=points.front().second,maxY=minY;
+    for(const auto& p:points){
+        minX=std::min(minX,p.first);maxX=std::max(maxX,p.first);
+        minY=std::min(minY,p.second);maxY=std::max(maxY,p.second);
+    }
+    minX=std::clamp(minX,0.0f,width);maxX=std::clamp(maxX,0.0f,width);
+    minY=std::clamp(minY,0.0f,height);maxY=std::clamp(maxY,0.0f,height);
+    const float projectedWidth=maxX-minX, projectedHeight=maxY-minY;
+    if(projectedWidth<2.0f||projectedHeight<2.0f) return false;
+    // Reject pathological full-screen boxes caused by a mismatched camera basis or
+    // an AABB crossing the near plane. Normal player boxes remain far below this cap.
+    if(centerCamera.z>1.5f &&
+       (projectedWidth>width*0.88f || projectedHeight>height*0.94f)) return false;
+    out={minX,minY,projectedWidth,projectedHeight};
+    return true;
+}
+
+static bool projectPointToScreen(const bedrocktools::sdk::Vec3& point,
+                                 const bedrocktools::sdk::Vec3& camera,
+                                 const bedrocktools::sdk::Vec2& rotation,
+                                 float width, float height, float verticalFov,
+                                 float& x, float& y) {
+    return cameraPointToScreen(toCameraSpace(point,camera,rotation),width,height,verticalFov,x,y);
+}
+
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
  espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
  espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false},
  espLoggedOverlayMaterial{false},espLoggedOverlayUnavailable{false};
+static std::atomic_int espLastRenderState{-1};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -294,11 +402,8 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
         if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
         AABB bounds = getActorAABB(actor);
         if (!validRenderBounds(bounds)) continue;
-        if (auto* expander = static_cast<HitboxExpanderModule*>(
-                ModuleRegistry::get().find("bedrocktools.Hitbox Expander"))) {
-            const auto nativeBounds = expander->nativeBoundsForActor(actor, {bounds.min, bounds.max});
-            bounds = {nativeBounds.min, nativeBounds.max};
-        }
+        // The locator tracks the player's real body center, never the expanded
+        // collision box. Otherwise enabling BedrockBounds shifts the arrow bearing.
         const bedrocktools::sdk::Vec3 center{
             (bounds.min.x + bounds.max.x) * 0.5f,
             (bounds.min.y + bounds.max.y) * 0.5f,
@@ -318,16 +423,40 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     }
 
     auto* expander = static_cast<HitboxExpanderModule*>(
-        ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
-    auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
-    auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
-    const bool espEnabled = esp && esp->enabled;
+        ModuleRegistry::get().find("bedaim.Hitbox Expander"));
+    auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedaim.ESP"));
+    auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedaim.Ore ESP"));
+    if(esp) esp->beginScreenFrame();
+    // Only publish after RenderLevel has a valid context. Some auxiliary passes
+    // return early; publishing their empty staging buffer made 2D ESP flicker.
+    bool screenFrameReady = false;
+    struct ScreenFramePublishGuard {
+        EspModule* module;
+        bool* ready;
+        ~ScreenFramePublishGuard() { if (module) module->endScreenFrame(ready && *ready); }
+    } screenFramePublishGuard{esp, &screenFrameReady};
+    // Read the complete effective state at the render hook boundary. The shared
+    // RenderLevel hook intentionally remains installed, so stale cached flags must
+    // never keep a module's visuals alive after its master toggle or keybind is off.
+    const bool espEnabled = esp && esp->enabled && esp->masterEnabled && esp->keybindActive;
+    const int espRenderState = espEnabled ? 1 : 0;
+    const int previousEspRenderState = espLastRenderState.exchange(espRenderState, std::memory_order_acq_rel);
+    if (previousEspRenderState != espRenderState) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "ESP",
+            std::string("render_state=") + (espEnabled ? "enabled" : "disabled") +
+            "; module=" + (esp ? (esp->enabled ? "enabled" : "disabled") : "missing") +
+            "; master=" + (esp && esp->masterEnabled ? "true" : "false") +
+            "; keybind=" + (esp && esp->keybindActive ? "true" : "false"));
+    }
     // Require the complete effective state, not just the cached enabled flag.
     // The shared renderer hook can remain installed while individual modules toggle.
     const bool oreEspEnabled = oreEsp && oreEsp->enabled &&
                                oreEsp->masterEnabled && oreEsp->keybindActive;
-    const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
-    const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
+    const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled &&
+                                       g_hitboxMod->masterEnabled && g_hitboxMod->keybindActive;
+    const bool showExpandedHitboxes = expander && expander->enabled &&
+                                      expander->masterEnabled && expander->keybindActive &&
+                                      expander->shouldShowHitbox();
     const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled;
     const bool overlayVisualsEnabled = actorVisualsEnabled || oreEspEnabled;
     if (!overlayVisualsEnabled) return;
@@ -335,7 +464,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     // Fetch the native actor vector once per RenderLevel call and reuse it for both
     // off-screen HUD targeting and 3D ESP/Hitbox rendering.
-    const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
+    const float espRange = espEnabled ? (esp->infiniteRange ? 100000.0f : std::clamp(esp->range, 8.0f, 80.0f)) : 30.0f;
     const float queryRange = actorVisualsEnabled ? std::max(30.0f, espRange) : 0.0f;
     ActorVec actors{};
     bool actorSnapshotValid = false;
@@ -364,10 +493,17 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     uintptr_t lrpPtr = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer);
     if (!lrpPtr || lrpPtr < 0x1000) { if(overlayVisualsEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=level_renderer_player_unavailable"); return; }
+    screenFrameReady = true;
 
     float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
     float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
     float camZ = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 8);
+    const bedrocktools::sdk::Vec3 cameraPosition{camX,camY,camZ};
+    const bedrocktools::sdk::Vec2 cameraRotation=getActorRotation(g_localPlayerPtr);
+    const auto hudSurface=pl::modmenu::getHudSurfaceSize();
+    const float hudWidth=std::isfinite(hudSurface.width)?hudSurface.width:0.0f;
+    const float hudHeight=std::isfinite(hudSurface.height)?hudSurface.height:0.0f;
+    // Screen-space rectangles and rings are appended by renderActor below.
 
     ensureMaterials();
 
@@ -608,8 +744,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const double targetSpeed = esp ? std::clamp(esp->targetSpeed, 0.1f, 4.0f) : 1.0;
         const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled * targetSpeed, tau));
         const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled * targetSpeed, tau));
-        const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
-        const float radius = std::clamp(0.42f * sizeScale, 0.22f, 0.84f);
+        const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 3.33f) : 1.0f;
+        const float radius = std::clamp(0.42f * sizeScale, 0.22f, 1.40f);
         using RingLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
         // Reuse ring buffers across actors and frames; this path runs every frame.
         static std::vector<RingLine> outerLines;
@@ -730,11 +866,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             return;
         }
         const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
-        AABB espBounds = aabb;
-        if (expander) {
-            const auto native = expander->nativeBoundsForActor(ent, {aabb.min, aabb.max});
-            espBounds = {native.min, native.max};
-        }
+        // ESP describes the actor's actual rendered body, not its expanded
+        // collision/query bounds. Reusing Hitbox Expander's bounds makes the 2D
+        // rectangle grow and drift away from the player when BedrockBounds is on.
+        const AABB espBounds = aabb;
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
         if(wantsEsp){
             std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
@@ -742,8 +877,72 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            drawBox(espBounds,color,true,esp->outlineThickness);
-            if (esp->showLockInAim) drawTargetRing(espBounds);
+            // "2D" mode deliberately uses a camera-facing world-space billboard,
+            // anchored to the actor's native AABB. This avoids projecting through a
+            // guessed FOV/actor rotation (which differs from the interpolated render
+            // camera in third-person and made the HUD box slide away from the target).
+            if(esp->box2D || (esp->showLockInAim && esp->ring2D)){
+                constexpr float kDegToRad=0.01745329251994329577f;
+                const float yaw=cameraRotation.y*kDegToRad;
+                const float pitch=cameraRotation.x*kDegToRad;
+                const bedrocktools::sdk::Vec3 right{std::cos(yaw),0.0f,std::sin(yaw)};
+                const bedrocktools::sdk::Vec3 up{-std::sin(yaw)*std::sin(pitch),
+                                                   std::cos(pitch),
+                                                   std::cos(yaw)*std::sin(pitch)};
+                const float actorHeight=std::clamp(espBounds.max.y-espBounds.min.y,0.5f,4.0f);
+                const bedrocktools::sdk::Vec3 center{
+                    (espBounds.min.x+espBounds.max.x)*0.5f,
+                    (espBounds.min.y+espBounds.max.y)*0.5f,
+                    (espBounds.min.z+espBounds.max.z)*0.5f
+                };
+                const float halfWidth=actorHeight*0.30f;
+                const float halfHeight=actorHeight*0.50f;
+                const auto point=[&](float rx,float uy){
+                    return bedrocktools::sdk::Vec3{
+                        center.x+right.x*rx+up.x*uy,
+                        center.y+right.y*rx+up.y*uy,
+                        center.z+right.z*rx+up.z*uy
+                    };
+                };
+                if(esp->box2D){
+                    std::vector<std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>> edges;
+                    edges.reserve(4);
+                    const auto tl=point(-halfWidth,halfHeight),tr=point(halfWidth,halfHeight);
+                    const auto br=point(halfWidth,-halfHeight),bl=point(-halfWidth,-halfHeight);
+                    edges.push_back({tl,tr});edges.push_back({tr,br});
+                    edges.push_back({br,bl});edges.push_back({bl,tl});
+                    drawLines(edges,color,true);
+                }else{
+                    drawBox(espBounds,color,true,esp->outlineThickness);
+                }
+                if(esp->showLockInAim && esp->ring2D){
+                    std::vector<std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>> ring;
+                    constexpr int segments=32;
+                    ring.reserve(segments);
+                    const float radius=std::clamp(esp->indicatorSize/48.0f*actorHeight*0.32f,
+                                                  actorHeight*0.12f,actorHeight*0.8f);
+                    const auto ringCenter=point(0.0f,-halfHeight*0.55f);
+                    for(int i=0;i<segments;++i){
+                        const float a0=6.2831853071795864769f*static_cast<float>(i)/segments;
+                        const float a1=6.2831853071795864769f*static_cast<float>(i+1)/segments;
+                        const auto p0=bedrocktools::sdk::Vec3{
+                            ringCenter.x+right.x*std::cos(a0)*radius+up.x*std::sin(a0)*radius,
+                            ringCenter.y+right.y*std::cos(a0)*radius+up.y*std::sin(a0)*radius,
+                            ringCenter.z+right.z*std::cos(a0)*radius+up.z*std::sin(a0)*radius};
+                        const auto p1=bedrocktools::sdk::Vec3{
+                            ringCenter.x+right.x*std::cos(a1)*radius+up.x*std::sin(a1)*radius,
+                            ringCenter.y+right.y*std::cos(a1)*radius+up.y*std::sin(a1)*radius,
+                            ringCenter.z+right.z*std::cos(a1)*radius+up.z*std::sin(a1)*radius};
+                        ring.push_back({p0,p1});
+                    }
+                    drawLines(ring,color,true);
+                }else if(esp->showLockInAim){
+                    drawTargetRing(espBounds);
+                }
+            }else{
+                drawBox(espBounds,color,true,esp->outlineThickness);
+                if(esp->showLockInAim) drawTargetRing(espBounds);
+            }
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
@@ -971,6 +1170,13 @@ void HitboxModule::loadConfig(const nlohmann::json& j) {
     parseColor("hitboxColor", hitboxColor);
     parseColor("eyeLineColor", eyeLineColor);
     parseColor("lookLineColor", lookLineColor);
+
+    // This is an internal renderer, not an independently toggleable visual module.
+    // Old configs may contain masterEnabled=true from when Hitbox was visible. Never
+    // let that stale setting draw native boxes after ESP/BedrockBounds were switched off.
+    masterEnabled.store(false, std::memory_order_release);
+    keybindActive.store(true, std::memory_order_release);
+    enabled.store(false, std::memory_order_release);
 }
 
 void HitboxModule::saveConfig(nlohmann::json& j) {

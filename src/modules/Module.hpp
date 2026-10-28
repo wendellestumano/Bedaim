@@ -1,6 +1,7 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
+#include <atomic>
 #include "../core/Diagnostics.hpp"
 #include <string>
 #include <string_view>
@@ -11,9 +12,11 @@ public:
     const char* name;
     const char* description;
     std::string moduleId;
-    bool masterEnabled = false;
-    bool keybindActive = true;
-    bool enabled = false;
+    // Menu callbacks may run on the UI thread while RenderLevel/events read the
+    // state on game threads. Atomics make OFF transitions visible without a data race.
+    std::atomic_bool masterEnabled{false};
+    std::atomic_bool keybindActive{true};
+    std::atomic_bool enabled{false};
     bool showInMenu = true;
     bool hideInHudEditor = false;
     int keybind = 0;
@@ -22,7 +25,7 @@ public:
     // This lets modules be branded without breaking other modules or saved configs.
     Module(const char* n, const char* d, const char* idName = nullptr)
         : name(n), description(d),
-          moduleId(std::string("bedrocktools.") + (idName ? idName : n)) {}
+          moduleId(std::string("bedaim.") + (idName ? idName : n)) {}
     virtual ~Module() = default;
 
     virtual void onInit()     {}
@@ -41,13 +44,15 @@ public:
     }
 
     void setMasterEnabled(bool state) {
-        if (masterEnabled == state) return;
+        // Never short-circuit on the stored master flag. A stale effective enabled
+        // flag can survive an earlier transition; always recompute it from both gates.
         masterEnabled = state;
         updateEnabledState();
     }
 
     void setKeybindActive(bool state) {
-        if (keybindActive == state) return;
+        // Reconcile even when the value is repeated, for the same reason as the
+        // master toggle: effective state is the conjunction of both gates.
         keybindActive = state;
         updateEnabledState();
     }
@@ -78,7 +83,7 @@ public:
 
     virtual void saveConfig(nlohmann::json& j) {
         j["keybind"] = keybind;
-        j["keybindActive"] = keybindActive;
-        j["masterEnabled"] = masterEnabled;
+        j["keybindActive"] = keybindActive.load(std::memory_order_acquire);
+        j["masterEnabled"] = masterEnabled.load(std::memory_order_acquire);
     }
 };

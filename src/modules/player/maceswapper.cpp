@@ -243,7 +243,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             return;
         }
 
-        auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+        auto* aimModuleBase = ModuleRegistry::get().find("bedaim.Aim Assist");
         if (!aimModuleBase || !aimModuleBase->enabled) {
             bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
                 "MaceSwapper", "aim_dependency", "disabled_during_pending_attack");
@@ -315,7 +315,7 @@ void MaceSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    auto* aimModuleBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    auto* aimModuleBase = ModuleRegistry::get().find("bedaim.Aim Assist");
     if (!aimModuleBase || !aimModuleBase->enabled) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Warning,
             "MaceSwapper", "aim_dependency", "disabled");
