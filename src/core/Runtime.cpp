@@ -2,6 +2,11 @@
 #include "JavaVm.hpp"
 #include "GameHooks.hpp"
 #include "config/ConfigManager.hpp"
+#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
+#include <filesystem>
+#include <fstream>
+#include <array>
 #include "launcher/ModuleMenu.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "core/memory/Hooks.hpp"
@@ -29,6 +34,7 @@ bedrocktools::hooks::Handle dlopenHook = nullptr;
 bool eventsWired = false;
 int containerDepth = 0;
 int chatDepth = 0;
+std::atomic<std::uintptr_t> lastWorldIdentity{0};
 
 class ResolveGuard {
 public:
@@ -84,6 +90,19 @@ void Runtime::wireEvents() {
     eventsWired = true;
     using namespace bedrocktools::events;
     bus().subscribe<FrameEvent>([](auto&) { ModuleRegistry::get().onFrame(); });
+    bus().subscribe<LocalPlayerTickEvent>([](auto& event) {
+        if (!event.player) return;
+        auto* actor = static_cast<bedrocktools::sdk::Actor*>(event.player);
+        const auto worldIdentity = reinterpret_cast<std::uintptr_t>(actor->level());
+        if (worldIdentity == 0) return;
+        const auto previous = lastWorldIdentity.exchange(worldIdentity, std::memory_order_acq_rel);
+        if (previous != worldIdentity) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Info, "Config",
+                "world identity changed; reloading Downloads/BEDAIM/config.json");
+            bedrocktools::config::ConfigManager::get().load();
+        }
+    });
     bus().subscribe<MouseInputEvent>([](auto& event) {
         if (ModuleRegistry::get().onMouseEvent(event.button, event.down)) event.cancel();
     });
@@ -137,7 +156,76 @@ bool Runtime::load(pl::mod::ModContext& context) {
                          : "Preloader ModContext provided a null JavaVM");
     mResourceDirectory = context.resourceDir();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "Bedaim load requested");
-    bedrocktools::config::ConfigManager::get().setConfigPath((context.configDir() / "Configs.json").string());
+    // Android's public Downloads directory is normally exposed as "Download"
+    // on disk. Prefer any existing config so upgrades do not silently switch files.
+    const std::filesystem::path pluralDownloads("/storage/emulated/0/Downloads/BEDAIM/config.json");
+    const std::filesystem::path sdcardPluralDownloads("/sdcard/Downloads/BEDAIM/config.json");
+    const std::filesystem::path conventionalDownload("/storage/emulated/0/Download/BEDAIM/config.json");
+    const std::filesystem::path sdcardDownload("/sdcard/Download/BEDAIM/config.json");
+    std::error_code configPathError;
+    const std::array<std::filesystem::path, 4> publicConfigCandidates{
+        pluralDownloads, sdcardPluralDownloads, conventionalDownload, sdcardDownload
+    };
+    std::filesystem::path configPath = conventionalDownload;
+    bool foundExistingConfig = false;
+    for (const auto& candidate : publicConfigCandidates) {
+        configPathError.clear();
+        if (std::filesystem::exists(candidate, configPathError) && !configPathError) {
+            configPath = candidate;
+            foundExistingConfig = true;
+            break;
+        }
+    }
+    // If no config exists yet, respect a BEDAIM folder the user already created
+    // under Downloads before defaulting to Android's standard Download directory.
+    if (!foundExistingConfig) {
+        for (const auto& candidate : publicConfigCandidates) {
+            configPathError.clear();
+            if (std::filesystem::is_directory(candidate.parent_path(), configPathError) &&
+                !configPathError) {
+                configPath = candidate;
+                break;
+            }
+        }
+    }
+
+    // Confirm the selected public folder is actually writable by the game process.
+    // Scoped-storage restrictions can make Downloads inaccessible even when the path
+    // exists; in that case use the launcher's private config directory rather than
+    // silently losing every save. Keep the selected path in diagnostics.
+    auto canWriteBesideConfig = [](const std::filesystem::path& config) {
+        std::error_code ec;
+        std::filesystem::create_directories(config.parent_path(), ec);
+        if (ec) return false;
+        const auto probe = config.parent_path() / ".bedaim_write_test.tmp";
+        {
+            std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+            if (!out) return false;
+            out << "ok";
+            out.flush();
+            if (!out.good()) {
+                out.close();
+                std::filesystem::remove(probe, ec);
+                return false;
+            }
+        }
+        std::filesystem::remove(probe, ec);
+        return !ec;
+    };
+    if (!canWriteBesideConfig(configPath)) {
+        const auto privateConfig = context.configDir() / "BEDAIM" / "config.json";
+        if (canWriteBesideConfig(privateConfig)) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "Config",
+                "Downloads is not writable by the game process; using launcher's private config directory");
+            configPath = privateConfig;
+        } else {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+                "neither Downloads nor launcher's private config directory is writable");
+        }
+    }
+    bedrocktools::config::ConfigManager::get().setConfigPath(configPath.string());
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Config",
+        "active config path: " + configPath.string());
     if (!launcherContext()) return true;
     void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
     if (minecraft) {
