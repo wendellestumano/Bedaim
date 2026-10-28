@@ -57,38 +57,52 @@ void EspModule::onEnable() {
 }
 
 void EspModule::onDisable(){
+    // Clear published and in-progress HUD overlays immediately. The render hook may
+    // remain installed after the module is disabled.
     pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
     {
         std::lock_guard<std::mutex> lock(m_hudTargetMutex);
         m_offscreenTargetValid=false;
         m_offscreenFrameTime={};
     }
-    beginScreenFrame();
+    {
+        std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+        m_screenOverlays.clear();
+        m_screenBuildingOverlays.clear();
+    }
 }
 
 void EspModule::beginScreenFrame(){
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
-    m_screenOverlays.clear();
+    // Build into a private buffer; onFrame() continues to see the last complete frame.
+    m_screenBuildingOverlays.clear();
+}
+
+void EspModule::endScreenFrame(){
+    std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+    m_screenOverlays.swap(m_screenBuildingOverlays);
+    // The previous published frame is now the staging buffer and will be cleared by
+    // beginScreenFrame() before the next render pass.
 }
 
 void EspModule::addScreenBox(float x,float y,float w,float h,std::uint32_t color,float thickness){
     if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h)||
        !std::isfinite(thickness)||w<2.0f||h<2.0f)return;
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
-    if(m_screenOverlays.size()>=512)return;
+    if(m_screenBuildingOverlays.size()>=512)return;
     ScreenOverlay overlay;overlay.kind=ScreenOverlay::Kind::Box;overlay.x=x;overlay.y=y;
     overlay.w=w;overlay.h=h;overlay.color=color;overlay.thickness=std::clamp(thickness,1.0f,5.0f);
-    m_screenOverlays.push_back(overlay);
+    m_screenBuildingOverlays.push_back(overlay);
 }
 
 void EspModule::addScreenRing(float x,float y,float radius,std::uint32_t color,float thickness){
     if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(radius)||
        !std::isfinite(thickness)||radius<3.0f)return;
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
-    if(m_screenOverlays.size()>=512)return;
+    if(m_screenBuildingOverlays.size()>=512)return;
     ScreenOverlay overlay;overlay.kind=ScreenOverlay::Kind::Ring;overlay.x=x;overlay.y=y;
     overlay.radius=std::clamp(radius,3.0f,96.0f);overlay.color=color;
-    overlay.thickness=std::clamp(thickness,1.0f,5.0f);m_screenOverlays.push_back(overlay);
+    overlay.thickness=std::clamp(thickness,1.0f,5.0f);m_screenBuildingOverlays.push_back(overlay);
 }
 
 std::vector<EspModule::ScreenOverlay> EspModule::screenOverlaySnapshot() const{
@@ -137,7 +151,20 @@ bool EspModule::offscreenTargetSnapshot(bedrocktools::sdk::Vec3& targetCenter,
 }
 
 void EspModule::onFrame(){
-    if(!enabled)return;
+    if(!(enabled && masterEnabled && keybindActive)){
+        pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
+        {
+            std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+            m_screenOverlays.clear();
+            m_screenBuildingOverlays.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_hudTargetMutex);
+            m_offscreenTargetValid=false;
+            m_offscreenFrameTime={};
+        }
+        return;
+    }
     const auto surface=pl::modmenu::getHudSurfaceSize();
     if(!std::isfinite(surface.width)||!std::isfinite(surface.height)||surface.width<64.0f||surface.height<64.0f){
         pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
