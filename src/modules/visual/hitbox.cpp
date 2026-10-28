@@ -915,28 +915,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 }else{
                     drawBox(espBounds,color,true,esp->outlineThickness);
                 }
-                if(esp->showLockInAim && esp->ring2D){
-                    std::vector<std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>> ring;
-                    constexpr int segments=32;
-                    ring.reserve(segments);
-                    const float radius=std::clamp(esp->indicatorSize/48.0f*actorHeight*0.32f,
-                                                  actorHeight*0.12f,actorHeight*0.8f);
-                    const auto ringCenter=point(0.0f,-halfHeight*0.55f);
-                    for(int i=0;i<segments;++i){
-                        const float a0=6.2831853071795864769f*static_cast<float>(i)/segments;
-                        const float a1=6.2831853071795864769f*static_cast<float>(i+1)/segments;
-                        const auto p0=bedrocktools::sdk::Vec3{
-                            ringCenter.x+right.x*std::cos(a0)*radius+up.x*std::sin(a0)*radius,
-                            ringCenter.y+right.y*std::cos(a0)*radius+up.y*std::sin(a0)*radius,
-                            ringCenter.z+right.z*std::cos(a0)*radius+up.z*std::sin(a0)*radius};
-                        const auto p1=bedrocktools::sdk::Vec3{
-                            ringCenter.x+right.x*std::cos(a1)*radius+up.x*std::sin(a1)*radius,
-                            ringCenter.y+right.y*std::cos(a1)*radius+up.y*std::sin(a1)*radius,
-                            ringCenter.z+right.z*std::cos(a1)*radius+up.z*std::sin(a1)*radius};
-                        ring.push_back({p0,p1});
-                    }
-                    drawLines(ring,color,true);
-                }else if(esp->showLockInAim){
+                if(esp->showLockInAim){
+                    // Reuse the complete animated, camera-facing reticle renderer.
+                    // The old 32-segment circle was visually unlike the 3D marker and
+                    // could disappear at certain camera angles because its basis was
+                    // reconstructed independently from the render camera.
                     drawTargetRing(espBounds);
                 }
             }else{
