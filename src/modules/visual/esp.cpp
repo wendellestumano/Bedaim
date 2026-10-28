@@ -134,7 +134,7 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     // This keeps the arrow hidden while the target bearing still lies in the viewport.
     const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
     const float tanHalfVertical=std::tan(std::clamp(kMaxVerticalFov,60.0f,140.0f)*0.5f/kRadToDeg);
-    const bool inFront=std::cos(yawDelta/kRadToDeg)>0.0f;
+    const bool inFront=(std::cos(yawDelta/kRadToDeg)*std::cos(pitchDelta/kRadToDeg))>0.0f;
     const float projectedX=-std::tan(yawDelta/kRadToDeg)/(tanHalfVertical*aspect);
     const float projectedY=std::tan(pitchDelta/kRadToDeg)/tanHalfVertical;
     if(inFront&&std::isfinite(projectedX)&&std::isfinite(projectedY)&&
@@ -233,7 +233,7 @@ void EspModule::onFrame(){
                 const float aspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
                 const float tanHalfVertical=std::tan(std::clamp(locatorFov,60.0f,140.0f)*0.5f*kDegToRad);
                 float dirX=0.0f,dirY=0.0f;
-                if(std::cos(yawRadians)>0.0f){
+                if((std::cos(yawRadians)*std::cos(pitchRadians))>0.0f){
                     dirX=-std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
                     dirY=std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
                 }else{
