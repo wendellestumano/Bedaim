@@ -35,11 +35,6 @@ bool parseColor(std::string_view v,std::uint32_t& out){
 void loadColor(const nlohmann::json& j,const char* key,std::uint32_t& v){
  if(!j.contains(key)||!j[key].is_string())return;std::uint32_t parsed=0;if(parseColor(j[key].get<std::string>(),parsed))v=parsed;
 }
-float normalizeDegrees(float value){
- while(value>180.0f)value-=360.0f;
- while(value< -180.0f)value+=360.0f;
- return value;
-}
 }
 
 EspModule::EspModule():Module("ESP","Player outlines, Lock in Aim and off-screen direction indicators."){showInMenu=true;}
@@ -196,47 +191,41 @@ void EspModule::onFrame(){
             float dy=target.y-(local.y+1.62f);
             float dz=target.z-local.z;
             const float horizontal=std::sqrt(dx*dx+dz*dz);
-            constexpr float kRadToDeg=57.29577951308232f;
             constexpr float kDegToRad=0.01745329251994329577f;
             if(std::sqrt(dx*dx+dy*dy+dz*dz)>0.001f){
-                // Work in relative yaw/pitch angles. Do not invert the bearing when
-                // cameraDepth is negative: that projection sent rear targets to the
-                // opposite side of the screen. Horizontal bearing remains meaningful
-                // even when the target is behind the camera.
-                const float targetYaw=horizontal<0.001f
-                    ? rotation.y : std::atan2(-dx,dz)*kRadToDeg;
-                const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
-                const float yawDelta=normalizeDegrees(targetYaw-rotation.y);
-                const float pitchDelta=targetPitch-rotation.x;
-                const float yawRadians=yawDelta*kDegToRad;
-                const float pitchRadians=pitchDelta*kDegToRad;
+                // Project the target vector through the same camera basis used by the
+                // 2D box renderer. This avoids yaw/pitch sign flips and tracks the
+                // actual on-screen bearing even for targets above, below, or behind.
+                const float yaw=rotation.y*kDegToRad;
+                const float pitch=rotation.x*kDegToRad;
+                const float sy=std::sin(yaw),cy=std::cos(yaw);
+                const float sp=std::sin(pitch),cp=std::cos(pitch);
+                const float cameraX=dx*cy+dz*sy;
+                const float cameraY=dx*(-sy*sp)+dy*cp+dz*(cy*sp);
+                const float cameraDepth=dx*(-sy*cp)+dy*(-sp)+dz*(cy*cp);
                 const float aspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
                 const float tanHalfVertical=std::tan(std::clamp(locatorFov,60.0f,140.0f)*0.5f*kDegToRad);
-                const bool inFront=(std::cos(yawRadians)*std::cos(pitchRadians))>0.0f;
-                const float projectedX=-std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
-                const float projectedY=std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
+                const bool inFront=cameraDepth>0.05f;
+                const float safeDepth=std::max(0.05f,cameraDepth);
+                const float projectedX=cameraX/(safeDepth*std::max(0.001f,tanHalfVertical)*aspect);
+                const float projectedY=-cameraY/(safeDepth*std::max(0.001f,tanHalfVertical));
                 const bool targetOnScreen=inFront&&std::isfinite(projectedX)&&std::isfinite(projectedY)&&
                                           std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f;
                 if(!targetOnScreen){
                 float dirX=0.0f,dirY=0.0f;
                 if(inFront){
-                    dirX=-std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
-                    dirY=std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
+                    dirX=projectedX;
+                    dirY=projectedY;
                 }else{
-                    dirX=-std::sin(yawRadians);
-                    dirY=std::sin(pitchRadians)*std::cos(yawRadians);
+                    dirX=cameraX;
+                    dirY=-cameraY;
                 }
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(directionLength<0.0001f){
                     // A target almost exactly behind the player has no stable
                     // 2D projection. Choose the corresponding horizontal edge.
-                    if(std::fabs(yawDelta)>90.0f){
-                        dirX=yawDelta>=0.0f?1.0f:-1.0f;
-                        dirY=0.0f;
-                    }else{
-                        dirX=0.0f;
-                        dirY=pitchDelta>=0.0f?1.0f:-1.0f;
-                    }
+                    dirX=1.0f;
+                    dirY=0.0f;
                 }else{
                     dirX/=directionLength;
                     dirY/=directionLength;
