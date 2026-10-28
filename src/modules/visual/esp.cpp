@@ -286,13 +286,13 @@ void EspModule::onFrame(){
                 // multiplier into tan() made the bearing saturate and pinned the
                 // arrow toward arbitrary edges instead of following the target.
                 if(std::fabs(yawDelta)>90.0f){
-                    dirX=(yawDelta<0.0f)?-1.0f:1.0f;
+                    dirX=(yawDelta<0.0f)?1.0f:-1.0f;
                     const float vertical=std::clamp(pitchDelta,-halfVertical,halfVertical);
                     dirY=-vertical/std::max(1.0f,halfVertical);
                 }else{
                     const float safeYaw=std::clamp(yawDelta,-89.0f,89.0f)*kDegToRad;
                     const float safePitch=std::clamp(pitchDelta,-89.0f,89.0f)*kDegToRad;
-                    dirX=std::tan(safeYaw)/std::max(0.01f,std::tan(halfHorizontal*kDegToRad));
+                    dirX=-std::tan(safeYaw)/std::max(0.01f,std::tan(halfHorizontal*kDegToRad));
                     dirY=-std::tan(safePitch)/std::max(0.01f,std::tan(halfVertical*kDegToRad));
                 }
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
