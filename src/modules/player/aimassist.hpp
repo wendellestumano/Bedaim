@@ -180,4 +180,6 @@ private:
     bool m_lastAppliedExpandPlayers = true;
     bool m_lastAppliedExpandMobs = false;
     std::unordered_map<void*, NativeBoundsSnapshot> m_nativeBoundsOriginal;
+    // Keep restore-all pending across frames until the original AABBs are actually restored.
+    std::atomic_bool m_restoreAllPending{false};
 };
