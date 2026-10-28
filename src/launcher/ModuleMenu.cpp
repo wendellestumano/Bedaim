@@ -724,6 +724,12 @@ void registerModulesWithLauncher() {
     for (auto* mod : modules) {
         if (!mod->showInMenu) continue;
 
+        // Per-instance cleanup is authoritative even if the list above is missing a
+        // newly added module ID. This prevents duplicate rejection after hot reloads.
+        pl::modmenu::submitDrawCommands(
+            mod->moduleId, std::span<const pl::modmenu::DrawCommand>{});
+        pl::modmenu::unregisterModule(mod->moduleId);
+
         pl::modmenu::ModuleBuilder builder(mod->moduleId, mod->name);
         builder.description(mod->description)
                 .defaultEnabled(mod->masterEnabled)
