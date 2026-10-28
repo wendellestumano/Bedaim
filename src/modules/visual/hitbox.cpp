@@ -916,7 +916,36 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 edges.reserve(4);
                 edges.push_back({tl,tr});edges.push_back({tr,br});
                 edges.push_back({br,bl});edges.push_back({bl,tl});
-                drawLines(edges,color,true);
+                // RenderDragon's native LineList has a fixed stroke width, so
+                // emulate the requested pixel thickness with parallel strokes in
+                // the billboard plane. Scale their spacing by depth/FOV so the
+                // slider remains approximately screen-pixel based at different ranges.
+                const auto centerCamera = toCameraSpace(center, cameraPosition, cameraRotation);
+                const float fovRadians = std::clamp(esp->projectionFov, 40.0f, 120.0f) *
+                                         kDegToRad * 0.5f;
+                const float pixelsPerWorldUnit =
+                    hudHeight / (2.0f * std::tan(fovRadians) * std::max(centerCamera.z, 0.05f));
+                const float worldPerPixel = (std::isfinite(pixelsPerWorldUnit) &&
+                                             pixelsPerWorldUnit > 0.001f)
+                    ? 1.0f / pixelsPerWorldUnit : 0.01f;
+                const int strokeCount = std::clamp(
+                    static_cast<int>(std::lround(esp->box2DThickness)), 1, 10);
+                std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>> thickEdges;
+                thickEdges.reserve(static_cast<std::size_t>(strokeCount) * edges.size());
+                for (std::size_t edgeIndex = 0; edgeIndex < edges.size(); ++edgeIndex) {
+                    // Top/bottom borders spread vertically; side borders spread horizontally.
+                    const auto& axis = (edgeIndex == 0 || edgeIndex == 2) ? up : right;
+                    for (int stroke = 0; stroke < strokeCount; ++stroke) {
+                        const float offset = (static_cast<float>(stroke) -
+                            (static_cast<float>(strokeCount) - 1.0f) * 0.5f) * worldPerPixel;
+                        auto first = edges[edgeIndex].first;
+                        auto second = edges[edgeIndex].second;
+                        first.x += axis.x * offset; first.y += axis.y * offset; first.z += axis.z * offset;
+                        second.x += axis.x * offset; second.y += axis.y * offset; second.z += axis.z * offset;
+                        thickEdges.push_back({first, second});
+                    }
+                }
+                drawLines(thickEdges,color,true);
             }else{
                 drawBox(espBounds,color,true,esp->outlineThickness);
             }
