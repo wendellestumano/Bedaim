@@ -435,7 +435,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // Match AutoHit's targeting contract: use the fresh Aim Assist target,
     // require that it is a player, and verify the camera ray intersects that
     // same target. A nearby player elsewhere on screen is not sufficient.
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    auto* aimBase = ModuleRegistry::get().find("bedaim.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
         resetTargetState();
         reject("aim_assist_unavailable",
@@ -617,7 +617,7 @@ void UnglideModule::onMenuRegistered(){
      if (it->is_boolean()) return it->get<bool>() ? std::string("true") : std::string("false");
      return it->dump();
    };
-   ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
+   ModuleBuilder settings("bedaim.unglide.persistent_settings", "Unglide Settings");
    settings.modId("Bedaim")
      .description("Persistent Unglide controls; values apply immediately.")
      .defaultEnabled(true)
