@@ -1144,7 +1144,11 @@ bool AimAssistModule::localPlayerIsGliding() {
 }
 
 void AimAssistModule::processPlayerFrame() {
-    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    // Target scanning holds this mutex while walking the native nearby-actor list.
+    // Never stall the client/frame callback waiting for that scan; skip this frame
+    // and resume on the next update instead of producing a visible hitch.
+    std::unique_lock<std::mutex> stateLock(m_stateMutex, std::try_to_lock);
+    if (!stateLock.owns_lock()) return;
     auto* player = m_lastPlayer;
     if (!enabled || !player || !m_lastTarget || !m_targetPresent ||
         !m_weaponFilterAllowsCurrent || !g_applyLocalPlayerTurnDelta) return;
