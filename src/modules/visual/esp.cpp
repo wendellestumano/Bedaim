@@ -277,22 +277,23 @@ void EspModule::onFrame(){
                 const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
                 const float yawDelta=normalizeDegrees(targetYaw-rotation.y);
                 const float pitchDelta=targetPitch-rotation.x;
+                constexpr float kDegToRad=0.01745329251994329577f;
                 const float halfVertical=std::clamp(locatorFov,60.0f,140.0f)*0.5f;
                 const float aspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
-                const float halfHorizontal=std::atan(std::tan(halfVertical*kRadToDeg)*aspect)/kRadToDeg;
+                const float halfHorizontal=std::atan(std::tan(halfVertical*kDegToRad)*aspect)/kDegToRad;
                 float dirX=0.0f,dirY=0.0f;
-                // Convert yaw/pitch deltas to normalized viewport coordinates. This
-                // makes the edge intersection depend on the real screen aspect/FOV,
-                // rather than a raw sine that collapses near 180 degrees.
+                // All trigonometry below is in radians. Mixing the radians-to-degrees
+                // multiplier into tan() made the bearing saturate and pinned the
+                // arrow toward arbitrary edges instead of following the target.
                 if(std::fabs(yawDelta)>90.0f){
-                    dirX=(yawDelta<0.0f)?1.0f:-1.0f;
+                    dirX=(yawDelta<0.0f)?-1.0f:1.0f;
                     const float vertical=std::clamp(pitchDelta,-halfVertical,halfVertical);
                     dirY=-vertical/std::max(1.0f,halfVertical);
                 }else{
-                    const float safeYaw=std::clamp(yawDelta,-89.0f,89.0f)*kRadToDeg;
-                    const float safePitch=std::clamp(pitchDelta,-89.0f,89.0f)*kRadToDeg;
-                    dirX=std::tan(safeYaw)/std::max(0.01f,std::tan(halfHorizontal*kRadToDeg));
-                    dirY=-std::tan(safePitch)/std::max(0.01f,std::tan(halfVertical*kRadToDeg));
+                    const float safeYaw=std::clamp(yawDelta,-89.0f,89.0f)*kDegToRad;
+                    const float safePitch=std::clamp(pitchDelta,-89.0f,89.0f)*kDegToRad;
+                    dirX=std::tan(safeYaw)/std::max(0.01f,std::tan(halfHorizontal*kDegToRad));
+                    dirY=-std::tan(safePitch)/std::max(0.01f,std::tan(halfVertical*kDegToRad));
                 }
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(!std::isfinite(directionLength)||directionLength<0.0001f){
