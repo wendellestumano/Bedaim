@@ -1749,55 +1749,6 @@ HitboxExpanderModule::HitboxExpanderModule()
     g_hitboxExpander = this;
 }
 
-void HitboxExpanderModule::onMenuRegistered() {
-    using namespace pl::modmenu;
-    ConfigSchemaBuilder schema;
-    nlohmann::json config;
-    saveConfig(config);
-    schema.defaultCategory("bounds")
-        .category("bounds", "Hitbox bounds", "Client-side bounding-box dimensions and display options");
-
-    auto toggle = [&](const char* key, const char* title, const char* description, bool defaultValue) {
-        ConfigNodeV2 node;
-        node.id = key;
-        node.key = key;
-        node.title = title;
-        node.description = description;
-        node.category = "bounds";
-        node.type = ConfigControlTypeV2::Toggle;
-        node.defaultValue = defaultValue ? "true" : "false";
-        node.currentValue = config.contains(key) ? config[key].dump() : node.defaultValue;
-        node.hasCurrentValue = true;
-        schema.node(std::move(node));
-    };
-    auto slider = [&](const char* key, const char* title, const char* description,
-                      float defaultValue, float minimum, float maximum, float step) {
-        ConfigNodeV2 node;
-        node.id = key;
-        node.key = key;
-        node.title = title;
-        node.description = description;
-        node.category = "bounds";
-        node.type = ConfigControlTypeV2::SliderFloat;
-        node.defaultValue = std::to_string(defaultValue);
-        node.currentValue = config.contains(key) ? config[key].dump() : node.defaultValue;
-        node.hasCurrentValue = true;
-        node.minValue = std::to_string(minimum);
-        node.maxValue = std::to_string(maximum);
-        node.step = std::to_string(step);
-        node.unit = " blocks";
-        schema.node(std::move(node));
-    };
-
-    toggle("m_expandPlayers", "Expand players", "Apply expanded bounds to other players.", true);
-    toggle("m_expandMobs", "Expand mobs", "Apply expanded bounds to mobs.", false);
-    toggle("m_requireLineOfSight", "Require line of sight", "Keep target queries gated by line of sight where applicable.", true);
-    toggle("m_showHitbox", "Draw expanded hitbox", "Draw the expanded bounds as a separate outline.", false);
-    slider("m_hitboxWidth", "Hitbox width", "Width of expanded player/mob bounds on the X axis.", 1.5f, 0.6f, 8.0f, 0.1f);
-    slider("m_hitboxHeight", "Hitbox height", "Height of expanded player/mob bounds.", 2.5f, 0.6f, 8.0f, 0.1f);
-    setConfigSchemaJson(moduleId, schema.toJson());
-}
-
 bool HitboxExpanderModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     auto parseNumber = [&]() -> std::optional<float> {
         try {
