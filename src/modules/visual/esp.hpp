@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string_view>
+#include <vector>
 
 class EspModule final : public Module {
 public:
@@ -28,12 +29,31 @@ public:
                                  bedrocktools::sdk::Vec2& localRotation,
                                  float& distance) const;
 
+    struct ScreenOverlay {
+        enum class Kind { Box, Ring };
+        Kind kind = Kind::Box;
+        float x = 0.0f;
+        float y = 0.0f;
+        float w = 0.0f;
+        float h = 0.0f;
+        float radius = 0.0f;
+        float thickness = 1.5f;
+        std::uint32_t color = 0xFFFFFFFFu;
+    };
+    void beginScreenFrame();
+    void addScreenBox(float x, float y, float w, float h, std::uint32_t color, float thickness);
+    void addScreenRing(float x, float y, float radius, std::uint32_t color, float thickness);
+    std::vector<ScreenOverlay> screenOverlaySnapshot() const;
+
     bool showPlayers = true;
     bool showInvisible = false;
     bool showLockInAim = true;
     bool showOffscreenIndicators = true;
     bool animatedIndicators = true;
+    bool box2D = false;
+    bool ring2D = false;
     float indicatorSize = 48.0f;
+    float locatorSize = 48.0f;
     float locatorFov = 90.0f;
     float targetYOffset = 0.0f;
     float targetSpeed = 1.0f;
@@ -57,4 +77,6 @@ private:
     float m_offscreenTargetDistance = 0.0f;
     bool m_offscreenTargetValid = false;
     std::chrono::steady_clock::time_point m_offscreenFrameTime{};
+    mutable std::mutex m_screenOverlayMutex;
+    std::vector<ScreenOverlay> m_screenOverlays;
 };
