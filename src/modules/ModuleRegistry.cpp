@@ -11,6 +11,7 @@
 #include "visual/oreesp.hpp"
 #include "hud/ultrakillhud.hpp"
 #include "misc/modulediagnostics.hpp"
+#include "misc/configurations.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
     static ModuleRegistry registry;
@@ -73,4 +74,5 @@ void registerAllModules() {
     registry.emplace<OreEspModule>();
     registry.emplace<UltrakillHudModule>();
     registry.emplace<ModuleDiagnosticsModule>();
+    registry.emplace<ConfigurationsModule>();
 }
