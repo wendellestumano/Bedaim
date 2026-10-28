@@ -78,12 +78,19 @@ void EspModule::beginScreenFrame(){
     m_screenBuildingOverlays.clear();
 }
 
-void EspModule::endScreenFrame(){
+void EspModule::endScreenFrame(bool publish){
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
     // A render pass can finish after a concurrent UI toggle disabled ESP. Never
     // republish overlays from that stale pass after onDisable() has cleared them.
     if (!(enabled && masterEnabled && keybindActive)) {
         m_screenOverlays.clear();
+        m_screenBuildingOverlays.clear();
+        return;
+    }
+    // RenderLevel can be invoked for auxiliary passes that do not have a usable
+    // screen context. Preserve the last complete overlay frame instead of swapping
+    // in the empty staging buffer, which caused visible 2D flicker.
+    if (!publish) {
         m_screenBuildingOverlays.clear();
         return;
     }
