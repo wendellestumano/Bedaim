@@ -246,7 +246,7 @@ void SwordSwapperModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
 
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    auto* aimBase = ModuleRegistry::get().find("bedaim.Aim Assist");
     auto* aim = (aimBase && aimBase->enabled) ? static_cast<AimAssistModule*>(aimBase) : nullptr;
     bool hasTarget = false;
     bool targetInRange = false;
