@@ -49,7 +49,7 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
             const std::string_view shortId = separator == std::string_view::npos
                 ? stableId : stableId.substr(separator + 1);
             if (module_id == name || module_id == shortId ||
-                module_id == std::string("bedrocktools.") + name) {
+                module_id == std::string("bedaim.") + name) {
                 mod = candidate;
                 break;
             }
@@ -65,9 +65,9 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
             pl::modmenu::submitDrawCommands(
                 mod->moduleId, std::span<const pl::modmenu::DrawCommand>{});
         }
-        if (module_id == "ESP" || module_id == "bedrocktools.ESP") {
+        if (module_id == "ESP" || module_id == "bedaim.ESP") {
             pl::modmenu::submitDrawCommands(
-                "bedrocktools.ESP", std::span<const pl::modmenu::DrawCommand>{});
+                "bedaim.ESP", std::span<const pl::modmenu::DrawCommand>{});
         }
     }
 
@@ -84,8 +84,8 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
     mod->setMasterEnabled(enabled);
 
     const std::string_view stableId = mod->moduleId;
-    const bool isEsp = stableId == "bedrocktools.ESP";
-    const bool isBounds = stableId == "bedrocktools.Hitbox Expander";
+    const bool isEsp = stableId == "bedaim.ESP";
+    const bool isBounds = stableId == "bedaim.Hitbox Expander";
 
     if (!enabled && (isEsp || isBounds)) {
         // Idempotent cleanup for renderer state and outstanding native AABB restores.
@@ -601,18 +601,18 @@ private:
             }
             lock.unlock();
             for (const auto& entry : ready) {
-                if (entry.first == "bedrocktools.Aim Assist") {
+                if (entry.first == "bedaim.Aim Assist") {
                     registerAimAssistConfigSchema(entry.first, entry.second);
-                } else if (entry.first == "bedrocktools.Hitbox Expander") {
+                } else if (entry.first == "bedaim.Hitbox Expander") {
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
-                } else if (entry.first == "bedrocktools.Mace Swapper" ||
-                           entry.first == "bedrocktools.Auto Hit" ||
-                           entry.first == "bedrocktools.ESP") {
+                } else if (entry.first == "bedaim.Mace Swapper" ||
+                           entry.first == "bedaim.Auto Hit" ||
+                           entry.first == "bedaim.ESP") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
-                } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
+                } else if (entry.first == "bedaim.ULTRAKILL HUD") {
                     registerUltrakillHudConfigSchema(entry.first, entry.second);
-                } else if (entry.first == "bedrocktools.Module Diagnostics") {
+                } else if (entry.first == "bedaim.Module Diagnostics") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
                 }
@@ -630,14 +630,14 @@ private:
 
 static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                                                const nlohmann::json& snapshot) {
-    if (!mod || (mod->moduleId != "bedrocktools.Aim Assist" &&
-                 mod->moduleId != "bedrocktools.Hitbox Expander" &&
-                 mod->moduleId != "bedrocktools.Mace Swapper" &&
-                 mod->moduleId != "bedrocktools.Auto Hit" &&
-                 mod->moduleId != "bedrocktools.Unglide" &&
-                 mod->moduleId != "bedrocktools.ESP" &&
-                 mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
-                 mod->moduleId != "bedrocktools.Module Diagnostics")) return;
+    if (!mod || (mod->moduleId != "bedaim.Aim Assist" &&
+                 mod->moduleId != "bedaim.Hitbox Expander" &&
+                 mod->moduleId != "bedaim.Mace Swapper" &&
+                 mod->moduleId != "bedaim.Auto Hit" &&
+                 mod->moduleId != "bedaim.Unglide" &&
+                 mod->moduleId != "bedaim.ESP" &&
+                 mod->moduleId != "bedaim.ULTRAKILL HUD" &&
+                 mod->moduleId != "bedaim.Module Diagnostics")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
     // change. Debounce continuous sliders and give the whitelist editor more time
     // so one character/drag does not reset the active widget mid-interaction.
@@ -709,7 +709,7 @@ void registerModulesWithLauncher() {
                 }
             }
 
-            if (mod->moduleId == "bedrocktools.Mace Swapper") {
+            if (mod->moduleId == "bedaim.Mace Swapper") {
                 if (k == "m_enableMaceSwapper") displayName = "MACEFALL > Enable";
                 else if (k == "m_attackRange") displayName = "MACEFALL > Attack range";
                 else if (k == "m_minimumFallDistance") displayName = "MACEFALL > Minimum fall distance (blocks)";
@@ -719,12 +719,12 @@ void registerModulesWithLauncher() {
                 else if (k == "m_unglideHeight") displayName = "MACEFALL > Unglide ground clearance (blocks)";
                 else if (k == "m_unglideTargetDistance") displayName = "MACEFALL > Unglide target distance (blocks)";
             }
-            if (mod->moduleId == "bedrocktools.Sword Swapper") {
+            if (mod->moduleId == "bedaim.Sword Swapper") {
                 if (k == "m_attackRange") displayName = "SHIFTBLADE > Attack range";
                 else if (k == "m_groundDistance") displayName = "SHIFTBLADE > Allowed distance above ground (blocks)";
                 else if (k == "m_restoreSlot") displayName = "SHIFTBLADE > Restore previous slot";
             }
-            if (mod->moduleId == "bedrocktools.Hitbox Expander") {
+            if (mod->moduleId == "bedaim.Hitbox Expander") {
                 if (k == "m_hitboxWidth") displayName = "BEDROCK BOUNDS > Width / depth (blocks)";
                 else if (k == "m_hitboxHeight") displayName = "BEDROCK BOUNDS > Height (blocks)";
                 else if (k == "m_expandPlayers") displayName = "BEDROCK BOUNDS > Players";
@@ -733,7 +733,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_showHitbox") displayName = "BEDROCK BOUNDS > Ver Hitbox";
             }
 
-            if (mod->moduleId == "bedrocktools.Aim Assist") {
+            if (mod->moduleId == "bedaim.Aim Assist") {
                 if (k == "m_aimMode") displayName = "BEDROCK AIM > Profile";
                 else if (k == "m_trackingMode") displayName = "BEDROCK AIM > Tracking mode";
                 else if (k == "m_naturalization") displayName = "BEDROCK AIM > Naturalization during jumps";
@@ -768,7 +768,7 @@ void registerModulesWithLauncher() {
                 else if (k == "m_weaponOtherMelee") displayName = "WEAPON FILTER > Other melee";
                 else if (k == "m_elytraMode") displayName = "SPECIAL > Elytra mode";
             }
-            if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" && k == "m_hitStopDurationMs") {
+            if (mod->moduleId == "bedaim.ULTRAKILL HUD" && k == "m_hitStopDurationMs") {
                 displayName = "ULTRAKILL HUD > Impact hold duration (ms)";
             }
 
@@ -797,7 +797,7 @@ void registerModulesWithLauncher() {
                 } else {
                     int minVal = 0;
                     int maxVal = 200;
-                    if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" &&
+                    if (mod->moduleId == "bedaim.ULTRAKILL HUD" &&
                         kLower == "m_hitstopdurationms") {
                         minVal = 250;
                         maxVal = 750;
@@ -820,55 +820,55 @@ void registerModulesWithLauncher() {
 
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
-                if (mod->moduleId == "bedrocktools.Hitbox Expander" && kLower == "m_hitboxsize") {
+                if (mod->moduleId == "bedaim.Hitbox Expander" && kLower == "m_hitboxsize") {
                     minVal = 1.0f;
                     maxVal = 200.0f;
-                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackrange") {
+                } else if (mod->moduleId == "bedaim.Mace Swapper" && kLower == "m_attackrange") {
                     minVal = 2.0f;
                     maxVal = 6.0f;
-                } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_attackrange") {
+                } else if (mod->moduleId == "bedaim.Sword Swapper" && kLower == "m_attackrange") {
                     minVal = 1.0f;
                     maxVal = 16.0f;
-                } else if (mod->moduleId == "bedrocktools.Sword Swapper" && kLower == "m_grounddistance") {
+                } else if (mod->moduleId == "bedaim.Sword Swapper" && kLower == "m_grounddistance") {
                     minVal = 0.0f;
                     maxVal = 3.0f;
-                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_minimumfalldistance") {
+                } else if (mod->moduleId == "bedaim.Mace Swapper" && kLower == "m_minimumfalldistance") {
                     minVal = 0.30f;
                     maxVal = 10.0f;
-                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackintervalms") {
+                } else if (mod->moduleId == "bedaim.Mace Swapper" && kLower == "m_attackintervalms") {
                     minVal = 80.0f;
                     maxVal = 1000.0f;
-                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_unglideheight") {
+                } else if (mod->moduleId == "bedaim.Mace Swapper" && kLower == "m_unglideheight") {
                     minVal = 1.0f;
                     maxVal = 24.0f;
-                } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_unglidetargetdistance") {
+                } else if (mod->moduleId == "bedaim.Mace Swapper" && kLower == "m_unglidetargetdistance") {
                     minVal = 1.0f;
                     maxVal = 32.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_elytradistancedislocatestrength") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_elytradistancedislocatestrength") {
                     minVal = 0.0f;
                     maxVal = 1.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_strength") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_strength") {
                     minVal = 0.0f;
                     maxVal = 1.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_aimspeed") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_aimspeed") {
                     minVal = 0.1f;
                     maxVal = 10.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxscale") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_hitboxscale") {
                     minVal = 0.30f;
                     maxVal = 50.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_hitboxdistancegrowth") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_hitboxdistancegrowth") {
                     minVal = 0.1f;
                     maxVal = 500.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_rotationspeed") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_rotationspeed") {
                     minVal = 0.1f;
                     maxVal = 1000.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchhysteresis") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_targetswitchhysteresis") {
                     minVal = 0.0f;
                     maxVal = 12.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetswitchdistancemargin") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_targetswitchdistancemargin") {
                     minVal = 0.0f;
                     maxVal = 5.0f;
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_targetretentionradius") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_targetretentionradius") {
                     minVal = 0.5f;
                     maxVal = 5.0f;
                 } else if (kLower.find("opacity") != std::string::npos ||
@@ -888,14 +888,14 @@ void registerModulesWithLauncher() {
                     maxVal = 2000.0f;
                 } else if (kLower.find("range") != std::string::npos) {
                     maxVal = 180.0f;
-                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_range") {
+                    if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_range") {
                         minVal = 2.0f;
                         maxVal = 80.0f;
                     }
                 } else if (kLower.find("fov") != std::string::npos) {
                     minVal = 1.0f;
                     maxVal = 179.0f;
-                    if (mod->moduleId == "bedrocktools.Aim Assist" && kLower == "m_fov") {
+                    if (mod->moduleId == "bedaim.Aim Assist" && kLower == "m_fov") {
                         minVal = 1.0f;
                         maxVal = 360.0f;
                     }
@@ -912,19 +912,19 @@ void registerModulesWithLauncher() {
                 entry.max_value = std::to_string(maxVal);
             } else if (v.is_string()) {
                 std::string str = v.get<std::string>();
-                if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_trackingMode") {
+                if (mod->moduleId == "bedaim.Aim Assist" && k == "m_trackingMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     if (str == "Grudado") entry.default_value = "0";
                     else if (str == "Adaptativo") entry.default_value = "2";
                     else entry.default_value = "1";
                     entry.min_value = "Grudado,Smooth,Adaptativo";
 
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_targetSelectionMode") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && k == "m_targetSelectionMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     entry.default_value = (str == "Player") ? "0" : "1";
                     entry.min_value = "Closest to player,Closest to crosshair";
 
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_naturalizationWeapon") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && k == "m_naturalizationWeapon") {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     const std::vector<std::string> weapons = {
                         "All", "Sword", "Axe", "Mace", "Bow", "Crossbow", "Trident", "Spear", "Other melee", "Tools"
@@ -934,7 +934,7 @@ void registerModulesWithLauncher() {
                         ? "0" : std::to_string(std::distance(weapons.begin(), selected));
                     entry.min_value = "All,Sword,Axe,Mace,Bow,Crossbow,Trident,Spear,Other melee,Tools";
 
-                } else if (mod->moduleId == "bedrocktools.Aim Assist" && k == "m_aimMode") {
+                } else if (mod->moduleId == "bedaim.Aim Assist" && k == "m_aimMode") {
                     entry.type = pl::modmenu::ConfigType::Radio;
                     if (str == "Robotic") entry.default_value = "0";
                     else if (str == "Human") entry.default_value = "2";
@@ -959,7 +959,7 @@ void registerModulesWithLauncher() {
             configs.push_back(entry);
         }
 
-        if (mod->moduleId == "bedrocktools.Mace Swapper") {
+        if (mod->moduleId == "bedaim.Mace Swapper") {
             const std::vector<std::string> priority = {
                 "m_enableMaceSwapper", "m_minimumFallDistance", "m_attackRange",
                 "m_attackIntervalMs", "m_restoreSlot", "m_unglideEnabled",
@@ -973,7 +973,7 @@ void registerModulesWithLauncher() {
                 [&rank](const TmpConfigEntry& a, const TmpConfigEntry& b) {
                     return rank(a.key) < rank(b.key);
                 });
-        } else if (mod->moduleId == "bedrocktools.Sword Swapper") {
+        } else if (mod->moduleId == "bedaim.Sword Swapper") {
             const std::vector<std::string> priority = {"m_attackRange", "m_groundDistance", "m_restoreSlot", "m_respectManualSlotChanges"};
             const auto rank = [&priority](const std::string& key) {
                 const auto it = std::find(priority.begin(), priority.end(), key);
@@ -985,7 +985,7 @@ void registerModulesWithLauncher() {
                 });
         }
 
-        if (mod->moduleId == "bedrocktools.Aim Assist") {
+        if (mod->moduleId == "bedaim.Aim Assist") {
             // Keep the flat launcher menu visually grouped by consistent prefixes
             // and a deliberate order; the current public menu API has no section header.
             const std::vector<std::string> priority = {
@@ -1011,7 +1011,7 @@ void registerModulesWithLauncher() {
 
         for (auto& entry : configs) {
             std::string k = entry.key;
-            if (mod->moduleId == "bedrocktools.Aim Assist" &&
+            if (mod->moduleId == "bedaim.Aim Assist" &&
                 (k == "m_weaponSword" || k == "m_weaponAxe" || k == "m_weaponMace" ||
                  k == "m_weaponBow" || k == "m_weaponCrossbow" || k == "m_weaponTrident" ||
                  k == "m_weaponSpear" || k == "m_weaponOtherMelee")) {
@@ -1038,11 +1038,11 @@ void registerModulesWithLauncher() {
 
         if (builder.registerModule()) {
             mod->onMenuRegistered();
-            if (mod->moduleId == "bedrocktools.Aim Assist") {
+            if (mod->moduleId == "bedaim.Aim Assist") {
                 registerAimAssistConfigSchema(mod->moduleId, j);
-            } else if (mod->moduleId == "bedrocktools.Hitbox Expander") {
+            } else if (mod->moduleId == "bedaim.Hitbox Expander") {
                 registerHitboxExpanderConfigSchema(mod->moduleId, j);
-            } else if (mod->moduleId == "bedrocktools.ULTRAKILL HUD") {
+            } else if (mod->moduleId == "bedaim.ULTRAKILL HUD") {
                 registerUltrakillHudConfigSchema(mod->moduleId, j);
             }
         }
