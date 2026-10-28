@@ -116,10 +116,6 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
 
-    const float dx=targetCenter.x-m_hudLocalPosition.x;
-    const float dz=targetCenter.z-m_hudLocalPosition.z;
-    const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
-    const float horizontal=std::sqrt(dx*dx+dz*dz);
     // Keep the nearest ESP target selected even while it is visible. The HUD
     // projection decides whether to draw the arrow, so it disappears for that same
     // target instead of jumping to a different off-screen player.
@@ -223,7 +219,7 @@ void EspModule::onFrame(){
                                           std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f;
                 if(!targetOnScreen){
                 float dirX=0.0f,dirY=0.0f;
-                if((std::cos(yawRadians)*std::cos(pitchRadians))>0.0f){
+                if(inFront){
                     dirX=-std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
                     dirY=std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
                 }else{
