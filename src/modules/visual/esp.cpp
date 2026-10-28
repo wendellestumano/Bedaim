@@ -135,8 +135,8 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
     const float tanHalfVertical=std::tan(std::clamp(kMaxVerticalFov,60.0f,140.0f)*0.5f/kRadToDeg);
     const bool inFront=std::cos(yawDelta/kRadToDeg)>0.0f;
-    const float projectedX=std::tan(yawDelta/kRadToDeg)/(tanHalfVertical*aspect);
-    const float projectedY=-std::tan(pitchDelta/kRadToDeg)/tanHalfVertical;
+    const float projectedX=-std::tan(yawDelta/kRadToDeg)/(tanHalfVertical*aspect);
+    const float projectedY=std::tan(pitchDelta/kRadToDeg)/tanHalfVertical;
     if(inFront&&std::isfinite(projectedX)&&std::isfinite(projectedY)&&
        std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f)return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
@@ -208,11 +208,11 @@ void EspModule::onFrame(){
                 const float tanHalfVertical=std::tan(std::clamp(locatorFov,60.0f,140.0f)*0.5f*kDegToRad);
                 float dirX=0.0f,dirY=0.0f;
                 if(std::cos(yawRadians)>0.0f){
-                    dirX=std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
-                    dirY=-std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
+                    dirX=-std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
+                    dirY=std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
                 }else{
                     dirX=-std::sin(yawRadians);
-                    dirY=-std::sin(pitchRadians)*std::cos(yawRadians);
+                    dirY=std::sin(pitchRadians)*std::cos(yawRadians);
                 }
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(directionLength<0.0001f){
@@ -305,7 +305,7 @@ void EspModule::onMenuRegistered(){
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Target ring size";
  size.description="Scale of the rotating target ring.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
- size.hasCurrentValue=true;size.minValue="24";size.maxValue="160";size.step="4";size.unit=" %";schema.node(std::move(size));
+ size.hasCurrentValue=true;size.minValue="24";size.maxValue="160";size.step="4";size.unit=" relative";schema.node(std::move(size));
  auto slider=[&](const char* key,const char* title,const char* desc,const char* category,
                   float defaultValue,float minimum,float maximum,float step,const char* unit){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;
