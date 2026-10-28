@@ -146,9 +146,26 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
 
-    // Keep the nearest ESP target selected even while it is visible. The HUD
-    // projection decides whether to draw the arrow, so it disappears for that same
-    // target instead of jumping to a different off-screen player.
+    // Choose the nearest target that is actually outside the current locator
+    // viewport. Selecting the nearest actor first (even if visible) caused the
+    // HUD to suppress the arrow and ignore other off-screen players.
+    const float dx=targetCenter.x-m_hudLocalPosition.x;
+    const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
+    const float dz=targetCenter.z-m_hudLocalPosition.z;
+    constexpr float kDegToRad=0.01745329251994329577f;
+    const float yaw=m_hudLocalRotation.y*kDegToRad;
+    const float pitch=m_hudLocalRotation.x*kDegToRad;
+    const float sy=std::sin(yaw),cy=std::cos(yaw);
+    const float sp=std::sin(pitch),cp=std::cos(pitch);
+    const float cameraX=dx*cy+dz*sy;
+    const float cameraY=dx*(-sy*sp)+dy*cp+dz*(cy*sp);
+    const float cameraDepth=dx*(-sy*cp)+dy*(-sp)+dz*(cy*cp);
+    const float tanHalf=std::tan(std::clamp(locatorFov,30.0f,150.0f)*0.5f*kDegToRad);
+    const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
+    const bool inViewport=cameraDepth>0.05f&&std::isfinite(tanHalf)&&tanHalf>0.001f&&
+        std::fabs(cameraX/cameraDepth)<=tanHalf*aspect&&
+        std::fabs(cameraY/cameraDepth)<=tanHalf;
+    if(inViewport)return;
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
