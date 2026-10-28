@@ -675,7 +675,7 @@ bool AimAssistModule::currentTargetInCrosshair(bedrocktools::sdk::Player* player
     // dedicated expander participates in this exact same target-ray test.
     const float crosshairTolerance = std::clamp(tolerance, 0.05f, 0.8f);
     AABB targetQueryBounds = m_lastTargetBounds;
-    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expanderBase = ModuleRegistry::get().find("bedaim.Hitbox Expander");
     auto* expander = (expanderBase && expanderBase->enabled)
         ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
     if (expander && g_actorIsPlayer) {
@@ -771,7 +771,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         return;
     }
 
-    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expanderBase = ModuleRegistry::get().find("bedaim.Hitbox Expander");
     auto* expander = (expanderBase && expanderBase->enabled)
         ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
     const bool expanderRequiresLineOfSight = expander && expander->requiresLineOfSight();
@@ -1261,7 +1261,7 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
         {nativeBounds.max.x + predictionOffset.x, nativeBounds.max.y + predictionOffset.y,
          nativeBounds.max.z + predictionOffset.z}
     };
-    auto* steeringExpanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* steeringExpanderBase = ModuleRegistry::get().find("bedaim.Hitbox Expander");
     auto* steeringExpander = (steeringExpanderBase && steeringExpanderBase->enabled)
         ? static_cast<HitboxExpanderModule*>(steeringExpanderBase) : nullptr;
     AABB bounds = nativeBounds;
