@@ -25,6 +25,19 @@ static void registerHitboxExpanderConfigSchema(std::string_view moduleId, const 
 static void registerUltrakillHudConfigSchema(std::string_view moduleId, const nlohmann::json& config);
 static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key, const nlohmann::json& snapshot);
 
+// Legacy BedrockTools registrations used the same global ModMenu IDs as the
+// custom modules. The preloader rejects duplicate module_id values regardless of
+// mod ownership, silently leaving the legacy callbacks attached to the visible
+// toggle. Turn off and remove only the conflicting legacy visual entries before
+// registering the uniquely-namespaced Bedaim replacements.
+static void retireLegacyModuleRegistration(std::string_view id) {
+    pl::modmenu::setModuleEnabled(id, false);
+    pl::modmenu::submitDrawCommands(id, std::span<const pl::modmenu::DrawCommand>{});
+    pl::modmenu::unregisterModule(id);
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+        "ModuleMenu", std::string("retired legacy module registration: ") + std::string(id));
+}
+
 static void persistModuleConfig() {
     // Menu callbacks can fire on every slider movement or every typed character.
     // ConfigManager already debounces and writes on its worker thread; never force
@@ -649,6 +662,16 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
 }
 
 void registerModulesWithLauncher() {
+    // Older builds or the inherited BedrockTools menu may already own these IDs.
+    // Retire those registrations so the toggles target the custom Bedaim instances.
+    static constexpr std::string_view legacyModuleIds[] = {
+        "bedrocktools.ESP",
+        "bedrocktools.Hitbox Expander",
+        "bedrocktools.BedrockBounds",
+        "bedrocktools.Hitbox"
+    };
+    for (const auto id : legacyModuleIds) retireLegacyModuleRegistration(id);
+
     auto& modules = ModuleRegistry::get().modules();
 
     for (auto* mod : modules) {
@@ -1036,15 +1059,20 @@ void registerModulesWithLauncher() {
             builder.config(entry.key, entry.displayName, entry.type, entry.default_value, entry.min_value, entry.max_value, entry.depends_on);
         }
 
-        if (builder.registerModule()) {
-            mod->onMenuRegistered();
-            if (mod->moduleId == "bedaim.Aim Assist") {
-                registerAimAssistConfigSchema(mod->moduleId, j);
-            } else if (mod->moduleId == "bedaim.Hitbox Expander") {
-                registerHitboxExpanderConfigSchema(mod->moduleId, j);
-            } else if (mod->moduleId == "bedaim.ULTRAKILL HUD") {
-                registerUltrakillHudConfigSchema(mod->moduleId, j);
-            }
+        const bool registered = builder.registerModule();
+        if (!registered) {
+            bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+                "ModuleMenu", std::string("custom module registration failed; toggle will not control Bedaim instance: ") +
+                mod->moduleId + " (duplicate ID or invalid schema)");
+            continue;
+        }
+        mod->onMenuRegistered();
+        if (mod->moduleId == "bedaim.Aim Assist") {
+            registerAimAssistConfigSchema(mod->moduleId, j);
+        } else if (mod->moduleId == "bedaim.Hitbox Expander") {
+            registerHitboxExpanderConfigSchema(mod->moduleId, j);
+        } else if (mod->moduleId == "bedaim.ULTRAKILL HUD") {
+            registerUltrakillHudConfigSchema(mod->moduleId, j);
         }
     }
 }
