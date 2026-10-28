@@ -57,18 +57,18 @@ void EspModule::onEnable() {
 }
 
 void EspModule::onDisable(){
-    // Clear published and in-progress HUD overlays immediately. The render hook may
-    // remain installed after the module is disabled.
-    pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
-    {
-        std::lock_guard<std::mutex> lock(m_hudTargetMutex);
-        m_offscreenTargetValid=false;
-        m_offscreenFrameTime={};
-    }
+    // Serialize the empty submission with onFrame() so an older frame cannot
+    // overwrite this clear after the module has been switched off.
     {
         std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
         m_screenOverlays.clear();
         m_screenBuildingOverlays.clear();
+        pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_hudTargetMutex);
+        m_offscreenTargetValid=false;
+        m_offscreenFrameTime={};
     }
 }
 
@@ -161,11 +161,11 @@ bool EspModule::offscreenTargetSnapshot(bedrocktools::sdk::Vec3& targetCenter,
 
 void EspModule::onFrame(){
     if(!(enabled && masterEnabled && keybindActive)){
-        pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
         {
             std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
             m_screenOverlays.clear();
             m_screenBuildingOverlays.clear();
+            pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
         }
         {
             std::lock_guard<std::mutex> lock(m_hudTargetMutex);
@@ -294,7 +294,18 @@ void EspModule::onFrame(){
             }
         }
     }
-    pl::modmenu::submitDrawCommands(moduleId,commands);
+    // Recheck while serialized with onDisable(): a stale onFrame invocation must
+    // not replace the empty command list after a concurrent module toggle.
+    {
+        std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+        if (!(enabled && masterEnabled && keybindActive)) {
+            m_screenOverlays.clear();
+            m_screenBuildingOverlays.clear();
+            pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
+            return;
+        }
+        pl::modmenu::submitDrawCommands(moduleId,commands);
+    }
 }
 
 void EspModule::onMenuRegistered(){
