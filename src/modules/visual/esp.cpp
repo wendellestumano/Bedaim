@@ -153,39 +153,41 @@ void EspModule::onFrame(){
             float dx=target.x-local.x;
             float dy=target.y-(local.y+1.62f);
             float dz=target.z-local.z;
-            const float worldLength=std::sqrt(dx*dx+dy*dy+dz*dz);
-            if(worldLength>0.001f){
-                dx/=worldLength;dy/=worldLength;dz/=worldLength;
-                constexpr float kRadToDeg=57.29577951308232f;
-                constexpr float kDegToRad=0.01745329251994329577f;
-                const float yaw=rotation.y*kDegToRad;
-                const float pitch=rotation.x*kDegToRad;
-
-                // Bedrock camera basis. The sign of the projected direction must be
-                // flipped for targets behind the camera to keep the edge arrow honest.
-                const float rightX=-std::cos(yaw);
-                const float rightZ=-std::sin(yaw);
-                const float upX=-std::sin(pitch)*std::sin(yaw);
-                const float upY=std::cos(pitch);
-                const float upZ=std::sin(pitch)*std::cos(yaw);
-                const float forwardX=-std::sin(yaw)*std::cos(pitch);
-                const float forwardY=-std::sin(pitch);
-                const float forwardZ=std::cos(yaw)*std::cos(pitch);
-                const float cameraDepth=dx*forwardX+dy*forwardY+dz*forwardZ;
-                float dirX=dx*rightX+dz*rightZ;
-                float dirY=-(dx*upX+dy*upY+dz*upZ);
+            const float horizontal=std::sqrt(dx*dx+dz*dz);
+            constexpr float kRadToDeg=57.29577951308232f;
+            constexpr float kDegToRad=0.01745329251994329577f;
+            if(std::sqrt(dx*dx+dy*dy+dz*dz)>0.001f){
+                // Work in relative yaw/pitch angles. Do not invert the bearing when
+                // cameraDepth is negative: that projection sent rear targets to the
+                // opposite side of the screen. Horizontal bearing remains meaningful
+                // even when the target is behind the camera.
+                const float targetYaw=horizontal<0.001f
+                    ? rotation.y : std::atan2(-dx,dz)*kRadToDeg;
+                const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
+                const float yawDelta=normalizeDegrees(targetYaw-rotation.y);
+                const float pitchDelta=targetPitch-rotation.x;
+                const float yawRadians=yawDelta*kDegToRad;
+                const float pitchRadians=pitchDelta*kDegToRad;
+                float dirX=std::sin(yawRadians);
+                float dirY=std::sin(pitchRadians)*std::cos(yawRadians);
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(directionLength<0.0001f){
-                    dirX=0.0f;
-                    dirY=1.0f;
+                    // A target almost exactly behind the player has no stable
+                    // 2D projection. Choose the corresponding horizontal edge.
+                    if(std::fabs(yawDelta)>90.0f){
+                        dirX=yawDelta>=0.0f?1.0f:-1.0f;
+                        dirY=0.0f;
+                    }else{
+                        dirX=0.0f;
+                        dirY=pitchDelta>=0.0f?1.0f:-1.0f;
+                    }
                 }else{
-                    if(cameraDepth<0.0f){dirX=-dirX;dirY=-dirY;}
                     dirX/=directionLength;
                     dirY/=directionLength;
                 }
 
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
-                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
+                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f*targetSpeed+0.6f):1.0f);
                 const float edgeMargin=size*0.5f+12.0f;
                 const float halfW=std::max(1.0f,cx-edgeMargin);
                 const float halfH=std::max(1.0f,cy-edgeMargin);
