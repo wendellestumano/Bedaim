@@ -80,12 +80,20 @@ void EspModule::beginScreenFrame(){
 
 void EspModule::endScreenFrame(){
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
+    // A render pass can finish after a concurrent UI toggle disabled ESP. Never
+    // republish overlays from that stale pass after onDisable() has cleared them.
+    if (!(enabled && masterEnabled && keybindActive)) {
+        m_screenOverlays.clear();
+        m_screenBuildingOverlays.clear();
+        return;
+    }
     m_screenOverlays.swap(m_screenBuildingOverlays);
     // The previous published frame is now the staging buffer and will be cleared by
     // beginScreenFrame() before the next render pass.
 }
 
 void EspModule::addScreenBox(float x,float y,float w,float h,std::uint32_t color,float thickness){
+    if(!(enabled && masterEnabled && keybindActive))return;
     if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(w)||!std::isfinite(h)||
        !std::isfinite(thickness)||w<2.0f||h<2.0f)return;
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
@@ -96,6 +104,7 @@ void EspModule::addScreenBox(float x,float y,float w,float h,std::uint32_t color
 }
 
 void EspModule::addScreenRing(float x,float y,float radius,std::uint32_t color,float thickness){
+    if(!(enabled && masterEnabled && keybindActive))return;
     if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(radius)||
        !std::isfinite(thickness)||radius<3.0f)return;
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
