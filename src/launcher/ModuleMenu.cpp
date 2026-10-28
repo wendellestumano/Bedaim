@@ -33,29 +33,77 @@ static void persistModuleConfig() {
 }
 
 static void onModuleToggle(std::string_view module_id, bool enabled) {
-    // Clear HUD draw commands before looking up the module. This is deliberately
-    // done at the launcher callback boundary so stale screen-space ESP commands
-    // cannot survive a toggle even if the module instance has already transitioned.
+    auto& registry = ModuleRegistry::get();
+    Module* mod = registry.find(module_id);
+
+    // Some launcher builds report the visible module label rather than the stable
+    // internal ID on legacy-toggle callbacks. Resolve the callback through both
+    // identity fields before giving up; otherwise the menu flips but gameplay never
+    // receives the OFF transition.
+    if (!mod) {
+        for (auto* candidate : registry.modules()) {
+            if (!candidate) continue;
+            const std::string name = candidate->name ? candidate->name : "";
+            const std::string_view stableId(candidate->moduleId);
+            const auto separator = stableId.rfind('.');
+            const std::string_view shortId = separator == std::string_view::npos
+                ? stableId : stableId.substr(separator + 1);
+            if (module_id == name || module_id == shortId ||
+                module_id == std::string("bedrocktools.") + name) {
+                mod = candidate;
+                break;
+            }
+        }
+    }
+
+    // Always clear all possible aliases before applying OFF, since HUD draw
+    // commands are owned by the module's stable ID, not its visible label.
     if (!enabled) {
         pl::modmenu::submitDrawCommands(
             module_id, std::span<const pl::modmenu::DrawCommand>{});
+        if (mod) {
+            pl::modmenu::submitDrawCommands(
+                mod->moduleId, std::span<const pl::modmenu::DrawCommand>{});
+        }
+        if (module_id == "ESP" || module_id == "bedrocktools.ESP") {
+            pl::modmenu::submitDrawCommands(
+                "bedrocktools.ESP", std::span<const pl::modmenu::DrawCommand>{});
+        }
     }
-    auto* mod = ModuleRegistry::get().find(module_id);
+
     if (!mod) {
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
-            "ModuleMenu", std::string("toggle callback could not resolve module: ") +
-            std::string(module_id));
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error,
+            "ModuleMenu", std::string("toggle unresolved; UI/game state may diverge: callback_id=") +
+            std::string(module_id) + ", requested=" + (enabled ? "on" : "off"));
         return;
     }
+
+    // Setter recomputes enabled from masterEnabled && keybindActive even when the
+    // master value repeats. This repairs stale effective state as well as normal
+    // transitions, rather than merely changing what the menu displays.
     mod->setMasterEnabled(enabled);
-    if (!enabled && module_id == "bedrocktools.ESP") {
-        // A repeated off-toggle can arrive while the module's effective enabled
-        // flag is already false. Run its cleanup anyway to remove stale HUD state.
+
+    const std::string_view stableId = mod->moduleId;
+    const bool isEsp = stableId == "bedrocktools.ESP";
+    const bool isBounds = stableId == "bedrocktools.Hitbox Expander";
+
+    if (!enabled && (isEsp || isBounds)) {
+        // Idempotent cleanup for renderer state and outstanding native AABB restores.
+        // These hooks intentionally remain installed, so cleanup must run on every OFF.
+        mod->masterEnabled = false;
+        mod->enabled = false;
         mod->onDisable();
+        pl::modmenu::submitDrawCommands(
+            stableId, std::span<const pl::modmenu::DrawCommand>{});
     }
+
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
-        "ModuleMenu", std::string("toggle applied: ") + std::string(module_id) +
-        (enabled ? " enabled" : " disabled"));
+        "ModuleMenu", std::string("toggle applied: callback_id=") + std::string(module_id) +
+        ", resolved_id=" + mod->moduleId + ", requested=" +
+        (enabled ? "on" : "off") + ", master=" +
+        (mod->masterEnabled ? "true" : "false") + ", effective=" +
+        (mod->enabled ? "true" : "false") + ", keybind=" +
+        (mod->keybindActive ? "true" : "false"));
     persistModuleConfig();
 }
 
