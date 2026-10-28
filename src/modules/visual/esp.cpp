@@ -87,12 +87,14 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float dz=targetCenter.z-m_hudLocalPosition.z;
     const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
     const float horizontal=std::sqrt(dx*dx+dz*dz);
-    if(horizontal<0.001f)return;
     constexpr float kRadToDeg=57.29577951308232f;
     constexpr float kMaxVerticalFov=110.0f;
-    const float targetYaw=std::atan2(-dx,dz)*kRadToDeg;
+    // Targets directly above/below can have almost no horizontal separation.
+    // Keep them eligible for the locator instead of silently dropping them.
+    const float targetYaw=horizontal<0.001f
+        ? m_hudLocalRotation.y : std::atan2(-dx,dz)*kRadToDeg;
     const float yawDelta=normalizeDegrees(targetYaw-m_hudLocalRotation.y);
-    const float targetPitch=-std::atan2(dy,horizontal)*kRadToDeg;
+    const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
     const float pitchDelta=targetPitch-m_hudLocalRotation.x;
 
     // Use a high-end viewport bound, rather than the old 42°/28° thresholds,
@@ -151,39 +153,41 @@ void EspModule::onFrame(){
             float dx=target.x-local.x;
             float dy=target.y-(local.y+1.62f);
             float dz=target.z-local.z;
-            const float worldLength=std::sqrt(dx*dx+dy*dy+dz*dz);
-            if(worldLength>0.001f){
-                dx/=worldLength;dy/=worldLength;dz/=worldLength;
-                constexpr float kRadToDeg=57.29577951308232f;
-                constexpr float kDegToRad=0.01745329251994329577f;
-                const float yaw=rotation.y*kDegToRad;
-                const float pitch=rotation.x*kDegToRad;
-
-                // Bedrock camera basis. The sign of the projected direction must be
-                // flipped for targets behind the camera to keep the edge arrow honest.
-                const float rightX=-std::cos(yaw);
-                const float rightZ=-std::sin(yaw);
-                const float upX=-std::sin(pitch)*std::sin(yaw);
-                const float upY=std::cos(pitch);
-                const float upZ=std::sin(pitch)*std::cos(yaw);
-                const float forwardX=-std::sin(yaw)*std::cos(pitch);
-                const float forwardY=-std::sin(pitch);
-                const float forwardZ=std::cos(yaw)*std::cos(pitch);
-                const float cameraDepth=dx*forwardX+dy*forwardY+dz*forwardZ;
-                float dirX=dx*rightX+dz*rightZ;
-                float dirY=-(dx*upX+dy*upY+dz*upZ);
+            const float horizontal=std::sqrt(dx*dx+dz*dz);
+            constexpr float kRadToDeg=57.29577951308232f;
+            constexpr float kDegToRad=0.01745329251994329577f;
+            if(std::sqrt(dx*dx+dy*dy+dz*dz)>0.001f){
+                // Work in relative yaw/pitch angles. Do not invert the bearing when
+                // cameraDepth is negative: that projection sent rear targets to the
+                // opposite side of the screen. Horizontal bearing remains meaningful
+                // even when the target is behind the camera.
+                const float targetYaw=horizontal<0.001f
+                    ? rotation.y : std::atan2(-dx,dz)*kRadToDeg;
+                const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
+                const float yawDelta=normalizeDegrees(targetYaw-rotation.y);
+                const float pitchDelta=targetPitch-rotation.x;
+                const float yawRadians=yawDelta*kDegToRad;
+                const float pitchRadians=pitchDelta*kDegToRad;
+                float dirX=std::sin(yawRadians);
+                float dirY=std::sin(pitchRadians)*std::cos(yawRadians);
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(directionLength<0.0001f){
-                    dirX=0.0f;
-                    dirY=1.0f;
+                    // A target almost exactly behind the player has no stable
+                    // 2D projection. Choose the corresponding horizontal edge.
+                    if(std::fabs(yawDelta)>90.0f){
+                        dirX=yawDelta>=0.0f?1.0f:-1.0f;
+                        dirY=0.0f;
+                    }else{
+                        dirX=0.0f;
+                        dirY=pitchDelta>=0.0f?1.0f:-1.0f;
+                    }
                 }else{
-                    if(cameraDepth<0.0f){dirX=-dirX;dirY=-dirY;}
                     dirX/=directionLength;
                     dirY/=directionLength;
                 }
 
                 const float size=std::clamp(indicatorSize,24.0f,96.0f)*
-                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f+0.6f):1.0f);
+                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f*targetSpeed+0.6f):1.0f);
                 const float edgeMargin=size*0.5f+12.0f;
                 const float halfW=std::max(1.0f,cx-edgeMargin);
                 const float halfH=std::max(1.0f,cy-edgeMargin);
@@ -214,6 +218,7 @@ void EspModule::onMenuRegistered(){
  using namespace pl::modmenu;ConfigSchemaBuilder schema;nlohmann::json config;saveConfig(config);
  schema.defaultCategory("players").category("players","Players","Player outline visibility and distance")
   .category("indicators","HUD indicators","Lock in Aim and off-screen player direction")
+  .category("appearance","ESP appearance","World-space ESP and hitbox outline thickness")
   .category("colors","Game-mode colors","Hexadecimal ARGB outline colors");
  auto toggle=[&](const char* key,const char* title,const char* desc,bool d,const char* category="players"){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;n.type=ConfigControlTypeV2::Toggle;
@@ -228,6 +233,19 @@ void EspModule::onMenuRegistered(){
  size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
  size.hasCurrentValue=true;size.minValue="24";size.maxValue="96";size.step="2";size.unit=" px";schema.node(std::move(size));
+ auto slider=[&](const char* key,const char* title,const char* desc,const char* category,
+                  float defaultValue,float minimum,float maximum,float step,const char* unit){
+  ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;
+  n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=std::to_string(defaultValue);
+  n.currentValue=cfgText(config,key,n.defaultValue.c_str());n.hasCurrentValue=true;
+  n.minValue=std::to_string(minimum);n.maxValue=std::to_string(maximum);
+  n.step=std::to_string(step);n.unit=unit;schema.node(std::move(n));
+ };
+ slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
+ slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
+ slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
+ slider("outlineThickness","ESP box thickness","Approximate outline thickness for normal player ESP boxes. Zero uses one line.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
+ slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
  r.category="players";r.type=ConfigControlTypeV2::SliderFloat;r.defaultValue="30";r.currentValue=cfgText(config,"range","30");
  r.hasCurrentValue=true;r.minValue="8";r.maxValue="80";r.step="1";r.unit=" blocks";schema.node(std::move(r));
@@ -253,6 +271,16 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  }
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,96.0f);return true;}
+ if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
+    key=="outlineThickness"||key=="hitboxThickness"){
+  float f=0;if(!parseFloat(value,f))return false;
+  if(key=="targetYOffset")targetYOffset=std::clamp(f,-1.5f,1.5f);
+  else if(key=="targetSpeed")targetSpeed=std::clamp(f,0.1f,4.0f);
+  else if(key=="targetThickness")targetThickness=std::clamp(std::round(f),1.0f,5.0f);
+  else if(key=="outlineThickness")outlineThickness=std::clamp(f,0.0f,0.10f);
+  else hitboxThickness=std::clamp(f,0.0f,0.10f);
+  return true;
+ }
  std::uint32_t c=0;if(!parseColor(value,c))return false;
  if(key=="survivalColor")survivalColor=c;else if(key=="creativeColor")creativeColor=c;
  else if(key=="spectatorColor")spectatorColor=c;else if(key=="adventureColor")adventureColor=c;
@@ -264,6 +292,11 @@ void EspModule::loadConfig(const nlohmann::json& j){
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,96.0f);
+ targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
+ targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
+ targetThickness=std::clamp(std::round(j.value("targetThickness",targetThickness)),1.0f,5.0f);
+ outlineThickness=std::clamp(j.value("outlineThickness",outlineThickness),0.0f,0.10f);
+ hitboxThickness=std::clamp(j.value("hitboxThickness",hitboxThickness),0.0f,0.10f);
  range=std::clamp(j.value("range",range),8.0f,80.0f);
  loadColor(j,"survivalColor",survivalColor);loadColor(j,"creativeColor",creativeColor);
  loadColor(j,"spectatorColor",spectatorColor);loadColor(j,"adventureColor",adventureColor);loadColor(j,"unknownColor",unknownColor);
@@ -272,6 +305,11 @@ void EspModule::saveConfig(nlohmann::json& j){
  Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
+ j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
+ j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
+ j["targetThickness"]=std::clamp(std::round(targetThickness),1.0f,5.0f);
+ j["outlineThickness"]=std::clamp(outlineThickness,0.0f,0.10f);
+ j["hitboxThickness"]=std::clamp(hitboxThickness,0.0f,0.10f);
  j["range"]=std::clamp(range,8.0f,80.0f);
  char color[12];auto save=[&](const char* key,std::uint32_t v){std::snprintf(color,sizeof(color),"#%08X",v);j[key]=std::string(color);};
  save("survivalColor",survivalColor);save("creativeColor",creativeColor);save("spectatorColor",spectatorColor);

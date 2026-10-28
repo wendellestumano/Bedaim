@@ -71,6 +71,9 @@ bool collectNearbyActors(void* origin, float radius, std::unordered_set<void*>& 
     ActorVector actors = g_fetchNearbyActors(origin, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    // ActorFetchNearbyActorsSorted can represent an empty result as {nullptr, nullptr}.
+    // Treat that as a successful empty snapshot, not a malformed vector.
+    if (begin == 0 && end == 0) return true;
     if (!begin || !end || end < begin ||
         (end - begin) % sizeof(DistanceSortedActor) != 0 ||
         (end - begin) / sizeof(DistanceSortedActor) > 16384) return false;
@@ -1746,6 +1749,42 @@ HitboxExpanderModule::HitboxExpanderModule()
     g_hitboxExpander = this;
 }
 
+bool HitboxExpanderModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    auto parseNumber = [&]() -> std::optional<float> {
+        try {
+            const std::string text(value);
+            std::size_t parsedLength = 0;
+            const float number = std::stof(text, &parsedLength);
+            while (parsedLength < text.size() &&
+                   std::isspace(static_cast<unsigned char>(text[parsedLength]))) ++parsedLength;
+            if (parsedLength != text.size() || !std::isfinite(number)) return std::nullopt;
+            return number;
+        } catch (...) { return std::nullopt; }
+    };
+    bool boolValue = false;
+    const bool booleanKey = key == "m_expandPlayers" || key == "m_expandMobs" ||
+        key == "m_requireLineOfSight" || key == "m_showHitbox";
+    if (booleanKey) {
+        if (value == "true" || value == "1" || value == "on") boolValue = true;
+        else if (value == "false" || value == "0" || value == "off") boolValue = false;
+        else return false;
+        std::lock_guard<std::mutex> lock(m_expandMutex);
+        if (key == "m_expandPlayers") m_expandPlayers = boolValue;
+        else if (key == "m_expandMobs") m_expandMobs = boolValue;
+        else if (key == "m_requireLineOfSight") m_requireLineOfSight = boolValue;
+        else m_showHitbox = boolValue;
+        return true;
+    }
+
+    const auto number = parseNumber();
+    if (!number) return false;
+    std::lock_guard<std::mutex> lock(m_expandMutex);
+    if (key == "m_hitboxWidth") m_hitboxWidth = std::clamp(*number, 0.6f, 8.0f);
+    else if (key == "m_hitboxHeight") m_hitboxHeight = std::clamp(*number, 0.6f, 8.0f);
+    else return false;
+    return true;
+}
+
 void HitboxExpanderModule::onInit() {
     if (!g_fetchNearbyActors) {
         g_fetchNearbyActors = reinterpret_cast<ActorFetchNearbyActorsSortedFn>(
@@ -1852,7 +1891,11 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
         missingActorsResolved = !hasMissingTrackedActor();
         if (!missingActorsResolved) {
             if (!collectNearbyActors(player, 512.0f, liveActors)) return;
-            missingActorsResolved = true;
+            // Do not discard the original AABB snapshot just because an actor was
+            // absent from a broad query. If the query temporarily omits a still-live
+            // actor, dropping its snapshot would make an expanded hitbox impossible
+            // to restore when that actor is encountered again.
+            missingActorsResolved = !hasMissingTrackedActor();
         }
     }
 
@@ -1932,6 +1975,11 @@ void HitboxExpanderModule::applyNativeBounds(bedrocktools::sdk::Player* player) 
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto begin = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto end = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (begin == 0 && end == 0) {
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
+            "HitboxExpander", "actor_snapshot", "empty");
+        return;
+    }
     if (!begin || !end || end < begin ||
         (end - begin) % sizeof(DistanceSortedActor) != 0 ||
         (end - begin) / sizeof(DistanceSortedActor) > 8192) {
@@ -2074,6 +2122,46 @@ bedrocktools::sdk::AABB HitboxExpanderModule::expandedTargetBounds(
         {center.x - half.x, nativeBounds.min.y, center.z - half.z},
         {center.x + half.x, nativeBounds.min.y + height, center.z + half.z}
     };
+}
+
+bedrocktools::sdk::AABB HitboxExpanderModule::nativeBoundsForActor(
+    void* actor, const bedrocktools::sdk::AABB& fallback) {
+    using namespace bedrocktools::sdk;
+    if (!actor || reinterpret_cast<std::uintptr_t>(actor) <= 0x1000) return fallback;
+
+    NativeBoundsSnapshot snapshot{};
+    {
+        std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+        const auto it = m_nativeBoundsOriginal.find(actor);
+        if (it == m_nativeBoundsOriginal.end()) return fallback;
+        snapshot = it->second;
+    }
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    auto** componentSlot = reinterpret_cast<void**>(actorAddress + offsets::Actor::mStateVectorComponent +
+        offsets::BuiltInActorComponents::mAABBShapeComponent);
+    void* currentComponent = *componentSlot;
+    auto* actorObject = reinterpret_cast<Actor*>(actor);
+    const Vec3 currentPosition = actorObject->position();
+    if (currentComponent != snapshot.component || actorObject->level() != snapshot.level ||
+        reinterpret_cast<std::uintptr_t>(currentComponent) <= 0x1000 ||
+        !finiteVec3(currentPosition) || !finiteVec3(snapshot.originalActorPosition) ||
+        !validBounds(snapshot.originalBounds)) return fallback;
+
+    const Vec3 delta{
+        currentPosition.x - snapshot.originalActorPosition.x,
+        currentPosition.y - snapshot.originalActorPosition.y,
+        currentPosition.z - snapshot.originalActorPosition.z
+    };
+    const AABB translated{
+        {snapshot.originalBounds.min.x + delta.x,
+         snapshot.originalBounds.min.y + delta.y,
+         snapshot.originalBounds.min.z + delta.z},
+        {snapshot.originalBounds.max.x + delta.x,
+         snapshot.originalBounds.max.y + delta.y,
+         snapshot.originalBounds.max.z + delta.z}
+    };
+    return validBounds(translated) ? translated : fallback;
 }
 
 float HitboxExpanderModule::queryExpansionMargin() const {
