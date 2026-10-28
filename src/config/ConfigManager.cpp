@@ -5,6 +5,7 @@
 #include <pl/Logger.hpp>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <string_view>
 #include <stdexcept>
 
@@ -66,26 +67,29 @@ void ConfigManager::load() {
 }
 
 void ConfigManager::save() {
-    // Snapshotting happens outside m_mutex because module saveConfig() takes its own
-    // locks. Serialize snapshot+enqueue as one operation so overlapping callers
-    // cannot enqueue an older config after a newer one.
+    saveTo(getConfigPath());
+}
+
+void ConfigManager::saveTo(const std::string& targetPath) {
+    if (targetPath.empty()) return;
     std::lock_guard<std::mutex> snapshotGuard(m_saveMutex);
     nlohmann::json j;
-
     for (auto* mod : ModuleRegistry::get().modules()) {
         nlohmann::json modJson;
         mod->saveConfig(modJson);
         j["Modules"][mod->name] = std::move(modJson);
     }
-
-    std::string path = getConfigPath();
     std::string payload = j.dump();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) return;
         ensureWorkerLocked();
-        m_pendingPath = std::move(path);
-        m_pendingPayload = std::move(payload);
+        auto pending = std::find_if(m_pendingWrites.begin(), m_pendingWrites.end(),
+            [&](const auto& item) { return item.first == targetPath; });
+        if (pending == m_pendingWrites.end())
+            m_pendingWrites.emplace_back(targetPath, std::move(payload));
+        else
+            pending->second = std::move(payload);
         m_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
         ++m_queuedGeneration;
         m_hasPending = true;
@@ -130,11 +134,13 @@ void ConfigManager::workerLoop() {
             continue;
         }
 
-        std::string path = std::move(m_pendingPath);
-        std::string payload = std::move(m_pendingPayload);
+        auto writes = std::move(m_pendingWrites);
+        m_pendingWrites.clear();
         m_hasPending = false;
         lock.unlock();
-        const bool writeSucceeded = writePayload(path, payload);
+        bool writeSucceeded = true;
+        for (const auto& write : writes)
+            writeSucceeded = writePayload(write.first, write.second) && writeSucceeded;
         lock.lock();
         m_lastWriteSucceeded = writeSucceeded;
         if (m_completedGeneration < generation) m_completedGeneration = generation;
