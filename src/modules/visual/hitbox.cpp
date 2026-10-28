@@ -877,32 +877,71 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            ScreenBounds screenBox{};
-            const bool screenBoxValid=(esp->box2D || (esp->showLockInAim && esp->ring2D)) &&
-                projectAabbToScreen(espBounds,cameraPosition,cameraRotation,hudWidth,hudHeight,
-                                    esp->projectionFov,screenBox);
-            if(esp->box2D){
-                if(screenBoxValid)
-                    esp->addScreenBox(screenBox.x,screenBox.y,screenBox.w,screenBox.h,
-                                      color,std::max(1.0f,esp->outlineThickness*40.0f));
-            }else{
-                drawBox(espBounds,color,true,esp->outlineThickness);
-            }
-            if(esp->showLockInAim){
-                if(esp->ring2D){
-                    // Anchor the 2D ring to the same projected actor bounds as the box.
-                    // Projecting an independent world-space point caused visible jitter
-                    // when the camera FOV/rotation and actor bounds updated on different ticks.
-                    if(screenBoxValid){
-                        const float screenX=screenBox.x+screenBox.w*0.5f;
-                        const float screenY=screenBox.y+screenBox.h*0.82f;
-                        const float ringRadius=std::clamp(esp->indicatorSize/48.0f*18.0f,8.0f,64.0f);
-                        esp->addScreenRing(screenX,screenY,ringRadius,color,
-                                           std::clamp(esp->targetThickness,1.0f,5.0f));
-                    }
+            // "2D" mode deliberately uses a camera-facing world-space billboard,
+            // anchored to the actor's native AABB. This avoids projecting through a
+            // guessed FOV/actor rotation (which differs from the interpolated render
+            // camera in third-person and made the HUD box slide away from the target).
+            if(esp->box2D || (esp->showLockInAim && esp->ring2D)){
+                constexpr float kDegToRad=0.01745329251994329577f;
+                const float yaw=cameraRotation.y*kDegToRad;
+                const float pitch=cameraRotation.x*kDegToRad;
+                const bedrocktools::sdk::Vec3 right{std::cos(yaw),0.0f,std::sin(yaw)};
+                const bedrocktools::sdk::Vec3 up{-std::sin(yaw)*std::sin(pitch),
+                                                   std::cos(pitch),
+                                                   std::cos(yaw)*std::sin(pitch)};
+                const float actorHeight=std::clamp(espBounds.max.y-espBounds.min.y,0.5f,4.0f);
+                const bedrocktools::sdk::Vec3 center{
+                    (espBounds.min.x+espBounds.max.x)*0.5f,
+                    (espBounds.min.y+espBounds.max.y)*0.5f,
+                    (espBounds.min.z+espBounds.max.z)*0.5f
+                };
+                const float halfWidth=actorHeight*0.30f;
+                const float halfHeight=actorHeight*0.50f;
+                const auto point=[&](float rx,float uy){
+                    return bedrocktools::sdk::Vec3{
+                        center.x+right.x*rx+up.x*uy,
+                        center.y+right.y*rx+up.y*uy,
+                        center.z+right.z*rx+up.z*uy
+                    };
+                };
+                if(esp->box2D){
+                    std::vector<std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>> edges;
+                    edges.reserve(4);
+                    const auto tl=point(-halfWidth,halfHeight),tr=point(halfWidth,halfHeight);
+                    const auto br=point(halfWidth,-halfHeight),bl=point(-halfWidth,-halfHeight);
+                    edges.push_back({tl,tr});edges.push_back({tr,br});
+                    edges.push_back({br,bl});edges.push_back({bl,tl});
+                    drawLines(edges,color,true);
                 }else{
+                    drawBox(espBounds,color,true,esp->outlineThickness);
+                }
+                if(esp->showLockInAim && esp->ring2D){
+                    std::vector<std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>> ring;
+                    constexpr int segments=32;
+                    ring.reserve(segments);
+                    const float radius=std::clamp(esp->indicatorSize/48.0f*actorHeight*0.32f,
+                                                  actorHeight*0.12f,actorHeight*0.8f);
+                    const auto ringCenter=point(0.0f,-halfHeight*0.55f);
+                    for(int i=0;i<segments;++i){
+                        const float a0=6.2831853071795864769f*static_cast<float>(i)/segments;
+                        const float a1=6.2831853071795864769f*static_cast<float>(i+1)/segments;
+                        const auto p0=bedrocktools::sdk::Vec3{
+                            ringCenter.x+right.x*std::cos(a0)*radius+up.x*std::sin(a0)*radius,
+                            ringCenter.y+right.y*std::cos(a0)*radius+up.y*std::sin(a0)*radius,
+                            ringCenter.z+right.z*std::cos(a0)*radius+up.z*std::sin(a0)*radius};
+                        const auto p1=bedrocktools::sdk::Vec3{
+                            ringCenter.x+right.x*std::cos(a1)*radius+up.x*std::sin(a1)*radius,
+                            ringCenter.y+right.y*std::cos(a1)*radius+up.y*std::sin(a1)*radius,
+                            ringCenter.z+right.z*std::cos(a1)*radius+up.z*std::sin(a1)*radius};
+                        ring.push_back({p0,p1});
+                    }
+                    drawLines(ring,color,true);
+                }else if(esp->showLockInAim){
                     drawTargetRing(espBounds);
                 }
+            }else{
+                drawBox(espBounds,color,true,esp->outlineThickness);
+                if(esp->showLockInAim) drawTargetRing(espBounds);
             }
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
