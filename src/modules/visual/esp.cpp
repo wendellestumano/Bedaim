@@ -169,7 +169,7 @@ void EspModule::onFrame(){
                 const float yawRadians=yawDelta*kDegToRad;
                 const float pitchRadians=pitchDelta*kDegToRad;
                 float dirX=-std::sin(yawRadians);
-                float dirY=std::sin(pitchRadians)*std::cos(yawRadians);
+                float dirY=-std::sin(pitchRadians)*std::cos(yawRadians);
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(directionLength<0.0001f){
                     // A target almost exactly behind the player has no stable
@@ -186,7 +186,7 @@ void EspModule::onFrame(){
                     dirY/=directionLength;
                 }
 
-                const float size=std::clamp(indicatorSize,24.0f,96.0f)*
+                const float size=std::clamp(indicatorSize,24.0f,160.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f*targetSpeed+0.6f):1.0f);
                 const float edgeMargin=size*0.5f+12.0f;
                 const float halfW=std::max(1.0f,cx-edgeMargin);
@@ -232,7 +232,7 @@ void EspModule::onMenuRegistered(){
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
  size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
- size.hasCurrentValue=true;size.minValue="24";size.maxValue="96";size.step="2";size.unit=" px";schema.node(std::move(size));
+ size.hasCurrentValue=true;size.minValue="24";size.maxValue="160";size.step="4";size.unit=" px";schema.node(std::move(size));
  auto slider=[&](const char* key,const char* title,const char* desc,const char* category,
                   float defaultValue,float minimum,float maximum,float step,const char* unit){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;
@@ -271,7 +271,7 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
   return true;
  }
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
- if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,96.0f);return true;}
+ if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,160.0f);return true;}
  if(key=="locatorFov"){float f=0;if(!parseFloat(value,f))return false;locatorFov=std::clamp(f,60.0f,140.0f);return true;}
  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
@@ -293,7 +293,7 @@ void EspModule::loadConfig(const nlohmann::json& j){
  showLockInAim=j.value("showLockInAim",showLockInAim);
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
- indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,96.0f);
+ indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,160.0f);
  locatorFov=std::clamp(j.value("locatorFov",locatorFov),60.0f,140.0f);
  targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
  targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
