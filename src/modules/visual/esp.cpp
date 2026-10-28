@@ -88,7 +88,7 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
     const float horizontal=std::sqrt(dx*dx+dz*dz);
     constexpr float kRadToDeg=57.29577951308232f;
-    constexpr float kMaxVerticalFov=80.0f;
+    const float kMaxVerticalFov=std::clamp(locatorFov,60.0f,140.0f);
     // Targets directly above/below can have almost no horizontal separation.
     // Keep them eligible for the locator instead of silently dropping them.
     const float targetYaw=horizontal<0.001f
@@ -241,6 +241,7 @@ void EspModule::onMenuRegistered(){
   n.minValue=std::to_string(minimum);n.maxValue=std::to_string(maximum);
   n.step=std::to_string(step);n.unit=unit;schema.node(std::move(n));
  };
+ slider("locatorFov","Locator FOV","Vertical FOV threshold used to decide when the target is outside the visible area.", "indicators",90.0f,60.0f,140.0f,1.0f,"°");
  slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
@@ -271,6 +272,7 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  }
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,96.0f);return true;}
+ if(key=="locatorFov"){float f=0;if(!parseFloat(value,f))return false;locatorFov=std::clamp(f,60.0f,140.0f);return true;}
  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
@@ -292,6 +294,7 @@ void EspModule::loadConfig(const nlohmann::json& j){
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,96.0f);
+ locatorFov=std::clamp(j.value("locatorFov",locatorFov),60.0f,140.0f);
  targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
  targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
  targetThickness=std::clamp(std::round(j.value("targetThickness",targetThickness)),1.0f,5.0f);
@@ -305,6 +308,7 @@ void EspModule::saveConfig(nlohmann::json& j){
  Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
+ j["locatorFov"]=std::clamp(locatorFov,60.0f,140.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
  j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
  j["targetThickness"]=std::clamp(std::round(targetThickness),1.0f,5.0f);
