@@ -85,6 +85,10 @@ void EspModule::endScreenFrame(bool publish){
     if (!(enabled && masterEnabled && keybindActive)) {
         m_screenOverlays.clear();
         m_screenBuildingOverlays.clear();
+        // Clear the actual HUD command queue as well as the internal buffers.
+        // This is also a final safety net if a UI path changes state without
+        // invoking the normal onDisable transition.
+        pl::modmenu::submitDrawCommands(moduleId,std::span<const pl::modmenu::DrawCommand>{});
         return;
     }
     // RenderLevel can be invoked for auxiliary passes that do not have a usable
