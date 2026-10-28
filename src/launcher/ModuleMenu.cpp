@@ -48,6 +48,11 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
         return;
     }
     mod->setMasterEnabled(enabled);
+    if (!enabled && module_id == "bedrocktools.ESP") {
+        // A repeated off-toggle can arrive while the module's effective enabled
+        // flag is already false. Run its cleanup anyway to remove stale HUD state.
+        mod->onDisable();
+    }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
         "ModuleMenu", std::string("toggle applied: ") + std::string(module_id) +
         (enabled ? " enabled" : " disabled"));
