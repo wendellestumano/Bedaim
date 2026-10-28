@@ -48,9 +48,10 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
         return;
     }
     mod->setMasterEnabled(enabled);
-    if (!enabled && module_id == "bedrocktools.ESP") {
-        // A repeated off-toggle can arrive while the module's effective enabled
-        // flag is already false. Run its cleanup anyway to remove stale HUD state.
+    if (!enabled && (module_id == "bedrocktools.ESP" ||
+                     module_id == "bedrocktools.Hitbox Expander")) {
+        // Repeated OFF events must clear renderer-owned state even when the module's
+        // logical enabled flag was already false due to a previous stale transition.
         mod->onDisable();
     }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
