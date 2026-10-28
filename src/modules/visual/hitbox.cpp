@@ -321,13 +321,19 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
     auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
-    const bool espEnabled = esp && esp->enabled;
+    // Read the complete effective state at the render hook boundary. The shared
+    // RenderLevel hook intentionally remains installed, so stale cached flags must
+    // never keep a module's visuals alive after its master toggle or keybind is off.
+    const bool espEnabled = esp && esp->enabled && esp->masterEnabled && esp->keybindActive;
     // Require the complete effective state, not just the cached enabled flag.
     // The shared renderer hook can remain installed while individual modules toggle.
     const bool oreEspEnabled = oreEsp && oreEsp->enabled &&
                                oreEsp->masterEnabled && oreEsp->keybindActive;
-    const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
-    const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
+    const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled &&
+                                       g_hitboxMod->masterEnabled && g_hitboxMod->keybindActive;
+    const bool showExpandedHitboxes = expander && expander->enabled &&
+                                      expander->masterEnabled && expander->keybindActive &&
+                                      expander->shouldShowHitbox();
     const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled;
     const bool overlayVisualsEnabled = actorVisualsEnabled || oreEspEnabled;
     if (!overlayVisualsEnabled) return;
