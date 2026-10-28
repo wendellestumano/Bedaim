@@ -120,25 +120,9 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float dz=targetCenter.z-m_hudLocalPosition.z;
     const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
     const float horizontal=std::sqrt(dx*dx+dz*dz);
-    constexpr float kRadToDeg=57.29577951308232f;
-    const float kMaxVerticalFov=std::clamp(locatorFov,60.0f,140.0f);
-    // Targets directly above/below can have almost no horizontal separation.
-    // Keep them eligible for the locator instead of silently dropping them.
-    const float targetYaw=horizontal<0.001f
-        ? m_hudLocalRotation.y : std::atan2(-dx,dz)*kRadToDeg;
-    const float yawDelta=normalizeDegrees(targetYaw-m_hudLocalRotation.y);
-    const float targetPitch=-std::atan2(dy,std::max(horizontal,0.001f))*kRadToDeg;
-    const float pitchDelta=targetPitch-m_hudLocalRotation.x;
-
-    // Use the same perspective test as the on-screen locator projection.
-    // This keeps the arrow hidden while the target bearing still lies in the viewport.
-    const float aspect=std::clamp(m_hudViewportAspect,0.5f,3.2f);
-    const float tanHalfVertical=std::tan(std::clamp(kMaxVerticalFov,60.0f,140.0f)*0.5f/kRadToDeg);
-    const bool inFront=(std::cos(yawDelta/kRadToDeg)*std::cos(pitchDelta/kRadToDeg))>0.0f;
-    const float projectedX=-std::tan(yawDelta/kRadToDeg)/(tanHalfVertical*aspect);
-    const float projectedY=std::tan(pitchDelta/kRadToDeg)/tanHalfVertical;
-    if(inFront&&std::isfinite(projectedX)&&std::isfinite(projectedY)&&
-       std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f)return;
+    // Keep the nearest ESP target selected even while it is visible. The HUD
+    // projection decides whether to draw the arrow, so it disappears for that same
+    // target instead of jumping to a different off-screen player.
     if(m_offscreenTargetValid&&distance>=m_offscreenTargetDistance)return;
     m_offscreenTargetCenter=targetCenter;
     m_offscreenTargetDistance=distance;
@@ -232,6 +216,12 @@ void EspModule::onFrame(){
                 const float pitchRadians=pitchDelta*kDegToRad;
                 const float aspect=std::clamp(surface.width/surface.height,0.5f,3.2f);
                 const float tanHalfVertical=std::tan(std::clamp(locatorFov,60.0f,140.0f)*0.5f*kDegToRad);
+                const bool inFront=(std::cos(yawRadians)*std::cos(pitchRadians))>0.0f;
+                const float projectedX=-std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
+                const float projectedY=std::tan(pitchRadians)/std::max(0.001f,tanHalfVertical);
+                const bool targetOnScreen=inFront&&std::isfinite(projectedX)&&std::isfinite(projectedY)&&
+                                          std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f;
+                if(!targetOnScreen){
                 float dirX=0.0f,dirY=0.0f;
                 if((std::cos(yawRadians)*std::cos(pitchRadians))>0.0f){
                     dirX=-std::tan(yawRadians)/(std::max(0.001f,tanHalfVertical)*aspect);
@@ -278,6 +268,7 @@ void EspModule::onFrame(){
                 arrow.color=0xFFFFFFFFu;
                 arrow.imageId="bedaim.esp.arrow."+std::to_string(sprite);
                 commands.push_back(std::move(arrow));
+                }
             }
         }
     }
