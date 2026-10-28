@@ -1817,8 +1817,11 @@ void HitboxExpanderModule::onInit() {
 }
 
 void HitboxExpanderModule::onDisable() {
-    // Avoid dereferencing a cached actor from a menu callback. The persistent pre-tick
-    // listener restores any active snapshots on the next valid in-world tick.
+    // The render/menu callback may not safely dereference actors. Mark a restore-all
+    // request and keep it pending until the next valid pre-tick restores every tracked AABB.
+    m_restoreAllPending.store(true, std::memory_order_release);
+    bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+        "HitboxExpander", "restore_all", "pending_next_valid_tick");
 }
 
 void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
@@ -1830,15 +1833,32 @@ void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
         return;
     }
     const bool effectiveEnabled = enabled && masterEnabled && keybindActive;
+    const bool restorePending = m_restoreAllPending.load(std::memory_order_acquire);
+    const bool restoreAll = !effectiveEnabled || restorePending;
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "restore_policy", effectiveEnabled ? "restore_stale_only" : "restore_all");
-    restoreNativeBounds(player, effectiveEnabled);
+        "HitboxExpander", "restore_policy",
+        restoreAll ? (restorePending ? "restore_all_pending" : "restore_all") : "restore_stale_only");
+    restoreNativeBounds(player, !restoreAll);
+    if (restoreAll) {
+        bool snapshotsEmpty = false;
+        {
+            std::lock_guard<std::mutex> lock(m_nativeBoundsMutex);
+            snapshotsEmpty = m_nativeBoundsOriginal.empty();
+        }
+        if (snapshotsEmpty) {
+            m_restoreAllPending.store(false, std::memory_order_release);
+            bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+                "HitboxExpander", "restore_all", "completed");
+        }
+    }
 }
 
 void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
-    if (!enabled || !masterEnabled || !keybindActive) {
+    if (!enabled || !masterEnabled || !keybindActive ||
+        m_restoreAllPending.load(std::memory_order_acquire)) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-            "HitboxExpander", "state", "disabled");
+            "HitboxExpander", "state",
+            m_restoreAllPending.load(std::memory_order_relaxed) ? "waiting_for_restore_before_reapply" : "disabled");
         return;
     }
     if (!player) {
@@ -1958,7 +1978,8 @@ void HitboxExpanderModule::restoreNativeBounds(bedrocktools::sdk::Player* player
         // Keep the first unexpanded snapshot while enabled. Re-capturing the box
         // after each movement tick would bake any stale world position into the
         // next snapshot and make the hitbox lag behind the actor.
-        if (enabled && !onlyStale) ++it;
+        if (enabled && !onlyStale &&
+            !m_restoreAllPending.load(std::memory_order_acquire)) ++it;
         else it = m_nativeBoundsOriginal.erase(it);
     }
 }
