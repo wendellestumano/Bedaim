@@ -34,6 +34,7 @@ public:
     bool showOffscreenIndicators = true;
     bool animatedIndicators = true;
     float indicatorSize = 48.0f;
+    float locatorFov = 90.0f;
     float targetYOffset = 0.0f;
     float targetSpeed = 1.0f;
     float targetThickness = 2.0f;
