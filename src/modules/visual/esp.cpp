@@ -181,6 +181,32 @@ void EspModule::onFrame(){
     // The player reticle is rendered around each player's world-space AABB by
     // the existing RenderLevel hook. Never place a fixed reticle at screen center.
 
+    for(const auto& overlay:screenOverlaySnapshot()){
+        if(overlay.kind==ScreenOverlay::Kind::Box){
+            pl::modmenu::DrawCommand box{};
+            box.type=pl::modmenu::DrawCommandType::Rect;
+            box.x=overlay.x;box.y=overlay.y;box.w=overlay.w;box.h=overlay.h;
+            box.color=overlay.color;box.size=overlay.thickness;
+            commands.push_back(std::move(box));
+        }else{
+            constexpr int segments=48;
+            const float phase=animatedIndicators?seconds*targetSpeed*0.85f:0.0f;
+            const float tau=6.2831853071795864769f;
+            for(int i=0;i<segments;++i){
+                if((i%12)>=10)continue;
+                const float a0=tau*static_cast<float>(i)/segments+phase;
+                const float a1=tau*static_cast<float>(i+1)/segments+phase;
+                const float r0=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a0-phase)));
+                const float r1=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a1-phase)));
+                pl::modmenu::DrawCommand line{};
+                line.type=pl::modmenu::DrawCommandType::Line;
+                line.x=overlay.x+std::cos(a0)*r0;line.y=overlay.y+std::sin(a0)*r0;
+                line.w=overlay.x+std::cos(a1)*r1;line.h=overlay.y+std::sin(a1)*r1;
+                line.color=overlay.color;line.size=overlay.thickness;
+                commands.push_back(std::move(line));
+            }
+        }
+    }
     if(showOffscreenIndicators){
         bedrocktools::sdk::Vec3 target{},local{};
         bedrocktools::sdk::Vec2 rotation{};
@@ -252,32 +278,6 @@ void EspModule::onFrame(){
                 arrow.color=0xFFFFFFFFu;
                 arrow.imageId="bedaim.esp.arrow."+std::to_string(sprite);
                 commands.push_back(std::move(arrow));
-            }
-        }
-    }
-    for(const auto& overlay:screenOverlaySnapshot()){
-        if(overlay.kind==ScreenOverlay::Kind::Box){
-            pl::modmenu::DrawCommand box{};
-            box.type=pl::modmenu::DrawCommandType::Rect;
-            box.x=overlay.x;box.y=overlay.y;box.w=overlay.w;box.h=overlay.h;
-            box.color=overlay.color;box.size=overlay.thickness;
-            commands.push_back(std::move(box));
-        }else{
-            constexpr int segments=48;
-            const float phase=animatedIndicators?seconds*targetSpeed*0.85f:0.0f;
-            const float tau=6.2831853071795864769f;
-            for(int i=0;i<segments;++i){
-                if((i%12)>=10)continue;
-                const float a0=tau*static_cast<float>(i)/segments+phase;
-                const float a1=tau*static_cast<float>(i+1)/segments+phase;
-                const float r0=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a0-phase)));
-                const float r1=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a1-phase)));
-                pl::modmenu::DrawCommand line{};
-                line.type=pl::modmenu::DrawCommandType::Line;
-                line.x=overlay.x+std::cos(a0)*r0;line.y=overlay.y+std::sin(a0)*r0;
-                line.w=overlay.x+std::cos(a1)*r1;line.h=overlay.y+std::sin(a1)*r1;
-                line.color=overlay.color;line.size=overlay.thickness;
-                commands.push_back(std::move(line));
             }
         }
     }
