@@ -1170,6 +1170,13 @@ void HitboxModule::loadConfig(const nlohmann::json& j) {
     parseColor("hitboxColor", hitboxColor);
     parseColor("eyeLineColor", eyeLineColor);
     parseColor("lookLineColor", lookLineColor);
+
+    // This is an internal renderer, not an independently toggleable visual module.
+    // Old configs may contain masterEnabled=true from when Hitbox was visible. Never
+    // let that stale setting draw native boxes after ESP/BedrockBounds were switched off.
+    masterEnabled.store(false, std::memory_order_release);
+    keybindActive.store(true, std::memory_order_release);
+    enabled.store(false, std::memory_order_release);
 }
 
 void HitboxModule::saveConfig(nlohmann::json& j) {
