@@ -630,7 +630,8 @@ private:
                         module->onMenuRegistered();
                 } else if (entry.first == "bedaim.ULTRAKILL HUD") {
                     registerUltrakillHudConfigSchema(entry.first, entry.second);
-                } else if (entry.first == "bedaim.Module Diagnostics") {
+                } else if (entry.first == "bedaim.Module Diagnostics" ||
+                           entry.first == "bedaim.Configurations") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
                 }
@@ -655,7 +656,8 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                  mod->moduleId != "bedaim.Unglide" &&
                  mod->moduleId != "bedaim.ESP" &&
                  mod->moduleId != "bedaim.ULTRAKILL HUD" &&
-                 mod->moduleId != "bedaim.Module Diagnostics")) return;
+                 mod->moduleId != "bedaim.Module Diagnostics" &&
+                 mod->moduleId != "bedaim.Configurations")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
     // change. Debounce continuous sliders and give the whitelist editor more time
     // so one character/drag does not reset the active widget mid-interaction.
@@ -706,6 +708,7 @@ void registerModulesWithLauncher() {
         "bedaim.Ore ESP",
         "bedaim.ULTRAKILL HUD",
         "bedaim.Module Diagnostics",
+        "bedaim.Configurations",
         "bedaim.GameMode Checker",
         "bedaim.Xray"
     };
