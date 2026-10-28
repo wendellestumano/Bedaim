@@ -66,9 +66,13 @@ void ConfigManager::load() {
 }
 
 void ConfigManager::save() {
-    // Snapshotting happens outside m_mutex because module saveConfig() takes its own
-    // locks. Serialize snapshot+enqueue as one operation so overlapping callers
-    // cannot enqueue an older config after a newer one.
+    saveTo(getConfigPath());
+}
+
+void ConfigManager::saveTo(const std::string& targetPath) {
+    if (targetPath.empty()) return;
+    // Serialize complete snapshots before enqueueing them. Concurrent save() calls
+    // must not let an older snapshot overwrite a newer one in the debounce queue.
     std::lock_guard<std::mutex> snapshotGuard(m_saveMutex);
     nlohmann::json j;
 
@@ -78,13 +82,12 @@ void ConfigManager::save() {
         j["Modules"][mod->name] = std::move(modJson);
     }
 
-    std::string path = getConfigPath();
     std::string payload = j.dump();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) return;
         ensureWorkerLocked();
-        m_pendingPath = std::move(path);
+        m_pendingPath = targetPath;
         m_pendingPayload = std::move(payload);
         m_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
         ++m_queuedGeneration;
