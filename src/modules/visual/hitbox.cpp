@@ -158,6 +158,98 @@ static bool validRenderBounds(const AABB& b) {
         std::isfinite(b.max.x)&&std::isfinite(b.max.y)&&std::isfinite(b.max.z)&&
         b.max.x>b.min.x&&b.max.y>b.min.y&&b.max.z>b.min.z;
 }
+struct CameraPoint { float x, y, z; };
+struct ScreenBounds { float x, y, w, h; };
+
+static CameraPoint toCameraSpace(const bedrocktools::sdk::Vec3& p,
+                                 const bedrocktools::sdk::Vec3& camera,
+                                 const bedrocktools::sdk::Vec2& rotation) {
+    constexpr float kDegToRad = 0.01745329251994329577f;
+    const float yaw = rotation.y * kDegToRad;
+    const float pitch = rotation.x * kDegToRad;
+    const float sy = std::sin(yaw), cy = std::cos(yaw);
+    const float sp = std::sin(pitch), cp = std::cos(pitch);
+    const float dx = p.x - camera.x, dy = p.y - camera.y, dz = p.z - camera.z;
+    // Minecraft forward is (-sin(yaw), -sin(pitch), cos(yaw)).
+    return {
+        dx * cy + dz * sy,
+        dx * (-sy * sp) + dy * cp + dz * (cy * sp),
+        dx * (-sy * cp) + dy * (-sp) + dz * (cy * cp)
+    };
+}
+
+static bool cameraPointToScreen(const CameraPoint& p, float width, float height,
+                                float verticalFov, float& sx, float& sy) {
+    if (!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)||p.z<=0.05f||
+        width<64.0f||height<64.0f) return false;
+    constexpr float kDegToRad = 0.01745329251994329577f;
+    const float tanHalf = std::tan(std::clamp(verticalFov, 30.0f, 150.0f)*0.5f*kDegToRad);
+    if (!std::isfinite(tanHalf)||tanHalf<0.001f) return false;
+    const float pixelsPerVerticalUnit = height/(2.0f*tanHalf);
+    sx = width*0.5f + (p.x/p.z)*pixelsPerVerticalUnit;
+    sy = height*0.5f - (p.y/p.z)*pixelsPerVerticalUnit;
+    return std::isfinite(sx)&&std::isfinite(sy);
+}
+
+static bool projectAabbToScreen(const AABB& box,
+                                const bedrocktools::sdk::Vec3& camera,
+                                const bedrocktools::sdk::Vec2& rotation,
+                                float width, float height, float verticalFov,
+                                ScreenBounds& out) {
+    if (!validRenderBounds(box)) return false;
+    const bedrocktools::sdk::Vec3 corners[8] = {
+        {box.min.x,box.min.y,box.min.z},{box.max.x,box.min.y,box.min.z},
+        {box.max.x,box.min.y,box.max.z},{box.min.x,box.min.y,box.max.z},
+        {box.min.x,box.max.y,box.min.z},{box.max.x,box.max.y,box.min.z},
+        {box.max.x,box.max.y,box.max.z},{box.min.x,box.max.y,box.max.z}
+    };
+    constexpr int edges[12][2] = {
+        {0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},
+        {0,4},{1,5},{2,6},{3,7}
+    };
+    CameraPoint cameraCorners[8];
+    std::vector<std::pair<float,float>> points;
+    points.reserve(32);
+    for (int i=0;i<8;++i) {
+        cameraCorners[i]=toCameraSpace(corners[i],camera,rotation);
+        float sx=0,sy=0;
+        if(cameraPointToScreen(cameraCorners[i],width,height,verticalFov,sx,sy))
+            points.push_back({sx,sy});
+    }
+    constexpr float kNear=0.06f;
+    for(const auto& edge:edges){
+        const auto& a=cameraCorners[edge[0]];
+        const auto& b=cameraCorners[edge[1]];
+        const bool aFront=a.z>kNear,bFront=b.z>kNear;
+        if(aFront==bFront) continue;
+        const float denominator=b.z-a.z;
+        if(std::fabs(denominator)<1.0e-6f) continue;
+        const float t=std::clamp((kNear-a.z)/denominator,0.0f,1.0f);
+        CameraPoint p{a.x+(b.x-a.x)*t,a.y+(b.y-a.y)*t,kNear};
+        float sx=0,sy=0;
+        if(cameraPointToScreen(p,width,height,verticalFov,sx,sy)) points.push_back({sx,sy});
+    }
+    if(points.empty()) return false;
+    float minX=points.front().first,maxX=minX,minY=points.front().second,maxY=minY;
+    for(const auto& p:points){
+        minX=std::min(minX,p.first);maxX=std::max(maxX,p.first);
+        minY=std::min(minY,p.second);maxY=std::max(maxY,p.second);
+    }
+    minX=std::clamp(minX,0.0f,width);maxX=std::clamp(maxX,0.0f,width);
+    minY=std::clamp(minY,0.0f,height);maxY=std::clamp(maxY,0.0f,height);
+    if(maxX-minX<2.0f||maxY-minY<2.0f) return false;
+    out={minX,minY,maxX-minX,maxY-minY};
+    return true;
+}
+
+static bool projectPointToScreen(const bedrocktools::sdk::Vec3& point,
+                                 const bedrocktools::sdk::Vec3& camera,
+                                 const bedrocktools::sdk::Vec2& rotation,
+                                 float width, float height, float verticalFov,
+                                 float& x, float& y) {
+    return cameraPointToScreen(toCameraSpace(point,camera,rotation),width,height,verticalFov,x,y);
+}
+
 static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLoggedContext{false},
  espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
  espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false},
