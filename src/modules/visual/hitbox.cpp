@@ -576,10 +576,13 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     // Reference-style reticle above each ESP player. It lives in world space and
     // uses only that actor's current AABB, so Aim Assist never gates the ring.
     auto drawTargetRing = [&](const AABB& aabb) {
-        const float width = aabb.max.x - aabb.min.x;
+        // Anchor the marker to a stable point above the actor's feet. BedrockBounds
+        // can enlarge max.y, so using the AABB midpoint makes the marker rise as the
+        // expanded hitbox grows. Keep the marker's position and radius independent of
+        // the expanded collision bounds.
         const bedrocktools::sdk::Vec3 center{
             (aabb.min.x + aabb.max.x) * 0.5f,
-            (aabb.min.y + aabb.max.y) * 0.5f + (esp ? esp->targetYOffset : 0.0f),
+            aabb.min.y + 0.90f + (esp ? esp->targetYOffset : 0.0f),
             (aabb.min.z + aabb.max.z) * 0.5f
         };
 
@@ -606,7 +609,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled * targetSpeed, tau));
         const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled * targetSpeed, tau));
         const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
-        const float radius = std::clamp(std::max(width * 1.02f, 0.42f) * sizeScale, 0.22f, 1.20f);
+        const float radius = std::clamp(0.42f * sizeScale, 0.22f, 0.84f);
         using RingLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
         // Reuse ring buffers across actors and frames; this path runs every frame.
         static std::vector<RingLine> outerLines;

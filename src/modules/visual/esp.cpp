@@ -88,7 +88,7 @@ void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& target
     const float dy=targetCenter.y-(m_hudLocalPosition.y+1.62f);
     const float horizontal=std::sqrt(dx*dx+dz*dz);
     constexpr float kRadToDeg=57.29577951308232f;
-    constexpr float kMaxVerticalFov=110.0f;
+    constexpr float kMaxVerticalFov=80.0f;
     // Targets directly above/below can have almost no horizontal separation.
     // Keep them eligible for the locator instead of silently dropping them.
     const float targetYaw=horizontal<0.001f
@@ -168,7 +168,7 @@ void EspModule::onFrame(){
                 const float pitchDelta=targetPitch-rotation.x;
                 const float yawRadians=yawDelta*kDegToRad;
                 const float pitchRadians=pitchDelta*kDegToRad;
-                float dirX=std::sin(yawRadians);
+                float dirX=-std::sin(yawRadians);
                 float dirY=std::sin(pitchRadians)*std::cos(yawRadians);
                 const float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(directionLength<0.0001f){
