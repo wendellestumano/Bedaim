@@ -262,7 +262,7 @@ void EspModule::onMenuRegistered(){
 }
 bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value){
  if(key=="showPlayers"||key=="showInvisible"||key=="showLockInAim"||
-    key=="showOffscreenIndicators"||key=="animatedIndicators"){
+    key=="showOffscreenIndicators"||key=="animatedIndicators"||key=="infiniteRange"){
   bool b=false;if(!parseBool(value,b))return false;
   if(key=="showPlayers")showPlayers=b;
   else if(key=="showInvisible")showInvisible=b;
