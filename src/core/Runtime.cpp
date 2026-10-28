@@ -2,6 +2,9 @@
 #include "JavaVm.hpp"
 #include "GameHooks.hpp"
 #include "config/ConfigManager.hpp"
+#include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
+#include <filesystem>
 #include "launcher/ModuleMenu.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "core/memory/Hooks.hpp"
@@ -29,6 +32,7 @@ bedrocktools::hooks::Handle dlopenHook = nullptr;
 bool eventsWired = false;
 int containerDepth = 0;
 int chatDepth = 0;
+std::atomic<std::uintptr_t> lastWorldIdentity{0};
 
 class ResolveGuard {
 public:
@@ -84,6 +88,19 @@ void Runtime::wireEvents() {
     eventsWired = true;
     using namespace bedrocktools::events;
     bus().subscribe<FrameEvent>([](auto&) { ModuleRegistry::get().onFrame(); });
+    bus().subscribe<LocalPlayerTickEvent>([](auto& event) {
+        if (!event.player) return;
+        auto* actor = static_cast<bedrocktools::sdk::Actor*>(event.player);
+        const auto worldIdentity = reinterpret_cast<std::uintptr_t>(actor->level());
+        if (worldIdentity == 0) return;
+        const auto previous = lastWorldIdentity.exchange(worldIdentity, std::memory_order_acq_rel);
+        if (previous != worldIdentity) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Info, "Config",
+                "world identity changed; reloading Downloads/BEDAIM/config.json");
+            bedrocktools::config::ConfigManager::get().load();
+        }
+    });
     bus().subscribe<MouseInputEvent>([](auto& event) {
         if (ModuleRegistry::get().onMouseEvent(event.button, event.down)) event.cancel();
     });
@@ -137,7 +154,24 @@ bool Runtime::load(pl::mod::ModContext& context) {
                          : "Preloader ModContext provided a null JavaVM");
     mResourceDirectory = context.resourceDir();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "Bedaim load requested");
-    bedrocktools::config::ConfigManager::get().setConfigPath((context.configDir() / "Configs.json").string());
+    // Prefer the user's requested public Downloads/BEDAIM folder, while also
+    // recognizing Android's conventional singular Download directory if it
+    // already contains the config.
+    const std::filesystem::path pluralDownloads("/sdcard/Downloads/BEDAIM/config.json");
+    const std::filesystem::path conventionalDownload("/sdcard/Download/BEDAIM/config.json");
+    const std::filesystem::path sharedStorageDownload("/storage/emulated/0/Download/BEDAIM/config.json");
+    std::error_code configPathError;
+    std::filesystem::path configPath = pluralDownloads;
+    if (std::filesystem::exists(pluralDownloads, configPathError)) {
+        configPath = pluralDownloads;
+    } else if (std::filesystem::exists(conventionalDownload, configPathError)) {
+        configPath = conventionalDownload;
+    } else if (std::filesystem::exists(sharedStorageDownload, configPathError)) {
+        configPath = sharedStorageDownload;
+    }
+    bedrocktools::config::ConfigManager::get().setConfigPath(configPath.string());
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Config",
+        "external config path set to " + configPath.string());
     if (!launcherContext()) return true;
     void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
     if (minecraft) {
