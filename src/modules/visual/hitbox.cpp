@@ -423,9 +423,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     }
 
     auto* expander = static_cast<HitboxExpanderModule*>(
-        ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
-    auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
-    auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
+        ModuleRegistry::get().find("bedaim.Hitbox Expander"));
+    auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedaim.ESP"));
+    auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedaim.Ore ESP"));
     if(esp) esp->beginScreenFrame();
     // Only publish after RenderLevel has a valid context. Some auxiliary passes
     // return early; publishing their empty staging buffer made 2D ESP flicker.
