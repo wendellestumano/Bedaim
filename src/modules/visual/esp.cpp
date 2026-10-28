@@ -339,6 +339,7 @@ void EspModule::onMenuRegistered(){
   n.step=std::to_string(step);n.unit=unit;schema.node(std::move(n));
  };
  slider("locatorFov","Locator FOV","Vertical FOV threshold used to decide when the target is outside the visible area.", "indicators",90.0f,60.0f,140.0f,1.0f,"°");
+ slider("projectionFov","2D projection FOV","Vertical FOV used to align screen-space ESP boxes and target rings with the game camera.", "appearance",70.0f,40.0f,120.0f,1.0f,"°");
  slider("locatorSize","Locator size","Size of the off-screen locator arrow in pixels.","indicators",48.0f,24.0f,160.0f,4.0f," px");
  slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
@@ -376,6 +377,7 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,160.0f);return true;}
  if(key=="locatorSize"){float f=0;if(!parseFloat(value,f))return false;locatorSize=std::clamp(f,24.0f,160.0f);return true;}
  if(key=="locatorFov"){float f=0;if(!parseFloat(value,f))return false;locatorFov=std::clamp(f,60.0f,140.0f);return true;}
+ if(key=="projectionFov"){float f=0;if(!parseFloat(value,f))return false;projectionFov=std::clamp(f,40.0f,120.0f);return true;}
  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
@@ -401,6 +403,7 @@ void EspModule::loadConfig(const nlohmann::json& j){
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,160.0f);
  locatorSize=std::clamp(j.value("locatorSize",locatorSize),24.0f,160.0f);
  locatorFov=std::clamp(j.value("locatorFov",locatorFov),60.0f,140.0f);
+ projectionFov=std::clamp(j.value("projectionFov",projectionFov),40.0f,120.0f);
  targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
  targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
  targetThickness=std::clamp(std::round(j.value("targetThickness",targetThickness)),1.0f,5.0f);
@@ -417,6 +420,7 @@ void EspModule::saveConfig(nlohmann::json& j){
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,160.0f);
  j["locatorSize"]=std::clamp(locatorSize,24.0f,160.0f);
  j["locatorFov"]=std::clamp(locatorFov,60.0f,140.0f);
+ j["projectionFov"]=std::clamp(projectionFov,40.0f,120.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
  j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
  j["targetThickness"]=std::clamp(std::round(targetThickness),1.0f,5.0f);
