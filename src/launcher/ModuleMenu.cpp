@@ -61,7 +61,11 @@ static void onModuleToggle(std::string_view module_id, bool enabled) {
             const auto separator = stableId.rfind('.');
             const std::string_view shortId = separator == std::string_view::npos
                 ? stableId : stableId.substr(separator + 1);
-            if (module_id == name || module_id == shortId ||
+            const bool unqualifiedId =
+                module_id.find('.') == std::string_view::npos &&
+                module_id.find('/') == std::string_view::npos;
+            if (module_id == name ||
+                (unqualifiedId && module_id == shortId) ||
                 module_id == std::string("bedaim.") + name) {
                 mod = candidate;
                 break;
