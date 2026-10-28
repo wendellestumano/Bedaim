@@ -414,6 +414,12 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
     auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
     if(esp) esp->beginScreenFrame();
+    // Always publish the finished overlay set, including every early-return path.
+    // Without this guard, the HUD can read the cleared staging buffer and flicker.
+    struct ScreenFramePublishGuard {
+        EspModule* module;
+        ~ScreenFramePublishGuard() { if (module) module->endScreenFrame(); }
+    } screenFramePublishGuard{esp};
     // Read the complete effective state at the render hook boundary. The shared
     // RenderLevel hook intentionally remains installed, so stale cached flags must
     // never keep a module's visuals alive after its master toggle or keybind is off.
