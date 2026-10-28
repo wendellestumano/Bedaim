@@ -57,6 +57,8 @@ public:
     float indicatorSize = 48.0f;
     float locatorSize = 48.0f;
     float locatorFov = 90.0f;
+    // Vertical field of view used only by screen-space ESP box/ring projection.
+    float projectionFov = 70.0f;
     float targetYOffset = 0.0f;
     float targetSpeed = 1.0f;
     float targetThickness = 2.0f;
