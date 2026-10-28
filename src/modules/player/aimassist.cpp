@@ -943,16 +943,9 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         };
         const float selectionDistanceSq = distanceSquared(eyePosition, nearestOnSelection);
 
-        // Fail closed when the visibility signature or block source is unavailable.
-        // hasClearLineOfSight() returns false if it cannot safely perform the check.
-        // If the LOS signature is unavailable for this Minecraft build, don't
-        // silently discard every candidate. Enforce LOS only when the checker is live.
-        if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
-            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
-
         const float d2 = distanceSquared(eyePosition, centerAimPoint);
-        // Range checks use the nearest point on the selected hitbox geometry, not
-        // its center; the box itself still cannot exceed the configured size limits.
+        // Do cheap range/angle rejection before ray-marching blocks. On mobile,
+        // doing a voxel DDA for every actor in an 80-block scan was a major CPU spike.
         const bool inAimAssistRange = std::isfinite(selectionDistanceSq) &&
             selectionDistanceSq <= maxDistanceSq;
         if (!std::isfinite(d2) || !inAimAssistRange) continue;
@@ -999,6 +992,12 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // during the fast vertical movement of a slam.
         if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer &&
             !rayHitsExpandedTarget) continue;
+
+        // Only candidates that survive cheap geometry/FOV checks need an occlusion
+        // query. This preserves the LOS policy while avoiding a DDA walk for every
+        // nearby actor, including actors far outside the configured aim cone.
+        if ((m_cantSeeThroughBlocks || expanderRequiresLineOfSight) && blockSource &&
+            g_isSolidBlockingBlock && !hasClearLineOfSight(blockSource, eyePosition, centerAimPoint)) continue;
 
         // A ray through the expanded box is a high-confidence crosshair match,
         // not an angle-only candidate that happens to fall inside the FOV.
