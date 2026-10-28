@@ -34,6 +34,11 @@ public:
     bool showOffscreenIndicators = true;
     bool animatedIndicators = true;
     float indicatorSize = 48.0f;
+    float targetYOffset = 0.0f;
+    float targetSpeed = 1.0f;
+    float targetThickness = 2.0f;
+    float outlineThickness = 0.025f;
+    float hitboxThickness = 0.025f;
     float range = 30.0f;
     std::uint32_t survivalColor = 0xFFFFFFFF;
     std::uint32_t creativeColor = 0xFFFF3030;
