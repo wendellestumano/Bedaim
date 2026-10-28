@@ -62,6 +62,7 @@ public:
     float targetYOffset = 0.0f;
     float targetSpeed = 1.0f;
     float targetThickness = 2.0f;
+    float boxes2DThickness = 2.0f;
     float outlineThickness = 0.025f;
     float hitboxThickness = 0.025f;
     float range = 30.0f;
