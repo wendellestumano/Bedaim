@@ -130,7 +130,7 @@ void OreEspModule::onEnable() {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_oreCache.clear();
     }
-    if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox")) {
+    if (auto* hitbox = ModuleRegistry::get().find("bedaim.Hitbox")) {
         static_cast<class HitboxModule*>(hitbox)->ensureRenderHook();
     }
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Ore ESP",
