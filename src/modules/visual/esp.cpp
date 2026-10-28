@@ -275,9 +275,10 @@ void EspModule::onFrame(){
                 const float projectedX=cameraX/(safeDepth*std::max(0.001f,tanHalfVertical)*aspect);
                 const float projectedY=-cameraY/(safeDepth*std::max(0.001f,tanHalfVertical));
                 const bool projectionValid=std::isfinite(projectedX)&&std::isfinite(projectedY);
-                const bool targetOnScreen=inFront&&projectionValid&&
-                                          std::fabs(projectedX)<=1.0f&&std::fabs(projectedY)<=1.0f;
-                if(!targetOnScreen){
+                // Candidates have already been filtered against the locator viewport
+                // during collection. Always place the selected arrow on the edge; a
+                // second threshold test here could hide it due to frame/aspect timing.
+                {
                 float dirX=0.0f,dirY=0.0f;
                 if(inFront&&projectionValid){
                     dirX=projectedX;
