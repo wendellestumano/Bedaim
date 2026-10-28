@@ -41,6 +41,7 @@ public:
     float outlineThickness = 0.025f;
     float hitboxThickness = 0.025f;
     float range = 30.0f;
+    bool infiniteRange = true;
     std::uint32_t survivalColor = 0xFFFFFFFF;
     std::uint32_t creativeColor = 0xFFFF3030;
     std::uint32_t spectatorColor = 0xFFB040FF;
