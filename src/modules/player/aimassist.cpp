@@ -1829,13 +1829,14 @@ void HitboxExpanderModule::processPreTick(bedrocktools::sdk::Player* player) {
             "HitboxExpander", "player", "missing");
         return;
     }
+    const bool effectiveEnabled = enabled && masterEnabled && keybindActive;
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
-        "HitboxExpander", "restore_policy", enabled ? "restore_stale_only" : "restore_all");
-    restoreNativeBounds(player, enabled);
+        "HitboxExpander", "restore_policy", effectiveEnabled ? "restore_stale_only" : "restore_all");
+    restoreNativeBounds(player, effectiveEnabled);
 }
 
 void HitboxExpanderModule::processPostTick(bedrocktools::sdk::Player* player) {
-    if (!enabled) {
+    if (!enabled || !masterEnabled || !keybindActive) {
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
             "HitboxExpander", "state", "disabled");
         return;
@@ -2166,7 +2167,7 @@ bedrocktools::sdk::AABB HitboxExpanderModule::nativeBoundsForActor(
 
 float HitboxExpanderModule::queryExpansionMargin() const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    if (!enabled || (!m_expandPlayers && !m_expandMobs)) return 0.0f;
+    if (!enabled || !masterEnabled || !keybindActive || (!m_expandPlayers && !m_expandMobs)) return 0.0f;
     return std::clamp(0.5f * std::max(
         std::clamp(m_hitboxWidth, 0.6f, 8.0f),
         std::clamp(m_hitboxHeight, 0.6f, 8.0f)), 0.0f, 4.0f);
@@ -2174,17 +2175,17 @@ float HitboxExpanderModule::queryExpansionMargin() const {
 
 bool HitboxExpanderModule::requiresLineOfSight() const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && m_requireLineOfSight;
+    return enabled && masterEnabled && keybindActive && m_requireLineOfSight;
 }
 
 bool HitboxExpanderModule::shouldShowHitbox() const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && m_showHitbox;
+    return enabled && masterEnabled && keybindActive && m_showHitbox;
 }
 
 bool HitboxExpanderModule::expandsType(bool isPlayer) const {
     std::lock_guard<std::mutex> lock(m_expandMutex);
-    return enabled && (isPlayer ? m_expandPlayers : m_expandMobs);
+    return enabled && masterEnabled && keybindActive && (isPlayer ? m_expandPlayers : m_expandMobs);
 }
 
 bool HitboxExpanderModule::showInLegacyMenu(std::string_view key) const {
