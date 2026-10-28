@@ -31,7 +31,8 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
 // toggle. Turn off and remove only the conflicting legacy visual entries before
 // registering the uniquely-namespaced Bedaim replacements.
 static void retireLegacyModuleRegistration(std::string_view id) {
-    pl::modmenu::setModuleEnabled(id, false);
+    // Do not invoke an old toggle callback before unregistering: after a hot reload
+    // that callback may point into an unloaded .levipack image.
     pl::modmenu::submitDrawCommands(id, std::span<const pl::modmenu::DrawCommand>{});
     pl::modmenu::unregisterModule(id);
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
@@ -697,7 +698,8 @@ void registerModulesWithLauncher() {
         "bedaim.Xray"
     };
     for (const auto id : staleBedaimModuleIds) {
-        pl::modmenu::setModuleEnabled(id, false);
+        // Clear owned geometry and unregister without calling a possibly stale
+        // callback left by the previously loaded module image.
         pl::modmenu::submitDrawCommands(
             id, std::span<const pl::modmenu::DrawCommand>{});
         pl::modmenu::unregisterModule(id);
