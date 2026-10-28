@@ -301,7 +301,7 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
         }
         const bedrocktools::sdk::Vec3 center{
             (bounds.min.x + bounds.max.x) * 0.5f,
-            (bounds.min.y + bounds.max.y) * 0.5f,
+            bounds.min.y + 0.90f,
             (bounds.min.z + bounds.max.z) * 0.5f
         };
         esp->considerOffscreenCandidate(center, it->mDistance);
@@ -603,10 +603,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             std::chrono::steady_clock::now().time_since_epoch()).count();
         const double animationEnabled = (esp && esp->animatedIndicators) ? 1.0 : 0.0;
         const double targetSpeed = esp ? std::clamp(esp->targetSpeed, 0.1f, 4.0f) : 1.0;
-        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled * targetSpeed, tau));
-        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled * targetSpeed, tau));
+        const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * (esp ? std::clamp(esp->indicatorSpeed, 0.1f, 3.0f) : 1.0f) * animationEnabled * targetSpeed, tau));
+        const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * (esp ? std::clamp(esp->indicatorSpeed, 0.1f, 3.0f) : 1.0f) * animationEnabled * targetSpeed, tau));
         const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
-        const float radius = std::clamp(std::max(width * 1.02f, 0.42f) * sizeScale, 0.22f, 1.20f);
+        const float radius = std::clamp(std::max(width * 1.02f, 0.42f) * sizeScale, 0.22f, 1.20f) * (esp ? std::clamp(esp->ringThickness, 0.5f, 2.0f) : 1.0f);
         using RingLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
         // Reuse ring buffers across actors and frames; this path runs every frame.
         static std::vector<RingLine> outerLines;
@@ -734,6 +734,17 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
         if(wantsEsp){
+            // ESP is a visual overlay, not the native combat AABB. BedrockBounds
+            // may enlarge the actor component; keep the ESP outline anchored at
+            // the feet with a stable player-sized box so it does not grow with it.
+            const float visualWidth = 0.60f;
+            const float visualHeight = 1.80f;
+            const float visualCenterX = (aabb.min.x + aabb.max.x) * 0.5f;
+            const float visualCenterZ = (aabb.min.z + aabb.max.z) * 0.5f;
+            const AABB visualAabb{
+                {visualCenterX - visualWidth * 0.5f, aabb.min.y, visualCenterZ - visualWidth * 0.5f},
+                {visualCenterX + visualWidth * 0.5f, aabb.min.y + visualHeight, visualCenterZ + visualWidth * 0.5f}
+            };
             std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
             if(bedrocktools::core::gamehooks::tryGetPlayerGameType(ent,gameType)){
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
