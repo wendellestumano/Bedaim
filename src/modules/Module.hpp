@@ -25,7 +25,7 @@ public:
     // This lets modules be branded without breaking other modules or saved configs.
     Module(const char* n, const char* d, const char* idName = nullptr)
         : name(n), description(d),
-          moduleId(std::string("bedrocktools.") + (idName ? idName : n)) {}
+          moduleId(std::string("bedaim.") + (idName ? idName : n)) {}
     virtual ~Module() = default;
 
     virtual void onInit()     {}
