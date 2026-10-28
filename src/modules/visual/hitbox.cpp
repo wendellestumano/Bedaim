@@ -414,12 +414,14 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
     auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
     if(esp) esp->beginScreenFrame();
-    // Always publish the finished overlay set, including every early-return path.
-    // Without this guard, the HUD can read the cleared staging buffer and flicker.
+    // Only publish after RenderLevel has a valid context. Some auxiliary passes
+    // return early; publishing their empty staging buffer made 2D ESP flicker.
+    bool screenFrameReady = false;
     struct ScreenFramePublishGuard {
         EspModule* module;
-        ~ScreenFramePublishGuard() { if (module) module->endScreenFrame(); }
-    } screenFramePublishGuard{esp};
+        bool* ready;
+        ~ScreenFramePublishGuard() { if (module) module->endScreenFrame(ready && *ready); }
+    } screenFramePublishGuard{esp, &screenFrameReady};
     // Read the complete effective state at the render hook boundary. The shared
     // RenderLevel hook intentionally remains installed, so stale cached flags must
     // never keep a module's visuals alive after its master toggle or keybind is off.
@@ -469,6 +471,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     uintptr_t lrpPtr = *(uintptr_t*)((uintptr_t)_this + bedrocktools::sdk::offsets::LevelRenderer::mLevelRendererPlayer);
     if (!lrpPtr || lrpPtr < 0x1000) { if(overlayVisualsEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=level_renderer_player_unavailable"); return; }
+    screenFrameReady = true;
 
     float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
     float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
