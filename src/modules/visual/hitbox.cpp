@@ -413,6 +413,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
     auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
+    if(esp) esp->beginScreenFrame();
     // Read the complete effective state at the render hook boundary. The shared
     // RenderLevel hook intentionally remains installed, so stale cached flags must
     // never keep a module's visuals alive after its master toggle or keybind is off.
@@ -471,8 +472,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     const auto hudSurface=pl::modmenu::getHudSurfaceSize();
     const float hudWidth=std::isfinite(hudSurface.width)?hudSurface.width:0.0f;
     const float hudHeight=std::isfinite(hudSurface.height)?hudSurface.height:0.0f;
-    // HUD overlays are regenerated every render frame; disabled modules cannot leave stale boxes/rings.
-    if(esp) esp->beginScreenFrame();
+    // Screen-space rectangles and rings are appended by renderActor below.
 
     ensureMaterials();
 
@@ -713,8 +713,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const double targetSpeed = esp ? std::clamp(esp->targetSpeed, 0.1f, 4.0f) : 1.0;
         const float outerPhase = static_cast<float>(std::fmod(seconds * 0.78 * animationEnabled * targetSpeed, tau));
         const float innerPhase = static_cast<float>(std::fmod(-seconds * 1.12 * animationEnabled * targetSpeed, tau));
-        const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 2.0f) : 1.0f;
-        const float radius = std::clamp(0.42f * sizeScale, 0.22f, 0.84f);
+        const float sizeScale = esp ? std::clamp(esp->indicatorSize / 48.0f, 0.5f, 3.33f) : 1.0f;
+        const float radius = std::clamp(0.42f * sizeScale, 0.22f, 1.40f);
         using RingLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
         // Reuse ring buffers across actors and frames; this path runs every frame.
         static std::vector<RingLine> outerLines;
