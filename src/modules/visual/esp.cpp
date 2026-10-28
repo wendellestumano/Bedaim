@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace {
+constexpr float kRadToDeg = 57.29577951308232f;
 std::string cfgText(const nlohmann::json& j,const char* key,const char* fallback){
  auto it=j.find(key);if(it==j.end()||it->is_null())return fallback;
  if(it->is_string())return it->get<std::string>();if(it->is_boolean())return it->get<bool>()?"true":"false";return it->dump();
