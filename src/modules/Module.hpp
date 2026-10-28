@@ -52,12 +52,7 @@ public:
 
     void updateEnabledState() {
         const bool newState = masterEnabled && keybindActive;
-        if (newState == enabled) {
-            // Reconcile disabled modules as well: render hooks may outlive a module,
-            // so repeated OFF notifications must still clear any stale visuals.
-            if (!newState) onDisable();
-            return;
-        }
+        if (newState == enabled) return;
         enabled = newState;
         bedrocktools::diagnostics::log(
             bedrocktools::diagnostics::Level::Info,
