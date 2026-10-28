@@ -53,7 +53,7 @@ void EspModule::onInit(){
 }
 
 void EspModule::onEnable() {
-    auto* hitbox = static_cast<HitboxModule*>(ModuleRegistry::get().find("bedrocktools.Hitbox"));
+    auto* hitbox = static_cast<HitboxModule*>(ModuleRegistry::get().find("bedaim.Hitbox"));
     if (hitbox) {
         hitbox->ensureRenderHook();
     } else {
