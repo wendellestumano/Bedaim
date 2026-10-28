@@ -885,16 +885,38 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
+            // Restore the previously working camera-facing 2D box renderer.
+            // Keep using espBounds (the native player AABB), never BedrockBounds' expanded AABB.
             if(esp->box2D){
-                ScreenBounds projected{};
-                if(projectAabbToScreen(espBounds,cameraPosition,cameraRotation,
-                                       hudWidth,hudHeight,esp->projectionFov,projected)){
-                    // Use the native actor AABB and true screen-space stroke width.
-                    // This keeps the rectangle locked to the player's rendered body,
-                    // independent of BedrockBounds' expanded query AABB.
-                    esp->addScreenBox(projected.x,projected.y,projected.w,projected.h,
-                                      color,esp->box2DThickness);
-                }
+                constexpr float kDegToRad=0.01745329251994329577f;
+                const float yaw=cameraRotation.y*kDegToRad;
+                const float pitch=cameraRotation.x*kDegToRad;
+                const bedrocktools::sdk::Vec3 right{std::cos(yaw),0.0f,std::sin(yaw)};
+                const bedrocktools::sdk::Vec3 up{-std::sin(yaw)*std::sin(pitch),
+                                                   std::cos(pitch),
+                                                   std::cos(yaw)*std::sin(pitch)};
+                const float actorHeight=std::clamp(espBounds.max.y-espBounds.min.y,0.5f,4.0f);
+                const bedrocktools::sdk::Vec3 center{
+                    (espBounds.min.x+espBounds.max.x)*0.5f,
+                    (espBounds.min.y+espBounds.max.y)*0.5f,
+                    (espBounds.min.z+espBounds.max.z)*0.5f
+                };
+                const float halfWidth=actorHeight*0.30f;
+                const float halfHeight=actorHeight*0.50f;
+                const auto point=[&](float rx,float uy){
+                    return bedrocktools::sdk::Vec3{
+                        center.x+right.x*rx+up.x*uy,
+                        center.y+right.y*rx+up.y*uy,
+                        center.z+right.z*rx+up.z*uy
+                    };
+                };
+                const auto tl=point(-halfWidth,halfHeight),tr=point(halfWidth,halfHeight);
+                const auto br=point(halfWidth,-halfHeight),bl=point(-halfWidth,-halfHeight);
+                std::vector<std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>> edges;
+                edges.reserve(4);
+                edges.push_back({tl,tr});edges.push_back({tr,br});
+                edges.push_back({br,bl});edges.push_back({bl,tl});
+                drawLines(edges,color,true);
             }else{
                 drawBox(espBounds,color,true,esp->outlineThickness);
             }
