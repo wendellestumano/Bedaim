@@ -19,6 +19,7 @@ public:
 
     void load();
     void save();
+    void saveTo(const std::string& path);
     bool flush();
 
     std::string getConfigPath() const;
