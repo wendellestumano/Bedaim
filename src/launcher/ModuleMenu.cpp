@@ -670,10 +670,22 @@ void registerModulesWithLauncher() {
     // Older builds or the inherited BedrockTools menu may already own these IDs.
     // Retire those registrations so the toggles target the custom Bedaim instances.
     static constexpr std::string_view legacyModuleIds[] = {
-        "bedrocktools.ESP",
+        "bedrocktools.Aim Assist",
+        "bedrocktools.Auto Hit",
+        "bedrocktools.Mace Swapper",
+        "bedrocktools.Unglide",
+        "bedrocktools.Sword Swapper",
         "bedrocktools.Hitbox Expander",
         "bedrocktools.BedrockBounds",
-        "bedrocktools.Hitbox"
+        "bedrocktools.Hitbox",
+        "bedrocktools.ESP",
+        "bedrocktools.Ore ESP",
+        "bedrocktools.ULTRAKILL HUD",
+        "bedrocktools.Module Diagnostics",
+        // Labels used by older builds before IDs were separated from display names.
+        "bedrocktools.BedrockAim",
+        "bedrocktools.BedrockBound",
+        "bedrocktools.BedrockBounds"
     };
     for (const auto id : legacyModuleIds) retireLegacyModuleRegistration(id);
 
