@@ -15,6 +15,12 @@
 
 namespace {
 constexpr float kRadToDeg = 57.29577951308232f;
+float normalizeDegrees(float value) {
+    if (!std::isfinite(value)) return 0.0f;
+    value = std::fmod(value + 180.0f, 360.0f);
+    if (value < 0.0f) value += 360.0f;
+    return value - 180.0f;
+}
 std::string cfgText(const nlohmann::json& j,const char* key,const char* fallback){
  auto it=j.find(key);if(it==j.end()||it->is_null())return fallback;
  if(it->is_string())return it->get<std::string>();if(it->is_boolean())return it->get<bool>()?"true":"false";return it->dump();
@@ -277,17 +283,15 @@ void EspModule::onFrame(){
                 float dirY=std::sin(pitchRadians)*std::cos(yawRadians);
                 float directionLength=std::sqrt(dirX*dirX+dirY*dirY);
                 if(!std::isfinite(directionLength)||directionLength<0.0001f){
-                    if(std::fabs(yawDelta)>90.0f){
-                        dirX=yawDelta>=0.0f?1.0f:-1.0f;
-                        dirY=0.0f;
-                    }else{
-                        dirX=0.0f;
-                        dirY=pitchDelta>=0.0f?1.0f:-1.0f;
-                    }
-                }else{
-                    dirX/=directionLength;
-                    dirY/=directionLength;
+                    // A target directly behind has no stable perspective direction.
+                    // Keep it on a horizontal edge rather than letting (0,0) place
+                    // the locator in the center of the screen.
+                    dirX=(yawDelta<0.0f)?1.0f:-1.0f;
+                    dirY=0.0f;
+                    directionLength=1.0f;
                 }
+                dirX/=directionLength;
+                dirY/=directionLength;
 
                 const float size=std::clamp(locatorSize,24.0f,160.0f)*
                     (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f*targetSpeed+0.6f):1.0f);
