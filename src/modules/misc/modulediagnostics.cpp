@@ -560,8 +560,11 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
             addCheck("duplicate_module_id", "error", "Duplicate module ID: " + id);
         }
 
-        const bool expectedEnabled = module->masterEnabled && module->keybindActive;
-        if (module->enabled != expectedEnabled) {
+        const bool masterEnabled = module->masterEnabled.load(std::memory_order_acquire);
+        const bool keybindActive = module->keybindActive.load(std::memory_order_acquire);
+        const bool enabled = module->enabled.load(std::memory_order_acquire);
+        const bool expectedEnabled = masterEnabled && keybindActive;
+        if (enabled != expectedEnabled) {
             warnings.push_back("enabled state differs from masterEnabled && keybindActive");
             addCheck("activation_state", "warning",
                      "Activation state mismatch for '" + (name.empty() ? id : name) + "'.");
@@ -572,9 +575,9 @@ ModuleDiagnosticsModule::ReportSummary ModuleDiagnosticsModule::runDiagnostics()
             {"id", id},
             {"description", description},
             {"status", moduleStatus(module)},
-            {"enabled", module->enabled},
-            {"master_enabled", module->masterEnabled},
-            {"keybind_active", module->keybindActive},
+            {"enabled", enabled},
+            {"master_enabled", masterEnabled},
+            {"keybind_active", keybindActive},
             {"keybind", module->keybind},
             {"show_in_menu", module->showInMenu},
             {"warnings", std::move(warnings)}
