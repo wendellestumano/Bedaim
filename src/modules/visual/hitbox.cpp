@@ -402,11 +402,8 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
         if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
         AABB bounds = getActorAABB(actor);
         if (!validRenderBounds(bounds)) continue;
-        if (auto* expander = static_cast<HitboxExpanderModule*>(
-                ModuleRegistry::get().find("bedrocktools.Hitbox Expander"))) {
-            const auto nativeBounds = expander->nativeBoundsForActor(actor, {bounds.min, bounds.max});
-            bounds = {nativeBounds.min, nativeBounds.max};
-        }
+        // The locator tracks the player's real body center, never the expanded
+        // collision box. Otherwise enabling BedrockBounds shifts the arrow bearing.
         const bedrocktools::sdk::Vec3 center{
             (bounds.min.x + bounds.max.x) * 0.5f,
             (bounds.min.y + bounds.max.y) * 0.5f,
