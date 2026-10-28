@@ -141,9 +141,11 @@ public:
     HitboxExpanderModule();
     void onInit() override;
     void onDisable() override;
+    bool onMenuConfigChanged(std::string_view key, std::string_view value) override;
     void processPreTick(bedrocktools::sdk::Player* player);
     void processPostTick(bedrocktools::sdk::Player* player);
     bedrocktools::sdk::AABB expandedTargetBounds(bool isPlayer, const bedrocktools::sdk::AABB& nativeBounds) const;
+    bedrocktools::sdk::AABB nativeBoundsForActor(void* actor, const bedrocktools::sdk::AABB& fallback);
     bool requiresLineOfSight() const;
     float queryExpansionMargin() const;
     bool shouldShowHitbox() const;
