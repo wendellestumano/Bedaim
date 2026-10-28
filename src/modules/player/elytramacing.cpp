@@ -131,7 +131,7 @@ void ElytraMacingModule::onInit() {
 }
 
 void ElytraMacingModule::onEnable() {
-    if (auto* base = ModuleRegistry::get().find("bedrocktools.Aim Assist"))
+    if (auto* base = ModuleRegistry::get().find("bedaim.Aim Assist"))
         static_cast<AimAssistModule*>(base)->setExternalAimOffsetY(0.0f);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     // Leave slot ownership intact if a disable/enable happened before the next tick;
@@ -170,7 +170,7 @@ void ElytraMacingModule::onDisable() {
         m_boostImmediatelyAfterGlide = false;
         m_waitForSeparation = false;
     }
-    if (auto* base = ModuleRegistry::get().find("bedrocktools.Aim Assist")) {
+    if (auto* base = ModuleRegistry::get().find("bedaim.Aim Assist")) {
         auto* aim = static_cast<AimAssistModule*>(base);
         aim->setExternalAimOffsetY(0.0f);
         if (wasSuspended) aim->setExternalControlSuspended(false);
@@ -188,7 +188,7 @@ void ElytraMacingModule::note(std::string_view field, std::string_view state,
 void ElytraMacingModule::setAimSuspendedLocked(bool suspended) {
     if (m_aimSuspended == suspended) return;
     m_aimSuspended = suspended;
-    auto* base = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    auto* base = ModuleRegistry::get().find("bedaim.Aim Assist");
     if (base) static_cast<AimAssistModule*>(base)->setExternalControlSuspended(suspended);
     note("aim_assist", suspended ? "temporarily_suspended" : "resumed",
          "Only used around the configured recovery look-up keymap.");
@@ -404,7 +404,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         m_stationaryTicks = 0;
     }
 
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    auto* aimBase = ModuleRegistry::get().find("bedaim.Aim Assist");
     if (!aimBase || !aimBase->enabled) {
         if (m_aimSuspended) setAimSuspendedLocked(false);
         note("dependency", "aim_assist_disabled",
@@ -673,7 +673,7 @@ void ElytraMacingModule::processPlayerTick(Player* player) {
         m_nextRocket = now + 1000ms;
     }
 
-    auto* autoHitBase = ModuleRegistry::get().find("bedrocktools.Auto Hit");
+    auto* autoHitBase = ModuleRegistry::get().find("bedaim.Auto Hit");
     auto* autoHit = autoHitBase ? static_cast<AutoHitModule*>(autoHitBase) : nullptr;
     const bool autoHitReady = autoHit && autoHit->enabled &&
         autoHit->hasEnabledProfileFor("minecraft:mace");
@@ -768,7 +768,7 @@ void ElytraMacingModule::onMenuRegistered() {
             if (it == config.end() || it->is_null()) return fallback;
             return it->is_string() ? it->get<std::string>() : it->dump();
         };
-        ModuleBuilder settings("bedrocktools.elytramacing.keymap_settings", "ElytraMacing Keymapper UIDs");
+        ModuleBuilder settings("bedaim.elytramacing.keymap_settings", "ElytraMacing Keymapper UIDs");
         settings.modId("Bedaim")
             .description("Paste the UUID of each Key Mapper keymap. Empty UIDs disable that action.")
             .defaultEnabled(true)
