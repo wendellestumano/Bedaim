@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace bedrocktools::config {
 
@@ -43,8 +44,7 @@ private:
     std::condition_variable m_condition;
     std::thread m_worker;
     std::string m_configPath;
-    std::string m_pendingPath;
-    std::string m_pendingPayload;
+    std::vector<std::pair<std::string, std::string>> m_pendingWrites;
     std::chrono::steady_clock::time_point m_deadline{};
     std::uint64_t m_queuedGeneration = 0;
     std::uint64_t m_completedGeneration = 0;
