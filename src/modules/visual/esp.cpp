@@ -238,8 +238,14 @@ void EspModule::onFrame(){
                 const float r1=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a1-phase)));
                 pl::modmenu::DrawCommand line{};
                 line.type=pl::modmenu::DrawCommandType::Line;
-                line.x=overlay.x+std::cos(a0)*r0;line.y=overlay.y+std::sin(a0)*r0;
-                line.w=overlay.x+std::cos(a1)*r1;line.h=overlay.y+std::sin(a1)*r1;
+                const float x0=overlay.x+std::cos(a0)*r0;
+                const float y0=overlay.y+std::sin(a0)*r0;
+                const float x1=overlay.x+std::cos(a1)*r1;
+                const float y1=overlay.y+std::sin(a1)*r1;
+                // ModMenu Line uses x/y as the origin and w/h as delta width/height,
+                // not the absolute endpoint. Passing absolute coordinates draws huge
+                // diagonal rays from the ring toward the screen corner.
+                line.x=x0;line.y=y0;line.w=x1-x0;line.h=y1-y0;
                 line.color=overlay.color;line.size=overlay.thickness;
                 commands.push_back(std::move(line));
             }
