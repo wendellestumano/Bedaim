@@ -41,13 +41,15 @@ public:
     }
 
     void setMasterEnabled(bool state) {
-        if (masterEnabled == state) return;
+        // Never short-circuit on the stored master flag. A stale effective enabled
+        // flag can survive an earlier transition; always recompute it from both gates.
         masterEnabled = state;
         updateEnabledState();
     }
 
     void setKeybindActive(bool state) {
-        if (keybindActive == state) return;
+        // Reconcile even when the value is repeated, for the same reason as the
+        // master toggle: effective state is the conjunction of both gates.
         keybindActive = state;
         updateEnabledState();
     }
