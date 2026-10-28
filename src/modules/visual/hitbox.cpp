@@ -750,8 +750,16 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            drawBox(espBounds,color,true,esp->outlineThickness);
-            if (esp->showLockInAim) drawTargetRing(espBounds);
+            const float visualWidth = 0.60f;
+            const float visualHeight = 1.80f;
+            const float visualCenterX = (espBounds.min.x + espBounds.max.x) * 0.5f;
+            const float visualCenterZ = (espBounds.min.z + espBounds.max.z) * 0.5f;
+            const AABB visualAabb{
+                {visualCenterX - visualWidth * 0.5f, espBounds.min.y, visualCenterZ - visualWidth * 0.5f},
+                {visualCenterX + visualWidth * 0.5f, espBounds.min.y + visualHeight, visualCenterZ + visualWidth * 0.5f}
+            };
+            drawBox(visualAabb,color,true,esp->outlineThickness);
+            if (esp->showLockInAim) drawTargetRing(visualAabb);
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
