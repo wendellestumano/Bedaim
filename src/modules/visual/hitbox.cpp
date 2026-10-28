@@ -269,6 +269,7 @@ static std::atomic_bool espLoggedLocal{false},espLoggedRenderer{false},espLogged
  espLoggedColor{false},espLoggedQuery{false},espLoggedSnapshot{false},espLoggedEmptyActors{false},
  espLoggedEmptyPlayerQuery{false},espLoggedBounds{false},espLoggedOutline{false},
  espLoggedOverlayMaterial{false},espLoggedOverlayUnavailable{false};
+static std::atomic_int espLastRenderState{-1};
 static void espLogOnce(std::atomic_bool& once,bedrocktools::diagnostics::Level level,const char* msg) {
  if(!once.exchange(true,std::memory_order_acq_rel))bedrocktools::diagnostics::log(level,"ESP",msg);
 }
@@ -441,6 +442,15 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     // RenderLevel hook intentionally remains installed, so stale cached flags must
     // never keep a module's visuals alive after its master toggle or keybind is off.
     const bool espEnabled = esp && esp->enabled && esp->masterEnabled && esp->keybindActive;
+    const int espRenderState = espEnabled ? 1 : 0;
+    const int previousEspRenderState = espLastRenderState.exchange(espRenderState, std::memory_order_acq_rel);
+    if (previousEspRenderState != espRenderState) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "ESP",
+            std::string("render_state=") + (espEnabled ? "enabled" : "disabled") +
+            "; module=" + (esp ? (esp->enabled ? "enabled" : "disabled") : "missing") +
+            "; master=" + (esp && esp->masterEnabled ? "true" : "false") +
+            "; keybind=" + (esp && esp->keybindActive ? "true" : "false"));
+    }
     // Require the complete effective state, not just the cached enabled flag.
     // The shared renderer hook can remain installed while individual modules toggle.
     const bool oreEspEnabled = oreEsp && oreEsp->enabled &&
