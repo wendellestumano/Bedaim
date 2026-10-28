@@ -116,19 +116,8 @@ void EspModule::addScreenBox(float x,float y,float w,float h,std::uint32_t color
     std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
     if(m_screenBuildingOverlays.size()>=512)return;
     ScreenOverlay overlay;overlay.kind=ScreenOverlay::Kind::Box;overlay.x=x;overlay.y=y;
-    overlay.w=w;overlay.h=h;overlay.color=color;overlay.thickness=std::clamp(thickness,1.0f,5.0f);
+    overlay.w=w;overlay.h=h;overlay.color=color;overlay.thickness=std::clamp(thickness,1.0f,10.0f);
     m_screenBuildingOverlays.push_back(overlay);
-}
-
-void EspModule::addScreenRing(float x,float y,float radius,std::uint32_t color,float thickness){
-    if(!(enabled && masterEnabled && keybindActive))return;
-    if(!std::isfinite(x)||!std::isfinite(y)||!std::isfinite(radius)||
-       !std::isfinite(thickness)||radius<3.0f)return;
-    std::lock_guard<std::mutex> lock(m_screenOverlayMutex);
-    if(m_screenBuildingOverlays.size()>=512)return;
-    ScreenOverlay overlay;overlay.kind=ScreenOverlay::Kind::Ring;overlay.x=x;overlay.y=y;
-    overlay.radius=std::clamp(radius,3.0f,96.0f);overlay.color=color;
-    overlay.thickness=std::clamp(thickness,1.0f,5.0f);m_screenBuildingOverlays.push_back(overlay);
 }
 
 std::vector<EspModule::ScreenOverlay> EspModule::screenOverlaySnapshot() const{
@@ -226,36 +215,11 @@ void EspModule::onFrame(){
     // the existing RenderLevel hook. Never place a fixed reticle at screen center.
 
     for(const auto& overlay:screenOverlaySnapshot()){
-        if(overlay.kind==ScreenOverlay::Kind::Box){
-            pl::modmenu::DrawCommand box{};
-            box.type=pl::modmenu::DrawCommandType::Rect;
-            box.x=overlay.x;box.y=overlay.y;box.w=overlay.w;box.h=overlay.h;
-            box.color=overlay.color;box.size=overlay.thickness;
-            commands.push_back(std::move(box));
-        }else{
-            constexpr int segments=48;
-            const float phase=animatedIndicators?seconds*targetSpeed*0.85f:0.0f;
-            const float tau=6.2831853071795864769f;
-            for(int i=0;i<segments;++i){
-                if((i%12)>=10)continue;
-                const float a0=tau*static_cast<float>(i)/segments+phase;
-                const float a1=tau*static_cast<float>(i+1)/segments+phase;
-                const float r0=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a0-phase)));
-                const float r1=overlay.radius*(0.94f+0.06f*std::cos(4.0f*(a1-phase)));
-                pl::modmenu::DrawCommand line{};
-                line.type=pl::modmenu::DrawCommandType::Line;
-                const float x0=overlay.x+std::cos(a0)*r0;
-                const float y0=overlay.y+std::sin(a0)*r0;
-                const float x1=overlay.x+std::cos(a1)*r1;
-                const float y1=overlay.y+std::sin(a1)*r1;
-                // ModMenu Line uses x/y as the origin and w/h as delta width/height,
-                // not the absolute endpoint. Passing absolute coordinates draws huge
-                // diagonal rays from the ring toward the screen corner.
-                line.x=x0;line.y=y0;line.w=x1-x0;line.h=y1-y0;
-                line.color=overlay.color;line.size=overlay.thickness;
-                commands.push_back(std::move(line));
-            }
-        }
+        pl::modmenu::DrawCommand box{};
+        box.type=pl::modmenu::DrawCommandType::Rect;
+        box.x=overlay.x;box.y=overlay.y;box.w=overlay.w;box.h=overlay.h;
+        box.color=overlay.color;box.size=std::clamp(overlay.thickness,1.0f,10.0f);
+        commands.push_back(std::move(box));
     }
     if(showOffscreenIndicators){
         bedrocktools::sdk::Vec3 target{},local{};
@@ -356,7 +320,6 @@ void EspModule::onMenuRegistered(){
  toggle("infiniteRange","Infinite ESP range","Show ESP and locator targets at any distance among entities loaded by the game.",true,"players");
  toggle("box2D","2D ESP box","Render the ESP box in screen space. Off renders it in the 3D world.",false,"appearance");
  toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
- toggle("ring2D","2D target ring","Render the target ring in screen space. Off renders it in the 3D world.",false,"indicators");
  toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Target ring size";
@@ -377,7 +340,8 @@ void EspModule::onMenuRegistered(){
  slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
- slider("outlineThickness","ESP box thickness","Approximate outline thickness for normal player ESP boxes. Zero uses one line.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
+ slider("outlineThickness","ESP box thickness","World-space outline thickness for normal 3D player ESP boxes.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
+ slider("box2DThickness","2D boxes thickness","Actual screen-space stroke width for 2D ESP boxes.", "appearance",2.0f,1.0f,10.0f,0.5f," px");
  slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
  r.category="players";r.type=ConfigControlTypeV2::SliderFloat;r.defaultValue="30";r.currentValue=cfgText(config,"range","30");
@@ -394,13 +358,12 @@ void EspModule::onMenuRegistered(){
 bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value){
  if(key=="showPlayers"||key=="showInvisible"||key=="showLockInAim"||
     key=="showOffscreenIndicators"||key=="animatedIndicators"||key=="infiniteRange"||
-    key=="box2D"||key=="ring2D"){
+    key=="box2D"){
   bool b=false;if(!parseBool(value,b))return false;
   if(key=="showPlayers")showPlayers=b;
   else if(key=="showInvisible")showInvisible=b;
   else if(key=="infiniteRange")infiniteRange=b;
   else if(key=="box2D")box2D=b;
-  else if(key=="ring2D")ring2D=b;
   else if(key=="showLockInAim")showLockInAim=b;
   else if(key=="showOffscreenIndicators")showOffscreenIndicators=b;
   else animatedIndicators=b;
@@ -411,8 +374,9 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  if(key=="locatorSize"){float f=0;if(!parseFloat(value,f))return false;locatorSize=std::clamp(f,24.0f,160.0f);return true;}
  if(key=="locatorFov"){float f=0;if(!parseFloat(value,f))return false;locatorFov=std::clamp(f,60.0f,140.0f);return true;}
  if(key=="projectionFov"){float f=0;if(!parseFloat(value,f))return false;projectionFov=std::clamp(f,40.0f,120.0f);return true;}
- if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
-    key=="outlineThickness"||key=="hitboxThickness"){
+ if(key=="box2DThickness"){float f=0;if(!parseFloat(value,f))return false;box2DThickness=std::clamp(f,1.0f,10.0f);return true;}
+  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
+     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
   if(key=="targetYOffset")targetYOffset=std::clamp(f,-1.5f,1.5f);
   else if(key=="targetSpeed")targetSpeed=std::clamp(f,0.1f,4.0f);
@@ -431,7 +395,8 @@ void EspModule::loadConfig(const nlohmann::json& j){
  showLockInAim=j.value("showLockInAim",showLockInAim);
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  infiniteRange=j.value("infiniteRange",infiniteRange);
- box2D=j.value("box2D",box2D);ring2D=j.value("ring2D",ring2D);
+ box2D=j.value("box2D",box2D);
+  box2DThickness=std::clamp(j.value("box2DThickness",box2DThickness),1.0f,10.0f);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,160.0f);
  locatorSize=std::clamp(j.value("locatorSize",locatorSize),24.0f,160.0f);
@@ -449,7 +414,8 @@ void EspModule::loadConfig(const nlohmann::json& j){
 void EspModule::saveConfig(nlohmann::json& j){
  Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
- j["infiniteRange"]=infiniteRange;j["box2D"]=box2D;j["ring2D"]=ring2D;
+ j["infiniteRange"]=infiniteRange;j["box2D"]=box2D;
+  j["box2DThickness"]=std::clamp(box2DThickness,1.0f,10.0f);
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,160.0f);
  j["locatorSize"]=std::clamp(locatorSize,24.0f,160.0f);
  j["locatorFov"]=std::clamp(locatorFov,60.0f,140.0f);

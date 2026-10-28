@@ -30,7 +30,7 @@ public:
                                  float& distance) const;
 
     struct ScreenOverlay {
-        enum class Kind { Box, Ring };
+        enum class Kind { Box };
         Kind kind = Kind::Box;
         float x = 0.0f;
         float y = 0.0f;
@@ -44,7 +44,6 @@ public:
     // Publish a completed set of HUD overlays atomically at the end of each render pass.
     void endScreenFrame(bool publish = true);
     void addScreenBox(float x, float y, float w, float h, std::uint32_t color, float thickness);
-    void addScreenRing(float x, float y, float radius, std::uint32_t color, float thickness);
     std::vector<ScreenOverlay> screenOverlaySnapshot() const;
 
     bool showPlayers = true;
@@ -53,7 +52,7 @@ public:
     bool showOffscreenIndicators = true;
     bool animatedIndicators = true;
     bool box2D = false;
-    bool ring2D = false;
+    float box2DThickness = 2.0f;
     float indicatorSize = 48.0f;
     float locatorSize = 48.0f;
     float locatorFov = 90.0f;
