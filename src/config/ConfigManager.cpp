@@ -10,6 +10,20 @@
 #include <string_view>
 #include <stdexcept>
 
+namespace {
+void migrateLegacyBlockEspSettings(nlohmann::json& modulesObj) {
+    if (!modulesObj.is_object() || modulesObj.contains("BlockESP") || !modulesObj.contains("ESP") || !modulesObj["ESP"].is_object()) return;
+    const auto& legacy = modulesObj["ESP"];
+    nlohmann::json migrated = nlohmann::json::object();
+    for (const char* key : {"showPlayers", "showInvisible", "infiniteRange", "box2D", "range",
+                            "box2DThickness", "projectionFov", "outlineThickness", "survivalColor",
+                            "creativeColor", "spectatorColor", "adventureColor", "unknownColor"}) {
+        if (legacy.contains(key)) migrated[key] = legacy[key];
+    }
+    if (!migrated.empty()) modulesObj["BlockESP"] = std::move(migrated);
+}
+}
+
 namespace bedrocktools::config {
 
 ConfigManager::~ConfigManager() {
@@ -51,6 +65,7 @@ void ConfigManager::load() {
 
         if (j.contains("Modules")) {
             auto& modulesObj = j["Modules"];
+            migrateLegacyBlockEspSettings(modulesObj);
             for (auto* mod : ModuleRegistry::get().modules()) {
                 if (modulesObj.contains(mod->name)) {
                     mod->loadConfig(modulesObj[mod->name]);
@@ -79,7 +94,8 @@ void ConfigManager::load() {
                 nlohmann::json customJson;
                 customFile >> customJson;
                 if (customJson.contains("Modules") && customJson["Modules"].is_object()) {
-                    const auto& modulesObj = customJson["Modules"];
+                    auto& modulesObj = customJson["Modules"];
+                    migrateLegacyBlockEspSettings(modulesObj);
                     for (auto* mod : ModuleRegistry::get().modules()) {
                         if (!mod) continue;
                         if (modulesObj.contains(mod->name)) mod->loadConfig(modulesObj[mod->name]);
