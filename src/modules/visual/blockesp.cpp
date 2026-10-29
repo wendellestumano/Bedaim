@@ -235,6 +235,7 @@ void BlockEspModule::onEnable() {
         static_cast<HitboxModule*>(hitbox)->ensureRenderHook();
     m_blockSource = nullptr; m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
     m_priorityScanActive = false; m_hasPriorityCenter = false; m_priorityDirectionDirty = false; m_priorityScanCursor = 0;
+    m_localScanActive = false; m_hasLocalScanOrigin = false; m_localScanCursor = 0;
     m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
     clearCache();
 }
@@ -255,6 +256,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_blockSource = source;
         m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
         m_priorityScanActive = false; m_hasPriorityCenter = false; m_priorityDirectionDirty = false; m_priorityScanCursor = 0;
+        m_localScanActive = false; m_hasLocalScanOrigin = false; m_localScanCursor = 0;
         m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
         clearCache();
     }
@@ -342,8 +344,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         foundOutlines.push_back(Outline{pos, colorForBlock(kind, normalizedName), kind, std::move(normalizedName)});
     };
 
-    // Fast local refresh: nearby placements/removals remain responsive every
-    // other tick, independent of how far the wide scan has progressed.
+    // Very fast near-player refresh: immediate changes/removals are checked every
+    // other tick, while the much larger local volume below is scanned incrementally.
     constexpr int kLocalRefreshRadius = 4;
     if ((m_tickCount & 1u) == 0u) {
         for (int dx = -kLocalRefreshRadius; dx <= kLocalRefreshRadius; ++dx) {
@@ -353,6 +355,55 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 }
             }
         }
+    }
+
+    // Incremental local scan of a 32x160x32 volume (163,840 block positions).
+    // It is deliberately spread across ticks instead of issuing 160k native calls
+    // in one frame/tick. Horizontal rings are ordered center-out; vertical offsets
+    // are center-out too, so the most useful positions are visited first.
+    constexpr int kLocalHalfWidth = 16;
+    constexpr int kLocalHalfHeight = 80;
+    constexpr std::size_t kLocalVolumeSize = 32u * 160u * 32u;
+    bool localMovedFar = false;
+    if (m_hasLocalScanOrigin) {
+        const int dx = current.x - m_localScanOrigin.x;
+        const int dy = current.y - m_localScanOrigin.y;
+        const int dz = current.z - m_localScanOrigin.z;
+        localMovedFar = dx * dx + dz * dz >= 64 || std::abs(dy) >= 16;
+    }
+    if (!m_localScanActive && (!m_hasLocalScanOrigin || localMovedFar)) {
+        m_localScanOrigin = current;
+        m_localScanCursor = 0;
+        m_localScanOffsets.clear();
+        m_localScanOffsets.reserve(kLocalVolumeSize);
+
+        auto centerOutOffset = [](int index) -> int {
+            if (index == 0) return 0;
+            const int magnitude = (index + 1) / 2;
+            return (index & 1) ? -magnitude : magnitude;
+        };
+        std::vector<std::pair<int, int>> localHorizontal;
+        localHorizontal.reserve(32u * 32u);
+        for (int ring = 0; ring <= kLocalHalfWidth; ++ring) {
+            for (int dx = -ring; dx <= ring; ++dx) {
+                for (int dz = -ring; dz <= ring; ++dz) {
+                    if (std::max(std::abs(dx), std::abs(dz)) != ring) continue;
+                    if (dx < -kLocalHalfWidth || dx >= kLocalHalfWidth ||
+                        dz < -kLocalHalfWidth || dz >= kLocalHalfWidth) continue;
+                    localHorizontal.emplace_back(dx, dz);
+                }
+            }
+        }
+        std::vector<int> localVertical;
+        localVertical.reserve(160u);
+        for (int i = 0; i < 160; ++i) localVertical.push_back(centerOutOffset(i));
+        for (const auto& [dx, dz] : localHorizontal) {
+            for (const int dy : localVertical) {
+                m_localScanOffsets.push_back({dx, dy, dz});
+            }
+        }
+        m_localScanActive = !m_localScanOffsets.empty();
+        m_hasLocalScanOrigin = true;
     }
 
     // The priority scan is a small rolling volume. When moving, it becomes a
@@ -443,10 +494,25 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_scanActive = true;
     }
 
-    // Spend roughly one third of the configured query budget on the priority
-    // volume (enough to finish it in a single tick at the default budget) and
-    // the remainder on the broad scan. Low user-set budgets remain split fairly.
-    const std::size_t priorityBudget = scanBudget >= 2048u ? scanBudget / 3u : scanBudget / 2u;
+    // Reserve budget for each pass: near-player refresh is already done above,
+    // then local volume gets ~50%, forward priority ~25%, and broad scan the rest.
+    // This keeps the expanded 32x160x32 area responsive without a 160k-query spike.
+    const std::size_t localBudget = scanBudget / 2u;
+    const std::size_t priorityBudget = scanBudget / 4u;
+    std::size_t localUsed = 0;
+    if (m_localScanActive) {
+        const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
+        for (std::size_t index = m_localScanCursor; index < end; ++index) {
+            const auto& offset = m_localScanOffsets[index];
+            inspectBlock(bedrocktools::sdk::BlockPos{
+                m_localScanOrigin.x + offset.x,
+                m_localScanOrigin.y + offset.y,
+                m_localScanOrigin.z + offset.z});
+        }
+        localUsed = end - m_localScanCursor;
+        m_localScanCursor = end;
+        if (m_localScanCursor >= m_localScanOffsets.size()) m_localScanActive = false;
+    }
     std::size_t priorityUsed = 0;
     if (m_priorityScanActive) {
         const std::size_t end = std::min(m_priorityScanOffsets.size(), m_priorityScanCursor + priorityBudget);
@@ -462,7 +528,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         if (m_priorityScanCursor >= m_priorityScanOffsets.size()) m_priorityScanActive = false;
     }
 
-    const std::size_t wideBudget = scanBudget - priorityUsed;
+    const std::size_t remainingBudget = scanBudget > localUsed + priorityUsed ? scanBudget - localUsed - priorityUsed : 0u;
+    const std::size_t wideBudget = remainingBudget;
     if (m_scanActive && wideBudget > 0u) {
         const std::size_t verticalCount = static_cast<std::size_t>(ry * 2 + 1);
         const std::size_t end = std::min(m_scanTotal, m_scanCursor + wideBudget);
