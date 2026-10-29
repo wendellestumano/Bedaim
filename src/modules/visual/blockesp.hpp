@@ -1,6 +1,8 @@
 #pragma once
 #include "../Module.hpp"
 #include <bedrocktools/sdk/Types.hpp>
+#include <bedrocktools/sdk/world/BlockSource.hpp>
+#include <bedrocktools/sdk/world/Actor.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
