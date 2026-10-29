@@ -43,6 +43,7 @@ public:
     bool infiniteRange = true;
     bool box2D = false;
     float box2DThickness = 2.0f;
+    float projectionFov = 70.0f;
     std::uint32_t survivalColor = 0xFFFFFFFF;
     std::uint32_t creativeColor = 0xFFFF3030;
     std::uint32_t spectatorColor = 0xFFB040FF;

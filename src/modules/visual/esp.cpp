@@ -248,6 +248,7 @@ void EspModule::onMenuRegistered(){
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
  slider("outlineThickness","ESP box thickness","Approximate outline thickness for normal player ESP boxes. Zero uses one line.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  slider("box2DThickness","2D boxes thickness","Screen-pixel-like thickness for the camera-facing 2D ESP box.", "appearance",2.0f,1.0f,10.0f,1.0f," px");
+ slider("projectionFov","2D projection FOV","Vertical FOV used to scale 2D ESP box thickness with camera depth.", "appearance",70.0f,40.0f,120.0f,1.0f,"°");
  slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
  r.category="players";r.type=ConfigControlTypeV2::SliderFloat;r.defaultValue="30";r.currentValue=cfgText(config,"range","30");
@@ -278,6 +279,7 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,96.0f);return true;}
  if(key=="box2DThickness"){float f=0;if(!parseFloat(value,f))return false;box2DThickness=std::clamp(f,1.0f,10.0f);return true;}
+ if(key=="projectionFov"){float f=0;if(!parseFloat(value,f))return false;projectionFov=std::clamp(f,40.0f,120.0f);return true;}
  if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
@@ -294,7 +296,7 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  else if(key=="unknownColor")unknownColor=c;else if(key=="targetColor")targetColor=c;else return false;return true;
 }
 void EspModule::loadConfig(const nlohmann::json& j){
- Module::loadConfig(j);showPlayers=j.value("showPlayers",showPlayers);infiniteRange=j.value("infiniteRange",infiniteRange);box2D=j.value("box2D",box2D);box2DThickness=std::clamp(j.value("box2DThickness",box2DThickness),1.0f,10.0f);showInvisible=j.value("showInvisible",showInvisible);
+ Module::loadConfig(j);showPlayers=j.value("showPlayers",showPlayers);infiniteRange=j.value("infiniteRange",infiniteRange);box2D=j.value("box2D",box2D);box2DThickness=std::clamp(j.value("box2DThickness",box2DThickness),1.0f,10.0f);projectionFov=std::clamp(j.value("projectionFov",projectionFov),40.0f,120.0f);showInvisible=j.value("showInvisible",showInvisible);
  showLockInAim=j.value("showLockInAim",showLockInAim);
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
@@ -310,7 +312,7 @@ void EspModule::loadConfig(const nlohmann::json& j){
  loadColor(j,"targetColor",targetColor);
 }
 void EspModule::saveConfig(nlohmann::json& j){
- Module::saveConfig(j);j["showPlayers"]=showPlayers;j["infiniteRange"]=infiniteRange;j["box2D"]=box2D;j["box2DThickness"]=std::clamp(box2DThickness,1.0f,10.0f);j["showInvisible"]=showInvisible;
+ Module::saveConfig(j);j["showPlayers"]=showPlayers;j["infiniteRange"]=infiniteRange;j["box2D"]=box2D;j["box2DThickness"]=std::clamp(box2DThickness,1.0f,10.0f);j["projectionFov"]=std::clamp(projectionFov,40.0f,120.0f);j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
