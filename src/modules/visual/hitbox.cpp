@@ -1,5 +1,6 @@
 #include "hitbox.hpp"
 #include "esp.hpp"
+#include "blockesp.hpp"
 #include "oreesp.hpp"
 #include "core/GameHooks.hpp"
 #include "core/Diagnostics.hpp"
@@ -261,7 +262,7 @@ static bool hasCategory(void* actor, uint32_t categoryBit) {
 
 
 
-static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
+static void updateEspOffscreenTargets(EspModule* esp, BlockEspModule* blockEsp, void* localPlayer,
                                           const bedrocktools::sdk::Vec3& localPosition,
                                           const ActorVec& actors, bool actorSnapshotValid,
                                           bool actorSnapshotEmpty, float targetRange) {
@@ -291,7 +292,7 @@ static void updateEspOffscreenTargets(EspModule* esp, void* localPlayer,
             it->mDistance < 0.0f || it->mDistance > targetRange ||
             !s_actorIsPlayer(actor)) continue;
         foundPlayer = true;
-        if (s_actorIsInvisible && s_actorIsInvisible(actor) && !esp->showInvisible) continue;
+        if (s_actorIsInvisible && s_actorIsInvisible(actor) && !(blockEsp && blockEsp->showInvisible)) continue;
         AABB bounds = getActorAABB(actor);
         if (!validRenderBounds(bounds)) continue;
         if (auto* expander = static_cast<HitboxExpanderModule*>(
@@ -320,15 +321,17 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     auto* expander = static_cast<HitboxExpanderModule*>(
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
+    auto* blockEsp = static_cast<BlockEspModule*>(ModuleRegistry::get().find("bedrocktools.BlockESP"));
     auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
     const bool espEnabled = esp && esp->enabled;
+    const bool blockEspEnabled = blockEsp && blockEsp->enabled;
     // Require the complete effective state, not just the cached enabled flag.
     // The shared renderer hook can remain installed while individual modules toggle.
     const bool oreEspEnabled = oreEsp && oreEsp->enabled &&
                                oreEsp->masterEnabled && oreEsp->keybindActive;
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
-    const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled;
+    const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled || blockEspEnabled;
     const bool overlayVisualsEnabled = actorVisualsEnabled || oreEspEnabled;
     if (!overlayVisualsEnabled) return;
     if (!g_localPlayerPtr) { espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
@@ -336,7 +339,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     // Fetch the native actor vector once per RenderLevel call and reuse it for both
     // off-screen HUD targeting and 3D ESP/Hitbox rendering.
     const float espRange = espEnabled ? (esp->infiniteRange ? 100000.0f : std::clamp(esp->range, 8.0f, 80.0f)) : 30.0f;
-    const float queryRange = actorVisualsEnabled ? std::max(30.0f, espRange) : 0.0f;
+    const float blockEspRange = blockEspEnabled ? (blockEsp->infiniteRange ? 100000.0f : std::clamp(blockEsp->range, 8.0f, 80.0f)) : 30.0f;
+    const float queryRange = actorVisualsEnabled ? std::max({30.0f, espEnabled ? espRange : 0.0f, blockEspEnabled ? blockEspRange : 0.0f}) : 0.0f;
     ActorVec actors{};
     bool actorSnapshotValid = false;
     bool actorSnapshotEmpty = true;
@@ -352,7 +356,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
              (end - begin) / sizeof(DistanceSortedActor) <= 8192);
     }
     if (espEnabled) {
-        updateEspOffscreenTargets(esp, g_localPlayerPtr, g_playerPos,
+        updateEspOffscreenTargets(esp, blockEsp, g_localPlayerPtr, g_playerPos,
                                   actors, actorSnapshotValid, actorSnapshotEmpty, espRange);
     }
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) { if(overlayVisualsEnabled)espLogOnce(espLoggedRenderer,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_tessellator_or_mesh_function"); return; }
@@ -723,28 +727,28 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     float dz = camZ - localPos.z;
     bool isThirdPerson = (dx*dx + dy*dy + dz*dz) > 0.05f;
 
-    auto renderActor = [&](void* ent, bool allowEsp) {
+    auto renderActor = [&](void* ent, bool allowBlockEsp, bool allowTargetRing) {
         const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
         AABB aabb=getActorAABB(ent);
         if(!validRenderBounds(aabb)){
-            if(espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr)
+            if(blockEspEnabled&&blockEsp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr)
               espLogOnce(espLoggedBounds,bedrocktools::diagnostics::Level::Warning,"actor_bounds=invalid_or_unavailable; skipped ESP outline");
             return;
         }
-        const bool wantsEsp=allowEsp&&espEnabled&&esp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
+        const bool wantsBlockEsp=allowBlockEsp&&blockEspEnabled&&blockEsp->showPlayers&&isPlayer&&ent!=g_localPlayerPtr;
         AABB espBounds = aabb;
         if (expander) {
             const auto native = expander->nativeBoundsForActor(ent, {aabb.min, aabb.max});
             espBounds = {native.min, native.max};
         }
         const bool isExpandedTarget=showExpandedHitboxes&&expander&&ent!=g_localPlayerPtr&&expander->expandsType(isPlayer);
-        if(wantsEsp){
-            std::int32_t gameType=-1;std::uint32_t color=esp->unknownColor;
+        if(wantsBlockEsp){
+            std::int32_t gameType=-1;std::uint32_t color=blockEsp->unknownColor;
             if(bedrocktools::core::gamehooks::tryGetPlayerGameType(ent,gameType)){
-                switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
-                 case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
+                switch(gameType){case 0:color=blockEsp->survivalColor;break;case 1:color=blockEsp->creativeColor;break;
+                 case 2:color=blockEsp->adventureColor;break;case 3:color=blockEsp->spectatorColor;break;default:color=blockEsp->unknownColor;break;}
             }
-            if (esp->box2D) {
+            if (blockEsp->box2D) {
                 constexpr float kDegToRad=0.01745329251994329577f;
                 const float yaw=cameraRotation.y*kDegToRad;
                 const float pitch=cameraRotation.x*kDegToRad;
@@ -767,10 +771,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 const EspLine edges[4]={{tl,tr},{tr,br},{br,bl},{bl,tl}};
                 const float dxCamera=center.x-cameraPosition.x,dyCamera=center.y-cameraPosition.y,dzCamera=center.z-cameraPosition.z;
                 const float depth=std::sqrt(dxCamera*dxCamera+dyCamera*dyCamera+dzCamera*dzCamera);
-                const float fovRadians=std::clamp(esp->projectionFov,40.0f,120.0f)*kDegToRad*0.5f;
+                const float fovRadians=std::clamp(blockEsp->projectionFov,40.0f,120.0f)*kDegToRad*0.5f;
                 const float pixelsPerWorldUnit=hudHeight/(2.0f*std::tan(fovRadians)*std::max(depth,0.05f));
                 const float worldPerPixel=(std::isfinite(pixelsPerWorldUnit)&&pixelsPerWorldUnit>0.001f)?1.0f/pixelsPerWorldUnit:0.01f;
-                const int strokeCount=std::clamp(static_cast<int>(std::lround(esp->box2DThickness)),1,10);
+                const int strokeCount=std::clamp(static_cast<int>(std::lround(blockEsp->box2DThickness)),1,10);
                 std::vector<EspLine> thickEdges;
                 thickEdges.reserve(static_cast<std::size_t>(strokeCount)*4);
                 for(std::size_t edgeIndex=0;edgeIndex<4;++edgeIndex){
@@ -785,11 +789,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 }
                 drawLines(thickEdges,color,true);
             } else {
-                drawBox(espBounds,color,true,esp->outlineThickness);
+                drawBox(espBounds,color,true,blockEsp->outlineThickness);
             }
-            if (esp->showLockInAim) drawTargetRing(espBounds);
-            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
+            espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; BlockESP submitted player box");
         }
+        if (allowTargetRing && espEnabled && esp->showLockInAim && isPlayer && ent != g_localPlayerPtr) drawTargetRing(espBounds);
         if (!nativeHitboxesEnabled && !isExpandedTarget) return;
         if (isExpandedTarget) {
             const bedrocktools::sdk::AABB nativeBounds{aabb.min, aabb.max};
@@ -799,7 +803,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         const uint32_t boxColor = g_hitboxMod ? g_hitboxMod->hitboxColor : 0xFF00FFFF;
         // Do not repaint the same native player bounds over an ESP game-mode color.
         // Expanded bounds remain separately visible when Bedrock Bounds is enabled.
-        if (!wantsEsp || isExpandedTarget)
+        if (!wantsBlockEsp || isExpandedTarget)
             drawBox(aabb, boxColor, false, esp ? esp->hitboxThickness : 0.025f);
 
         if (!nativeHitboxesEnabled) return;
@@ -853,7 +857,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     };
 
     if (nativeHitboxesEnabled && g_hitboxMod->showSelf && isThirdPerson) {
-        renderActor(g_localPlayerPtr, false);
+        renderActor(g_localPlayerPtr, false, false);
     }
 
     if(s_actorFetchNearby){
@@ -864,13 +868,14 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             if(!ent||reinterpret_cast<std::uintptr_t>(ent)<=0x1000||ent==g_localPlayerPtr||
                !std::isfinite(it->mDistance)||it->mDistance<0||it->mDistance>queryRange)continue;
             const bool isPlayer=s_actorIsPlayer&&s_actorIsPlayer(ent);
-            const bool wantsEsp=espEnabled&&esp->showPlayers&&isPlayer&&it->mDistance<=espRange;
+            const bool wantsBlockEsp=blockEspEnabled&&blockEsp->showPlayers&&isPlayer&&it->mDistance<=blockEspRange;
+            const bool wantsTargetRing=espEnabled&&esp->showLockInAim&&isPlayer&&it->mDistance<=espRange;
             const bool isEntityCategory=isPlayer||hasCategory(ent,2);
             const bool wantsExpanded=showExpandedHitboxes&&expander&&expander->expandsType(isPlayer)&&isEntityCategory;
             const bool wantsNative=nativeHitboxesEnabled&&(isPlayer?g_hitboxMod->showPlayers:(hasCategory(ent,2)&&g_hitboxMod->showEntities));
-            if(!wantsEsp&&!wantsExpanded&&!wantsNative)continue;
-            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsEsp&&esp->showInvisible))continue;
-            renderActor(ent,wantsEsp);
+            if(!wantsBlockEsp&&!wantsTargetRing&&!wantsExpanded&&!wantsNative)continue;
+            if(s_actorIsInvisible&&s_actorIsInvisible(ent)&&!(wantsBlockEsp&&blockEsp->showInvisible))continue;
+            renderActor(ent,wantsBlockEsp,wantsTargetRing);
         }
     }else if(espEnabled){
         espLogOnce(espLoggedQuery,bedrocktools::diagnostics::Level::Warning,"actor_query=signature_unavailable; ESP cannot enumerate nearby players");
