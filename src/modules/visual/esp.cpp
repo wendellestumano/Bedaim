@@ -79,7 +79,7 @@ void EspModule::beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition
 
 void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,float distance){
     if(!std::isfinite(targetCenter.x)||!std::isfinite(targetCenter.y)||!std::isfinite(targetCenter.z)||
-       !std::isfinite(distance)||distance<0.0f||(!infiniteRange&&distance>(infiniteRange?100000.0f:std::clamp(range,8.0f,80.0f)))return;
+       !std::isfinite(distance)||distance<0.0f||(!infiniteRange&&distance>std::clamp(range,8.0f,80.0f)))return;
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
 
