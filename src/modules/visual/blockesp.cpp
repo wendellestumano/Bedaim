@@ -20,8 +20,8 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
-constexpr std::size_t kMaxBlockEspCache = 4096;
-constexpr std::size_t kMaxBlockEspRendered = 512;
+constexpr std::size_t kMaxBlockEspCache = 16384;
+constexpr std::size_t kMaxBlockEspRendered = 2048;
 
 void resolveBlockGetBlock() {
     if (g_blockEspGetBlock.load(std::memory_order_acquire)) return;
@@ -81,9 +81,7 @@ const std::vector<std::string>& utilityBlockNames() {
         "smithing_table","enchanting_table","loom","stonecutter","cartography_table",
         "fletching_table","grindstone","composter","lectern","beacon","bell","jukebox",
         "note_block","observer","piston","sticky_piston","crafter","redstone_block",
-        "lever","target","oak_button","spruce_button","birch_button","jungle_button",
-        "acacia_button","dark_oak_button","mangrove_button","cherry_button","bamboo_button",
-        "crimson_button","warped_button","stone_button","polished_blackstone_button",
+        "lever","target","block_button",
         "oak_pressure_plate","spruce_pressure_plate","birch_pressure_plate","jungle_pressure_plate",
         "acacia_pressure_plate","dark_oak_pressure_plate","mangrove_pressure_plate",
         "cherry_pressure_plate","bamboo_pressure_plate","crimson_pressure_plate",
@@ -225,8 +223,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return;
     const bedrocktools::sdk::BlockPos current{
         static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)), static_cast<int>(std::floor(p.z))};
-    const int rx = std::clamp(horizontalRadius, 4, 32);
-    const int ry = std::clamp(verticalRadius, 2, 16);
+    const int rx = std::clamp(horizontalRadius, 20, 160);
+    const int ry = std::clamp(verticalRadius, 10, 80);
     const int moveThreshold = std::max(4, rx / 2);
     if (!m_hasCenter || (!m_scanActive &&
         (std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
@@ -262,7 +260,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
         if (!name || name->empty()) continue;
         Kind kind{};
-        const std::string normalizedName = stripNamespace(*name);
+        std::string normalizedName = stripNamespace(*name);
+        if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_cache.erase(key);
         if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
@@ -325,8 +324,8 @@ void BlockEspModule::onMenuRegistered() {
         n.currentValue=configText(config,key,n.defaultValue.c_str()); n.hasCurrentValue=true;
         n.minValue=std::to_string(min); n.maxValue=std::to_string(max); n.step=std::to_string(step); n.unit=unit; schema.node(std::move(n));
     };
-    slider("horizontalRadius","Horizontal radius","Horizontal scan and render radius.", "scan",16,4,32,1," blocks");
-    slider("verticalRadius","Vertical radius","Vertical scan and render radius.", "scan",8,2,16,1," blocks");
+    slider("horizontalRadius","Horizontal radius","Horizontal scan and render radius (5x default).", "scan",80,20,160,1," blocks");
+    slider("verticalRadius","Vertical radius","Vertical scan and render radius (5x default).", "scan",40,10,80,1," blocks");
     slider("scanBudgetPerTick","Scan budget","Block queries performed per tick.", "scan",1024,128,2048,128," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
     slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
@@ -376,8 +375,8 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
     int i=0;
     if(key=="horizontalRadius"||key=="verticalRadius"||key=="scanBudgetPerTick"||key=="outlineThickness"||key=="tracerThickness") {
         if(!parseInt(value,i)) return false;
-        if(key=="horizontalRadius")horizontalRadius=std::clamp(i,4,32);
-        else if(key=="verticalRadius")verticalRadius=std::clamp(i,2,16);
+        if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,160);
+        else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,80);
         else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,128,2048);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
@@ -404,8 +403,8 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
         auto it = m_utilityFilters.find(name);
         if (it != m_utilityFilters.end()) it->second = j.value(key, showUtilityBlocks);
     }
-    horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),4,32);
-    verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),2,16);
+    horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,160);
+    verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,80);
     scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),128,2048);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
     tracerThickness=static_cast<float>(std::clamp(j.value("tracerThickness",4),1,10))/100.0f;
