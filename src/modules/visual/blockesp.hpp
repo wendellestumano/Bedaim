@@ -42,6 +42,7 @@ public:
     int verticalRadius = 8;
     int scanBudgetPerTick = 1024;
     float outlineThickness = 0.035f;
+    float tracerThickness = 0.035f;
     std::uint32_t shulkerColor = 0xFFFF40FFu;
     std::uint32_t chestColor = 0xFFFFB52Eu;
     std::uint32_t enderChestColor = 0xFFB45CFFu;
