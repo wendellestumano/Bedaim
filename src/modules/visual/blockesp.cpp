@@ -353,9 +353,12 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
     if (key.size() > utilityPrefix.size() && key.substr(0, utilityPrefix.size()) == utilityPrefix) {
         if (!parseBool(value, b)) return false;
         const std::string blockName(key.substr(utilityPrefix.size()));
-        auto it = m_utilityFilters.find(blockName);
-        if (it == m_utilityFilters.end()) return false;
-        it->second = b;
+        {
+            std::lock_guard<std::mutex> lock(m_cacheMutex);
+            auto it = m_utilityFilters.find(blockName);
+            if (it == m_utilityFilters.end()) return false;
+            it->second = b;
+        }
         onMenuRegistered();
         return true;
     }
