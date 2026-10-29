@@ -243,6 +243,7 @@ std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) co
 void BlockEspModule::clearCache() {
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     m_cache.clear();
+    m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
     resolveBlockGetBlock();
@@ -398,7 +399,12 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         const int dz = current.z - m_localScanOrigin.z;
         localMovedFar = dx * dx + dz * dz >= 64 || std::abs(dy) >= 16;
     }
-    if (!m_localScanActive && (!m_hasLocalScanOrigin || localMovedFar)) {
+    // Revisit the local volume periodically even when the player stands still.
+    // Otherwise blocks placed/broken after the first pass can remain undiscovered
+    // until movement or a manual scan-setting change happens to restart scanning.
+    constexpr std::uint64_t kLocalRescanIntervalTicks = 40u;
+    const bool localRescanDue = (m_tickCount % kLocalRescanIntervalTicks) == 0u;
+    if (!m_localScanActive && (!m_hasLocalScanOrigin || localMovedFar || localRescanDue)) {
         m_localScanOrigin = current;
         m_localScanCursor = 0;
         m_localScanOffsets.clear();
@@ -463,8 +469,12 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         const int dz = current.z - m_priorityScanOrigin.z;
         movedFromPriorityCenter = dx * dx + dz * dz >= 25 || std::abs(dy) >= 5;
     }
+    // The priority volume must also cycle while stationary, so a new target
+    // just outside the immediate 9x9x9 refresh is found without user interaction.
+    constexpr std::uint64_t kPriorityRescanIntervalTicks = 20u;
+    const bool priorityRescanDue = (m_tickCount % kPriorityRescanIntervalTicks) == 0u;
     if (!m_priorityScanActive &&
-        (!m_hasPriorityCenter || movedFromPriorityCenter || m_priorityDirectionDirty)) {
+        (!m_hasPriorityCenter || movedFromPriorityCenter || m_priorityDirectionDirty || priorityRescanDue)) {
         m_priorityScanOrigin = current;
         m_priorityScanCursor = 0;
         m_priorityScanOffsets.clear();
@@ -515,7 +525,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const bool movedFar = std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
         std::abs(current.z - m_lastCenter.z) >= moveThreshold ||
         std::abs(current.y - m_lastCenter.y) >= moveThreshold;
-    if (!m_hasCenter || (!m_scanActive && movedFar)) {
+    // Restart a completed pass even if the player has not moved. New blocks
+    // and removals must eventually be noticed without changing a menu setting.
+    const bool widePassComplete = m_scanTotal > 0u && m_scanCursor >= m_scanTotal;
+    if (!m_hasCenter || (!m_scanActive && (movedFar || widePassComplete))) {
         m_scanCenter = current;
         m_lastCenter = current;
         m_hasCenter = true;
@@ -577,16 +590,21 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         ? scanBudget - m_uniqueQueriesThisTick : 0u;
     if (m_scanActive && wideBudget > 0u) {
         const std::size_t verticalCount = static_cast<std::size_t>(ry * 2 + 1);
+        const std::size_t horizontalCount = m_horizontalScanOffsets.size();
         std::size_t wideUsed = 0;
         auto verticalOffset = [](std::size_t layer) -> int {
             if (layer == 0) return 0;
             const int magnitude = static_cast<int>((layer + 1) / 2);
             return (layer & 1u) ? -magnitude : magnitude;
         };
+        // Scan the entire horizontal radius at the player's current Y first,
+        // then adjacent Y layers. The previous column-major order spent 2*ry+1
+        // queries at every nearer X/Z coordinate before reaching farther chunks,
+        // making same-height distant blocks take far too long to discover.
         while (m_scanCursor < m_scanTotal && wideUsed < wideBudget) {
             const std::size_t index = m_scanCursor++;
-            const std::size_t horizontalIndex = index / verticalCount;
-            const std::size_t layer = index % verticalCount;
+            const std::size_t layer = index / horizontalCount;
+            const std::size_t horizontalIndex = index % horizontalCount;
             const auto [dx, dz] = m_horizontalScanOffsets[horizontalIndex];
             const int dy = verticalOffset(layer);
             if (inspectBlock(bedrocktools::sdk::BlockPos{
@@ -772,12 +790,17 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
     if(key=="maxScanRadius") { if(!parseBool(value,b)) return false; maxScanRadius=b; m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true; }
     if(key=="horizontalRadius"||key=="verticalRadius"||key=="scanBudgetPerTick"||key=="outlineThickness"||key=="tracerThickness") {
         if(!parseInt(value,i)) return false;
+        const bool scanShapeChanged = key=="horizontalRadius" || key=="verticalRadius";
         if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,320);
         else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,160);
         else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,16384);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
-        m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true;
+        // A budget change affects work per tick, not the scan region/cursor.
+        // Restarting here used to make tapping Scan Budget appear to "wake up"
+        // the ESP by restarting its scan from the player's position.
+        if (scanShapeChanged) { m_scanActive=false; m_hasCenter=false; }
+        onMenuRegistered(); return true;
     }
     std::uint32_t c=0; if(!parseColor(value,c)) return false;
     if(key=="shulkerColor")shulkerColor=c; else if(key=="chestColor")chestColor=c;
