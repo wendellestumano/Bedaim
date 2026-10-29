@@ -47,7 +47,7 @@ public:
     bool maxScanRadius = false;
     int horizontalRadius = 320;
     int verticalRadius = 80;
-    int scanBudgetPerTick = 16384;
+    int scanBudgetPerTick = 4096;
     float outlineThickness = 0.035f;
     float tracerThickness = 0.035f;
     std::uint32_t shulkerColor = 0xFFFF40FFu;
