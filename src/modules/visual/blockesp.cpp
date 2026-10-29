@@ -282,7 +282,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
 
     const std::size_t plane = m_horizontalScanOffsets.size();
     const std::size_t end = std::min(m_scanTotal, m_scanCursor +
-        static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 2048)));
+        static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 16384)));
     auto verticalOffset = [](std::size_t layer) -> int {
         if (layer == 0) return 0;
         const int magnitude = static_cast<int>((layer + 1) / 2);
@@ -366,7 +366,7 @@ void BlockEspModule::onMenuRegistered() {
     };
     slider("horizontalRadius","Horizontal radius","Horizontal scan and render radius (5x default).", "scan",80,20,160,1," blocks");
     slider("verticalRadius","Vertical radius","Vertical scan and render radius (5x default).", "scan",40,10,80,1," blocks");
-    slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",512,256,2048,128," blocks/tick");
+    slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",16384,256,16384,256," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
     slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
     auto color = [&](const char* key,const char* title,std::uint32_t def) {
@@ -417,7 +417,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
         if(!parseInt(value,i)) return false;
         if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,160);
         else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,80);
-        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,2048);
+        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,16384);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true;
@@ -445,7 +445,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     }
     horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,160);
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,80);
-    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),256,2048);
+    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),256,16384);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
     tracerThickness=static_cast<float>(std::clamp(j.value("tracerThickness",4),1,10))/100.0f;
     loadColor(j,"shulkerColor",shulkerColor); loadColor(j,"chestColor",chestColor);
