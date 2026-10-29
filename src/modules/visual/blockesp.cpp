@@ -81,7 +81,7 @@ const std::vector<std::string>& utilityBlockNames() {
         "smithing_table","enchanting_table","loom","stonecutter","cartography_table",
         "fletching_table","grindstone","composter","lectern","beacon","bell","jukebox",
         "note_block","observer","piston","sticky_piston","crafter","redstone_block",
-        "lever","target","block_button",
+        "lever","target","block_button","redstone_torch","redstone_wire","redstone_lamp",
         "block_pressure_plate"
     };
     return names;
@@ -131,7 +131,7 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
              name == "composter" || name == "lectern" || name == "beacon" || name == "bell" ||
              name == "jukebox" || name == "note_block" || name == "observer" ||
              name == "piston" || name == "sticky_piston" || name == "crafter" ||
-             name == "redstone_block" || name == "lever" || name.find("button") != std::string::npos ||
+             name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp" || name == "lever" || name.find("button") != std::string::npos ||
              name.find("pressure_plate") != std::string::npos || name == "target") kind = Kind::Utility;
     else return false;
     return true;
@@ -185,7 +185,7 @@ std::uint32_t BlockEspModule::colorFor(Kind kind) const noexcept {
 }
 std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) const noexcept {
     if (kind != Kind::Utility) return colorFor(kind);
-    if (name == "redstone_block") return 0xFFFF3030u;
+    if (name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp") return 0xFFFF3030u;
     if (name == "block_button" || name == "block_pressure_plate" ||
         name == "polished_blackstone_button" || name == "polished_blackstone_pressure_plate") return 0xFFB9B9B9u;
     if (name == "lever") return 0xFFFFD34Eu;
