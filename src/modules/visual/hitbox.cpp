@@ -515,6 +515,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         using BlockLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
         constexpr std::size_t kindCount = static_cast<std::size_t>(BlockEspModule::Kind::Count);
         static std::array<std::vector<BlockLine>, kindCount> tracerLinesByKind;
+        std::array<std::uint32_t, kindCount> tracerColorsByKind{};
         for (auto& lines : tracerLinesByKind) lines.clear();
 
         for (const auto& block : blockOutlines) {
@@ -555,7 +556,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                         up.x /= upLength; up.y /= upLength; up.z /= upLength;
                     }
                     const float t = std::clamp(blockEsp->tracerThickness, 0.01f, 0.10f);
-                    auto& lines = tracerLinesByKind[static_cast<std::size_t>(block.kind)];
+                    const auto kindIndex = static_cast<std::size_t>(block.kind);
+                    if (kindIndex >= tracerLinesByKind.size()) continue;
+                    auto& lines = tracerLinesByKind[kindIndex];
+                    tracerColorsByKind[kindIndex] = block.color;
                     lines.push_back({cameraPosition, center});
                     lines.push_back({{cameraPosition.x + side.x*t, cameraPosition.y + side.y*t, cameraPosition.z + side.z*t},
                                      {center.x + side.x*t, center.y + side.y*t, center.z + side.z*t}});
@@ -572,14 +576,8 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             for (std::size_t kind = 0; kind < tracerLinesByKind.size(); ++kind) {
                 const auto& lines = tracerLinesByKind[kind];
                 if (lines.empty()) continue;
-                // Tracer color is deliberately the exact same HEX color as that block's outline.
-                const auto color = blockOutlines.empty() ? 0xFFFFFFFFu : lines.size() > 0
-                    ? [&]() -> std::uint32_t {
-                        for (const auto& block : blockOutlines)
-                            if (static_cast<std::size_t>(block.kind) == kind) return block.color;
-                        return 0xFFFFFFFFu;
-                    }() : 0xFFFFFFFFu;
-                drawLines(lines, color, true);
+                // Tracer color is the exact same HEX value as the corresponding block outline.
+                drawLines(lines, tracerColorsByKind[kind], true);
             }
         }
     }
