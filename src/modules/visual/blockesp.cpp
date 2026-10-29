@@ -449,13 +449,14 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
     }
 
-    // Incremental local scan of a 32x160x32 volume (163,840 block positions).
-    // It is deliberately spread across ticks instead of issuing 160k native calls
-    // in one frame/tick. Horizontal rings are ordered center-out; vertical offsets
-    // are center-out too, so the most useful positions are visited first.
-    constexpr int kLocalHalfWidth = 16;
+    // Experimental expanded local scan: 64x160x64 (655,360 block positions).
+    // The larger horizontal footprint tests whether the old 32x32 area was the
+    // reason distant blocks were missed. It remains incremental to avoid a single
+    // tick spike; horizontal chunk order and vertical center-out ordering prioritize
+    // nearby positions while allowing discovery up to 32 blocks in X/Z.
+    constexpr int kLocalHalfWidth = 32;
     constexpr int kLocalHalfHeight = 80;
-    constexpr std::size_t kLocalVolumeSize = 32u * 160u * 32u;
+    constexpr std::size_t kLocalVolumeSize = 64u * 160u * 64u;
     bool localMovedFar = false;
     if (m_hasLocalScanOrigin) {
         const int dx = current.x - m_localScanOrigin.x;
