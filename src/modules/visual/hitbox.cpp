@@ -1,5 +1,6 @@
 #include "hitbox.hpp"
 #include "esp.hpp"
+#include "blockesp.hpp"
 #include "oreesp.hpp"
 #include "core/GameHooks.hpp"
 #include "core/Diagnostics.hpp"
@@ -320,15 +321,17 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     auto* expander = static_cast<HitboxExpanderModule*>(
         ModuleRegistry::get().find("bedrocktools.Hitbox Expander"));
     auto* esp = static_cast<EspModule*>(ModuleRegistry::get().find("bedrocktools.ESP"));
+    auto* blockEsp = static_cast<BlockEspModule*>(ModuleRegistry::get().find("bedrocktools.BlockESP"));
     auto* oreEsp = static_cast<OreEspModule*>(ModuleRegistry::get().find("bedrocktools.Ore ESP"));
     const bool espEnabled = esp && esp->enabled;
+    const bool blockEspEnabled = blockEsp && blockEsp->enabled;
     // Require the complete effective state, not just the cached enabled flag.
     // The shared renderer hook can remain installed while individual modules toggle.
     const bool oreEspEnabled = oreEsp && oreEsp->enabled &&
                                oreEsp->masterEnabled && oreEsp->keybindActive;
     const bool nativeHitboxesEnabled = g_hitboxMod && g_hitboxMod->enabled;
     const bool showExpandedHitboxes = expander && expander->shouldShowHitbox();
-    const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled;
+    const bool actorVisualsEnabled = nativeHitboxesEnabled || showExpandedHitboxes || espEnabled || blockEspEnabled;
     const bool overlayVisualsEnabled = actorVisualsEnabled || oreEspEnabled;
     if (!overlayVisualsEnabled) return;
     if (!g_localPlayerPtr) { espLogOnce(espLoggedLocal,bedrocktools::diagnostics::Level::Warning,"render_gate=missing_local_player"); return; }
@@ -504,6 +507,35 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
         drawLines(lines, color, throughWalls);
     };
+
+    if (blockEspEnabled && blockEsp) {
+        static std::vector<BlockEspModule::Outline> blockOutlines;
+        blockOutlines.clear();
+        blockEsp->getRenderSnapshot(g_playerPos, blockOutlines);
+        using BlockLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+        static std::vector<BlockLine> tracerLines;
+        tracerLines.clear();
+        tracerLines.reserve(blockOutlines.size());
+        for (const auto& block : blockOutlines) {
+            constexpr float expand = 0.006f;
+            const float x0 = static_cast<float>(block.position.x) - expand;
+            const float y0 = static_cast<float>(block.position.y) - expand;
+            const float z0 = static_cast<float>(block.position.z) - expand;
+            const float x1 = static_cast<float>(block.position.x + 1) + expand;
+            const float y1 = static_cast<float>(block.position.y + 1) + expand;
+            const float z1 = static_cast<float>(block.position.z + 1) + expand;
+            drawBox({{x0,y0,z0},{x1,y1,z1}}, block.color, true, blockEsp->outlineThickness);
+            if (blockEsp->showTracer) {
+                const bedrocktools::sdk::Vec3 center{
+                    static_cast<float>(block.position.x) + 0.5f,
+                    static_cast<float>(block.position.y) + 0.5f,
+                    static_cast<float>(block.position.z) + 0.5f};
+                tracerLines.push_back({cameraPosition, center});
+            }
+        }
+        if (blockEsp->showTracer && !tracerLines.empty())
+            drawLines(tracerLines, blockEsp->tracerColor, true);
+    }
 
     if (oreEspEnabled && oreEsp) {
         static std::vector<OreEspModule::Outline> outlines;
