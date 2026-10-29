@@ -62,7 +62,7 @@ private:
         std::size_t operator()(const PositionKey& p) const noexcept;
     };
     static PositionKey keyFor(const bedrocktools::sdk::BlockPos& pos) noexcept;
-    static bool classify(std::string_view name, Kind& kind) noexcept;
+    static bool classify(std::string_view name, Kind& kind);
     static std::uint32_t defaultColor(Kind kind) noexcept;
     bool isKindEnabled(Kind kind) const noexcept;
     std::uint32_t colorFor(Kind kind) const noexcept;
