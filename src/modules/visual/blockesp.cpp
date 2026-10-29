@@ -20,7 +20,7 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
-constexpr std::size_t kMaxBlockEspCache = 4096;
+constexpr std::size_t kMaxBlockEspCache = 8192;
 constexpr std::size_t kMaxBlockEspRendered = 128;
 
 void resolveBlockGetBlock() {
@@ -243,13 +243,13 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return;
     const bedrocktools::sdk::BlockPos current{
         static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)), static_cast<int>(std::floor(p.z))};
-    const int rx = std::clamp(horizontalRadius, 20, 160);
-    const int ry = std::clamp(verticalRadius, 10, 80);
-    const int moveThreshold = std::max(4, rx / 2);
-    if (!m_hasCenter || (!m_scanActive &&
-        (std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
-         std::abs(current.z - m_lastCenter.z) >= moveThreshold ||
-         std::abs(current.y - m_lastCenter.y) >= std::max(2, ry / 2)))) {
+    const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
+    const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
+    const int moveThreshold = 8;
+    if (!m_hasCenter ||
+        std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
+        std::abs(current.z - m_lastCenter.z) >= moveThreshold ||
+        std::abs(current.y - m_lastCenter.y) >= moveThreshold) {
         m_scanCenter = current; m_lastCenter = current; m_hasCenter = true;
         m_scanCursor = 0;
         const std::size_t diameter = static_cast<std::size_t>(rx * 2 + 1);
@@ -289,8 +289,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         return (layer & 1u) ? -magnitude : magnitude;
     };
     for (std::size_t index = m_scanCursor; index < end; ++index) {
-        const std::size_t layer = index / plane;
-        const auto [dx, dz] = m_horizontalScanOffsets[index % plane];
+        const std::size_t verticalCount = static_cast<std::size_t>(ry * 2 + 1);
+        const std::size_t horizontalIndex = index / verticalCount;
+        const std::size_t layer = index % verticalCount;
+        const auto [dx, dz] = m_horizontalScanOffsets[horizontalIndex];
         const int dy = verticalOffset(layer);
         const bedrocktools::sdk::BlockPos pos{m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz};
         const PositionKey key = keyFor(pos);
@@ -365,7 +367,8 @@ void BlockEspModule::onMenuRegistered() {
         n.minValue=std::to_string(min); n.maxValue=std::to_string(max); n.step=std::to_string(step); n.unit=unit; schema.node(std::move(n));
     };
     slider("horizontalRadius","Horizontal radius","Horizontal scan and render radius (5x default).", "scan",80,20,160,1," blocks");
-    slider("verticalRadius","Vertical radius","Vertical scan and render radius (5x default).", "scan",40,10,80,1," blocks");
+    slider("verticalRadius","Vertical radius","Vertical scan and render radius for deep underground blocks.", "scan",80,10,160,1," blocks");
+    toggle("maxScanRadius","Max Scan Radius","Use the maximum supported horizontal and vertical scan radius (160 blocks each direction).",false,"scan");
     slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",16384,256,16384,256," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
     slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
@@ -413,10 +416,11 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
         onMenuRegistered(); return true;
     }
     int i=0;
+    if(key=="maxScanRadius") { if(!parseBool(value,b)) return false; maxScanRadius=b; m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true; }
     if(key=="horizontalRadius"||key=="verticalRadius"||key=="scanBudgetPerTick"||key=="outlineThickness"||key=="tracerThickness") {
         if(!parseInt(value,i)) return false;
         if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,160);
-        else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,80);
+        else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,160);
         else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,16384);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
@@ -438,13 +442,14 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
     showDroppers=j.value("showDroppers",showDroppers); showBarrels=j.value("showBarrels",showBarrels);
     showFurnaces=j.value("showFurnaces",showFurnaces); showUtilityBlocks=j.value("showUtilityBlocks",showUtilityBlocks);
+    maxScanRadius=j.value("maxScanRadius",maxScanRadius);
     for (const auto& name : utilityBlockNames()) {
         const std::string key = "showBlock_" + name;
         auto it = m_utilityFilters.find(name);
         if (it != m_utilityFilters.end()) it->second = j.value(key, showUtilityBlocks);
     }
     horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,160);
-    verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,80);
+    verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,160);
     scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),256,16384);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
     tracerThickness=static_cast<float>(std::clamp(j.value("tracerThickness",4),1,10))/100.0f;
@@ -459,7 +464,7 @@ void BlockEspModule::saveConfig(nlohmann::json& j) {
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
     j["showEnderChests"]=showEnderChests; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
     j["showDroppers"]=showDroppers; j["showBarrels"]=showBarrels; j["showFurnaces"]=showFurnaces;
-    j["showUtilityBlocks"]=showUtilityBlocks;
+    j["showUtilityBlocks"]=showUtilityBlocks; j["maxScanRadius"]=maxScanRadius;
     for (const auto& [name, enabled] : m_utilityFilters) j["showBlock_" + name] = enabled;
     j["horizontalRadius"]=horizontalRadius;
     j["verticalRadius"]=verticalRadius; j["scanBudgetPerTick"]=scanBudgetPerTick;
