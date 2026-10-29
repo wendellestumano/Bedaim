@@ -319,10 +319,24 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
     const std::size_t scanBudget = static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 16384));
 
-    // Keep discovered blocks cached even after the player moves far away.
-    // Entries are removed only when the source/dimension changes, the module is
-    // disabled, or the bounded cache must prune its least useful entries.
-    
+    // Cull cached blocks outside the active scan/render radius, with a small
+    // margin to avoid flicker while moving around the boundary.
+    if (m_tickCount % 10u == 0u) {
+        const int keepHorizontal = rx + 8;
+        const int keepVertical = ry + 8;
+        const int keepHorizontalSquared = keepHorizontal * keepHorizontal;
+        std::lock_guard<std::mutex> lock(m_cacheMutex);
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            const std::int64_t dx = static_cast<std::int64_t>(it->second.position.x) - current.x;
+            const std::int64_t dy = static_cast<std::int64_t>(it->second.position.y) - current.y;
+            const std::int64_t dz = static_cast<std::int64_t>(it->second.position.z) - current.z;
+            if (dx * dx + dz * dz > static_cast<std::int64_t>(keepHorizontalSquared) || std::abs(dy) > keepVertical)
+                it = m_cache.erase(it);
+            else
+                ++it;
+        }
+    }
+
     // Each query contributes to a batched cache update. The old implementation
     // acquired the cache mutex for every queried block (often >16,000 locks/tick).
     // Batch erases/inserts once per tick instead, while keeping unloaded positions
