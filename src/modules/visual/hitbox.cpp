@@ -623,10 +623,6 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             const float length = std::sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z);
             if (length <= 0.001f || !std::isfinite(length)) continue;
 
-            bedrocktools::sdk::Vec3 side{-delta.z, 0.0f, delta.x};
-            float sideLength = std::sqrt(side.x*side.x + side.z*side.z);
-            if (sideLength < 0.001f) { side = {1.0f, 0.0f, 0.0f}; sideLength = 1.0f; }
-            side.x /= sideLength; side.z /= sideLength;
             // Exactly one segment per block; the renderer expands it into one
             // filled ribbon using the configured width.
             tracerLinesByColor[block.color].push_back({tracerStart, center});
