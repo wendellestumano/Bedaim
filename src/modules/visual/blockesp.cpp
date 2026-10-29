@@ -433,6 +433,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 const int aChunkDistance = ax * ax + az * az;
                 const int bChunkDistance = bx * bx + bz * bz;
                 if (aChunkDistance != bChunkDistance) return aChunkDistance < bChunkDistance;
+                // Stable chunk-coordinate tie-break groups every column of a
+                // chunk together instead of interleaving equally distant chunks.
+                if (ax != bx) return ax < bx;
+                if (az != bz) return az < bz;
                 const int aBlockDistance = a.first * a.first + a.second * a.second;
                 const int bBlockDistance = b.first * b.first + b.second * b.second;
                 return aBlockDistance < bBlockDistance;
