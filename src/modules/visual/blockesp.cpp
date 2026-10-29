@@ -229,23 +229,33 @@ void BlockEspModule::onEnable() {
     if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
         static_cast<HitboxModule*>(hitbox)->ensureRenderHook();
     m_blockSource = nullptr; m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
+    m_priorityScanActive = false; m_hasPriorityCenter = false; m_priorityDirectionDirty = false; m_priorityScanCursor = 0;
+    m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
     clearCache();
 }
 void BlockEspModule::onDisable() {
     m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
+    m_priorityScanActive = false; m_hasPriorityCenter = false; m_priorityDirectionDirty = false; m_priorityScanCursor = 0;
+    m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
     clearCache();
 }
 void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     ++m_tickCount;
     if (!enabled || !player) return;
+
     auto* dimension = player->dimension();
     auto* source = dimension ? dimension->blockSource() : nullptr;
     if (!source) return;
     if (source != m_blockSource) {
-        m_blockSource = source; m_scanActive = false; m_hasCenter = false; clearCache();
+        m_blockSource = source;
+        m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
+        m_priorityScanActive = false; m_hasPriorityCenter = false; m_priorityDirectionDirty = false; m_priorityScanCursor = 0;
+        m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
+        clearCache();
     }
     if (!g_blockEspGetBlock.load(std::memory_order_acquire) && m_tickCount - m_lastResolveAttemptTick >= 40) {
-        m_lastResolveAttemptTick = m_tickCount; resolveBlockGetBlock();
+        m_lastResolveAttemptTick = m_tickCount;
+        resolveBlockGetBlock();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
@@ -255,54 +265,165 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const bedrocktools::sdk::BlockPos current{
         static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)), static_cast<int>(std::floor(p.z))};
 
-    // Lightweight near-player refresh: a 9x9x9 cube every other tick is
-    // responsive enough for nearby placements/removals without spending over
-    // a thousand block queries every tick on mobile CPUs.
+    // Infer horizontal movement from successive positions instead of relying on a
+    // version-specific velocity accessor. This also works with Elytra and knockback.
+    bool headingChanged = false;
+    float horizontalMovement = 0.0f;
+    if (m_hasPreviousPlayerPosition) {
+        const float moveX = p.x - m_previousPlayerPosition.x;
+        const float moveZ = p.z - m_previousPlayerPosition.z;
+        horizontalMovement = std::hypot(moveX, moveZ);
+        if (horizontalMovement > 0.5f) {
+            const float nextX = moveX / horizontalMovement;
+            const float nextZ = moveZ / horizontalMovement;
+            if (m_hasMovementDirection) {
+                const float directionDot = nextX * m_moveDirectionX + nextZ * m_moveDirectionZ;
+                headingChanged = directionDot < 0.80f;
+            }
+            m_moveDirectionX = nextX;
+            m_moveDirectionZ = nextZ;
+            m_hasMovementDirection = true;
+        }
+    }
+    m_previousPlayerPosition = p;
+    m_hasPreviousPlayerPosition = true;
+    if (headingChanged) m_priorityDirectionDirty = true;
+
+    const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
+    const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
+    const std::size_t scanBudget = static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 16384));
+
+    // Cull cache entries that cannot be rendered from the current player position.
+    // Without this, a long Elytra flight could fill the bounded cache with blocks
+    // from old locations and prevent newly discovered blocks from being inserted.
+    if (m_tickCount % 10u == 0u) {
+        const int keepHorizontal = rx + 8;
+        const int keepVertical = ry + 8;
+        const int keepHorizontalSquared = keepHorizontal * keepHorizontal;
+        std::lock_guard<std::mutex> lock(m_cacheMutex);
+        for (auto it = m_cache.begin(); it != m_cache.end();) {
+            const int dx = it->second.position.x - current.x;
+            const int dy = it->second.position.y - current.y;
+            const int dz = it->second.position.z - current.z;
+            if (dx * dx + dz * dz > keepHorizontalSquared || std::abs(dy) > keepVertical)
+                it = m_cache.erase(it);
+            else
+                ++it;
+        }
+    }
+
+    // Each query contributes to a batched cache update. The old implementation
+    // acquired the cache mutex for every queried block (often >16,000 locks/tick).
+    // Batch erases/inserts once per tick instead, while keeping unloaded positions
+    // untouched when BlockSource returns an invalid pointer.
+    std::vector<PositionKey> scannedPositions;
+    std::vector<Outline> foundOutlines;
+    scannedPositions.reserve(scanBudget + 729u);
+    foundOutlines.reserve(64u);
+    auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos) {
+        void* raw = getBlock(source, pos);
+        if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return;
+        const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
+        if (!name || name->empty()) return;
+
+        const PositionKey key = keyFor(pos);
+        scannedPositions.push_back(key);
+        Kind kind{};
+        if (!classify(*name, kind)) return;
+
+        std::string normalizedName = stripNamespace(*name);
+        if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
+        if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
+        foundOutlines.push_back(Outline{pos, colorForBlock(kind, normalizedName), kind, std::move(normalizedName)});
+    };
+
+    // Fast local refresh: nearby placements/removals remain responsive every
+    // other tick, independent of how far the wide scan has progressed.
     constexpr int kLocalRefreshRadius = 4;
     if ((m_tickCount & 1u) == 0u) {
         for (int dx = -kLocalRefreshRadius; dx <= kLocalRefreshRadius; ++dx) {
             for (int dy = -kLocalRefreshRadius; dy <= kLocalRefreshRadius; ++dy) {
                 for (int dz = -kLocalRefreshRadius; dz <= kLocalRefreshRadius; ++dz) {
-                    const bedrocktools::sdk::BlockPos pos{current.x + dx, current.y + dy, current.z + dz};
-                    const PositionKey key = keyFor(pos);
-                    void* raw = getBlock(source, pos);
-                    if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) continue;
-                    const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
-                    if (!name || name->empty()) continue;
-                    Kind kind{};
-                    std::string normalizedName = stripNamespace(*name);
-                    if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
-                    if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
-                    std::lock_guard<std::mutex> lock(m_cacheMutex);
-                    m_cache.erase(key);
-                    if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
-                        m_cache.emplace(key, Outline{pos, colorForBlock(kind, normalizedName), kind, normalizedName});
-                    }
+                    inspectBlock(bedrocktools::sdk::BlockPos{current.x + dx, current.y + dy, current.z + dz});
                 }
             }
         }
     }
-    const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
-    const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
-    // Rebuild the long-range scan after roughly two chunks (32 blocks),
-    // rather than constantly restarting while walking or flying. The local
-    // immediate scan above keeps nearby block changes responsive between passes.
+
+    // The priority scan is a small rolling volume. When moving, it becomes a
+    // forward corridor (24 blocks ahead, 5 blocks to either side and 8 vertically).
+    // While stationary, it scans a center-out 17x17x17 cube. This pass is rebuilt
+    // only after meaningful movement / a turn, never on each individual tick.
+    bool movedFromPriorityCenter = false;
+    if (m_hasPriorityCenter) {
+        const int dx = current.x - m_priorityScanOrigin.x;
+        const int dy = current.y - m_priorityScanOrigin.y;
+        const int dz = current.z - m_priorityScanOrigin.z;
+        movedFromPriorityCenter = dx * dx + dz * dz >= 25 || std::abs(dy) >= 5;
+    }
+    if (!m_priorityScanActive &&
+        (!m_hasPriorityCenter || movedFromPriorityCenter || m_priorityDirectionDirty)) {
+        m_priorityScanOrigin = current;
+        m_priorityScanCursor = 0;
+        m_priorityScanOffsets.clear();
+        m_priorityScanOffsets.reserve(4913u);
+
+        auto centerOutOffset = [](int index) -> int {
+            if (index == 0) return 0;
+            const int magnitude = (index + 1) / 2;
+            return (index & 1) ? -magnitude : magnitude;
+        };
+        if (m_hasMovementDirection) {
+            for (int forward = 0; forward <= 24; ++forward) {
+                for (int lateralIndex = 0; lateralIndex <= 10; ++lateralIndex) {
+                    const int lateral = centerOutOffset(lateralIndex);
+                    for (int verticalIndex = 0; verticalIndex <= 16; ++verticalIndex) {
+                        const int dy = centerOutOffset(verticalIndex);
+                        const int dx = static_cast<int>(std::lround(
+                            static_cast<float>(forward) * m_moveDirectionX -
+                            static_cast<float>(lateral) * m_moveDirectionZ));
+                        const int dz = static_cast<int>(std::lround(
+                            static_cast<float>(forward) * m_moveDirectionZ +
+                            static_cast<float>(lateral) * m_moveDirectionX));
+                        m_priorityScanOffsets.push_back({dx, dy, dz});
+                    }
+                }
+            }
+        } else {
+            for (int shell = 0; shell <= 8; ++shell) {
+                for (int dx = -shell; dx <= shell; ++dx) {
+                    for (int dy = -shell; dy <= shell; ++dy) {
+                        for (int dz = -shell; dz <= shell; ++dz) {
+                            if (std::max({std::abs(dx), std::abs(dy), std::abs(dz)}) != shell) continue;
+                            m_priorityScanOffsets.push_back({dx, dy, dz});
+                        }
+                    }
+                }
+            }
+        }
+        m_priorityScanActive = !m_priorityScanOffsets.empty();
+        m_hasPriorityCenter = true;
+        m_priorityDirectionDirty = false;
+    }
+
+    // Start/recenter the wide background scan only when no wide pass is running.
+    // Its cursor therefore keeps progressing during flight instead of restarting
+    // every time the player crosses another block or chunk.
     constexpr int moveThreshold = 32;
     const bool movedFar = std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
         std::abs(current.z - m_lastCenter.z) >= moveThreshold ||
         std::abs(current.y - m_lastCenter.y) >= moveThreshold;
-    // Do not restart a multi-million-block scan every time the player moves
-    // while flying. Finish the current pass, then center the next pass on the
-    // player's latest position; the immediate local scan follows the player.
     if (!m_hasCenter || (!m_scanActive && movedFar)) {
-        m_scanCenter = current; m_lastCenter = current; m_hasCenter = true;
+        m_scanCenter = current;
+        m_lastCenter = current;
+        m_hasCenter = true;
         m_scanCursor = 0;
+
         const std::size_t diameter = static_cast<std::size_t>(rx * 2 + 1);
         m_horizontalScanOffsets.clear();
         m_horizontalScanOffsets.reserve(diameter * diameter);
         m_horizontalScanOffsets.emplace_back(0, 0);
-        // Build center-out rings once per scan. Never calculate sqrt/ceil per block
-        // query on every tick; that was unnecessarily expensive on mobile CPUs.
+        // Precompute center-out rings once per background pass.
         for (int ring = 1; ring <= rx; ++ring) {
             for (int dx = -ring; dx <= ring; ++dx) {
                 m_horizontalScanOffsets.emplace_back(dx, -ring);
@@ -315,48 +436,56 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
         m_scanTotal = m_horizontalScanOffsets.size() * static_cast<std::size_t>(ry * 2 + 1);
         m_scanActive = true;
-        std::lock_guard<std::mutex> lock(m_cacheMutex);
-        for (auto it = m_cache.begin(); it != m_cache.end();) {
-            if (std::abs(it->second.position.x - current.x) > rx * 2 ||
-                std::abs(it->second.position.z - current.z) > rx * 2 ||
-                std::abs(it->second.position.y - current.y) > ry * 2) it = m_cache.erase(it);
-            else ++it;
-        }
     }
-    if (!m_scanActive) return;
 
-    const std::size_t plane = m_horizontalScanOffsets.size();
-    const std::size_t end = std::min(m_scanTotal, m_scanCursor +
-        static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 16384)));
-    auto verticalOffset = [](std::size_t layer) -> int {
-        if (layer == 0) return 0;
-        const int magnitude = static_cast<int>((layer + 1) / 2);
-        return (layer & 1u) ? -magnitude : magnitude;
-    };
-    for (std::size_t index = m_scanCursor; index < end; ++index) {
+    // Spend roughly one third of the configured query budget on the priority
+    // volume (enough to finish it in a single tick at the default budget) and
+    // the remainder on the broad scan. Low user-set budgets remain split fairly.
+    const std::size_t priorityBudget = scanBudget >= 2048u ? scanBudget / 3u : scanBudget / 2u;
+    std::size_t priorityUsed = 0;
+    if (m_priorityScanActive) {
+        const std::size_t end = std::min(m_priorityScanOffsets.size(), m_priorityScanCursor + priorityBudget);
+        for (std::size_t index = m_priorityScanCursor; index < end; ++index) {
+            const auto& offset = m_priorityScanOffsets[index];
+            inspectBlock(bedrocktools::sdk::BlockPos{
+                m_priorityScanOrigin.x + offset.x,
+                m_priorityScanOrigin.y + offset.y,
+                m_priorityScanOrigin.z + offset.z});
+        }
+        priorityUsed = end - m_priorityScanCursor;
+        m_priorityScanCursor = end;
+        if (m_priorityScanCursor >= m_priorityScanOffsets.size()) m_priorityScanActive = false;
+    }
+
+    const std::size_t wideBudget = scanBudget - priorityUsed;
+    if (m_scanActive && wideBudget > 0u) {
         const std::size_t verticalCount = static_cast<std::size_t>(ry * 2 + 1);
-        const std::size_t horizontalIndex = index / verticalCount;
-        const std::size_t layer = index % verticalCount;
-        const auto [dx, dz] = m_horizontalScanOffsets[horizontalIndex];
-        const int dy = verticalOffset(layer);
-        const bedrocktools::sdk::BlockPos pos{m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz};
-        const PositionKey key = keyFor(pos);
-        void* raw = getBlock(source, pos);
-        if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) continue;
-        const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
-        if (!name || name->empty()) continue;
-        Kind kind{};
-        std::string normalizedName = stripNamespace(*name);
-        if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
-        if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
+        const std::size_t end = std::min(m_scanTotal, m_scanCursor + wideBudget);
+        auto verticalOffset = [](std::size_t layer) -> int {
+            if (layer == 0) return 0;
+            const int magnitude = static_cast<int>((layer + 1) / 2);
+            return (layer & 1u) ? -magnitude : magnitude;
+        };
+        for (std::size_t index = m_scanCursor; index < end; ++index) {
+            const std::size_t horizontalIndex = index / verticalCount;
+            const std::size_t layer = index % verticalCount;
+            const auto [dx, dz] = m_horizontalScanOffsets[horizontalIndex];
+            const int dy = verticalOffset(layer);
+            inspectBlock(bedrocktools::sdk::BlockPos{
+                m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz});
+        }
+        m_scanCursor = end;
+        if (m_scanCursor >= m_scanTotal) m_scanActive = false;
+    }
+
+    if (!scannedPositions.empty() || !foundOutlines.empty()) {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
-        m_cache.erase(key);
-        if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
-            m_cache.emplace(key, Outline{pos, colorForBlock(kind, normalizedName), kind, normalizedName});
+        for (const auto& key : scannedPositions) m_cache.erase(key);
+        for (auto& outline : foundOutlines) {
+            if (m_cache.size() >= kMaxBlockEspCache) break;
+            m_cache.emplace(keyFor(outline.position), std::move(outline));
         }
     }
-    m_scanCursor = end;
-    if (m_scanCursor >= m_scanTotal) m_scanActive = false;
 }
 void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosition,
                                        std::vector<Outline>& output) const {
