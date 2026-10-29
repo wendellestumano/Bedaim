@@ -580,7 +580,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 m_horizontalScanOffsets.emplace_back(ring, dz);
             }
         }
-        m_scanTotal = m_horizontalScanOffsets.size() * static_cast<std::size_t>(ry * 2 + 1);
+        // Repeat the player's Y layer after each pair of adjacent vertical
+        // layers: 0, -1, +1, 0, -2, +2, ... . This keeps distant, same-height
+        // blocks fresh instead of revisiting the player's height only once per
+        // enormous 161-layer pass.
+        m_scanTotal = m_horizontalScanOffsets.size() * static_cast<std::size_t>(ry * 3);
         m_scanActive = true;
     }
 
@@ -620,24 +624,22 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const std::size_t wideBudget = scanBudget > m_uniqueQueriesThisTick
         ? scanBudget - m_uniqueQueriesThisTick : 0u;
     if (m_scanActive && wideBudget > 0u) {
-        const std::size_t verticalCount = static_cast<std::size_t>(ry * 2 + 1);
+        const std::size_t verticalCount = static_cast<std::size_t>(ry * 3);
         const std::size_t horizontalCount = m_horizontalScanOffsets.size();
         std::size_t wideUsed = 0;
-        auto verticalOffset = [](std::size_t layer) -> int {
-            if (layer == 0) return 0;
-            const int magnitude = static_cast<int>((layer + 1) / 2);
-            return (layer & 1u) ? -magnitude : magnitude;
-        };
-        // Scan the entire horizontal radius at the player's current Y first,
-        // then adjacent Y layers. The previous column-major order spent 2*ry+1
-        // queries at every nearer X/Z coordinate before reaching farther chunks,
-        // making same-height distant blocks take far too long to discover.
+        // Scan the full horizontal plane at the player's Y, adjacent planes, and
+        // revisit the player's Y every three layers: 0, -1, +1, 0, -2, +2, ...
+        // Combined with center-out horizontal offsets, this quickly detects far
+        // blocks at normal terrain height without abandoning vertical coverage.
         while (m_scanCursor < m_scanTotal && wideUsed < wideBudget) {
             const std::size_t index = m_scanCursor++;
             const std::size_t layer = index / horizontalCount;
             const std::size_t horizontalIndex = index % horizontalCount;
             const auto [dx, dz] = m_horizontalScanOffsets[horizontalIndex];
-            const int dy = verticalOffset(layer);
+            const std::size_t phase = layer % 3u;
+            const int dy = phase == 0u ? 0
+                : phase == 1u ? -static_cast<int>((layer + 2u) / 3u)
+                              : static_cast<int>((layer + 1u) / 3u);
             if (inspectBlock(bedrocktools::sdk::BlockPos{
                     m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz}))
                 ++wideUsed;
