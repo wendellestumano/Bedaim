@@ -159,6 +159,8 @@ bool BlockEspModule::isKindEnabled(Kind kind) const noexcept {
         case Kind::Shulker: return showShulkers;
         case Kind::Chest: return showChests;
         case Kind::EnderChest: return showEnderChests;
+        case Kind::Vault: return showVaults;
+        case Kind::Spawner: return showSpawners;
         case Kind::Hopper: return showHoppers;
         case Kind::Dispenser: return showDispensers;
         case Kind::Dropper: return showDroppers;
@@ -193,6 +195,8 @@ std::uint32_t BlockEspModule::colorFor(Kind kind) const noexcept {
 }
 std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) const noexcept {
     if (kind != Kind::Utility) return colorFor(kind);
+    if (name == "vault") return 0xFFFFD34Eu;
+    if (name.find("spawner") != std::string::npos || name == "mob_spawner") return 0xFF45E8D2u;
     if (name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp") return 0xFFFF3030u;
     if (name == "block_button" || name == "block_pressure_plate" ||
         name == "polished_blackstone_button" || name == "polished_blackstone_pressure_plate") return 0xFFB9B9B9u;
@@ -446,7 +450,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
 void BlockEspModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     showTracer=j.value("showTracer",showTracer); showShulkers=j.value("showShulkers",showShulkers);
-    showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests);
+    showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
     showDroppers=j.value("showDroppers",showDroppers); showBarrels=j.value("showBarrels",showBarrels);
     showFurnaces=j.value("showFurnaces",showFurnaces); showUtilityBlocks=j.value("showUtilityBlocks",showUtilityBlocks);
@@ -470,7 +474,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
 void BlockEspModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
-    j["showEnderChests"]=showEnderChests; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
+    j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
     j["showDroppers"]=showDroppers; j["showBarrels"]=showBarrels; j["showFurnaces"]=showFurnaces;
     j["showUtilityBlocks"]=showUtilityBlocks; j["maxScanRadius"]=maxScanRadius;
     for (const auto& [name, enabled] : m_utilityFilters) j["showBlock_" + name] = enabled;
