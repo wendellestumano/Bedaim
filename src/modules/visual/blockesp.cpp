@@ -115,14 +115,19 @@ BlockEspModule::PositionKey BlockEspModule::keyFor(const bedrocktools::sdk::Bloc
     return {p.x, p.y, p.z};
 }
 bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
-    const std::string name = stripNamespace(raw);
+    // Bedrock block identifiers are canonical lowercase names. Strip the
+    // namespace as a view so the hot scan loop does not allocate a string for
+    // every air/stone block it inspects.
+    const auto namespaceEnd = raw.find(':');
+    if (namespaceEnd != std::string_view::npos) raw.remove_prefix(namespaceEnd + 1);
+    const std::string_view name = raw;
     // Treat every chest variant as storage, including copper chests and any
     // future vanilla/custom names that follow the chest naming convention.
-    if (name.find("shulker_box") != std::string::npos) kind = Kind::Shulker;
+    if (name.find("shulker_box") != std::string_view::npos) kind = Kind::Shulker;
     else if (name == "ender_chest") kind = Kind::EnderChest;
-    else if (name.find("chest") != std::string::npos) kind = Kind::Chest;
-    else if (name.find("vault") != std::string::npos) kind = Kind::Vault;
-    else if (name.find("spawner") != std::string::npos || name == "mob_spawner" || name == "sculk_shrieker") kind = Kind::Spawner;
+    else if (name.find("chest") != std::string_view::npos) kind = Kind::Chest;
+    else if (name.find("vault") != std::string_view::npos) kind = Kind::Vault;
+    else if (name.find("spawner") != std::string_view::npos || name == "mob_spawner" || name == "sculk_shrieker") kind = Kind::Spawner;
     else if (name == "hopper") kind = Kind::Hopper;
     else if (name == "dispenser") kind = Kind::Dispenser;
     else if (name == "dropper") kind = Kind::Dropper;
@@ -135,8 +140,8 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
              name == "composter" || name == "lectern" || name == "beacon" || name == "bell" ||
              name == "jukebox" || name == "note_block" || name == "observer" ||
              name == "piston" || name == "sticky_piston" || name == "crafter" ||
-             name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp" || name == "lever" || name.find("button") != std::string::npos ||
-             name.find("pressure_plate") != std::string::npos || name == "target") kind = Kind::Utility;
+             name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp" || name == "lever" || name.find("button") != std::string_view::npos ||
+             name.find("pressure_plate") != std::string_view::npos || name == "target") kind = Kind::Utility;
     else return false;
     return true;
 }
@@ -302,10 +307,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         const int keepHorizontalSquared = keepHorizontal * keepHorizontal;
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         for (auto it = m_cache.begin(); it != m_cache.end();) {
-            const int dx = it->second.position.x - current.x;
-            const int dy = it->second.position.y - current.y;
-            const int dz = it->second.position.z - current.z;
-            if (dx * dx + dz * dz > keepHorizontalSquared || std::abs(dy) > keepVertical)
+            const std::int64_t dx = static_cast<std::int64_t>(it->second.position.x) - current.x;
+            const std::int64_t dy = static_cast<std::int64_t>(it->second.position.y) - current.y;
+            const std::int64_t dz = static_cast<std::int64_t>(it->second.position.z) - current.z;
+            if (dx * dx + dz * dz > static_cast<std::int64_t>(keepHorizontalSquared) || std::abs(dy) > keepVertical)
                 it = m_cache.erase(it);
             else
                 ++it;
@@ -373,7 +378,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
             const int magnitude = (index + 1) / 2;
             return (index & 1) ? -magnitude : magnitude;
         };
-        if (m_hasMovementDirection) {
+        if (horizontalMovement > 0.5f && m_hasMovementDirection) {
             for (int forward = 0; forward <= 24; ++forward) {
                 for (int lateralIndex = 0; lateralIndex <= 10; ++lateralIndex) {
                     const int lateral = centerOutOffset(lateralIndex);
