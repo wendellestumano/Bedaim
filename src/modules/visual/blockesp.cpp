@@ -496,8 +496,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
 
     // The priority scan is the fast discovery path near the player. While moving,
     // it becomes a forward corridor. While stationary, it scans a center-out
-    // 33x33x33 cube so targets 8-16 blocks away do not depend on the slow wide pass.
-    // The scan is incremental and is rebuilt only after meaningful movement / a turn.
+    // 17x17x17 cube. Keep this bounded: expanding this volume caused extra lag
+    // without fixing the underlying chunk-discovery limitation.
     bool movedFromPriorityCenter = false;
     if (m_hasPriorityCenter) {
         const int dx = current.x - m_priorityScanOrigin.x;
@@ -514,7 +514,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_priorityScanOrigin = current;
         m_priorityScanCursor = 0;
         m_priorityScanOffsets.clear();
-        m_priorityScanOffsets.reserve(35937u);
+        m_priorityScanOffsets.reserve(4913u);
 
         auto centerOutOffset = [](int index) -> int {
             if (index == 0) return 0;
@@ -538,7 +538,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 }
             }
         } else {
-            for (int shell = 0; shell <= 16; ++shell) {
+            for (int shell = 0; shell <= 8; ++shell) {
                 for (int dx = -shell; dx <= shell; ++dx) {
                     for (int dy = -shell; dy <= shell; ++dy) {
                         for (int dz = -shell; dz <= shell; ++dz) {
@@ -597,7 +597,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // Priority gets a small reserve for forward movement; the wide pass uses any
     // remaining unique-query budget. Never attempt the entire 160k volume at once.
     const std::size_t localBudget = (scanBudget * 3u) / 4u;
-    const std::size_t priorityBudget = scanBudget / 4u;
+    const std::size_t priorityBudget = scanBudget / 8u;
     if (m_localScanActive) {
         const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
         for (std::size_t index = m_localScanCursor; index < end; ++index) {
@@ -777,7 +777,7 @@ void BlockEspModule::onMenuRegistered() {
     slider("horizontalRadius","Horizontal radius","Experimental long-range scan and render radius.", "scan",320,20,320,1," blocks");
     slider("verticalRadius","Vertical radius","Vertical scan and render radius for deep underground blocks.", "scan",80,10,160,1," blocks");
     toggle("maxScanRadius","Max Scan Radius","Use maximum supported radius (320 horizontal, 160 vertical blocks).",false,"scan");
-    slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",16384,256,16384,256," blocks/tick");
+    slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",4096,256,8192,256," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
     slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
     auto color = [&](const char* key,const char* title,std::uint32_t def) {
@@ -831,7 +831,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
         const bool scanShapeChanged = key=="horizontalRadius" || key=="verticalRadius";
         if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,320);
         else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,160);
-        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,16384);
+        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,8192);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         // A budget change affects work per tick, not the scan region/cursor.
@@ -864,7 +864,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     }
     horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,320);
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,160);
-    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),256,16384);
+    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),256,8192);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
     tracerThickness=static_cast<float>(std::clamp(j.value("tracerThickness",4),1,10))/100.0f;
     loadColor(j,"shulkerColor",shulkerColor); loadColor(j,"chestColor",chestColor);
