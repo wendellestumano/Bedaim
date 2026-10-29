@@ -181,8 +181,6 @@ std::uint32_t BlockEspModule::colorFor(Kind kind) const noexcept {
         case Kind::Chest: return chestColor;
         case Kind::Vault: return 0xFFFFD34Eu;
         case Kind::Spawner: return 0xFF45E8D2u;
-        case Kind::Vault: return 0xFFFFD34Eu;
-        case Kind::Spawner: return 0xFF45E8D2u;
         case Kind::EnderChest: return enderChestColor;
         case Kind::Hopper: return hopperColor;
         case Kind::Dispenser: return dispenserColor;
