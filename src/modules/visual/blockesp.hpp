@@ -72,6 +72,7 @@ private:
     bool isKindEnabled(Kind kind) const noexcept;
     bool isBlockEnabled(const Outline& outline) const;
     std::uint32_t colorFor(Kind kind) const noexcept;
+    std::uint32_t colorForBlock(Kind kind, std::string_view blockName) const noexcept;
     void clearCache();
 
     bedrocktools::sdk::BlockSource* m_blockSource = nullptr;
