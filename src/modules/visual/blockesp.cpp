@@ -255,27 +255,29 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const bedrocktools::sdk::BlockPos current{
         static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)), static_cast<int>(std::floor(p.z))};
 
-    // Fast path: refresh a small cube around the player every tick. This makes
-    // nearby placements and removals visible immediately instead of waiting
-    // for the long-range incremental scan to reach the same coordinates.
-    constexpr int kImmediateRadius = 5;
-    for (int dx = -kImmediateRadius; dx <= kImmediateRadius; ++dx) {
-        for (int dy = -kImmediateRadius; dy <= kImmediateRadius; ++dy) {
-            for (int dz = -kImmediateRadius; dz <= kImmediateRadius; ++dz) {
-                const bedrocktools::sdk::BlockPos pos{current.x + dx, current.y + dy, current.z + dz};
-                const PositionKey key = keyFor(pos);
-                void* raw = getBlock(source, pos);
-                if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) continue;
-                const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
-                if (!name || name->empty()) continue;
-                Kind kind{};
-                std::string normalizedName = stripNamespace(*name);
-                if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
-                if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
-                std::lock_guard<std::mutex> lock(m_cacheMutex);
-                m_cache.erase(key);
-                if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
-                    m_cache.emplace(key, Outline{pos, colorForBlock(kind, normalizedName), kind, normalizedName});
+    // Lightweight near-player refresh: a 9x9x9 cube every other tick is
+    // responsive enough for nearby placements/removals without spending over
+    // a thousand block queries every tick on mobile CPUs.
+    constexpr int kLocalRefreshRadius = 4;
+    if ((m_tickCount & 1u) == 0u) {
+        for (int dx = -kLocalRefreshRadius; dx <= kLocalRefreshRadius; ++dx) {
+            for (int dy = -kLocalRefreshRadius; dy <= kLocalRefreshRadius; ++dy) {
+                for (int dz = -kLocalRefreshRadius; dz <= kLocalRefreshRadius; ++dz) {
+                    const bedrocktools::sdk::BlockPos pos{current.x + dx, current.y + dy, current.z + dz};
+                    const PositionKey key = keyFor(pos);
+                    void* raw = getBlock(source, pos);
+                    if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) continue;
+                    const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
+                    if (!name || name->empty()) continue;
+                    Kind kind{};
+                    std::string normalizedName = stripNamespace(*name);
+                    if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
+                    if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
+                    std::lock_guard<std::mutex> lock(m_cacheMutex);
+                    m_cache.erase(key);
+                    if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
+                        m_cache.emplace(key, Outline{pos, colorForBlock(kind, normalizedName), kind, normalizedName});
+                    }
                 }
             }
         }
