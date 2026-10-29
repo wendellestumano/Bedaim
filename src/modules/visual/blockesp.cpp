@@ -243,6 +243,7 @@ std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) co
 void BlockEspModule::clearCache() {
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     m_cache.clear();
+    m_cacheRefreshPositions.clear();
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
@@ -382,22 +383,26 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     std::vector<PositionKey> cachedValidationPositions;
     if (cacheValidationBudget > 0u) {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
-        const std::size_t cacheSize = m_cache.size();
-        if (cacheSize > 0u) {
-            m_cacheRefreshCursor %= cacheSize;
-            auto it = m_cache.begin();
-            for (std::size_t skipped = 0; skipped < m_cacheRefreshCursor; ++skipped) ++it;
-            const std::size_t count = std::min(cacheValidationBudget, cacheSize);
-            cachedValidationPositions.reserve(count);
-            for (std::size_t i = 0; i < count; ++i) {
-                if (it == m_cache.end()) it = m_cache.begin();
-                cachedValidationPositions.push_back(it->first);
-                ++it;
+        // Snapshot cache keys once per validation sweep. The unordered_map order
+        // may change as records are refreshed, so walking it by index each tick
+        // could repeatedly revisit the same subset and starve older records.
+        if (m_cacheRefreshCursor >= m_cacheRefreshPositions.size()) {
+            m_cacheRefreshPositions.clear();
+            m_cacheRefreshPositions.reserve(m_cache.size());
+            for (const auto& [key, outline] : m_cache) {
+                (void)outline;
+                m_cacheRefreshPositions.push_back(key);
             }
-            m_cacheRefreshCursor = (m_cacheRefreshCursor + count) % cacheSize;
-        } else {
             m_cacheRefreshCursor = 0u;
         }
+        const std::size_t remaining = m_cacheRefreshPositions.size() - m_cacheRefreshCursor;
+        const std::size_t count = std::min(cacheValidationBudget, remaining);
+        cachedValidationPositions.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            const PositionKey key = m_cacheRefreshPositions[m_cacheRefreshCursor + i];
+            if (m_cache.contains(key)) cachedValidationPositions.push_back(key);
+        }
+        m_cacheRefreshCursor += count;
     }
     for (const auto& key : cachedValidationPositions) {
         inspectBlock(bedrocktools::sdk::BlockPos{key.x, key.y, key.z});
