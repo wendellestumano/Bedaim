@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -17,6 +18,7 @@ public:
         bedrocktools::sdk::BlockPos position{};
         std::uint32_t color = 0xFFFFFFFFu;
         Kind kind = Kind::Utility;
+        std::string blockName;
     };
 
     BlockEspModule();
@@ -68,6 +70,7 @@ private:
     static bool classify(std::string_view name, Kind& kind);
     static std::uint32_t defaultColor(Kind kind) noexcept;
     bool isKindEnabled(Kind kind) const noexcept;
+    bool isBlockEnabled(const Outline& outline) const;
     std::uint32_t colorFor(Kind kind) const noexcept;
     void clearCache();
 
@@ -82,4 +85,5 @@ private:
     std::uint64_t m_lastResolveAttemptTick = 0;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<PositionKey, Outline, PositionHash> m_cache;
+    std::unordered_map<std::string, bool> m_utilityFilters;
 };
