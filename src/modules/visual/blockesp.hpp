@@ -9,7 +9,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 class BlockEspModule final : public Module {
@@ -70,6 +69,11 @@ private:
     struct PositionHash {
         std::size_t operator()(const PositionKey& p) const noexcept;
     };
+    struct QuerySlot {
+        PositionKey position{};
+        std::uint32_t generation = 0;
+    };
+    bool markQueryPosition(const PositionKey& position) noexcept;
     static PositionKey keyFor(const bedrocktools::sdk::BlockPos& pos) noexcept;
     static bool classify(std::string_view name, Kind& kind);
     static std::uint32_t defaultColor(Kind kind) noexcept;
@@ -109,6 +113,10 @@ private:
     std::uint64_t m_lastResolveAttemptTick = 0;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<PositionKey, Outline, PositionHash> m_cache;
-    std::unordered_set<PositionKey, PositionHash> m_tickQueried;
+    // Fixed open-addressing table avoids per-block allocations while deduplicating
+    // overlapping scan passes. 32768 slots covers the maximum 16384 queries/tick.
+    std::vector<QuerySlot> m_queryDedupSlots;
+    std::uint32_t m_queryGeneration = 0;
+    std::size_t m_uniqueQueriesThisTick = 0;
     std::unordered_map<std::string, bool> m_utilityFilters;
 };
