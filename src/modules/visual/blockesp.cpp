@@ -101,6 +101,7 @@ std::string utilityTitle(std::string name) {
 
 BlockEspModule::BlockEspModule()
     : Module("BlockESP", "Colored outlines and tracers for useful blocks: shulkers, storage, redstone and workstations.") {
+    m_queryDedupSlots.resize(1u << 15);
     showInMenu = true;
     for (const auto& name : utilityBlockNames()) m_utilityFilters.emplace(name, true);
 }
@@ -113,6 +114,23 @@ std::size_t BlockEspModule::PositionHash::operator()(const PositionKey& p) const
 }
 BlockEspModule::PositionKey BlockEspModule::keyFor(const bedrocktools::sdk::BlockPos& p) noexcept {
     return {p.x, p.y, p.z};
+}
+bool BlockEspModule::markQueryPosition(const PositionKey& position) noexcept {
+    if (m_queryDedupSlots.empty()) return false;
+    const std::size_t mask = m_queryDedupSlots.size() - 1u;
+    std::size_t slotIndex = PositionHash{}(position) & mask;
+    for (std::size_t probe = 0; probe < m_queryDedupSlots.size(); ++probe) {
+        auto& slot = m_queryDedupSlots[slotIndex];
+        if (slot.generation != m_queryGeneration) {
+            slot.position = position;
+            slot.generation = m_queryGeneration;
+            ++m_uniqueQueriesThisTick;
+            return true;
+        }
+        if (slot.position == position) return false;
+        slotIndex = (slotIndex + 1u) & mask;
+    }
+    return false;
 }
 bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
     // Bedrock block identifiers are canonical lowercase names. Strip the
@@ -329,12 +347,14 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     foundOutlines.reserve(64u);
     // Several scan passes overlap by design. Deduplicate their coordinates before
     // calling the native BlockSource function; a native lookup is the expensive part.
-    m_tickQueried.clear();
-    if (m_tickQueried.bucket_count() < scanBudget + 729u)
-        m_tickQueried.reserve(scanBudget + 729u);
+    if (++m_queryGeneration == 0u) {
+        for (auto& slot : m_queryDedupSlots) slot.generation = 0u;
+        m_queryGeneration = 1u;
+    }
+    m_uniqueQueriesThisTick = 0u;
     auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos) -> bool {
         const PositionKey key = keyFor(pos);
-        if (!m_tickQueried.emplace(key).second) return false;
+        if (!markQueryPosition(key)) return false;
         void* raw = getBlock(source, pos);
         if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return true;
         const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
@@ -534,8 +554,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // Budget against unique native queries, not cursor advances. If the local
     // and priority passes overlap, the wide pass uses the saved work to continue
     // until the per-tick query budget is actually spent.
-    const std::size_t wideBudget = scanBudget > m_tickQueried.size()
-        ? scanBudget - m_tickQueried.size() : 0u;
+    const std::size_t wideBudget = scanBudget > m_uniqueQueriesThisTick
+        ? scanBudget - m_uniqueQueriesThisTick : 0u;
     if (m_scanActive && wideBudget > 0u) {
         const std::size_t verticalCount = static_cast<std::size_t>(ry * 2 + 1);
         std::size_t wideUsed = 0;
