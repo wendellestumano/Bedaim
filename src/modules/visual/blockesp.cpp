@@ -499,6 +499,19 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
     const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
     const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
     output.reserve(kMaxBlockEspRendered);
+
+    struct Candidate {
+        float distanceSquared = 0.0f;
+        const Outline* outline = nullptr;
+    };
+    std::vector<Candidate> nearest;
+    nearest.reserve(kMaxBlockEspRendered);
+    // Heap top is the farthest retained block. This keeps selection O(N log K)
+    // and ensures new nearby blocks are not hidden by arbitrary hash-map order.
+    auto fartherHeap = [](const Candidate& a, const Candidate& b) {
+        return a.distanceSquared < b.distanceSquared;
+    };
+
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     for (const auto& [key, outline] : m_cache) {
         (void)key;
@@ -506,12 +519,29 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
         const float dx = static_cast<float>(outline.position.x) + 0.5f - playerPosition.x;
         const float dy = static_cast<float>(outline.position.y) + 0.5f - playerPosition.y;
         const float dz = static_cast<float>(outline.position.z) + 0.5f - playerPosition.z;
-        if (dx * dx + dz * dz > static_cast<float>(rx * rx) || std::fabs(dy) > static_cast<float>(ry)) continue;
-        output.push_back(Outline{outline.position, colorForBlock(outline.kind, outline.blockName), outline.kind, outline.blockName});
-        if (output.size() >= kMaxBlockEspRendered) break;
+        const float horizontalDistanceSquared = dx * dx + dz * dz;
+        if (horizontalDistanceSquared > static_cast<float>(rx * rx) || std::fabs(dy) > static_cast<float>(ry)) continue;
+
+        const Candidate candidate{horizontalDistanceSquared + dy * dy, &outline};
+        if (nearest.size() < kMaxBlockEspRendered) {
+            nearest.push_back(candidate);
+            std::push_heap(nearest.begin(), nearest.end(), fartherHeap);
+        } else if (candidate.distanceSquared < nearest.front().distanceSquared) {
+            std::pop_heap(nearest.begin(), nearest.end(), fartherHeap);
+            nearest.back() = candidate;
+            std::push_heap(nearest.begin(), nearest.end(), fartherHeap);
+        }
+    }
+
+    std::sort(nearest.begin(), nearest.end(), [](const Candidate& a, const Candidate& b) {
+        return a.distanceSquared < b.distanceSquared;
+    });
+    for (const auto& candidate : nearest) {
+        const auto& outline = *candidate.outline;
+        output.push_back(Outline{
+            outline.position, colorForBlock(outline.kind, outline.blockName), outline.kind, outline.blockName});
     }
 }
-
 void BlockEspModule::onMenuRegistered() {
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema; nlohmann::json config; saveConfig(config);
