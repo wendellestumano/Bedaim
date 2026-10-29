@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 class BlockEspModule final : public Module {
@@ -108,5 +109,6 @@ private:
     std::uint64_t m_lastResolveAttemptTick = 0;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<PositionKey, Outline, PositionHash> m_cache;
+    std::unordered_set<PositionKey, PositionHash> m_tickQueried;
     std::unordered_map<std::string, bool> m_utilityFilters;
 };
