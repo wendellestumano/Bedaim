@@ -313,7 +313,11 @@ void BlockEspModule::onMenuRegistered() {
     toggle("showDroppers","Droppers","Droppers.",true,"types");
     toggle("showBarrels","Barrels","Barrels.",true,"types");
     toggle("showFurnaces","Furnaces","Furnaces, blast furnaces and smokers.",true,"types");
-    toggle("showUtilityBlocks","Other useful blocks","Workstations and selected redstone utility blocks.",true,"types");
+    for (const auto& name : utilityBlockNames()) {
+        const std::string key = "showBlock_" + name;
+        const std::string title = utilityTitle(name);
+        toggle(key.c_str(), title.c_str(), "Independently detect this block type.", true, "types");
+    }
     toggle("showTracer","Show tracer","Draw a line from the camera to each detected block.",true,"tracer");
     auto slider = [&](const char* key,const char* title,const char* desc,const char* cat,int def,int min,int max,int step,const char* unit) {
         ConfigNodeV2 n; n.id=key; n.key=key; n.title=title; n.description=desc; n.category=cat;
@@ -345,6 +349,16 @@ void BlockEspModule::onMenuRegistered() {
 }
 bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     bool b=false;
+    constexpr std::string_view utilityPrefix = "showBlock_";
+    if (key.size() > utilityPrefix.size() && key.substr(0, utilityPrefix.size()) == utilityPrefix) {
+        if (!parseBool(value, b)) return false;
+        const std::string blockName(key.substr(utilityPrefix.size()));
+        auto it = m_utilityFilters.find(blockName);
+        if (it == m_utilityFilters.end()) return false;
+        it->second = b;
+        onMenuRegistered();
+        return true;
+    }
     if (key=="showTracer"||key=="showShulkers"||key=="showChests"||key=="showEnderChests"||
         key=="showHoppers"||key=="showDispensers"||key=="showDroppers"||key=="showBarrels"||
         key=="showFurnaces"||key=="showUtilityBlocks") {
@@ -382,6 +396,11 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
     showDroppers=j.value("showDroppers",showDroppers); showBarrels=j.value("showBarrels",showBarrels);
     showFurnaces=j.value("showFurnaces",showFurnaces); showUtilityBlocks=j.value("showUtilityBlocks",showUtilityBlocks);
+    for (const auto& name : utilityBlockNames()) {
+        const std::string key = "showBlock_" + name;
+        auto it = m_utilityFilters.find(name);
+        if (it != m_utilityFilters.end()) it->second = j.value(key, showUtilityBlocks);
+    }
     horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),4,32);
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),2,16);
     scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),128,2048);
@@ -398,7 +417,9 @@ void BlockEspModule::saveConfig(nlohmann::json& j) {
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
     j["showEnderChests"]=showEnderChests; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
     j["showDroppers"]=showDroppers; j["showBarrels"]=showBarrels; j["showFurnaces"]=showFurnaces;
-    j["showUtilityBlocks"]=showUtilityBlocks; j["horizontalRadius"]=horizontalRadius;
+    j["showUtilityBlocks"]=showUtilityBlocks;
+    for (const auto& [name, enabled] : m_utilityFilters) j["showBlock_" + name] = enabled;
+    j["horizontalRadius"]=horizontalRadius;
     j["verticalRadius"]=verticalRadius; j["scanBudgetPerTick"]=scanBudgetPerTick;
     j["outlineThickness"]=static_cast<int>(std::lround(outlineThickness*100.0f));
     j["tracerThickness"]=static_cast<int>(std::lround(tracerThickness*100.0f));
