@@ -5,6 +5,7 @@
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/world/BlockSource.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <bedrocktools/sdk/render/Block.hpp>
 #include <pl/ModMenu.hpp>
 #include <algorithm>
 #include <atomic>
