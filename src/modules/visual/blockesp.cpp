@@ -22,7 +22,7 @@ namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
 constexpr std::size_t kMaxBlockEspCache = 8192;
-constexpr std::size_t kMaxBlockEspRendered = 128;
+constexpr std::size_t kMaxBlockEspRendered = 1024;
 
 void resolveBlockGetBlock() {
     if (g_blockEspGetBlock.load(std::memory_order_acquire)) return;
@@ -412,16 +412,31 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         };
         std::vector<std::pair<int, int>> localHorizontal;
         localHorizontal.reserve(32u * 32u);
-        for (int ring = 0; ring <= kLocalHalfWidth; ++ring) {
-            for (int dx = -ring; dx <= ring; ++dx) {
-                for (int dz = -ring; dz <= ring; ++dz) {
-                    if (std::max(std::abs(dx), std::abs(dz)) != ring) continue;
-                    if (dx < -kLocalHalfWidth || dx >= kLocalHalfWidth ||
-                        dz < -kLocalHalfWidth || dz >= kLocalHalfWidth) continue;
-                    localHorizontal.emplace_back(dx, dz);
-                }
-            }
+        for (int dx = -kLocalHalfWidth; dx < kLocalHalfWidth; ++dx) {
+            for (int dz = -kLocalHalfWidth; dz < kLocalHalfWidth; ++dz)
+                localHorizontal.emplace_back(dx, dz);
         }
+        // Finish the nearest chunk before spending the scan budget on farther
+        // chunks. The old per-block rings interleaved chunks and delayed a full
+        // chunk's worth of chests until many ticks later.
+        auto floorChunk = [](int block) -> int {
+            return block >= 0 ? block / 16 : (block - 15) / 16;
+        };
+        const int playerChunkX = floorChunk(m_localScanOrigin.x);
+        const int playerChunkZ = floorChunk(m_localScanOrigin.z);
+        std::sort(localHorizontal.begin(), localHorizontal.end(),
+            [&](const auto& a, const auto& b) {
+                const int ax = floorChunk(m_localScanOrigin.x + a.first) - playerChunkX;
+                const int az = floorChunk(m_localScanOrigin.z + a.second) - playerChunkZ;
+                const int bx = floorChunk(m_localScanOrigin.x + b.first) - playerChunkX;
+                const int bz = floorChunk(m_localScanOrigin.z + b.second) - playerChunkZ;
+                const int aChunkDistance = ax * ax + az * az;
+                const int bChunkDistance = bx * bx + bz * bz;
+                if (aChunkDistance != bChunkDistance) return aChunkDistance < bChunkDistance;
+                const int aBlockDistance = a.first * a.first + a.second * a.second;
+                const int bBlockDistance = b.first * b.first + b.second * b.second;
+                return aBlockDistance < bBlockDistance;
+            });
         std::vector<int> localVertical;
         localVertical.reserve(160u);
         for (int i = 0; i < 160; ++i) localVertical.push_back(centerOutOffset(i));
@@ -522,11 +537,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_scanActive = true;
     }
 
-    // Reserve budget for each pass: near-player refresh is already done above,
-    // then local volume gets ~50%, forward priority ~25%, and broad scan the rest.
-    // This keeps the expanded 32x160x32 area responsive without a 160k-query spike.
-    const std::size_t localBudget = scanBudget / 2u;
-    const std::size_t priorityBudget = scanBudget / 4u;
+    // Spend most of the query budget completing the nearest chunks quickly.
+    // Priority gets a small reserve for forward movement; the wide pass uses any
+    // remaining unique-query budget. Never attempt the entire 160k volume at once.
+    const std::size_t localBudget = (scanBudget * 3u) / 4u;
+    const std::size_t priorityBudget = scanBudget / 8u;
     if (m_localScanActive) {
         const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
         for (std::size_t index = m_localScanCursor; index < end; ++index) {
