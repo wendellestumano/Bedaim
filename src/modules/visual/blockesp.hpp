@@ -42,8 +42,9 @@ public:
     bool showBarrels = true;
     bool showFurnaces = true;
     bool showUtilityBlocks = true;
+    bool maxScanRadius = false;
     int horizontalRadius = 80;
-    int verticalRadius = 40;
+    int verticalRadius = 80;
     int scanBudgetPerTick = 16384;
     float outlineThickness = 0.035f;
     float tracerThickness = 0.035f;
