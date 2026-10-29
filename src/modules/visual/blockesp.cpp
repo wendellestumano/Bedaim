@@ -340,8 +340,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
 
     // Each query contributes to a batched cache update. The old implementation
     // acquired the cache mutex for every queried block (often >16,000 locks/tick).
-    // Batch erases/inserts once per tick instead, while keeping unloaded positions
-    // untouched when BlockSource returns an invalid pointer.
+    // Batch erases/inserts once per tick. If BlockSource cannot resolve a queried
+    // position, evict any old outline there so unloaded chunks do not leave stale ESP.
     std::vector<PositionKey> scannedPositions;
     std::vector<Outline> foundOutlines;
     scannedPositions.reserve(scanBudget + 729u);
@@ -356,12 +356,15 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos) -> bool {
         const PositionKey key = keyFor(pos);
         if (!markQueryPosition(key)) return false;
+        // A successful scan invalidates the old outline first; a currently valid
+        // target block is reinserted below. This also removes stale cached blocks
+        // when the native lookup says the chunk/position is no longer available.
+        scannedPositions.push_back(key);
         void* raw = getBlock(source, pos);
         if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return true;
         const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
         if (!name || name->empty()) return true;
 
-        scannedPositions.push_back(key);
         Kind kind{};
         if (!classify(*name, kind)) return true;
 
@@ -371,6 +374,34 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         foundOutlines.push_back(Outline{pos, colorForBlock(kind, normalizedName), kind, std::move(normalizedName)});
         return true;
     };
+
+    // Revalidate a rotating slice of already-discovered blocks every tick.
+    // This catches distant blocks that were broken after the broad scan passed
+    // their coordinates, without forcing a full 320-block scan to restart.
+    const std::size_t cacheValidationBudget = std::min<std::size_t>(256u, scanBudget / 64u);
+    std::vector<PositionKey> cachedValidationPositions;
+    if (cacheValidationBudget > 0u) {
+        std::lock_guard<std::mutex> lock(m_cacheMutex);
+        const std::size_t cacheSize = m_cache.size();
+        if (cacheSize > 0u) {
+            m_cacheRefreshCursor %= cacheSize;
+            auto it = m_cache.begin();
+            for (std::size_t skipped = 0; skipped < m_cacheRefreshCursor; ++skipped) ++it;
+            const std::size_t count = std::min(cacheValidationBudget, cacheSize);
+            cachedValidationPositions.reserve(count);
+            for (std::size_t i = 0; i < count; ++i) {
+                if (it == m_cache.end()) it = m_cache.begin();
+                cachedValidationPositions.push_back(it->first);
+                ++it;
+            }
+            m_cacheRefreshCursor = (m_cacheRefreshCursor + count) % cacheSize;
+        } else {
+            m_cacheRefreshCursor = 0u;
+        }
+    }
+    for (const auto& key : cachedValidationPositions) {
+        inspectBlock(bedrocktools::sdk::BlockPos{key.x, key.y, key.z});
+    }
 
     // Very fast near-player refresh: immediate changes/removals are checked every
     // other tick, while the much larger local volume below is scanned incrementally.
