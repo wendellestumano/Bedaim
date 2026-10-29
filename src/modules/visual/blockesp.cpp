@@ -723,7 +723,7 @@ void BlockEspModule::onMenuRegistered() {
     };
     slider("horizontalRadius","Horizontal radius","Experimental long-range scan and render radius.", "scan",320,20,320,1," blocks");
     slider("verticalRadius","Vertical radius","Vertical scan and render radius for deep underground blocks.", "scan",80,10,160,1," blocks");
-    toggle("maxScanRadius","Max Scan Radius","Use the maximum supported horizontal and vertical scan radius (160 blocks each direction).",false,"scan");
+    toggle("maxScanRadius","Max Scan Radius","Use maximum supported radius (320 horizontal, 160 vertical blocks).",false,"scan");
     slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",16384,256,16384,256," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
     slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
