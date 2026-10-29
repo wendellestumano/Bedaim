@@ -75,11 +75,38 @@ std::string stripNamespace(std::string_view name) {
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
 }
+const std::vector<std::string>& utilityBlockNames() {
+    static const std::vector<std::string> names = {
+        "crafting_table","brewing_stand","anvil","chipped_anvil","damaged_anvil",
+        "smithing_table","enchanting_table","loom","stonecutter","cartography_table",
+        "fletching_table","grindstone","composter","lectern","beacon","bell","jukebox",
+        "note_block","observer","piston","sticky_piston","crafter","redstone_block",
+        "lever","target","oak_button","spruce_button","birch_button","jungle_button",
+        "acacia_button","dark_oak_button","mangrove_button","cherry_button","bamboo_button",
+        "crimson_button","warped_button","stone_button","polished_blackstone_button",
+        "oak_pressure_plate","spruce_pressure_plate","birch_pressure_plate","jungle_pressure_plate",
+        "acacia_pressure_plate","dark_oak_pressure_plate","mangrove_pressure_plate",
+        "cherry_pressure_plate","bamboo_pressure_plate","crimson_pressure_plate",
+        "warped_pressure_plate","stone_pressure_plate","polished_blackstone_pressure_plate",
+        "light_weighted_pressure_plate","heavy_weighted_pressure_plate"
+    };
+    return names;
+}
+std::string utilityTitle(std::string name) {
+    std::replace(name.begin(), name.end(), '_', ' ');
+    bool upper = true;
+    for (char& ch : name) {
+        if (upper) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        upper = ch == ' ';
+    }
+    return "Show " + name;
+}
 }
 
 BlockEspModule::BlockEspModule()
     : Module("BlockESP", "Colored outlines and tracers for useful blocks: shulkers, storage, redstone and workstations.") {
     showInMenu = true;
+    for (const auto& name : utilityBlockNames()) m_utilityFilters.emplace(name, true);
 }
 
 std::size_t BlockEspModule::PositionHash::operator()(const PositionKey& p) const noexcept {
@@ -137,9 +164,14 @@ bool BlockEspModule::isKindEnabled(Kind kind) const noexcept {
         case Kind::Dropper: return showDroppers;
         case Kind::Barrel: return showBarrels;
         case Kind::Furnace: return showFurnaces;
-        case Kind::Utility: return showUtilityBlocks;
+        case Kind::Utility: return true;
         default: return false;
     }
+}
+bool BlockEspModule::isBlockEnabled(const Outline& outline) const {
+    if (outline.kind != Kind::Utility) return isKindEnabled(outline.kind);
+    const auto it = m_utilityFilters.find(outline.blockName);
+    return it != m_utilityFilters.end() && it->second;
 }
 std::uint32_t BlockEspModule::colorFor(Kind kind) const noexcept {
     switch (kind) {
@@ -230,10 +262,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
         if (!name || name->empty()) continue;
         Kind kind{};
+        const std::string normalizedName = stripNamespace(*name);
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_cache.erase(key);
         if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
-            m_cache.emplace(key, Outline{pos, colorFor(kind), kind});
+            m_cache.emplace(key, Outline{pos, colorFor(kind), kind, normalizedName});
         }
     }
     m_scanCursor = end;
@@ -249,12 +282,12 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     for (const auto& [key, outline] : m_cache) {
         (void)key;
-        if (!isKindEnabled(outline.kind)) continue;
+        if (!isBlockEnabled(outline)) continue;
         const float dx = static_cast<float>(outline.position.x) + 0.5f - playerPosition.x;
         const float dy = static_cast<float>(outline.position.y) + 0.5f - playerPosition.y;
         const float dz = static_cast<float>(outline.position.z) + 0.5f - playerPosition.z;
         if (dx * dx + dz * dz > static_cast<float>(rx * rx) || std::fabs(dy) > static_cast<float>(ry)) continue;
-        output.push_back(Outline{outline.position, colorFor(outline.kind), outline.kind});
+        output.push_back(Outline{outline.position, colorFor(outline.kind), outline.kind, outline.blockName});
         if (output.size() >= kMaxBlockEspRendered) break;
     }
 }
