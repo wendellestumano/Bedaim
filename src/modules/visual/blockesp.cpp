@@ -282,7 +282,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     }
     const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
     const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
-    const int moveThreshold = 8;
+    // Rebuild the long-range scan after roughly two chunks (32 blocks),
+    // rather than constantly restarting while walking or flying. The local
+    // immediate scan above keeps nearby block changes responsive between passes.
+    constexpr int moveThreshold = 32;
     const bool movedFar = std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
         std::abs(current.z - m_lastCenter.z) >= moveThreshold ||
         std::abs(current.y - m_lastCenter.y) >= moveThreshold;
@@ -357,8 +360,8 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
                                        std::vector<Outline>& output) const {
     output.clear();
     if (!enabled || !masterEnabled || !keybindActive) return;
-    const int rx = std::clamp(horizontalRadius, 20, 160);
-    const int ry = std::clamp(verticalRadius, 10, 80);
+    const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
+    const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
     output.reserve(kMaxBlockEspRendered);
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     for (const auto& [key, outline] : m_cache) {
