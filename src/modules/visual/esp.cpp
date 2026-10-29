@@ -219,13 +219,16 @@ void EspModule::onMenuRegistered(){
  schema.defaultCategory("players").category("players","Players","Player outline visibility and distance")
   .category("indicators","HUD indicators","Lock in Aim ring settings")
   .category("locator","Locator arrow","Off-screen direction arrow settings")
-  .category("appearance","ESP appearance","Locator and hitbox-related appearance settings")
+  .category("appearance","ESP appearance","World-space ESP and hitbox outline thickness")
   .category("colors","Game-mode colors","Hexadecimal ARGB outline colors");
  auto toggle=[&](const char* key,const char* title,const char* desc,bool d,const char* category="players"){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;n.type=ConfigControlTypeV2::Toggle;
   n.defaultValue=d?"true":"false";n.currentValue=cfgText(config,key,n.defaultValue.c_str());n.hasCurrentValue=true;schema.node(std::move(n));
  };
+ toggle("showPlayers","Show players","Draw outlines around other players.",true);
  toggle("infiniteRange","Infinite ESP range","Show ESP and locator targets at any distance among entities loaded by the game.",true);
+ toggle("box2D","2D ESP box","Render player ESP as a camera-facing 2D rectangle. Off uses the 3D world-space box.",false,"appearance");
+ toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
  toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
  toggle("showOffscreenIndicators","Show locator arrow","Point to the nearest player outside the view.",true,"locator");
  toggle("locatorAnimated","Animate locator arrow","Pulse the locator arrow independently of the target ring.",true,"locator");
@@ -252,8 +255,11 @@ void EspModule::onMenuRegistered(){
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
  slider("locatorSpeed","Locator animation speed","Pulse speed of the off-screen direction arrow.", "locator",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
+ slider("outlineThickness","ESP box thickness","Approximate outline thickness for normal player ESP boxes. Zero uses one line.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
+ slider("box2DThickness","2D boxes thickness","Screen-pixel-like thickness for the camera-facing 2D ESP box.", "appearance",2.0f,1.0f,10.0f,1.0f," px");
+ slider("projectionFov","2D projection FOV","Vertical FOV used to scale 2D ESP box thickness with camera depth.", "appearance",70.0f,40.0f,120.0f,1.0f,"°");
  slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
- ConfigNodeV2 r;r.id="range";r.key="range";r.title="Locator range";r.description="Maximum range for locator targets when infinite range is off.";
+ ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
  r.category="players";r.type=ConfigControlTypeV2::SliderFloat;r.defaultValue="30";r.currentValue=cfgText(config,"range","30");
  r.hasCurrentValue=true;r.minValue="8";r.maxValue="80";r.step="1";r.unit=" blocks";schema.node(std::move(r));
  auto color=[&](const char* key,const char* title,const char* category="colors"){
@@ -261,6 +267,8 @@ void EspModule::onMenuRegistered(){
   n.category=category;n.type=ConfigControlTypeV2::Text;n.defaultValue="";n.currentValue=cfgText(config,key,"");
   n.hasCurrentValue=true;n.placeholder="#AARRGGBB";n.maxLength=9;schema.node(std::move(n));
  };
+ color("survivalColor","Survival color");color("creativeColor","Creative color");color("spectatorColor","Spectator color");
+ color("adventureColor","Adventure color");color("unknownColor","Unknown-mode color");
  color("targetColor","Target ring color","indicators");
  setConfigSchemaJson(moduleId,schema.toJson());
 }
