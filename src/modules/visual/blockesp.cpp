@@ -640,7 +640,7 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
                                        std::vector<Outline>& output) const {
     output.clear();
     if (!enabled || !masterEnabled || !keybindActive) return;
-    const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
+    const int rx = maxScanRadius ? 320 : std::clamp(horizontalRadius, 20, 320);
     const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
     output.reserve(kMaxBlockEspRendered);
 
