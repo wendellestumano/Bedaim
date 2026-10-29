@@ -362,6 +362,8 @@ void BlockEspModule::onMenuRegistered() {
     toggle("showShulkers","Shulker boxes","All colored shulker boxes.",true,"types");
     toggle("showChests","Chests","Normal and trapped chests.",true,"types");
     toggle("showEnderChests","Ender chests","Ender chests.",true,"types");
+    toggle("showVaults","Vaults","Vault blocks, including trial vaults.",true,"types");
+    toggle("showSpawners","Spawners","Mob spawners, trial spawners and sculk shriekers.",true,"types");
     toggle("showHoppers","Hoppers","Hoppers.",true,"types");
     toggle("showDispensers","Dispensers","Dispensers.",true,"types");
     toggle("showDroppers","Droppers","Droppers.",true,"types");
