@@ -253,7 +253,7 @@ void EspModule::onMenuRegistered(){
  slider("locatorSpeed","Locator animation speed","Pulse speed of the off-screen direction arrow.", "locator",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
  slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
- ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
+ ConfigNodeV2 r;r.id="range";r.key="range";r.title="Locator range";r.description="Maximum range for locator targets when infinite range is off.";
  r.category="players";r.type=ConfigControlTypeV2::SliderFloat;r.defaultValue="30";r.currentValue=cfgText(config,"range","30");
  r.hasCurrentValue=true;r.minValue="8";r.maxValue="80";r.step="1";r.unit=" blocks";schema.node(std::move(r));
  auto color=[&](const char* key,const char* title,const char* category="colors"){
