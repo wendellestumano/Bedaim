@@ -369,6 +369,33 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         Kind kind{};
         if (!classify(*name, kind)) return true;
 
+        // Only keep targets with at least one exposed face. Air and water both
+        // count as exposure: this preserves blocks visible in caves, ravines,
+        // open terrain, and underwater while filtering fully buried targets.
+        // Neighbour lookups happen only after a target block is classified, so
+        // the common stone/air scan path keeps its original cost.
+        constexpr bedrocktools::sdk::BlockPos kFaceOffsets[] = {
+            { 1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+            {0,-1, 0}, {0, 0, 1}, {0, 0,-1}
+        };
+        bool exposed = false;
+        for (const auto& face : kFaceOffsets) {
+            const bedrocktools::sdk::BlockPos neighbour{pos.x + face.x, pos.y + face.y, pos.z + face.z};
+            void* neighbourRaw = getBlock(source, neighbour);
+            if (!neighbourRaw || reinterpret_cast<std::uintptr_t>(neighbourRaw) <= 0x1000) continue;
+            const auto* neighbourName = reinterpret_cast<const bedrocktools::sdk::Block*>(neighbourRaw)->fullName();
+            if (!neighbourName || neighbourName->empty()) continue;
+            std::string_view exposedName(*neighbourName);
+            const auto namespaceEnd = exposedName.find(':');
+            if (namespaceEnd != std::string_view::npos) exposedName.remove_prefix(namespaceEnd + 1);
+            if (exposedName == "air" || exposedName == "cave_air" || exposedName == "void_air" ||
+                exposedName == "water" || exposedName == "flowing_water" || exposedName == "bubble_column") {
+                exposed = true;
+                break;
+            }
+        }
+        if (!exposed) return true;
+
         std::string normalizedName = stripNamespace(*name);
         if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
         if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
