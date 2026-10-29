@@ -457,6 +457,77 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         }
     };
 
+    // Render each tracer as a single camera-facing quad ribbon. Unlike parallel
+    // line strokes, this creates real geometric width while keeping one clean tracer.
+    auto drawThickLines = [&](const std::vector<std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>>& lines,
+                              uint32_t color, float width, bool throughWalls = false) {
+        if (lines.empty()) return;
+        const float r = ((color >> 16) & 0xFF) / 255.0f;
+        const float g = ((color >>  8) & 0xFF) / 255.0f;
+        const float b = ((color      ) & 0xFF) / 255.0f;
+        const float a = ((color >> 24) & 0xFF) / 255.0f;
+        const float halfWidth = std::clamp(width, 0.002f, 0.12f) * 0.5f;
+        std::vector<std::array<bedrocktools::sdk::Vec3, 4>> quads;
+        quads.reserve(lines.size());
+        for (const auto& line : lines) {
+            const auto& p1 = line.first;
+            const auto& p2 = line.second;
+            bedrocktools::sdk::Vec3 dir{p2.x-p1.x, p2.y-p1.y, p2.z-p1.z};
+            const float len = std::sqrt(dir.x*dir.x + dir.y*dir.y + dir.z*dir.z);
+            if (len < 0.001f || !std::isfinite(len)) continue;
+            dir.x /= len; dir.y /= len; dir.z /= len;
+            // Camera-to-segment vector gives a screen-facing width direction.
+            bedrocktools::sdk::Vec3 view{cameraPosition.x-(p1.x+p2.x)*0.5f,
+                                         cameraPosition.y-(p1.y+p2.y)*0.5f,
+                                         cameraPosition.z-(p1.z+p2.z)*0.5f};
+            const float viewLen = std::sqrt(view.x*view.x + view.y*view.y + view.z*view.z);
+            if (viewLen < 0.001f || !std::isfinite(viewLen)) continue;
+            view.x /= viewLen; view.y /= viewLen; view.z /= viewLen;
+            bedrocktools::sdk::Vec3 side{
+                dir.y*view.z - dir.z*view.y,
+                dir.z*view.x - dir.x*view.z,
+                dir.x*view.y - dir.y*view.x};
+            float sideLen = std::sqrt(side.x*side.x + side.y*side.y + side.z*side.z);
+            if (sideLen < 0.001f) {
+                side = {-dir.z, 0.0f, dir.x};
+                sideLen = std::sqrt(side.x*side.x + side.z*side.z);
+            }
+            if (sideLen < 0.001f) continue;
+            side.x = side.x / sideLen * halfWidth;
+            side.y = side.y / sideLen * halfWidth;
+            side.z = side.z / sideLen * halfWidth;
+            quads.push_back({{
+                {p1.x+side.x,p1.y+side.y,p1.z+side.z},
+                {p1.x-side.x,p1.y-side.y,p1.z-side.z},
+                {p2.x-side.x,p2.y-side.y,p2.z-side.z},
+                {p2.x+side.x,p2.y+side.y,p2.z+side.z}
+            }});
+        }
+        if (quads.empty()) return;
+        s_tessBegin(tessellator, nullptr, 1, static_cast<int>(quads.size() * 4), 0);
+        s_tessColor(tessellator, r, g, b, a);
+        for (const auto& quad : quads) {
+            for (const auto& point : quad) {
+                s_tessVertex(tessellator, point.x-camX, point.y-camY, point.z-camZ);
+            }
+        }
+        char pad[0x58];
+        memset(pad, 0, sizeof(pad));
+        const bool useThroughWallsMaterial = throughWalls && s_matThroughWalls && colorHolder;
+        void* materialForBatch = useThroughWallsMaterial ? static_cast<void*>(&s_matThroughWalls) : matInner;
+        float previousBatchColor[4] = {1.0f,1.0f,1.0f,1.0f};
+        if (useThroughWallsMaterial) {
+            previousBatchColor[0]=colorHolder[0]; previousBatchColor[1]=colorHolder[1];
+            previousBatchColor[2]=colorHolder[2]; previousBatchColor[3]=colorHolder[3];
+            colorHolder[0]=r; colorHolder[1]=g; colorHolder[2]=b; colorHolder[3]=a;
+        }
+        s_renderMesh(screenContext, tessellator, materialForBatch, pad);
+        if (useThroughWallsMaterial) {
+            colorHolder[0]=previousBatchColor[0]; colorHolder[1]=previousBatchColor[1];
+            colorHolder[2]=previousBatchColor[2]; colorHolder[3]=previousBatchColor[3];
+        }
+    };
+
     auto drawBox = [&](const AABB& aabb, uint32_t color, bool throughWalls, float thickness) {
         // RenderLevel may visit many actors every frame. Reuse this buffer.
         using Line = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
@@ -556,19 +627,13 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             float sideLength = std::sqrt(side.x*side.x + side.z*side.z);
             if (sideLength < 0.001f) { side = {1.0f, 0.0f, 0.0f}; sideLength = 1.0f; }
             side.x /= sideLength; side.z /= sideLength;
-            const float t = std::clamp(blockEsp->tracerThickness, 0.005f, 0.06f);
-            auto& lines = tracerLinesByColor[block.color];
-            // Main line is the true crosshair-to-block guide; two subtle parallel
-            // lines make thickness visible on renderers that ignore line width.
-            lines.push_back({tracerStart, center});
-            lines.push_back({{tracerStart.x + side.x*t, tracerStart.y + side.y*t, tracerStart.z + side.z*t},
-                             {center.x + side.x*t, center.y + side.y*t, center.z + side.z*t}});
-            lines.push_back({{tracerStart.x - side.x*t, tracerStart.y - side.y*t, tracerStart.z - side.z*t},
-                             {center.x - side.x*t, center.y - side.y*t, center.z - side.z*t}});
+            // Exactly one segment per block; the renderer expands it into one
+            // filled ribbon using the configured width.
+            tracerLinesByColor[block.color].push_back({tracerStart, center});
         }
         if (blockEsp->showTracer) {
             for (const auto& [color, lines] : tracerLinesByColor)
-                if (!lines.empty()) drawLines(lines, color, true);
+                if (!lines.empty()) drawThickLines(lines, color, blockEsp->tracerThickness, true);
         }
     }
 
