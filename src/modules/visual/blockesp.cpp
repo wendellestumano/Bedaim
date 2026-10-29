@@ -183,6 +183,28 @@ std::uint32_t BlockEspModule::colorFor(Kind kind) const noexcept {
         default: return defaultColor(kind);
     }
 }
+std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) const noexcept {
+    if (kind != Kind::Utility) return colorFor(kind);
+    if (name == "redstone_block") return 0xFFFF3030u;
+    if (name == "block_button" || name == "block_pressure_plate" ||
+        name == "polished_blackstone_button" || name == "polished_blackstone_pressure_plate") return 0xFFB9B9B9u;
+    if (name == "lever") return 0xFFFFD34Eu;
+    if (name == "target") return 0xFFFF5252u;
+    if (name == "beacon") return 0xFF6DF7F0u;
+    if (name == "crafting_table") return 0xFFB77A42u;
+    if (name == "brewing_stand") return 0xFF9A78D1u;
+    if (name == "anvil" || name == "chipped_anvil" || name == "damaged_anvil") return 0xFF777F8Au;
+    if (name == "smithing_table" || name == "stonecutter") return 0xFF9BA7B0u;
+    if (name == "enchanting_table") return 0xFF8B4DCCu;
+    if (name == "loom" || name == "cartography_table" || name == "fletching_table") return 0xFFD4A56Au;
+    if (name == "grindstone") return 0xFFB9C3C9u;
+    if (name == "composter") return 0xFF7C9A45u;
+    if (name == "lectern") return 0xFFB98954u;
+    if (name == "bell") return 0xFFFFD05Au;
+    if (name == "jukebox" || name == "note_block") return 0xFF9A633Au;
+    if (name == "observer" || name == "piston" || name == "sticky_piston" || name == "crafter") return 0xFF8E9A9Fu;
+    return utilityColor;
+}
 void BlockEspModule::clearCache() {
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     m_cache.clear();
@@ -281,7 +303,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_cache.erase(key);
         if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
-            m_cache.emplace(key, Outline{pos, colorFor(kind), kind, normalizedName});
+            m_cache.emplace(key, Outline{pos, colorForBlock(kind, normalizedName), kind, normalizedName});
         }
     }
     m_scanCursor = end;
@@ -302,7 +324,7 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
         const float dy = static_cast<float>(outline.position.y) + 0.5f - playerPosition.y;
         const float dz = static_cast<float>(outline.position.z) + 0.5f - playerPosition.z;
         if (dx * dx + dz * dz > static_cast<float>(rx * rx) || std::fabs(dy) > static_cast<float>(ry)) continue;
-        output.push_back(Outline{outline.position, colorFor(outline.kind), outline.kind, outline.blockName});
+        output.push_back(Outline{outline.position, colorForBlock(outline.kind, outline.blockName), outline.kind, outline.blockName});
         if (output.size() >= kMaxBlockEspRendered) break;
     }
 }
