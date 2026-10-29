@@ -86,6 +86,18 @@ private:
     std::size_t m_scanCursor = 0;
     std::size_t m_scanTotal = 0;
     std::vector<std::pair<int, int>> m_horizontalScanOffsets;
+    // A short, rolling priority scan follows the player independently of the long-range scan.
+    std::vector<bedrocktools::sdk::BlockPos> m_priorityScanOffsets;
+    bedrocktools::sdk::BlockPos m_priorityScanOrigin{};
+    std::size_t m_priorityScanCursor = 0;
+    bool m_priorityScanActive = false;
+    bool m_hasPriorityCenter = false;
+    bool m_priorityDirectionDirty = false;
+    bedrocktools::sdk::Vec3 m_previousPlayerPosition{};
+    bool m_hasPreviousPlayerPosition = false;
+    bool m_hasMovementDirection = false;
+    float m_moveDirectionX = 0.0f;
+    float m_moveDirectionZ = 1.0f;
     std::uint64_t m_tickCount = 0;
     std::uint64_t m_lastResolveAttemptTick = 0;
     mutable std::mutex m_cacheMutex;
