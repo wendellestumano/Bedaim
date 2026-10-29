@@ -1,4 +1,5 @@
 #include "blockesp.hpp"
+#include "hitbox.hpp"
 #include "../ModuleRegistry.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
@@ -164,6 +165,8 @@ void BlockEspModule::onInit() {
         [this](auto& event) { onPlayerTick(event.player); });
 }
 void BlockEspModule::onEnable() {
+    if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
+        static_cast<HitboxModule*>(hitbox)->ensureRenderHook();
     m_blockSource = nullptr; m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
     clearCache();
 }
