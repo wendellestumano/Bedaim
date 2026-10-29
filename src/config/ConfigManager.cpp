@@ -2,9 +2,11 @@
 #include "AtomicConfigWriter.hpp"
 #include "../core/Diagnostics.hpp"
 #include "modules/ModuleRegistry.hpp"
+#include "modules/misc/configurations.hpp"
 #include <pl/Logger.hpp>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <string_view>
 #include <stdexcept>
 
@@ -63,29 +65,65 @@ void ConfigManager::load() {
     } catch (...) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config", "configuration load failed with unknown exception");
     }
+
+    // Configs.json stores the selected snapshot filename. Load that snapshot
+    // after the primary file so the custom filename is a real configuration source.
+    auto* configurations = static_cast<ConfigurationsModule*>(
+        ModuleRegistry::get().find("bedrocktools.Configurations"));
+    if (configurations) {
+        const auto customName = configurations->configuredFileName();
+        const auto customPath = (std::filesystem::path(path).parent_path() / customName).string();
+        if (customPath != path && std::filesystem::exists(customPath)) {
+            try {
+                std::ifstream customFile(customPath);
+                nlohmann::json customJson;
+                customFile >> customJson;
+                if (customJson.contains("Modules") && customJson["Modules"].is_object()) {
+                    const auto& modulesObj = customJson["Modules"];
+                    for (auto* mod : ModuleRegistry::get().modules()) {
+                        if (!mod) continue;
+                        if (modulesObj.contains(mod->name)) mod->loadConfig(modulesObj[mod->name]);
+                        else if (std::string_view(mod->name) == "Hive Utils" && modulesObj.contains("AutoReQ"))
+                            mod->loadConfig(modulesObj["AutoReQ"]);
+                    }
+                    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+                        "Config", "custom configuration loaded from " + customPath);
+                }
+            } catch (const std::exception& ex) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+                    std::string("custom configuration load failed: ") + ex.what());
+            } catch (...) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+                    "custom configuration load failed with unknown exception");
+            }
+        }
+    }
 }
 
 void ConfigManager::save() {
-    // Snapshotting happens outside m_mutex because module saveConfig() takes its own
-    // locks. Serialize snapshot+enqueue as one operation so overlapping callers
-    // cannot enqueue an older config after a newer one.
+    saveTo(getConfigPath());
+}
+
+void ConfigManager::saveTo(const std::string& targetPath) {
+    if (targetPath.empty()) return;
     std::lock_guard<std::mutex> snapshotGuard(m_saveMutex);
     nlohmann::json j;
-
     for (auto* mod : ModuleRegistry::get().modules()) {
         nlohmann::json modJson;
         mod->saveConfig(modJson);
         j["Modules"][mod->name] = std::move(modJson);
     }
-
-    std::string path = getConfigPath();
     std::string payload = j.dump();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (m_stopping) return;
         ensureWorkerLocked();
-        m_pendingPath = std::move(path);
-        m_pendingPayload = std::move(payload);
+        auto pending = std::find_if(m_pendingWrites.begin(), m_pendingWrites.end(),
+            [&](const auto& item) { return item.first == targetPath; });
+        if (pending == m_pendingWrites.end())
+            m_pendingWrites.emplace_back(targetPath, std::move(payload));
+        else
+            pending->second = std::move(payload);
         m_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
         ++m_queuedGeneration;
         m_hasPending = true;
@@ -130,11 +168,13 @@ void ConfigManager::workerLoop() {
             continue;
         }
 
-        std::string path = std::move(m_pendingPath);
-        std::string payload = std::move(m_pendingPayload);
+        auto writes = std::move(m_pendingWrites);
+        m_pendingWrites.clear();
         m_hasPending = false;
         lock.unlock();
-        const bool writeSucceeded = writePayload(path, payload);
+        bool writeSucceeded = true;
+        for (const auto& write : writes)
+            writeSucceeded = writePayload(write.first, write.second) && writeSucceeded;
         lock.lock();
         m_lastWriteSucceeded = writeSucceeded;
         if (m_completedGeneration < generation) m_completedGeneration = generation;

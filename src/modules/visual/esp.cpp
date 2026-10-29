@@ -79,7 +79,7 @@ void EspModule::beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition
 
 void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,float distance){
     if(!std::isfinite(targetCenter.x)||!std::isfinite(targetCenter.y)||!std::isfinite(targetCenter.z)||
-       !std::isfinite(distance)||distance<0.0f||distance>std::clamp(range,8.0f,80.0f))return;
+       !std::isfinite(distance)||distance<0.0f||(!infiniteRange&&distance>std::clamp(range,8.0f,80.0f)))return;
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
 
@@ -186,8 +186,8 @@ void EspModule::onFrame(){
                     dirY/=directionLength;
                 }
 
-                const float size=std::clamp(indicatorSize,24.0f,96.0f)*
-                    (animatedIndicators?1.0f+0.045f*std::sin(seconds*4.0f*targetSpeed+0.6f):1.0f);
+                const float size=std::clamp(locatorSize,24.0f,160.0f)*
+                    (locatorAnimated?1.0f+0.045f*std::sin(seconds*4.0f*locatorSpeed+0.6f):1.0f);
                 const float edgeMargin=size*0.5f+12.0f;
                 const float halfW=std::max(1.0f,cx-edgeMargin);
                 const float halfH=std::max(1.0f,cy-edgeMargin);
@@ -217,7 +217,8 @@ void EspModule::onFrame(){
 void EspModule::onMenuRegistered(){
  using namespace pl::modmenu;ConfigSchemaBuilder schema;nlohmann::json config;saveConfig(config);
  schema.defaultCategory("players").category("players","Players","Player outline visibility and distance")
-  .category("indicators","HUD indicators","Lock in Aim and off-screen player direction")
+  .category("indicators","HUD indicators","Lock in Aim ring settings")
+  .category("locator","Locator arrow","Off-screen direction arrow settings")
   .category("appearance","ESP appearance","World-space ESP and hitbox outline thickness")
   .category("colors","Game-mode colors","Hexadecimal ARGB outline colors");
  auto toggle=[&](const char* key,const char* title,const char* desc,bool d,const char* category="players"){
@@ -225,14 +226,23 @@ void EspModule::onMenuRegistered(){
   n.defaultValue=d?"true":"false";n.currentValue=cfgText(config,key,n.defaultValue.c_str());n.hasCurrentValue=true;schema.node(std::move(n));
  };
  toggle("showPlayers","Show players","Draw outlines around other players.",true);
+ toggle("infiniteRange","Infinite ESP range","Show ESP and locator targets at any distance among entities loaded by the game.",true);
+ toggle("box2D","2D ESP box","Render player ESP as a camera-facing 2D rectangle. Off uses the 3D world-space box.",false,"appearance");
  toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
  toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
- toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
+ toggle("showOffscreenIndicators","Show locator arrow","Point to the nearest player outside the view.",true,"locator");
+ toggle("locatorAnimated","Animate locator arrow","Pulse the locator arrow independently of the target ring.",true,"locator");
  toggle("animatedIndicators","Animated indicators","Pulse the Lock in Aim and direction arrow subtly.",true,"indicators");
  ConfigNodeV2 size;size.id="indicatorSize";size.key="indicatorSize";size.title="Indicator size";
- size.description="Size of the screen-edge arrow and the ring above players.";size.category="indicators";
+ size.description="Size of the Lock in Aim ring above players.";size.category="indicators";
  size.type=ConfigControlTypeV2::SliderFloat;size.defaultValue="48";size.currentValue=cfgText(config,"indicatorSize","48");
  size.hasCurrentValue=true;size.minValue="24";size.maxValue="96";size.step="2";size.unit=" px";schema.node(std::move(size));
+ ConfigNodeV2 locatorSizeNode;locatorSizeNode.id="locatorSize";locatorSizeNode.key="locatorSize";
+ locatorSizeNode.title="Locator arrow size";locatorSizeNode.description="Size of the direction arrow at the edge of the screen.";
+ locatorSizeNode.category="locator";locatorSizeNode.type=ConfigControlTypeV2::SliderFloat;
+ locatorSizeNode.defaultValue="48";locatorSizeNode.currentValue=cfgText(config,"locatorSize","48");
+ locatorSizeNode.hasCurrentValue=true;locatorSizeNode.minValue="24";locatorSizeNode.maxValue="160";
+ locatorSizeNode.step="2";locatorSizeNode.unit=" px";schema.node(std::move(locatorSizeNode));
  auto slider=[&](const char* key,const char* title,const char* desc,const char* category,
                   float defaultValue,float minimum,float maximum,float step,const char* unit){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description=desc;n.category=category;
@@ -243,39 +253,50 @@ void EspModule::onMenuRegistered(){
  };
  slider("targetYOffset","Target Y offset","Vertical offset from the native player-box center. Negative moves the ring down.", "indicators",0.0f,-1.5f,1.5f,0.05f," blocks");
  slider("targetSpeed","Target animation speed","Speed multiplier for the target-ring rotation and animated indicator pulse.", "indicators",1.0f,0.1f,4.0f,0.1f,"x");
+ slider("locatorSpeed","Locator animation speed","Pulse speed of the off-screen direction arrow.", "locator",1.0f,0.1f,4.0f,0.1f,"x");
  slider("targetThickness","Target ring thickness","Number of adjacent world-space strokes used to thicken the ring (1–5).", "indicators",2.0f,1.0f,5.0f,1.0f," layers");
  slider("outlineThickness","ESP box thickness","Approximate outline thickness for normal player ESP boxes. Zero uses one line.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
+ slider("box2DThickness","2D boxes thickness","Screen-pixel-like thickness for the camera-facing 2D ESP box.", "appearance",2.0f,1.0f,10.0f,1.0f," px");
+ slider("projectionFov","2D projection FOV","Vertical FOV used to scale 2D ESP box thickness with camera depth.", "appearance",70.0f,40.0f,120.0f,1.0f,"°");
  slider("hitboxThickness","BedrockBounds outline thickness","Approximate thickness for the separate expanded-hitbox outline.", "appearance",0.025f,0.0f,0.10f,0.005f," blocks");
  ConfigNodeV2 r;r.id="range";r.key="range";r.title="ESP range";r.description="Maximum range for ESP outlines and direction indicators.";
  r.category="players";r.type=ConfigControlTypeV2::SliderFloat;r.defaultValue="30";r.currentValue=cfgText(config,"range","30");
  r.hasCurrentValue=true;r.minValue="8";r.maxValue="80";r.step="1";r.unit=" blocks";schema.node(std::move(r));
- auto color=[&](const char* key,const char* title){
+ auto color=[&](const char* key,const char* title,const char* category="colors"){
   ConfigNodeV2 n;n.id=key;n.key=key;n.title=title;n.description="HEX color: #AARRGGBB (or #RRGGBB).";
-  n.category="colors";n.type=ConfigControlTypeV2::Text;n.defaultValue="";n.currentValue=cfgText(config,key,"");
+  n.category=category;n.type=ConfigControlTypeV2::Text;n.defaultValue="";n.currentValue=cfgText(config,key,"");
   n.hasCurrentValue=true;n.placeholder="#AARRGGBB";n.maxLength=9;schema.node(std::move(n));
  };
  color("survivalColor","Survival color");color("creativeColor","Creative color");color("spectatorColor","Spectator color");
  color("adventureColor","Adventure color");color("unknownColor","Unknown-mode color");
+ color("targetColor","Target ring color","indicators");
  setConfigSchemaJson(moduleId,schema.toJson());
 }
 bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value){
- if(key=="showPlayers"||key=="showInvisible"||key=="showLockInAim"||
-    key=="showOffscreenIndicators"||key=="animatedIndicators"){
+ if(key=="showPlayers"||key=="infiniteRange"||key=="box2D"||key=="showInvisible"||key=="showLockInAim"||
+    key=="showOffscreenIndicators"||key=="animatedIndicators"||key=="locatorAnimated"){
   bool b=false;if(!parseBool(value,b))return false;
   if(key=="showPlayers")showPlayers=b;
+  else if(key=="infiniteRange")infiniteRange=b;
+  else if(key=="box2D")box2D=b;
   else if(key=="showInvisible")showInvisible=b;
   else if(key=="showLockInAim")showLockInAim=b;
   else if(key=="showOffscreenIndicators")showOffscreenIndicators=b;
+  else if(key=="locatorAnimated")locatorAnimated=b;
   else animatedIndicators=b;
   return true;
  }
  if(key=="range"){float f=0;if(!parseFloat(value,f))return false;range=std::clamp(f,8.0f,80.0f);return true;}
  if(key=="indicatorSize"){float f=0;if(!parseFloat(value,f))return false;indicatorSize=std::clamp(f,24.0f,96.0f);return true;}
- if(key=="targetYOffset"||key=="targetSpeed"||key=="targetThickness"||
+ if(key=="locatorSize"){float f=0;if(!parseFloat(value,f))return false;locatorSize=std::clamp(f,24.0f,160.0f);return true;}
+ if(key=="box2DThickness"){float f=0;if(!parseFloat(value,f))return false;box2DThickness=std::clamp(f,1.0f,10.0f);return true;}
+ if(key=="projectionFov"){float f=0;if(!parseFloat(value,f))return false;projectionFov=std::clamp(f,40.0f,120.0f);return true;}
+ if(key=="targetYOffset"||key=="targetSpeed"||key=="locatorSpeed"||key=="targetThickness"||
     key=="outlineThickness"||key=="hitboxThickness"){
   float f=0;if(!parseFloat(value,f))return false;
   if(key=="targetYOffset")targetYOffset=std::clamp(f,-1.5f,1.5f);
   else if(key=="targetSpeed")targetSpeed=std::clamp(f,0.1f,4.0f);
+  else if(key=="locatorSpeed")locatorSpeed=std::clamp(f,0.1f,4.0f);
   else if(key=="targetThickness")targetThickness=std::clamp(std::round(f),1.0f,5.0f);
   else if(key=="outlineThickness")outlineThickness=std::clamp(f,0.0f,0.10f);
   else hitboxThickness=std::clamp(f,0.0f,0.10f);
@@ -284,14 +305,17 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  std::uint32_t c=0;if(!parseColor(value,c))return false;
  if(key=="survivalColor")survivalColor=c;else if(key=="creativeColor")creativeColor=c;
  else if(key=="spectatorColor")spectatorColor=c;else if(key=="adventureColor")adventureColor=c;
- else if(key=="unknownColor")unknownColor=c;else return false;return true;
+ else if(key=="unknownColor")unknownColor=c;else if(key=="targetColor")targetColor=c;else return false;return true;
 }
 void EspModule::loadConfig(const nlohmann::json& j){
- Module::loadConfig(j);showPlayers=j.value("showPlayers",showPlayers);showInvisible=j.value("showInvisible",showInvisible);
+ Module::loadConfig(j);showPlayers=j.value("showPlayers",showPlayers);infiniteRange=j.value("infiniteRange",infiniteRange);box2D=j.value("box2D",box2D);box2DThickness=std::clamp(j.value("box2DThickness",box2DThickness),1.0f,10.0f);projectionFov=std::clamp(j.value("projectionFov",projectionFov),40.0f,120.0f);showInvisible=j.value("showInvisible",showInvisible);
  showLockInAim=j.value("showLockInAim",showLockInAim);
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
+ locatorAnimated=j.value("locatorAnimated",animatedIndicators);
  indicatorSize=std::clamp(j.value("indicatorSize",indicatorSize),24.0f,96.0f);
+ locatorSize=std::clamp(j.value("locatorSize",indicatorSize),24.0f,160.0f);
+ locatorSpeed=std::clamp(j.value("locatorSpeed",targetSpeed),0.1f,4.0f);
  targetYOffset=std::clamp(j.value("targetYOffset",targetYOffset),-1.5f,1.5f);
  targetSpeed=std::clamp(j.value("targetSpeed",targetSpeed),0.1f,4.0f);
  targetThickness=std::clamp(std::round(j.value("targetThickness",targetThickness)),1.0f,5.0f);
@@ -300,11 +324,14 @@ void EspModule::loadConfig(const nlohmann::json& j){
  range=std::clamp(j.value("range",range),8.0f,80.0f);
  loadColor(j,"survivalColor",survivalColor);loadColor(j,"creativeColor",creativeColor);
  loadColor(j,"spectatorColor",spectatorColor);loadColor(j,"adventureColor",adventureColor);loadColor(j,"unknownColor",unknownColor);
+ loadColor(j,"targetColor",targetColor);
 }
 void EspModule::saveConfig(nlohmann::json& j){
- Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
+ Module::saveConfig(j);j["showPlayers"]=showPlayers;j["infiniteRange"]=infiniteRange;j["box2D"]=box2D;j["box2DThickness"]=std::clamp(box2DThickness,1.0f,10.0f);j["projectionFov"]=std::clamp(projectionFov,40.0f,120.0f);j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
- j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
+ j["animatedIndicators"]=animatedIndicators;j["locatorAnimated"]=locatorAnimated;
+ j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
+ j["locatorSize"]=std::clamp(locatorSize,24.0f,160.0f);j["locatorSpeed"]=std::clamp(locatorSpeed,0.1f,4.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);
  j["targetSpeed"]=std::clamp(targetSpeed,0.1f,4.0f);
  j["targetThickness"]=std::clamp(std::round(targetThickness),1.0f,5.0f);
@@ -313,5 +340,5 @@ void EspModule::saveConfig(nlohmann::json& j){
  j["range"]=std::clamp(range,8.0f,80.0f);
  char color[12];auto save=[&](const char* key,std::uint32_t v){std::snprintf(color,sizeof(color),"#%08X",v);j[key]=std::string(color);};
  save("survivalColor",survivalColor);save("creativeColor",creativeColor);save("spectatorColor",spectatorColor);
- save("adventureColor",adventureColor);save("unknownColor",unknownColor);
+ save("adventureColor",adventureColor);save("unknownColor",unknownColor);save("targetColor",targetColor);
 }

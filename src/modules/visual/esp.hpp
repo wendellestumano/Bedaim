@@ -33,18 +33,26 @@ public:
     bool showLockInAim = true;
     bool showOffscreenIndicators = true;
     bool animatedIndicators = true;
+    bool locatorAnimated = true;
     float indicatorSize = 48.0f;
+    float locatorSize = 48.0f;
+    float locatorSpeed = 1.0f;
     float targetYOffset = 0.0f;
     float targetSpeed = 1.0f;
     float targetThickness = 2.0f;
     float outlineThickness = 0.025f;
     float hitboxThickness = 0.025f;
     float range = 30.0f;
+    bool infiniteRange = true;
+    bool box2D = false;
+    float box2DThickness = 2.0f;
+    float projectionFov = 70.0f;
     std::uint32_t survivalColor = 0xFFFFFFFF;
     std::uint32_t creativeColor = 0xFFFF3030;
     std::uint32_t spectatorColor = 0xFFB040FF;
     std::uint32_t adventureColor = 0xFF40D8FF;
     std::uint32_t unknownColor = 0xFFFFD040;
+    std::uint32_t targetColor = 0xFF7247FF;
 
 private:
     mutable std::mutex m_hudTargetMutex;

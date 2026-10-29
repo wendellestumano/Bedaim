@@ -137,7 +137,30 @@ bool Runtime::load(pl::mod::ModContext& context) {
                          : "Preloader ModContext provided a null JavaVM");
     mResourceDirectory = context.resourceDir();
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "Bedaim load requested");
-    bedrocktools::config::ConfigManager::get().setConfigPath((context.configDir() / "Configs.json").string());
+    const auto legacyConfigPath = context.configDir() / "Configs.json";
+    const std::filesystem::path bedaimConfigPath("/sdcard/Download/Bedaim/Configs.json");
+    std::error_code configPathError;
+    std::filesystem::create_directories(bedaimConfigPath.parent_path(), configPathError);
+    if (!configPathError) {
+        bool useBedaimConfigPath = true;
+        if (!std::filesystem::exists(bedaimConfigPath, configPathError) &&
+            std::filesystem::exists(legacyConfigPath, configPathError)) {
+            configPathError.clear();
+            std::filesystem::copy_file(legacyConfigPath, bedaimConfigPath,
+                std::filesystem::copy_options::none, configPathError);
+            if (configPathError) {
+                useBedaimConfigPath = false;
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "Config",
+                    "could not migrate legacy config; preserving launcher config as active source");
+            }
+        }
+        bedrocktools::config::ConfigManager::get().setConfigPath(
+            useBedaimConfigPath ? bedaimConfigPath.string() : legacyConfigPath.string());
+    } else {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "Config",
+            "Bedaim config folder unavailable; falling back to launcher config directory");
+        bedrocktools::config::ConfigManager::get().setConfigPath(legacyConfigPath.string());
+    }
     if (!launcherContext()) return true;
     void* minecraft = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
     if (minecraft) {

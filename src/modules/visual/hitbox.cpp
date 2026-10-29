@@ -335,7 +335,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     // Fetch the native actor vector once per RenderLevel call and reuse it for both
     // off-screen HUD targeting and 3D ESP/Hitbox rendering.
-    const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
+    const float espRange = espEnabled ? (esp->infiniteRange ? 100000.0f : std::clamp(esp->range, 8.0f, 80.0f)) : 30.0f;
     const float queryRange = actorVisualsEnabled ? std::max(30.0f, espRange) : 0.0f;
     ActorVec actors{};
     bool actorSnapshotValid = false;
@@ -368,6 +368,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
     float camX = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos);
     float camY = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 4);
     float camZ = *(float*)(lrpPtr + bedrocktools::sdk::offsets::LevelRendererPlayer::mCamPos + 8);
+    const bedrocktools::sdk::Vec3 cameraPosition{camX,camY,camZ};
+    const bedrocktools::sdk::Vec2 cameraRotation=getActorRotation(g_localPlayerPtr);
+    const auto hudSurface=pl::modmenu::getHudSurfaceSize();
+    const float hudHeight=std::isfinite(hudSurface.height)?hudSurface.height:0.0f;
 
     ensureMaterials();
 
@@ -696,8 +700,9 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         };
         makeThick(outerLines, thickOuterLines);
         makeThick(innerLines, thickInnerLines);
-        drawLines(thickOuterLines, 0xFF7247FFu, true); // violet, through walls
-        drawLines(thickInnerLines, 0xFF405DFFu, true); // electric blue, through walls
+        const std::uint32_t ringColor = esp ? esp->targetColor : 0xFF7247FFu;
+        drawLines(thickOuterLines, ringColor, true);
+        drawLines(thickInnerLines, ringColor, true);
     };
 
     void* selectedEntity = nullptr;
@@ -739,7 +744,49 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                 switch(gameType){case 0:color=esp->survivalColor;break;case 1:color=esp->creativeColor;break;
                  case 2:color=esp->adventureColor;break;case 3:color=esp->spectatorColor;break;default:color=esp->unknownColor;break;}
             }
-            drawBox(espBounds,color,true,esp->outlineThickness);
+            if (esp->box2D) {
+                constexpr float kDegToRad=0.01745329251994329577f;
+                const float yaw=cameraRotation.y*kDegToRad;
+                const float pitch=cameraRotation.x*kDegToRad;
+                const bedrocktools::sdk::Vec3 right{std::cos(yaw),0.0f,std::sin(yaw)};
+                const bedrocktools::sdk::Vec3 up{-std::sin(yaw)*std::sin(pitch),
+                                                   std::cos(pitch),
+                                                   std::cos(yaw)*std::sin(pitch)};
+                const float actorHeight=std::clamp(espBounds.max.y-espBounds.min.y,0.5f,4.0f);
+                const bedrocktools::sdk::Vec3 center{
+                    (espBounds.min.x+espBounds.max.x)*0.5f,
+                    (espBounds.min.y+espBounds.max.y)*0.5f,
+                    (espBounds.min.z+espBounds.max.z)*0.5f
+                };
+                const float halfWidth=actorHeight*0.30f, halfHeight=actorHeight*0.50f;
+                const auto point=[&](float rx,float uy){return bedrocktools::sdk::Vec3{
+                    center.x+right.x*rx+up.x*uy,center.y+right.y*rx+up.y*uy,center.z+right.z*rx+up.z*uy};};
+                const auto tl=point(-halfWidth,halfHeight),tr=point(halfWidth,halfHeight);
+                const auto br=point(halfWidth,-halfHeight),bl=point(-halfWidth,-halfHeight);
+                using EspLine=std::pair<bedrocktools::sdk::Vec3,bedrocktools::sdk::Vec3>;
+                const EspLine edges[4]={{tl,tr},{tr,br},{br,bl},{bl,tl}};
+                const float dxCamera=center.x-cameraPosition.x,dyCamera=center.y-cameraPosition.y,dzCamera=center.z-cameraPosition.z;
+                const float depth=std::sqrt(dxCamera*dxCamera+dyCamera*dyCamera+dzCamera*dzCamera);
+                const float fovRadians=std::clamp(esp->projectionFov,40.0f,120.0f)*kDegToRad*0.5f;
+                const float pixelsPerWorldUnit=hudHeight/(2.0f*std::tan(fovRadians)*std::max(depth,0.05f));
+                const float worldPerPixel=(std::isfinite(pixelsPerWorldUnit)&&pixelsPerWorldUnit>0.001f)?1.0f/pixelsPerWorldUnit:0.01f;
+                const int strokeCount=std::clamp(static_cast<int>(std::lround(esp->box2DThickness)),1,10);
+                std::vector<EspLine> thickEdges;
+                thickEdges.reserve(static_cast<std::size_t>(strokeCount)*4);
+                for(std::size_t edgeIndex=0;edgeIndex<4;++edgeIndex){
+                    const auto& axis=(edgeIndex==0||edgeIndex==2)?up:right;
+                    for(int stroke=0;stroke<strokeCount;++stroke){
+                        const float offset=(static_cast<float>(stroke)-(static_cast<float>(strokeCount)-1.0f)*0.5f)*worldPerPixel;
+                        auto first=edges[edgeIndex].first, second=edges[edgeIndex].second;
+                        first.x+=axis.x*offset;first.y+=axis.y*offset;first.z+=axis.z*offset;
+                        second.x+=axis.x*offset;second.y+=axis.y*offset;second.z+=axis.z*offset;
+                        thickEdges.push_back({first,second});
+                    }
+                }
+                drawLines(thickEdges,color,true);
+            } else {
+                drawBox(espBounds,color,true,esp->outlineThickness);
+            }
             if (esp->showLockInAim) drawTargetRing(espBounds);
             espLogOnce(espLoggedOutline,bedrocktools::diagnostics::Level::Info,"outline_submitted=first_player_box; renderer submitted ESP geometry and target ring");
         }
