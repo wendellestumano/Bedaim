@@ -86,6 +86,12 @@ private:
     std::size_t m_scanCursor = 0;
     std::size_t m_scanTotal = 0;
     std::vector<std::pair<int, int>> m_horizontalScanOffsets;
+    // Rolling local volume: 32x160x32 blocks, processed incrementally across ticks.
+    std::vector<bedrocktools::sdk::BlockPos> m_localScanOffsets;
+    bedrocktools::sdk::BlockPos m_localScanOrigin{};
+    std::size_t m_localScanCursor = 0;
+    bool m_localScanActive = false;
+    bool m_hasLocalScanOrigin = false;
     // A short, rolling priority scan follows the player independently of the long-range scan.
     std::vector<bedrocktools::sdk::BlockPos> m_priorityScanOffsets;
     bedrocktools::sdk::BlockPos m_priorityScanOrigin{};
