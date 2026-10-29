@@ -7,6 +7,7 @@
 #include "player/unglide.hpp"
 #include "player/swordswapper.hpp"
 #include "visual/esp.hpp"
+#include "visual/blockesp.hpp"
 #include "visual/hitbox.hpp"
 #include "visual/oreesp.hpp"
 #include "hud/ultrakillhud.hpp"
@@ -71,6 +72,7 @@ void registerAllModules() {
     registry.emplace<HitboxExpanderModule>();
     registry.emplace<HitboxModule>(); // Shared RenderLevel renderer used by ESP and Ore ESP.
     registry.emplace<EspModule>();
+    registry.emplace<BlockEspModule>();
     registry.emplace<OreEspModule>();
     registry.emplace<UltrakillHudModule>();
     registry.emplace<ModuleDiagnosticsModule>();
