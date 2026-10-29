@@ -33,7 +33,10 @@ public:
     bool showLockInAim = true;
     bool showOffscreenIndicators = true;
     bool animatedIndicators = true;
+    bool locatorAnimated = true;
     float indicatorSize = 48.0f;
+    float locatorSize = 48.0f;
+    float locatorSpeed = 1.0f;
     float targetYOffset = 0.0f;
     float targetSpeed = 1.0f;
     float targetThickness = 2.0f;
