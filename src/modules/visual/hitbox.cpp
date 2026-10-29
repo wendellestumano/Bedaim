@@ -555,20 +555,25 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
                     if (upLength > 0.001f) {
                         up.x /= upLength; up.y /= upLength; up.z /= upLength;
                     }
-                    const float t = std::clamp(blockEsp->tracerThickness, 0.01f, 0.10f);
+                    const float t = std::clamp(blockEsp->tracerThickness, 0.005f, 0.06f);
                     const auto kindIndex = static_cast<std::size_t>(block.kind);
                     if (kindIndex >= tracerLinesByKind.size()) continue;
                     auto& lines = tracerLinesByKind[kindIndex];
                     tracerColorsByKind[kindIndex] = block.color;
-                    lines.push_back({cameraPosition, center});
-                    lines.push_back({{cameraPosition.x + side.x*t, cameraPosition.y + side.y*t, cameraPosition.z + side.z*t},
+
+                    // Start each tracer just in front of the camera, on the ray to its
+                    // own block. This avoids the distracting bundle of lines at the eye
+                    // while keeping the far endpoint anchored to the block center.
+                    constexpr float cameraClearance = 0.65f;
+                    const bedrocktools::sdk::Vec3 start{
+                        cameraPosition.x + delta.x / length * cameraClearance,
+                        cameraPosition.y + delta.y / length * cameraClearance,
+                        cameraPosition.z + delta.z / length * cameraClearance};
+                    lines.push_back({start, center});
+                    lines.push_back({{start.x + side.x*t, start.y + side.y*t, start.z + side.z*t},
                                      {center.x + side.x*t, center.y + side.y*t, center.z + side.z*t}});
-                    lines.push_back({{cameraPosition.x - side.x*t, cameraPosition.y - side.y*t, cameraPosition.z - side.z*t},
+                    lines.push_back({{start.x - side.x*t, start.y - side.y*t, start.z - side.z*t},
                                      {center.x - side.x*t, center.y - side.y*t, center.z - side.z*t}});
-                    lines.push_back({{cameraPosition.x + up.x*t, cameraPosition.y + up.y*t, cameraPosition.z + up.z*t},
-                                     {center.x + up.x*t, center.y + up.y*t, center.z + up.z*t}});
-                    lines.push_back({{cameraPosition.x - up.x*t, cameraPosition.y - up.y*t, cameraPosition.z - up.z*t},
-                                     {center.x - up.x*t, center.y - up.y*t, center.z - up.z*t}});
                 }
             }
         }
