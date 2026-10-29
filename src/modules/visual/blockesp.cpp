@@ -308,7 +308,6 @@ void BlockEspModule::onMenuRegistered() {
     color("barrelColor","Barrel color",barrelColor);
     color("furnaceColor","Furnace color",furnaceColor);
     color("utilityColor","Utility block color",utilityColor);
-    color("tracerColor","Tracer color",tracerColor);
     setConfigSchemaJson(moduleId,schema.toJson());
 }
 bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
@@ -339,7 +338,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
     else if(key=="enderChestColor")enderChestColor=c; else if(key=="hopperColor")hopperColor=c;
     else if(key=="dispenserColor")dispenserColor=c; else if(key=="dropperColor")dropperColor=c;
     else if(key=="barrelColor")barrelColor=c; else if(key=="furnaceColor")furnaceColor=c;
-    else if(key=="utilityColor")utilityColor=c; else if(key=="tracerColor")tracerColor=c;
+    else if(key=="utilityColor")utilityColor=c;
     else return false;
     onMenuRegistered(); return true;
 }
@@ -359,7 +358,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     loadColor(j,"enderChestColor",enderChestColor); loadColor(j,"hopperColor",hopperColor);
     loadColor(j,"dispenserColor",dispenserColor); loadColor(j,"dropperColor",dropperColor);
     loadColor(j,"barrelColor",barrelColor); loadColor(j,"furnaceColor",furnaceColor);
-    loadColor(j,"utilityColor",utilityColor); loadColor(j,"tracerColor",tracerColor);
+    loadColor(j,"utilityColor",utilityColor);
 }
 void BlockEspModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
@@ -373,5 +372,5 @@ void BlockEspModule::saveConfig(nlohmann::json& j) {
     auto save=[&](const char* key,std::uint32_t c){char text[12];std::snprintf(text,sizeof(text),"#%08X",c);j[key]=std::string(text);};
     save("shulkerColor",shulkerColor); save("chestColor",chestColor); save("enderChestColor",enderChestColor);
     save("hopperColor",hopperColor); save("dispenserColor",dispenserColor); save("dropperColor",dropperColor);
-    save("barrelColor",barrelColor); save("furnaceColor",furnaceColor); save("utilityColor",utilityColor); save("tracerColor",tracerColor);
+    save("barrelColor",barrelColor); save("furnaceColor",furnaceColor); save("utilityColor",utilityColor);
 }
