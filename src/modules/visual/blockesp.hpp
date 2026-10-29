@@ -44,7 +44,7 @@ public:
     bool showUtilityBlocks = true;
     int horizontalRadius = 80;
     int verticalRadius = 40;
-    int scanBudgetPerTick = 1024;
+    int scanBudgetPerTick = 512;
     float outlineThickness = 0.035f;
     float tracerThickness = 0.035f;
     std::uint32_t shulkerColor = 0xFFFF40FFu;
@@ -82,6 +82,7 @@ private:
     bool m_hasCenter = false;
     std::size_t m_scanCursor = 0;
     std::size_t m_scanTotal = 0;
+    std::vector<std::pair<int, int>> m_horizontalScanOffsets;
     std::uint64_t m_tickCount = 0;
     std::uint64_t m_lastResolveAttemptTick = 0;
     mutable std::mutex m_cacheMutex;
