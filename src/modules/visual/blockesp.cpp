@@ -21,7 +21,7 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
-constexpr std::size_t kMaxBlockEspCache = 8192;
+constexpr std::size_t kMaxBlockEspCache = 32768;
 constexpr std::size_t kMaxBlockEspRendered = 1024;
 
 void resolveBlockGetBlock() {
@@ -315,7 +315,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     m_hasPreviousPlayerPosition = true;
     if (headingChanged) m_priorityDirectionDirty = true;
 
-    const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
+    const int rx = maxScanRadius ? 320 : std::clamp(horizontalRadius, 20, 320);
     const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
     const std::size_t scanBudget = static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 16384));
 
@@ -721,7 +721,7 @@ void BlockEspModule::onMenuRegistered() {
         n.currentValue=configText(config,key,n.defaultValue.c_str()); n.hasCurrentValue=true;
         n.minValue=std::to_string(min); n.maxValue=std::to_string(max); n.step=std::to_string(step); n.unit=unit; schema.node(std::move(n));
     };
-    slider("horizontalRadius","Horizontal radius","Horizontal scan and render radius (5x default).", "scan",80,20,160,1," blocks");
+    slider("horizontalRadius","Horizontal radius","Experimental long-range scan and render radius.", "scan",320,20,320,1," blocks");
     slider("verticalRadius","Vertical radius","Vertical scan and render radius for deep underground blocks.", "scan",80,10,160,1," blocks");
     toggle("maxScanRadius","Max Scan Radius","Use the maximum supported horizontal and vertical scan radius (160 blocks each direction).",false,"scan");
     slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",16384,256,16384,256," blocks/tick");
@@ -775,7 +775,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
     if(key=="maxScanRadius") { if(!parseBool(value,b)) return false; maxScanRadius=b; m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true; }
     if(key=="horizontalRadius"||key=="verticalRadius"||key=="scanBudgetPerTick"||key=="outlineThickness"||key=="tracerThickness") {
         if(!parseInt(value,i)) return false;
-        if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,160);
+        if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,320);
         else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,160);
         else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,16384);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
@@ -804,7 +804,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
         auto it = m_utilityFilters.find(name);
         if (it != m_utilityFilters.end()) it->second = j.value(key, showUtilityBlocks);
     }
-    horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,160);
+    horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,320);
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,160);
     scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),256,16384);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
