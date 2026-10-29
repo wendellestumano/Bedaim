@@ -292,6 +292,7 @@ void BlockEspModule::onMenuRegistered() {
     slider("verticalRadius","Vertical radius","Vertical scan and render radius.", "scan",8,2,16,1," blocks");
     slider("scanBudgetPerTick","Scan budget","Block queries performed per tick.", "scan",1024,128,2048,128," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
+    slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
     auto color = [&](const char* key,const char* title,std::uint32_t def) {
         ConfigNodeV2 n; n.id=key; n.key=key; n.title=title; n.description="HEX color: #AARRGGBB (or #RRGGBB).";
         n.category="colors"; n.type=ConfigControlTypeV2::Text; n.defaultValue="";
@@ -324,12 +325,13 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
         onMenuRegistered(); return true;
     }
     int i=0;
-    if(key=="horizontalRadius"||key=="verticalRadius"||key=="scanBudgetPerTick"||key=="outlineThickness") {
+    if(key=="horizontalRadius"||key=="verticalRadius"||key=="scanBudgetPerTick"||key=="outlineThickness"||key=="tracerThickness") {
         if(!parseInt(value,i)) return false;
         if(key=="horizontalRadius")horizontalRadius=std::clamp(i,4,32);
         else if(key=="verticalRadius")verticalRadius=std::clamp(i,2,16);
         else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,128,2048);
-        else outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
+        else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
+        else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true;
     }
     std::uint32_t c=0; if(!parseColor(value,c)) return false;
@@ -352,6 +354,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),2,16);
     scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),128,2048);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
+    tracerThickness=static_cast<float>(std::clamp(j.value("tracerThickness",4),1,10))/100.0f;
     loadColor(j,"shulkerColor",shulkerColor); loadColor(j,"chestColor",chestColor);
     loadColor(j,"enderChestColor",enderChestColor); loadColor(j,"hopperColor",hopperColor);
     loadColor(j,"dispenserColor",dispenserColor); loadColor(j,"dropperColor",dropperColor);
@@ -366,6 +369,7 @@ void BlockEspModule::saveConfig(nlohmann::json& j) {
     j["showUtilityBlocks"]=showUtilityBlocks; j["horizontalRadius"]=horizontalRadius;
     j["verticalRadius"]=verticalRadius; j["scanBudgetPerTick"]=scanBudgetPerTick;
     j["outlineThickness"]=static_cast<int>(std::lround(outlineThickness*100.0f));
+    j["tracerThickness"]=static_cast<int>(std::lround(tracerThickness*100.0f));
     auto save=[&](const char* key,std::uint32_t c){char text[12];std::snprintf(text,sizeof(text),"#%08X",c);j[key]=std::string(text);};
     save("shulkerColor",shulkerColor); save("chestColor",chestColor); save("enderChestColor",enderChestColor);
     save("hopperColor",hopperColor); save("dispenserColor",dispenserColor); save("dropperColor",dropperColor);
