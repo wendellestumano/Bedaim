@@ -13,7 +13,7 @@
 
 class BlockEspModule final : public Module {
 public:
-    enum class Kind : std::uint8_t { Shulker, Chest, EnderChest, Hopper, Dispenser, Dropper, Barrel, Furnace, Utility, Count };
+    enum class Kind : std::uint8_t { Shulker, Chest, EnderChest, Vault, Spawner, Hopper, Dispenser, Dropper, Barrel, Furnace, Utility, Count };
     struct Outline {
         bedrocktools::sdk::BlockPos position{};
         std::uint32_t color = 0xFFFFFFFFu;
@@ -36,6 +36,8 @@ public:
     bool showShulkers = true;
     bool showChests = true;
     bool showEnderChests = true;
+    bool showVaults = true;
+    bool showSpawners = true;
     bool showHoppers = true;
     bool showDispensers = true;
     bool showDroppers = true;
