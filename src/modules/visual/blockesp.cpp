@@ -327,21 +327,28 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     std::vector<Outline> foundOutlines;
     scannedPositions.reserve(scanBudget + 729u);
     foundOutlines.reserve(64u);
-    auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos) {
-        void* raw = getBlock(source, pos);
-        if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return;
-        const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
-        if (!name || name->empty()) return;
-
+    // Several scan passes overlap by design. Deduplicate their coordinates before
+    // calling the native BlockSource function; a native lookup is the expensive part.
+    m_tickQueried.clear();
+    if (m_tickQueried.bucket_count() < scanBudget + 729u)
+        m_tickQueried.reserve(scanBudget + 729u);
+    auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos) -> bool {
         const PositionKey key = keyFor(pos);
+        if (!m_tickQueried.emplace(key).second) return false;
+        void* raw = getBlock(source, pos);
+        if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return true;
+        const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
+        if (!name || name->empty()) return true;
+
         scannedPositions.push_back(key);
         Kind kind{};
-        if (!classify(*name, kind)) return;
+        if (!classify(*name, kind)) return true;
 
         std::string normalizedName = stripNamespace(*name);
         if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
         if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
         foundOutlines.push_back(Outline{pos, colorForBlock(kind, normalizedName), kind, std::move(normalizedName)});
+        return true;
     };
 
     // Very fast near-player refresh: immediate changes/removals are checked every
@@ -528,34 +535,68 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         if (m_priorityScanCursor >= m_priorityScanOffsets.size()) m_priorityScanActive = false;
     }
 
-    const std::size_t remainingBudget = scanBudget > localUsed + priorityUsed ? scanBudget - localUsed - priorityUsed : 0u;
-    const std::size_t wideBudget = remainingBudget;
+    // Budget against unique native queries, not cursor advances. If the local
+    // and priority passes overlap, the wide pass uses the saved work to continue
+    // until the per-tick query budget is actually spent.
+    const std::size_t wideBudget = scanBudget > m_tickQueried.size()
+        ? scanBudget - m_tickQueried.size() : 0u;
     if (m_scanActive && wideBudget > 0u) {
         const std::size_t verticalCount = static_cast<std::size_t>(ry * 2 + 1);
-        const std::size_t end = std::min(m_scanTotal, m_scanCursor + wideBudget);
+        std::size_t wideUsed = 0;
         auto verticalOffset = [](std::size_t layer) -> int {
             if (layer == 0) return 0;
             const int magnitude = static_cast<int>((layer + 1) / 2);
             return (layer & 1u) ? -magnitude : magnitude;
         };
-        for (std::size_t index = m_scanCursor; index < end; ++index) {
+        while (m_scanCursor < m_scanTotal && wideUsed < wideBudget) {
+            const std::size_t index = m_scanCursor++;
             const std::size_t horizontalIndex = index / verticalCount;
             const std::size_t layer = index % verticalCount;
             const auto [dx, dz] = m_horizontalScanOffsets[horizontalIndex];
             const int dy = verticalOffset(layer);
-            inspectBlock(bedrocktools::sdk::BlockPos{
-                m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz});
+            if (inspectBlock(bedrocktools::sdk::BlockPos{
+                    m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz}))
+                ++wideUsed;
         }
-        m_scanCursor = end;
         if (m_scanCursor >= m_scanTotal) m_scanActive = false;
     }
 
     if (!scannedPositions.empty() || !foundOutlines.empty()) {
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         for (const auto& key : scannedPositions) m_cache.erase(key);
-        for (auto& outline : foundOutlines) {
-            if (m_cache.size() >= kMaxBlockEspCache) break;
-            m_cache.emplace(keyFor(outline.position), std::move(outline));
+        // insert_or_assign updates recently scanned blocks. Do not discard new
+        // outlines simply because the cache has reached its nominal capacity.
+        for (auto& outline : foundOutlines)
+            m_cache.insert_or_assign(keyFor(outline.position), std::move(outline));
+
+        // Keep a small slack to avoid pruning every tick, then retain the nearest
+        // blocks to the player. This prevents stale/far entries from starving
+        // discoveries around a newly entered area.
+        constexpr std::size_t kCachePruneSlack = 512u;
+        if (m_cache.size() > kMaxBlockEspCache + kCachePruneSlack) {
+            using CacheIterator = decltype(m_cache.begin());
+            std::vector<CacheIterator> ranked;
+            ranked.reserve(m_cache.size());
+            for (auto it = m_cache.begin(); it != m_cache.end(); ++it) ranked.push_back(it);
+
+            auto distanceSquared = [&](const Outline& outline) {
+                const double dx = static_cast<double>(outline.position.x) + 0.5 - p.x;
+                const double dy = static_cast<double>(outline.position.y) + 0.5 - p.y;
+                const double dz = static_cast<double>(outline.position.z) + 0.5 - p.z;
+                return dx * dx + dy * dy + dz * dz;
+            };
+            std::nth_element(ranked.begin(), ranked.begin() + kMaxBlockEspCache, ranked.end(),
+                [&](CacheIterator a, CacheIterator b) {
+                    return distanceSquared(a->second) < distanceSquared(b->second);
+                });
+
+            std::unordered_set<PositionKey, PositionHash> retained;
+            retained.reserve(kMaxBlockEspCache * 2u);
+            for (std::size_t i = 0; i < kMaxBlockEspCache; ++i) retained.emplace(ranked[i]->first);
+            for (auto it = m_cache.begin(); it != m_cache.end();) {
+                if (!retained.contains(it->first)) it = m_cache.erase(it);
+                else ++it;
+            }
         }
     }
 }
