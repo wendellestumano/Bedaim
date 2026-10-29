@@ -91,6 +91,7 @@ const std::vector<std::string>& utilityBlockNames() {
     return names;
 }
 std::string utilityTitle(std::string name) {
+    if (name == "block_button") return "Block Button";
     std::replace(name.begin(), name.end(), '_', ' ');
     bool upper = true;
     for (char& ch : name) {
