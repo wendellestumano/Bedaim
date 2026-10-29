@@ -116,9 +116,13 @@ BlockEspModule::PositionKey BlockEspModule::keyFor(const bedrocktools::sdk::Bloc
 }
 bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
     const std::string name = stripNamespace(raw);
+    // Treat every chest variant as storage, including copper chests and any
+    // future vanilla/custom names that follow the chest naming convention.
     if (name.find("shulker_box") != std::string::npos) kind = Kind::Shulker;
     else if (name == "ender_chest") kind = Kind::EnderChest;
-    else if (name == "trapped_chest" || name == "chest") kind = Kind::Chest;
+    else if (name.find("chest") != std::string::npos) kind = Kind::Chest;
+    else if (name.find("vault") != std::string::npos) kind = Kind::Vault;
+    else if (name.find("spawner") != std::string::npos || name == "mob_spawner") kind = Kind::Spawner;
     else if (name == "hopper") kind = Kind::Hopper;
     else if (name == "dispenser") kind = Kind::Dispenser;
     else if (name == "dropper") kind = Kind::Dropper;
@@ -173,6 +177,10 @@ std::uint32_t BlockEspModule::colorFor(Kind kind) const noexcept {
     switch (kind) {
         case Kind::Shulker: return shulkerColor;
         case Kind::Chest: return chestColor;
+        case Kind::Vault: return 0xFFFFD34Eu;
+        case Kind::Spawner: return 0xFF45E8D2u;
+        case Kind::Vault: return 0xFFFFD34Eu;
+        case Kind::Spawner: return 0xFF45E8D2u;
         case Kind::EnderChest: return enderChestColor;
         case Kind::Hopper: return hopperColor;
         case Kind::Dispenser: return dispenserColor;
