@@ -19,6 +19,7 @@
 #include <cstring>
 #include <vector>
 #include <array>
+#include <unordered_map>
 #include <utility>
 
 typedef void (*Tessellator_begin_t)(void* tessellator, void* debugCallback, int primitiveMode, int vertexCount, int noIndices);
@@ -513,10 +514,23 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         blockOutlines.clear();
         blockEsp->getRenderSnapshot(g_playerPos, blockOutlines);
         using BlockLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
-        constexpr std::size_t kindCount = static_cast<std::size_t>(BlockEspModule::Kind::Count);
-        static std::array<std::vector<BlockLine>, kindCount> tracerLinesByKind;
-        std::array<std::uint32_t, kindCount> tracerColorsByKind{};
-        for (auto& lines : tracerLinesByKind) lines.clear();
+        std::unordered_map<std::uint32_t, std::vector<BlockLine>> tracerLinesByColor;
+        if (blockEsp->showTracer) tracerLinesByColor.reserve(64);
+
+        // Rotation is the player's camera pitch/yaw in degrees. The first point
+        // lies on the view ray, so every tracer visibly begins at the crosshair.
+        constexpr float degToRad = 0.01745329251994329577f;
+        const float pitch = cameraRotation.x * degToRad;
+        const float yaw = cameraRotation.y * degToRad;
+        const bedrocktools::sdk::Vec3 viewForward{
+            -std::sin(yaw) * std::cos(pitch),
+            -std::sin(pitch),
+             std::cos(yaw) * std::cos(pitch)};
+        constexpr float crosshairStart = 0.18f;
+        const bedrocktools::sdk::Vec3 tracerStart{
+            cameraPosition.x + viewForward.x * crosshairStart,
+            cameraPosition.y + viewForward.y * crosshairStart,
+            cameraPosition.z + viewForward.z * crosshairStart};
 
         for (const auto& block : blockOutlines) {
             constexpr float expand = 0.006f;
@@ -528,62 +542,33 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             const float z1 = static_cast<float>(block.position.z + 1) + expand;
             drawBox({{x0,y0,z0},{x1,y1,z1}}, block.color, true, blockEsp->outlineThickness);
 
-            if (blockEsp->showTracer) {
-                const bedrocktools::sdk::Vec3 center{
-                    static_cast<float>(block.position.x) + 0.5f,
-                    static_cast<float>(block.position.y) + 0.5f,
-                    static_cast<float>(block.position.z) + 0.5f};
-                const auto delta = bedrocktools::sdk::Vec3{
-                    center.x - cameraPosition.x, center.y - cameraPosition.y, center.z - cameraPosition.z};
-                const float length = std::sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z);
-                if (length > 0.001f && std::isfinite(length)) {
-                    // Build a stable perpendicular frame around the tracer so thickness
-                    // is visible even on RenderDragon drivers that ignore line width.
-                    bedrocktools::sdk::Vec3 side{
-                        -delta.z, 0.0f, delta.x};
-                    float sideLength = std::sqrt(side.x*side.x + side.z*side.z);
-                    if (sideLength < 0.001f) {
-                        side = {1.0f, 0.0f, 0.0f};
-                        sideLength = 1.0f;
-                    }
-                    side.x /= sideLength; side.z /= sideLength;
-                    bedrocktools::sdk::Vec3 up{
-                        delta.y*side.z - delta.z*side.y,
-                        delta.z*side.x - delta.x*side.z,
-                        delta.x*side.y - delta.y*side.x};
-                    const float upLength = std::sqrt(up.x*up.x + up.y*up.y + up.z*up.z);
-                    if (upLength > 0.001f) {
-                        up.x /= upLength; up.y /= upLength; up.z /= upLength;
-                    }
-                    const float t = std::clamp(blockEsp->tracerThickness, 0.005f, 0.06f);
-                    const auto kindIndex = static_cast<std::size_t>(block.kind);
-                    if (kindIndex >= tracerLinesByKind.size()) continue;
-                    auto& lines = tracerLinesByKind[kindIndex];
-                    tracerColorsByKind[kindIndex] = block.color;
+            if (!blockEsp->showTracer) continue;
+            const bedrocktools::sdk::Vec3 center{
+                static_cast<float>(block.position.x) + 0.5f,
+                static_cast<float>(block.position.y) + 0.5f,
+                static_cast<float>(block.position.z) + 0.5f};
+            const auto delta = bedrocktools::sdk::Vec3{
+                center.x - tracerStart.x, center.y - tracerStart.y, center.z - tracerStart.z};
+            const float length = std::sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z);
+            if (length <= 0.001f || !std::isfinite(length)) continue;
 
-                    // Start each tracer just in front of the camera, on the ray to its
-                    // own block. This avoids the distracting bundle of lines at the eye
-                    // while keeping the far endpoint anchored to the block center.
-                    constexpr float cameraClearance = 0.65f;
-                    const bedrocktools::sdk::Vec3 start{
-                        cameraPosition.x + delta.x / length * cameraClearance,
-                        cameraPosition.y + delta.y / length * cameraClearance,
-                        cameraPosition.z + delta.z / length * cameraClearance};
-                    lines.push_back({start, center});
-                    lines.push_back({{start.x + side.x*t, start.y + side.y*t, start.z + side.z*t},
-                                     {center.x + side.x*t, center.y + side.y*t, center.z + side.z*t}});
-                    lines.push_back({{start.x - side.x*t, start.y - side.y*t, start.z - side.z*t},
-                                     {center.x - side.x*t, center.y - side.y*t, center.z - side.z*t}});
-                }
-            }
+            bedrocktools::sdk::Vec3 side{-delta.z, 0.0f, delta.x};
+            float sideLength = std::sqrt(side.x*side.x + side.z*side.z);
+            if (sideLength < 0.001f) { side = {1.0f, 0.0f, 0.0f}; sideLength = 1.0f; }
+            side.x /= sideLength; side.z /= sideLength;
+            const float t = std::clamp(blockEsp->tracerThickness, 0.005f, 0.06f);
+            auto& lines = tracerLinesByColor[block.color];
+            // Main line is the true crosshair-to-block guide; two subtle parallel
+            // lines make thickness visible on renderers that ignore line width.
+            lines.push_back({tracerStart, center});
+            lines.push_back({{tracerStart.x + side.x*t, tracerStart.y + side.y*t, tracerStart.z + side.z*t},
+                             {center.x + side.x*t, center.y + side.y*t, center.z + side.z*t}});
+            lines.push_back({{tracerStart.x - side.x*t, tracerStart.y - side.y*t, tracerStart.z - side.z*t},
+                             {center.x - side.x*t, center.y - side.y*t, center.z - side.z*t}});
         }
         if (blockEsp->showTracer) {
-            for (std::size_t kind = 0; kind < tracerLinesByKind.size(); ++kind) {
-                const auto& lines = tracerLinesByKind[kind];
-                if (lines.empty()) continue;
-                // Tracer color is the exact same HEX value as the corresponding block outline.
-                drawLines(lines, tracerColorsByKind[kind], true);
-            }
+            for (const auto& [color, lines] : tracerLinesByColor)
+                if (!lines.empty()) drawLines(lines, color, true);
         }
     }
 
