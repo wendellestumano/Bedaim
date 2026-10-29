@@ -2,6 +2,7 @@
 #include "AtomicConfigWriter.hpp"
 #include "../core/Diagnostics.hpp"
 #include "modules/ModuleRegistry.hpp"
+#include "modules/misc/configurations.hpp"
 #include <pl/Logger.hpp>
 #include <filesystem>
 #include <fstream>
@@ -63,6 +64,39 @@ void ConfigManager::load() {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config", std::string("configuration load failed: ") + ex.what());
     } catch (...) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config", "configuration load failed with unknown exception");
+    }
+
+    // Configs.json stores the selected snapshot filename. Load that snapshot
+    // after the primary file so the custom filename is a real configuration source.
+    auto* configurations = static_cast<ConfigurationsModule*>(
+        ModuleRegistry::get().find("bedrocktools.Configurations"));
+    if (configurations) {
+        const auto customName = configurations->configuredFileName();
+        const auto customPath = (std::filesystem::path(path).parent_path() / customName).string();
+        if (customPath != path && std::filesystem::exists(customPath)) {
+            try {
+                std::ifstream customFile(customPath);
+                nlohmann::json customJson;
+                customFile >> customJson;
+                if (customJson.contains("Modules") && customJson["Modules"].is_object()) {
+                    const auto& modulesObj = customJson["Modules"];
+                    for (auto* mod : ModuleRegistry::get().modules()) {
+                        if (!mod) continue;
+                        if (modulesObj.contains(mod->name)) mod->loadConfig(modulesObj[mod->name]);
+                        else if (std::string_view(mod->name) == "Hive Utils" && modulesObj.contains("AutoReQ"))
+                            mod->loadConfig(modulesObj["AutoReQ"]);
+                    }
+                    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info,
+                        "Config", "custom configuration loaded from " + customPath);
+                }
+            } catch (const std::exception& ex) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+                    std::string("custom configuration load failed: ") + ex.what());
+            } catch (...) {
+                bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Config",
+                    "custom configuration load failed with unknown exception");
+            }
+        }
     }
 }
 

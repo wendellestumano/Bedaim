@@ -79,7 +79,7 @@ void EspModule::beginOffscreenFrame(const bedrocktools::sdk::Vec3& localPosition
 
 void EspModule::considerOffscreenCandidate(const bedrocktools::sdk::Vec3& targetCenter,float distance){
     if(!std::isfinite(targetCenter.x)||!std::isfinite(targetCenter.y)||!std::isfinite(targetCenter.z)||
-       !std::isfinite(distance)||distance<0.0f||distance>std::clamp(range,8.0f,80.0f))return;
+       !std::isfinite(distance)||distance<0.0f||(!infiniteRange&&distance>std::clamp(range,8.0f,80.0f)))return;
     std::lock_guard<std::mutex> lock(m_hudTargetMutex);
     if(m_offscreenFrameTime.time_since_epoch().count()==0)return;
 
@@ -225,6 +225,7 @@ void EspModule::onMenuRegistered(){
   n.defaultValue=d?"true":"false";n.currentValue=cfgText(config,key,n.defaultValue.c_str());n.hasCurrentValue=true;schema.node(std::move(n));
  };
  toggle("showPlayers","Show players","Draw outlines around other players.",true);
+ toggle("infiniteRange","Infinite ESP range","Extends ESP and the locator to a bounded 512-block scan instead of the selected distance.",false);
  toggle("showInvisible","Show invisible players","Include invisible players in ESP.",false);
  toggle("showLockInAim","Target ring","Draw an animated ring above each in-range player, independent of Aim Assist.",true,"indicators");
  toggle("showOffscreenIndicators","Off-screen indicators","Point to the nearest player outside the view.",true,"indicators");
@@ -260,10 +261,11 @@ void EspModule::onMenuRegistered(){
  setConfigSchemaJson(moduleId,schema.toJson());
 }
 bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value){
- if(key=="showPlayers"||key=="showInvisible"||key=="showLockInAim"||
+ if(key=="showPlayers"||key=="infiniteRange"||key=="showInvisible"||key=="showLockInAim"||
     key=="showOffscreenIndicators"||key=="animatedIndicators"){
   bool b=false;if(!parseBool(value,b))return false;
   if(key=="showPlayers")showPlayers=b;
+  else if(key=="infiniteRange")infiniteRange=b;
   else if(key=="showInvisible")showInvisible=b;
   else if(key=="showLockInAim")showLockInAim=b;
   else if(key=="showOffscreenIndicators")showOffscreenIndicators=b;
@@ -288,7 +290,7 @@ bool EspModule::onMenuConfigChanged(std::string_view key,std::string_view value)
  else if(key=="unknownColor")unknownColor=c;else if(key=="targetColor")targetColor=c;else return false;return true;
 }
 void EspModule::loadConfig(const nlohmann::json& j){
- Module::loadConfig(j);showPlayers=j.value("showPlayers",showPlayers);showInvisible=j.value("showInvisible",showInvisible);
+ Module::loadConfig(j);showPlayers=j.value("showPlayers",showPlayers);infiniteRange=j.value("infiniteRange",infiniteRange);showInvisible=j.value("showInvisible",showInvisible);
  showLockInAim=j.value("showLockInAim",showLockInAim);
  showOffscreenIndicators=j.value("showOffscreenIndicators",showOffscreenIndicators);
  animatedIndicators=j.value("animatedIndicators",animatedIndicators);
@@ -304,7 +306,7 @@ void EspModule::loadConfig(const nlohmann::json& j){
  loadColor(j,"targetColor",targetColor);
 }
 void EspModule::saveConfig(nlohmann::json& j){
- Module::saveConfig(j);j["showPlayers"]=showPlayers;j["showInvisible"]=showInvisible;
+ Module::saveConfig(j);j["showPlayers"]=showPlayers;j["infiniteRange"]=infiniteRange;j["showInvisible"]=showInvisible;
  j["showLockInAim"]=showLockInAim;j["showOffscreenIndicators"]=showOffscreenIndicators;
  j["animatedIndicators"]=animatedIndicators;j["indicatorSize"]=std::clamp(indicatorSize,24.0f,96.0f);
  j["targetYOffset"]=std::clamp(targetYOffset,-1.5f,1.5f);

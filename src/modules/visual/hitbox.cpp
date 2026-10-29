@@ -335,7 +335,7 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
 
     // Fetch the native actor vector once per RenderLevel call and reuse it for both
     // off-screen HUD targeting and 3D ESP/Hitbox rendering.
-    const float espRange = espEnabled ? std::clamp(esp->range, 8.0f, 80.0f) : 30.0f;
+    const float espRange = espEnabled ? (esp->infiniteRange ? 512.0f : std::clamp(esp->range, 8.0f, 80.0f)) : 30.0f;
     const float queryRange = actorVisualsEnabled ? std::max(30.0f, espRange) : 0.0f;
     ActorVec actors{};
     bool actorSnapshotValid = false;
