@@ -82,16 +82,13 @@ const std::vector<std::string>& utilityBlockNames() {
         "fletching_table","grindstone","composter","lectern","beacon","bell","jukebox",
         "note_block","observer","piston","sticky_piston","crafter","redstone_block",
         "lever","target","block_button",
-        "oak_pressure_plate","spruce_pressure_plate","birch_pressure_plate","jungle_pressure_plate",
-        "acacia_pressure_plate","dark_oak_pressure_plate","mangrove_pressure_plate",
-        "cherry_pressure_plate","bamboo_pressure_plate","crimson_pressure_plate",
-        "warped_pressure_plate","stone_pressure_plate","polished_blackstone_pressure_plate",
-        "light_weighted_pressure_plate","heavy_weighted_pressure_plate"
+        "block_pressure_plate"
     };
     return names;
 }
 std::string utilityTitle(std::string name) {
     if (name == "block_button") return "Block Button";
+    if (name == "block_pressure_plate") return "Pressure Plate";
     std::replace(name.begin(), name.end(), '_', ' ');
     bool upper = true;
     for (char& ch : name) {
@@ -249,11 +246,28 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const std::size_t diameter = static_cast<std::size_t>(rx * 2 + 1);
     const std::size_t plane = diameter * diameter;
     const std::size_t end = std::min(m_scanTotal, m_scanCursor +
-        static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 128, 2048)));
+        static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 512, 16384)));
+    auto spiralOffset = [](std::size_t n) -> std::pair<int, int> {
+        if (n == 0) return {0, 0};
+        const auto root = static_cast<std::size_t>(std::ceil((std::sqrt(static_cast<double>(n + 1)) - 1.0) / 2.0));
+        const auto side = root * 2;
+        const auto maxIndex = (side + 1) * (side + 1) - 1;
+        const auto d = maxIndex - n;
+        if (d < side) return {static_cast<int>(root) - static_cast<int>(d), -static_cast<int>(root)};
+        if (d < side * 2) return {-static_cast<int>(root), -static_cast<int>(root) + static_cast<int>(d - side)};
+        if (d < side * 3) return {-static_cast<int>(root) + static_cast<int>(d - side * 2), static_cast<int>(root)};
+        return {static_cast<int>(root), static_cast<int>(root) - static_cast<int>(d - side * 3)};
+    };
+    auto verticalOffset = [](std::size_t layer) -> int {
+        if (layer == 0) return 0;
+        const int magnitude = static_cast<int>((layer + 1) / 2);
+        return (layer & 1u) ? -magnitude : magnitude;
+    };
     for (std::size_t index = m_scanCursor; index < end; ++index) {
-        const int dx = static_cast<int>(index % diameter) - rx;
-        const int dz = static_cast<int>((index / diameter) % diameter) - rx;
-        const int dy = static_cast<int>(index / plane) - ry;
+        const std::size_t layer = index / plane;
+        const std::size_t horizontalIndex = index % plane;
+        const auto [dx, dz] = spiralOffset(horizontalIndex);
+        const int dy = verticalOffset(layer);
         const bedrocktools::sdk::BlockPos pos{m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz};
         const PositionKey key = keyFor(pos);
         void* raw = getBlock(source, pos);
@@ -263,6 +277,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         Kind kind{};
         std::string normalizedName = stripNamespace(*name);
         if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
+        if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         m_cache.erase(key);
         if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
@@ -327,7 +342,7 @@ void BlockEspModule::onMenuRegistered() {
     };
     slider("horizontalRadius","Horizontal radius","Horizontal scan and render radius (5x default).", "scan",80,20,160,1," blocks");
     slider("verticalRadius","Vertical radius","Vertical scan and render radius (5x default).", "scan",40,10,80,1," blocks");
-    slider("scanBudgetPerTick","Scan budget","Block queries performed per tick.", "scan",1024,128,2048,128," blocks/tick");
+    slider("scanBudgetPerTick","Scan budget","Block queries performed per tick; higher values populate long ranges faster at greater CPU cost.", "scan",8192,512,16384,512," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
     slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
     auto color = [&](const char* key,const char* title,std::uint32_t def) {
@@ -378,7 +393,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
         if(!parseInt(value,i)) return false;
         if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,160);
         else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,80);
-        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,128,2048);
+        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,512,16384);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true;
@@ -406,7 +421,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     }
     horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,160);
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,80);
-    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),128,2048);
+    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),512,16384);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
     tracerThickness=static_cast<float>(std::clamp(j.value("tracerThickness",4),1,10))/100.0f;
     loadColor(j,"shulkerColor",shulkerColor); loadColor(j,"chestColor",chestColor);
