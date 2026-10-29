@@ -16,6 +16,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
