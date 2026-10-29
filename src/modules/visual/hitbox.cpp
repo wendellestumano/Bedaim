@@ -513,9 +513,10 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         blockOutlines.clear();
         blockEsp->getRenderSnapshot(g_playerPos, blockOutlines);
         using BlockLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
-        static std::vector<BlockLine> tracerLines;
-        tracerLines.clear();
-        tracerLines.reserve(blockOutlines.size());
+        constexpr std::size_t kindCount = static_cast<std::size_t>(BlockEspModule::Kind::Count);
+        static std::array<std::vector<BlockLine>, kindCount> tracerLinesByKind;
+        for (auto& lines : tracerLinesByKind) lines.clear();
+
         for (const auto& block : blockOutlines) {
             constexpr float expand = 0.006f;
             const float x0 = static_cast<float>(block.position.x) - expand;
@@ -525,16 +526,62 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             const float y1 = static_cast<float>(block.position.y + 1) + expand;
             const float z1 = static_cast<float>(block.position.z + 1) + expand;
             drawBox({{x0,y0,z0},{x1,y1,z1}}, block.color, true, blockEsp->outlineThickness);
+
             if (blockEsp->showTracer) {
                 const bedrocktools::sdk::Vec3 center{
                     static_cast<float>(block.position.x) + 0.5f,
                     static_cast<float>(block.position.y) + 0.5f,
                     static_cast<float>(block.position.z) + 0.5f};
-                tracerLines.push_back({cameraPosition, center});
+                const auto delta = bedrocktools::sdk::Vec3{
+                    center.x - cameraPosition.x, center.y - cameraPosition.y, center.z - cameraPosition.z};
+                const float length = std::sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z);
+                if (length > 0.001f && std::isfinite(length)) {
+                    // Build a stable perpendicular frame around the tracer so thickness
+                    // is visible even on RenderDragon drivers that ignore line width.
+                    bedrocktools::sdk::Vec3 side{
+                        -delta.z, 0.0f, delta.x};
+                    float sideLength = std::sqrt(side.x*side.x + side.z*side.z);
+                    if (sideLength < 0.001f) {
+                        side = {1.0f, 0.0f, 0.0f};
+                        sideLength = 1.0f;
+                    }
+                    side.x /= sideLength; side.z /= sideLength;
+                    bedrocktools::sdk::Vec3 up{
+                        delta.y*side.z - delta.z*side.y,
+                        delta.z*side.x - delta.x*side.z,
+                        delta.x*side.y - delta.y*side.x};
+                    const float upLength = std::sqrt(up.x*up.x + up.y*up.y + up.z*up.z);
+                    if (upLength > 0.001f) {
+                        up.x /= upLength; up.y /= upLength; up.z /= upLength;
+                    }
+                    const float t = std::clamp(blockEsp->tracerThickness, 0.01f, 0.10f);
+                    auto& lines = tracerLinesByKind[static_cast<std::size_t>(block.kind)];
+                    lines.push_back({cameraPosition, center});
+                    lines.push_back({{cameraPosition.x + side.x*t, cameraPosition.y + side.y*t, cameraPosition.z + side.z*t},
+                                     {center.x + side.x*t, center.y + side.y*t, center.z + side.z*t}});
+                    lines.push_back({{cameraPosition.x - side.x*t, cameraPosition.y - side.y*t, cameraPosition.z - side.z*t},
+                                     {center.x - side.x*t, center.y - side.y*t, center.z - side.z*t}});
+                    lines.push_back({{cameraPosition.x + up.x*t, cameraPosition.y + up.y*t, cameraPosition.z + up.z*t},
+                                     {center.x + up.x*t, center.y + up.y*t, center.z + up.z*t}});
+                    lines.push_back({{cameraPosition.x - up.x*t, cameraPosition.y - up.y*t, cameraPosition.z - up.z*t},
+                                     {center.x - up.x*t, center.y - up.y*t, center.z - up.z*t}});
+                }
             }
         }
-        if (blockEsp->showTracer && !tracerLines.empty())
-            drawLines(tracerLines, blockEsp->tracerColor, true);
+        if (blockEsp->showTracer) {
+            for (std::size_t kind = 0; kind < tracerLinesByKind.size(); ++kind) {
+                const auto& lines = tracerLinesByKind[kind];
+                if (lines.empty()) continue;
+                // Tracer color is deliberately the exact same HEX color as that block's outline.
+                const auto color = blockOutlines.empty() ? 0xFFFFFFFFu : lines.size() > 0
+                    ? [&]() -> std::uint32_t {
+                        for (const auto& block : blockOutlines)
+                            if (static_cast<std::size_t>(block.kind) == kind) return block.color;
+                        return 0xFFFFFFFFu;
+                    }() : 0xFFFFFFFFu;
+                drawLines(lines, color, true);
+            }
+        }
     }
 
     if (oreEspEnabled && oreEsp) {
