@@ -621,13 +621,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_scanActive = true;
     }
 
-    // Spend most of the query budget completing the nearest chunks quickly.
-    // Priority gets a small reserve for forward movement; the wide pass uses any
-    // remaining unique-query budget. Never attempt the entire 160k volume at once.
-    // Keep local refresh responsive, but reserve most of the budget for the
-    // wide scan. Previously the 3/4 local allocation starved distant discovery,
-    // making blocks hundreds of blocks away appear only after a long wait.
-    const std::size_t localBudget = scanBudget / 4u;
+    // Experiment: give the local volume 75% of the configured query budget
+    // to test whether the local scan window is the part users need expanded.
+    // Priority keeps its 12.5% reserve; the wide pass consumes whatever unique
+    // query budget remains after overlaps are deduplicated.
+    const std::size_t localBudget = (scanBudget * 3u) / 4u;
     const std::size_t priorityBudget = scanBudget / 8u;
     if (m_localScanActive) {
         const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
