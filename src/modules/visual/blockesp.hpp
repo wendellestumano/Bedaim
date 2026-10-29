@@ -113,6 +113,7 @@ private:
     std::uint64_t m_lastResolveAttemptTick = 0;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<PositionKey, Outline, PositionHash> m_cache;
+    std::size_t m_cacheRefreshCursor = 0;
     // Fixed open-addressing table avoids per-block allocations while deduplicating
     // overlapping scan passes. 32768 slots covers the maximum 16384 queries/tick.
     std::vector<QuerySlot> m_queryDedupSlots;
