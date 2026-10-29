@@ -494,10 +494,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_hasLocalScanOrigin = true;
     }
 
-    // The priority scan is a small rolling volume. When moving, it becomes a
-    // forward corridor (24 blocks ahead, 5 blocks to either side and 8 vertically).
-    // While stationary, it scans a center-out 17x17x17 cube. This pass is rebuilt
-    // only after meaningful movement / a turn, never on each individual tick.
+    // The priority scan is the fast discovery path near the player. While moving,
+    // it becomes a forward corridor. While stationary, it scans a center-out
+    // 33x33x33 cube so targets 8-16 blocks away do not depend on the slow wide pass.
+    // The scan is incremental and is rebuilt only after meaningful movement / a turn.
     bool movedFromPriorityCenter = false;
     if (m_hasPriorityCenter) {
         const int dx = current.x - m_priorityScanOrigin.x;
@@ -514,7 +514,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_priorityScanOrigin = current;
         m_priorityScanCursor = 0;
         m_priorityScanOffsets.clear();
-        m_priorityScanOffsets.reserve(4913u);
+        m_priorityScanOffsets.reserve(35937u);
 
         auto centerOutOffset = [](int index) -> int {
             if (index == 0) return 0;
@@ -538,7 +538,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 }
             }
         } else {
-            for (int shell = 0; shell <= 8; ++shell) {
+            for (int shell = 0; shell <= 16; ++shell) {
                 for (int dx = -shell; dx <= shell; ++dx) {
                     for (int dy = -shell; dy <= shell; ++dy) {
                         for (int dz = -shell; dz <= shell; ++dz) {
@@ -597,7 +597,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // Priority gets a small reserve for forward movement; the wide pass uses any
     // remaining unique-query budget. Never attempt the entire 160k volume at once.
     const std::size_t localBudget = (scanBudget * 3u) / 4u;
-    const std::size_t priorityBudget = scanBudget / 8u;
+    const std::size_t priorityBudget = scanBudget / 4u;
     if (m_localScanActive) {
         const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
         for (std::size_t index = m_localScanCursor; index < end; ++index) {
