@@ -21,7 +21,7 @@ namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
 constexpr std::size_t kMaxBlockEspCache = 4096;
-constexpr std::size_t kMaxBlockEspRendered = 256;
+constexpr std::size_t kMaxBlockEspRendered = 128;
 
 void resolveBlockGetBlock() {
     if (g_blockEspGetBlock.load(std::memory_order_acquire)) return;
@@ -315,8 +315,8 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
                                        std::vector<Outline>& output) const {
     output.clear();
     if (!enabled || !masterEnabled || !keybindActive) return;
-    const int rx = std::clamp(horizontalRadius, 4, 32);
-    const int ry = std::clamp(verticalRadius, 2, 16);
+    const int rx = std::clamp(horizontalRadius, 20, 160);
+    const int ry = std::clamp(verticalRadius, 10, 80);
     output.reserve(kMaxBlockEspRendered);
     std::lock_guard<std::mutex> lock(m_cacheMutex);
     for (const auto& [key, outline] : m_cache) {
