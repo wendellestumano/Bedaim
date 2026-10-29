@@ -91,7 +91,7 @@ std::size_t BlockEspModule::PositionHash::operator()(const PositionKey& p) const
 BlockEspModule::PositionKey BlockEspModule::keyFor(const bedrocktools::sdk::BlockPos& p) noexcept {
     return {p.x, p.y, p.z};
 }
-bool BlockEspModule::classify(std::string_view raw, Kind& kind) noexcept {
+bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
     const std::string name = stripNamespace(raw);
     if (name.find("shulker_box") != std::string::npos) kind = Kind::Shulker;
     else if (name == "ender_chest") kind = Kind::EnderChest;
