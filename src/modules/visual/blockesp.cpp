@@ -20,8 +20,8 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
-constexpr std::size_t kMaxBlockEspCache = 16384;
-constexpr std::size_t kMaxBlockEspRendered = 2048;
+constexpr std::size_t kMaxBlockEspCache = 4096;
+constexpr std::size_t kMaxBlockEspRendered = 256;
 
 void resolveBlockGetBlock() {
     if (g_blockEspGetBlock.load(std::memory_order_acquire)) return;
@@ -253,7 +253,22 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_scanCenter = current; m_lastCenter = current; m_hasCenter = true;
         m_scanCursor = 0;
         const std::size_t diameter = static_cast<std::size_t>(rx * 2 + 1);
-        m_scanTotal = diameter * diameter * static_cast<std::size_t>(ry * 2 + 1);
+        m_horizontalScanOffsets.clear();
+        m_horizontalScanOffsets.reserve(diameter * diameter);
+        m_horizontalScanOffsets.emplace_back(0, 0);
+        // Build center-out rings once per scan. Never calculate sqrt/ceil per block
+        // query on every tick; that was unnecessarily expensive on mobile CPUs.
+        for (int ring = 1; ring <= rx; ++ring) {
+            for (int dx = -ring; dx <= ring; ++dx) {
+                m_horizontalScanOffsets.emplace_back(dx, -ring);
+                m_horizontalScanOffsets.emplace_back(dx, ring);
+            }
+            for (int dz = -ring + 1; dz < ring; ++dz) {
+                m_horizontalScanOffsets.emplace_back(-ring, dz);
+                m_horizontalScanOffsets.emplace_back(ring, dz);
+            }
+        }
+        m_scanTotal = m_horizontalScanOffsets.size() * static_cast<std::size_t>(ry * 2 + 1);
         m_scanActive = true;
         std::lock_guard<std::mutex> lock(m_cacheMutex);
         for (auto it = m_cache.begin(); it != m_cache.end();) {
@@ -265,21 +280,9 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     }
     if (!m_scanActive) return;
 
-    const std::size_t diameter = static_cast<std::size_t>(rx * 2 + 1);
-    const std::size_t plane = diameter * diameter;
+    const std::size_t plane = m_horizontalScanOffsets.size();
     const std::size_t end = std::min(m_scanTotal, m_scanCursor +
-        static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 512, 16384)));
-    auto spiralOffset = [](std::size_t n) -> std::pair<int, int> {
-        if (n == 0) return {0, 0};
-        const auto root = static_cast<std::size_t>(std::ceil((std::sqrt(static_cast<double>(n + 1)) - 1.0) / 2.0));
-        const auto side = root * 2;
-        const auto maxIndex = (side + 1) * (side + 1) - 1;
-        const auto d = maxIndex - n;
-        if (d < side) return {static_cast<int>(root) - static_cast<int>(d), -static_cast<int>(root)};
-        if (d < side * 2) return {-static_cast<int>(root), -static_cast<int>(root) + static_cast<int>(d - side)};
-        if (d < side * 3) return {-static_cast<int>(root) + static_cast<int>(d - side * 2), static_cast<int>(root)};
-        return {static_cast<int>(root), static_cast<int>(root) - static_cast<int>(d - side * 3)};
-    };
+        static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 2048)));
     auto verticalOffset = [](std::size_t layer) -> int {
         if (layer == 0) return 0;
         const int magnitude = static_cast<int>((layer + 1) / 2);
@@ -287,8 +290,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     };
     for (std::size_t index = m_scanCursor; index < end; ++index) {
         const std::size_t layer = index / plane;
-        const std::size_t horizontalIndex = index % plane;
-        const auto [dx, dz] = spiralOffset(horizontalIndex);
+        const auto [dx, dz] = m_horizontalScanOffsets[index % plane];
         const int dy = verticalOffset(layer);
         const bedrocktools::sdk::BlockPos pos{m_scanCenter.x + dx, m_scanCenter.y + dy, m_scanCenter.z + dz};
         const PositionKey key = keyFor(pos);
@@ -364,7 +366,7 @@ void BlockEspModule::onMenuRegistered() {
     };
     slider("horizontalRadius","Horizontal radius","Horizontal scan and render radius (5x default).", "scan",80,20,160,1," blocks");
     slider("verticalRadius","Vertical radius","Vertical scan and render radius (5x default).", "scan",40,10,80,1," blocks");
-    slider("scanBudgetPerTick","Scan budget","Block queries performed per tick; higher values populate long ranges faster at greater CPU cost.", "scan",8192,512,16384,512," blocks/tick");
+    slider("scanBudgetPerTick","Scan budget","Block queries per tick; higher values load faster but use more CPU.", "scan",512,256,2048,128," blocks/tick");
     slider("outlineThickness","Outline thickness","Approximate thickness of block outlines.", "tracer",4,1,10,1," units");
     slider("tracerThickness","Tracer thickness","World-space thickness of guide lines pointing to each block.", "tracer",4,1,10,1," units");
     auto color = [&](const char* key,const char* title,std::uint32_t def) {
@@ -415,7 +417,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
         if(!parseInt(value,i)) return false;
         if(key=="horizontalRadius")horizontalRadius=std::clamp(i,20,160);
         else if(key=="verticalRadius")verticalRadius=std::clamp(i,10,80);
-        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,512,16384);
+        else if(key=="scanBudgetPerTick")scanBudgetPerTick=std::clamp(i,256,2048);
         else if(key=="outlineThickness")outlineThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         else tracerThickness=static_cast<float>(std::clamp(i,1,10))/100.0f;
         m_scanActive=false; m_hasCenter=false; onMenuRegistered(); return true;
@@ -443,7 +445,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     }
     horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,160);
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,80);
-    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),512,16384);
+    scanBudgetPerTick=std::clamp(j.value("scanBudgetPerTick",scanBudgetPerTick),256,2048);
     outlineThickness=static_cast<float>(std::clamp(j.value("outlineThickness",4),1,10))/100.0f;
     tracerThickness=static_cast<float>(std::clamp(j.value("tracerThickness",4),1,10))/100.0f;
     loadColor(j,"shulkerColor",shulkerColor); loadColor(j,"chestColor",chestColor);
