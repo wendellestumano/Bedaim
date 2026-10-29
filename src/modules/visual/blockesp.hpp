@@ -44,7 +44,7 @@ public:
     bool showUtilityBlocks = true;
     int horizontalRadius = 80;
     int verticalRadius = 40;
-    int scanBudgetPerTick = 512;
+    int scanBudgetPerTick = 16384;
     float outlineThickness = 0.035f;
     float tracerThickness = 0.035f;
     std::uint32_t shulkerColor = 0xFFFF40FFu;
