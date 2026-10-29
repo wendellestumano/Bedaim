@@ -506,7 +506,6 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // This keeps the expanded 32x160x32 area responsive without a 160k-query spike.
     const std::size_t localBudget = scanBudget / 2u;
     const std::size_t priorityBudget = scanBudget / 4u;
-    std::size_t localUsed = 0;
     if (m_localScanActive) {
         const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
         for (std::size_t index = m_localScanCursor; index < end; ++index) {
@@ -516,11 +515,9 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 m_localScanOrigin.y + offset.y,
                 m_localScanOrigin.z + offset.z});
         }
-        localUsed = end - m_localScanCursor;
         m_localScanCursor = end;
         if (m_localScanCursor >= m_localScanOffsets.size()) m_localScanActive = false;
     }
-    std::size_t priorityUsed = 0;
     if (m_priorityScanActive) {
         const std::size_t end = std::min(m_priorityScanOffsets.size(), m_priorityScanCursor + priorityBudget);
         for (std::size_t index = m_priorityScanCursor; index < end; ++index) {
@@ -530,7 +527,6 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 m_priorityScanOrigin.y + offset.y,
                 m_priorityScanOrigin.z + offset.z});
         }
-        priorityUsed = end - m_priorityScanCursor;
         m_priorityScanCursor = end;
         if (m_priorityScanCursor >= m_priorityScanOffsets.size()) m_priorityScanActive = false;
     }
