@@ -417,12 +417,13 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
         onMenuRegistered();
         return true;
     }
-    if (key=="showTracer"||key=="showShulkers"||key=="showChests"||key=="showEnderChests"||
+    if (key=="showTracer"||key=="showShulkers"||key=="showChests"||key=="showEnderChests"||key=="showVaults"||key=="showSpawners"||
         key=="showHoppers"||key=="showDispensers"||key=="showDroppers"||key=="showBarrels"||
         key=="showFurnaces"||key=="showUtilityBlocks") {
         if (!parseBool(value,b)) return false;
         if(key=="showTracer")showTracer=b; else if(key=="showShulkers")showShulkers=b;
         else if(key=="showChests")showChests=b; else if(key=="showEnderChests")showEnderChests=b;
+        else if(key=="showVaults")showVaults=b; else if(key=="showSpawners")showSpawners=b;
         else if(key=="showHoppers")showHoppers=b; else if(key=="showDispensers")showDispensers=b;
         else if(key=="showDroppers")showDroppers=b; else if(key=="showBarrels")showBarrels=b;
         else if(key=="showFurnaces")showFurnaces=b; else showUtilityBlocks=b;
@@ -451,7 +452,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
 void BlockEspModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     showTracer=j.value("showTracer",showTracer); showShulkers=j.value("showShulkers",showShulkers);
-    showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
+    showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
     showDroppers=j.value("showDroppers",showDroppers); showBarrels=j.value("showBarrels",showBarrels);
     showFurnaces=j.value("showFurnaces",showFurnaces); showUtilityBlocks=j.value("showUtilityBlocks",showUtilityBlocks);
@@ -475,7 +476,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
 void BlockEspModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
-    j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
+    j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
     j["showDroppers"]=showDroppers; j["showBarrels"]=showBarrels; j["showFurnaces"]=showFurnaces;
     j["showUtilityBlocks"]=showUtilityBlocks; j["maxScanRadius"]=maxScanRadius;
     for (const auto& [name, enabled] : m_utilityFilters) j["showBlock_" + name] = enabled;
