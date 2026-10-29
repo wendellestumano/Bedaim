@@ -122,7 +122,7 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
     else if (name == "ender_chest") kind = Kind::EnderChest;
     else if (name.find("chest") != std::string::npos) kind = Kind::Chest;
     else if (name.find("vault") != std::string::npos) kind = Kind::Vault;
-    else if (name.find("spawner") != std::string::npos || name == "mob_spawner") kind = Kind::Spawner;
+    else if (name.find("spawner") != std::string::npos || name == "mob_spawner" || name == "sculk_shrieker") kind = Kind::Spawner;
     else if (name == "hopper") kind = Kind::Hopper;
     else if (name == "dispenser") kind = Kind::Dispenser;
     else if (name == "dropper") kind = Kind::Dropper;
@@ -197,6 +197,7 @@ std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) co
     if (kind != Kind::Utility) return colorFor(kind);
     if (name == "vault") return 0xFFFFD34Eu;
     if (name.find("spawner") != std::string::npos || name == "mob_spawner") return 0xFF45E8D2u;
+    if (name == "sculk_shrieker") return 0xFF8A4DCEu;
     if (name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp") return 0xFFFF3030u;
     if (name == "block_button" || name == "block_pressure_plate" ||
         name == "polished_blackstone_button" || name == "polished_blackstone_pressure_plate") return 0xFFB9B9B9u;
