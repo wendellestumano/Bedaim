@@ -319,25 +319,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
     const std::size_t scanBudget = static_cast<std::size_t>(std::clamp(scanBudgetPerTick, 256, 16384));
 
-    // Cull cache entries that cannot be rendered from the current player position.
-    // Without this, a long Elytra flight could fill the bounded cache with blocks
-    // from old locations and prevent newly discovered blocks from being inserted.
-    if (m_tickCount % 10u == 0u) {
-        const int keepHorizontal = rx + 8;
-        const int keepVertical = ry + 8;
-        const int keepHorizontalSquared = keepHorizontal * keepHorizontal;
-        std::lock_guard<std::mutex> lock(m_cacheMutex);
-        for (auto it = m_cache.begin(); it != m_cache.end();) {
-            const std::int64_t dx = static_cast<std::int64_t>(it->second.position.x) - current.x;
-            const std::int64_t dy = static_cast<std::int64_t>(it->second.position.y) - current.y;
-            const std::int64_t dz = static_cast<std::int64_t>(it->second.position.z) - current.z;
-            if (dx * dx + dz * dz > static_cast<std::int64_t>(keepHorizontalSquared) || std::abs(dy) > keepVertical)
-                it = m_cache.erase(it);
-            else
-                ++it;
-        }
-    }
-
+    // Keep discovered blocks cached even after the player moves far away.
+    // Entries are removed only when the source/dimension changes, the module is
+    // disabled, or the bounded cache must prune its least useful entries.
+    
     // Each query contributes to a batched cache update. The old implementation
     // acquired the cache mutex for every queried block (often >16,000 locks/tick).
     // Batch erases/inserts once per tick instead, while keeping unloaded positions
@@ -640,8 +625,8 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
                                        std::vector<Outline>& output) const {
     output.clear();
     if (!enabled || !masterEnabled || !keybindActive) return;
-    const int rx = maxScanRadius ? 320 : std::clamp(horizontalRadius, 20, 320);
-    const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
+    // Rendering is independent from the active discovery radius: once a block is
+    // discovered, keep drawing it from cache while it remains in the bounded cache.
     output.reserve(kMaxBlockEspRendered);
 
     struct Candidate {
@@ -664,8 +649,6 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
         const float dy = static_cast<float>(outline.position.y) + 0.5f - playerPosition.y;
         const float dz = static_cast<float>(outline.position.z) + 0.5f - playerPosition.z;
         const float horizontalDistanceSquared = dx * dx + dz * dz;
-        if (horizontalDistanceSquared > static_cast<float>(rx * rx) || std::fabs(dy) > static_cast<float>(ry)) continue;
-
         const Candidate candidate{horizontalDistanceSquared + dy * dy, &outline};
         if (nearest.size() < kMaxBlockEspRendered) {
             nearest.push_back(candidate);
