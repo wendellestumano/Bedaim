@@ -254,13 +254,42 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return;
     const bedrocktools::sdk::BlockPos current{
         static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)), static_cast<int>(std::floor(p.z))};
+
+    // Fast path: refresh a small cube around the player every tick. This makes
+    // nearby placements and removals visible immediately instead of waiting
+    // for the long-range incremental scan to reach the same coordinates.
+    constexpr int kImmediateRadius = 5;
+    for (int dx = -kImmediateRadius; dx <= kImmediateRadius; ++dx) {
+        for (int dy = -kImmediateRadius; dy <= kImmediateRadius; ++dy) {
+            for (int dz = -kImmediateRadius; dz <= kImmediateRadius; ++dz) {
+                const bedrocktools::sdk::BlockPos pos{current.x + dx, current.y + dy, current.z + dz};
+                const PositionKey key = keyFor(pos);
+                void* raw = getBlock(source, pos);
+                if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) continue;
+                const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
+                if (!name || name->empty()) continue;
+                Kind kind{};
+                std::string normalizedName = stripNamespace(*name);
+                if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
+                if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
+                std::lock_guard<std::mutex> lock(m_cacheMutex);
+                m_cache.erase(key);
+                if (classify(*name, kind) && m_cache.size() < kMaxBlockEspCache) {
+                    m_cache.emplace(key, Outline{pos, colorForBlock(kind, normalizedName), kind, normalizedName});
+                }
+            }
+        }
+    }
     const int rx = maxScanRadius ? 160 : std::clamp(horizontalRadius, 20, 160);
     const int ry = maxScanRadius ? 160 : std::clamp(verticalRadius, 10, 160);
     const int moveThreshold = 8;
-    if (!m_hasCenter ||
-        std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
+    const bool movedFar = std::abs(current.x - m_lastCenter.x) >= moveThreshold ||
         std::abs(current.z - m_lastCenter.z) >= moveThreshold ||
-        std::abs(current.y - m_lastCenter.y) >= moveThreshold) {
+        std::abs(current.y - m_lastCenter.y) >= moveThreshold;
+    // Do not restart a multi-million-block scan every time the player moves
+    // while flying. Finish the current pass, then center the next pass on the
+    // player's latest position; the immediate local scan follows the player.
+    if (!m_hasCenter || (!m_scanActive && movedFar)) {
         m_scanCenter = current; m_lastCenter = current; m_hasCenter = true;
         m_scanCursor = 0;
         const std::size_t diameter = static_cast<std::size_t>(rx * 2 + 1);
@@ -452,7 +481,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
 void BlockEspModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     showTracer=j.value("showTracer",showTracer); showShulkers=j.value("showShulkers",showShulkers);
-    showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
+    showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
     showDroppers=j.value("showDroppers",showDroppers); showBarrels=j.value("showBarrels",showBarrels);
     showFurnaces=j.value("showFurnaces",showFurnaces); showUtilityBlocks=j.value("showUtilityBlocks",showUtilityBlocks);
@@ -476,7 +505,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
 void BlockEspModule::saveConfig(nlohmann::json& j) {
     Module::saveConfig(j);
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
-    j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
+    j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
     j["showDroppers"]=showDroppers; j["showBarrels"]=showBarrels; j["showFurnaces"]=showFurnaces;
     j["showUtilityBlocks"]=showUtilityBlocks; j["maxScanRadius"]=maxScanRadius;
     for (const auto& [name, enabled] : m_utilityFilters) j["showBlock_" + name] = enabled;
