@@ -9,12 +9,12 @@ Native Android app hosting an authenticated MCP Streamable HTTP endpoint on `127
 - Local MCP foreground service and authenticated loopback endpoint.
 - Per-install 256-bit bearer token, masked by default, with copy and rotation controls.
 - MCP workspace tools: `bridge_status`, `workspace_list`, `workspace_read`, `workspace_write`.
-- APK Lab: import a user-selected APK, parse package/version/SDK metadata, enumerate ZIP contents, count DEX/native libraries/resources/assets and calculate signer certificate SHA-256 fingerprints.
-- APK file backup/duplication inside the app-private workspace. This duplicates the original bytes and does not modify package identity or signature.
+- APK Lab: import a user-selected APK, parse package/version/SDK metadata, list requested permissions and sensitive permissions, inventory app components, enumerate ZIP contents, count DEX/native libraries/resources/assets and calculate signer certificate SHA-256 fingerprints. It can safely extract the raw ZIP archive with path traversal and decompression-size limits.
+- APK file backup/duplication inside the app-private workspace, raw archive extraction and export through Android document picker. Duplication preserves the original bytes and does not modify package identity or signature.
 - File access restricted to app-private workspace with path traversal checks and size limits.
 
 ## Not yet implemented
-- Full Apktool-style binary XML/resource decoding and decompilation.
+- Full Apktool-style binary XML/resource decoding and decompilation; current extraction is raw ZIP extraction, not resource decompilation.
 - Repackaging or package-identity cloning. APK Lab currently inspects and backs up APK files without altering their signatures.
 - Termux command execution, process manager and build orchestration.
 - Shizuku-backed file/process operations beyond current permission/capability checks.
