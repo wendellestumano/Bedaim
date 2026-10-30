@@ -382,6 +382,7 @@ void loadColor(const nlohmann::json& j, const char* key, std::uint32_t& value) {
 std::string stripNamespace(std::string_view name) {
     const auto pos = name.find(':');
     if (pos != std::string_view::npos) name.remove_prefix(pos + 1);
+    if (name.starts_with("tile.")) name.remove_prefix(5);
     std::string out(name);
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
