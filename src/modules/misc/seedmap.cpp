@@ -38,6 +38,8 @@ constexpr int kActionDown = 0;
 constexpr int kActionUp = 1;
 constexpr int kActionMove = 2;
 constexpr int kActionCancel = 3;
+constexpr int kActionPointerDown = 5;
+constexpr int kActionPointerUp = 6;
 constexpr std::array<const char*, 17> kFeatureKeys{
     "feature_village", "feature_mansion", "feature_end_city", "feature_monument",
     "feature_ancient_city", "feature_outpost", "feature_buried_treasure",
@@ -742,6 +744,10 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
         m_touchPointerId = event.pointerId;
         m_touchDownX = x;
         m_touchDownY = y;
+        m_touchCurrentX = x;
+        m_touchCurrentY = y;
+        m_pinchActive = false;
+        m_secondPointerId = -1;
         m_touchStartHudX = hudPosX;
         m_touchStartHudY = hudPosY;
         m_touchStartedOnMap = insideMap;
@@ -749,10 +755,65 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
         return true;
     }
 
-    if (!m_touchTracking || event.pointerId != m_touchPointerId) return false;
+    if (event.action == kActionPointerDown) {
+        if (!m_touchTracking || event.pointerId == m_touchPointerId) return false;
+        m_secondPointerId = event.pointerId;
+        m_secondPointerX = x;
+        m_secondPointerY = y;
+        const float dx = m_secondPointerX - m_touchCurrentX;
+        const float dy = m_secondPointerY - m_touchCurrentY;
+        m_pinchStartDistance = std::sqrt(dx * dx + dy * dy);
+        m_pinchStartRadius = m_mapRadiusBlocks;
+        m_pinchActive = m_touchStartedOnMap && m_pinchStartDistance > 1.0f;
+        m_touchMoved = true;
+        return m_pinchActive;
+    }
+
+    if (event.action == kActionPointerUp) {
+        if (!m_touchTracking) return false;
+        if (event.pointerId == m_secondPointerId) {
+            m_secondPointerId = -1;
+            m_pinchActive = false;
+            m_touchCurrentX = m_touchDownX;
+            m_touchCurrentY = m_touchDownY;
+            return true;
+        }
+        if (event.pointerId == m_touchPointerId) {
+            m_pinchActive = false;
+            m_secondPointerId = -1;
+            m_touchTracking = false;
+            m_touchPointerId = -1;
+            return true;
+        }
+        return false;
+    }
+
+    if (!m_touchTracking ||
+        (event.pointerId != m_touchPointerId && event.pointerId != m_secondPointerId))
+        return false;
 
     if (event.action == kActionMove) {
-        if (std::fabs(x - m_touchDownX) > 5.0f || std::fabs(y - m_touchDownY) > 5.0f) {
+        if (m_pinchActive) {
+            if (event.pointerId == m_touchPointerId) {
+                m_touchCurrentX = x;
+                m_touchCurrentY = y;
+            } else {
+                m_secondPointerX = x;
+                m_secondPointerY = y;
+            }
+            const float dx = m_secondPointerX - m_touchCurrentX;
+            const float dy = m_secondPointerY - m_touchCurrentY;
+            const float distance = std::sqrt(dx * dx + dy * dy);
+            if (distance > 1.0f && m_pinchStartDistance > 1.0f) {
+                const float ratio = m_pinchStartDistance / distance;
+                m_mapRadiusBlocks = std::clamp(
+                    static_cast<int>(std::lround(m_pinchStartRadius * ratio)), 256, 8192);
+                m_markersDirty = true;
+            }
+            return true;
+        }
+        if (event.pointerId == m_touchPointerId &&
+            (std::fabs(x - m_touchDownX) > 5.0f || std::fabs(y - m_touchDownY) > 5.0f) {
             m_touchMoved = true;
             if (m_touchStartedOnMap) {
                 const float scale = std::min(m_lastMapWidth, m_lastMapHeight) /
@@ -778,6 +839,8 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
         m_touchPointerId = -1;
         m_touchStartedOnMap = false;
         m_touchMoved = false;
+        m_pinchActive = false;
+        m_secondPointerId = -1;
         return true;
     }
 
@@ -866,6 +929,8 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     m_touchPointerId = -1;
     m_touchStartedOnMap = false;
     m_touchMoved = false;
+    m_pinchActive = false;
+    m_secondPointerId = -1;
     return true;
 }
 
