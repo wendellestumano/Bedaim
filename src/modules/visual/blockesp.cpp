@@ -58,7 +58,6 @@ std::atomic<std::uint64_t> g_genericBlockUpdateCalls{0};
 
 std::atomic<bool> g_blockEspCaptureEvents{false};
 
-constexpr std::uintptr_t kBlockSourceGetBlockRva = 0x0FB91918u;
 constexpr std::uintptr_t kApollonBlockUpdateRva = 0x106EEED4u;
 
 // Use the real ELF image base. BlockSourceGetBlock may move between Bedrock
