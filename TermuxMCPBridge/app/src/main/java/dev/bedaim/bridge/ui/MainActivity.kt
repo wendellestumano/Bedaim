@@ -619,6 +619,7 @@ class MainActivity : Activity() {
         }.getOrDefault(false)
         val rootFound = listOf("/system/bin/su", "/system/xbin/su", "/sbin/su").any { File(it).canExecute() }
         val termux = packageManager.getLaunchIntentForPackage("com.termux") != null
+        val termuxRun = checkSelfPermission("com.termux.permission.RUN_COMMAND") == PackageManager.PERMISSION_GRANTED
         return "Shizuku: ${if (!shizukuActive) "inativo" else if (shizukuAllowed) "autorizado" else "sem permissão"}\n" +
             "Termux: ${if (termux) "instalado" else "não detectado"}\n" +
             "Root: ${if (rootFound) "binário su encontrado (não validado)" else "não detectado"}"
