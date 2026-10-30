@@ -92,10 +92,14 @@ object ApkLab {
         require(file.length() in 1..MAX_APK_SIZE) { "APK vazio ou maior que 1,5 GiB." }
 
         val flags = if (Build.VERSION.SDK_INT >= 28) {
-            PackageManager.GET_SIGNING_CERTIFICATES
+            PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_ACTIVITIES or
+                PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS or
+                PackageManager.GET_PROVIDERS or PackageManager.GET_PERMISSIONS
         } else {
             @Suppress("DEPRECATION")
-            PackageManager.GET_SIGNATURES
+            PackageManager.GET_SIGNATURES or PackageManager.GET_ACTIVITIES or
+                PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS or
+                PackageManager.GET_PROVIDERS or PackageManager.GET_PERMISSIONS
         }
         val info = packageManager.getPackageArchiveInfo(file.absolutePath, flags)
             ?: throw IllegalArgumentException("O Android não reconheceu este arquivo como APK válido.")
