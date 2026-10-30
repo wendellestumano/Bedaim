@@ -62,6 +62,8 @@ constexpr std::size_t kMaxEventCandidates = 4096u;
 struct BlockEventCandidate {
     void* source = nullptr;
     bedrocktools::sdk::BlockPos position{};
+    std::array<char, 128> blockName{};
+    std::uint8_t blockNameLength = 0;
 };
 struct BlockEventCandidateQueue {
     std::array<BlockEventCandidate, kMaxEventCandidates> candidates{};
@@ -83,7 +85,8 @@ bool isValidEventPosition(const bedrocktools::sdk::BlockPos& position) noexcept 
            position.y >= -4096 && position.y <= 4096;
 }
 
-void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& position) noexcept {
+void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& position,
+                               std::string_view resolvedBlockName = {}) noexcept {
     // Specialized Apollon dispatchers do not all pass the active BlockSource
     // as their second argument. Keep the pointer only as diagnostic metadata;
     // the candidate is revalidated against the current BlockSource on the tick.
@@ -98,7 +101,15 @@ void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& 
         g_eventCandidatesDropped.fetch_add(1u, std::memory_order_relaxed);
     }
     const std::size_t tail = (g_blockEventCandidates.head + g_blockEventCandidates.count) % kMaxEventCandidates;
-    g_blockEventCandidates.candidates[tail] = BlockEventCandidate{source, position};
+    auto& candidate = g_blockEventCandidates.candidates[tail];
+    candidate = {};
+    candidate.source = source;
+    candidate.position = position;
+    if (!resolvedBlockName.empty()) {
+        const auto length = std::min(resolvedBlockName.size(), candidate.blockName.size() - 1u);
+        std::memcpy(candidate.blockName.data(), resolvedBlockName.data(), length);
+        candidate.blockNameLength = static_cast<std::uint8_t>(length);
+    }
     ++g_blockEventCandidates.count;
     g_eventCandidatesQueued.fetch_add(1u, std::memory_order_relaxed);
 }
@@ -134,8 +145,8 @@ void enqueueApollonVectorCandidate(void* eventObject, void* source) noexcept {
     enqueueBlockEventPosition(source, position);
 }
 
-std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t maximum, void* expectedSource) {
-    std::vector<bedrocktools::sdk::BlockPos> result;
+std::vector<BlockEventCandidate> drainBlockEventCandidates(std::size_t maximum, void* expectedSource) {
+    std::vector<BlockEventCandidate> result;
     result.reserve(maximum);
     std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
     (void)expectedSource;
@@ -145,7 +156,7 @@ std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t m
         // Do not reject specialized callback candidates by pointer identity:
         // several Apollon dispatchers use a different context object here.
         // The current BlockSource is used later to validate the actual block.
-        result.push_back(candidate.position);
+        result.push_back(candidate);
         g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
         --g_blockEventCandidates.count;
     }
@@ -185,7 +196,10 @@ const void* blockSourceTessellationGetBlockHook(
         const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(block)->fullName();
         if (name && !name->empty() && BlockEspModule::isSupportedBlockName(*name)) {
             g_blockSourceTessellationCandidateCalls.fetch_add(1u, std::memory_order_relaxed);
-            enqueueBlockEventPosition(blockSource, *position);
+            // The renderer has already resolved this exact Block. Preserve its
+            // canonical identifier in the queue so the player tick can classify
+            // it without issuing a second BlockSource lookup.
+            enqueueBlockEventPosition(blockSource, *position, *name);
         }
     }
     return block;
@@ -802,20 +816,25 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_queryGeneration = 1u;
     }
     m_uniqueQueriesThisTick = 0u;
-    auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos, bool eventCandidate = false) -> bool {
+    auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos, bool eventCandidate = false,
+                            std::string_view resolvedName = {}) -> bool {
         const PositionKey key = keyFor(pos);
         if (!markQueryPosition(key)) return false;
         // A successful scan invalidates the old outline first; a currently valid
         // target block is reinserted below. This also removes stale cached blocks
         // when the native lookup says the chunk/position is no longer available.
         scannedPositions.push_back(key);
-        void* raw = getBlock(source, pos);
-        if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return true;
-        const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
-        if (!name || name->empty()) return true;
+        std::string_view blockName = resolvedName;
+        if (blockName.empty()) {
+            void* raw = getBlock(source, pos);
+            if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return true;
+            const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
+            if (!name || name->empty()) return true;
+            blockName = *name;
+        }
 
         Kind kind{};
-        if (!classify(*name, kind)) return true;
+        if (!classify(blockName, kind)) return true;
         if (eventCandidate) g_eventCandidatesClassified.fetch_add(1u, std::memory_order_relaxed);
 
         // Do not require adjacent air/water for utility targets. That extra
@@ -823,7 +842,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         // disappear whenever neighbouring chunk lookups were unavailable. The
         // classifier and per-block filters are the sole inclusion criteria.
 
-        std::string normalizedName = stripNamespace(*name);
+        std::string normalizedName = stripNamespace(blockName);
         if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
         if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
         if (normalizedName.starts_with("shelf_")) normalizedName = "shelf";
@@ -1053,7 +1072,12 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // from inside the hooked update method.
     const std::size_t eventBudget = std::min<std::size_t>(2048u, scanBudget / 2u);
     const auto eventCandidates = drainBlockEventCandidates(eventBudget, source);
-    for (const auto& candidate : eventCandidates) inspectBlock(candidate, true);
+    for (const auto& candidate : eventCandidates) {
+        const std::string_view resolvedName = candidate.blockNameLength
+            ? std::string_view(candidate.blockName.data(), candidate.blockNameLength)
+            : std::string_view{};
+        inspectBlock(candidate.position, true, resolvedName);
+    }
 
     // Reserve half the budget for the same-height-first local sweep. Priority
     // and wide scans consume only the unique-query budget that remains after
