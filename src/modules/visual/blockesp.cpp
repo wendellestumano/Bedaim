@@ -59,7 +59,7 @@ std::atomic<std::uint64_t> g_genericBlockUpdateCalls{0};
 
 std::atomic<bool> g_blockEspCaptureEvents{false};
 
-constexpr std::uintptr_t kApollonBlockUpdateRva = 0x106EEED4u;
+constexpr std::uintptr_t kApollonBlockUpdateRva = 0x10F7FDE0u;
 
 // Use the real ELF image base. BlockSourceGetBlock may move between Bedrock
 // releases, so reconstructing the base from an RVA copied from Apollon's
@@ -158,8 +158,9 @@ void blockUpdateHook(void* updateObject, void* blockSource) {
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource)
         enqueueBlockEventCandidate(updateObject, blockSource);
 
-    // This target is a void, two-argument engine routine in the analyzed build.
-    // Always forward the original call, even while BlockESP is disabled.
+    // The 26.60 target is the matching two-argument event broadcaster. The
+    // Apollon wrapper reads the BlockPos from argument 0 + 8 and forwards both
+    // original arguments unchanged. Always forward, even while BlockESP is off.
     const auto original = reinterpret_cast<BlockUpdateFn>(g_blockUpdateOriginal);
     if (original) original(updateObject, blockSource);
 }
@@ -385,8 +386,10 @@ bool installBlockUpdateHook() {
     auto* target = reinterpret_cast<std::uint8_t*>(engineBase + kApollonBlockUpdateRva);
     if (!isAddressInMinecraftImage(target, engineBase)) return false;
 
-    // Version guard: the offset is only valid for the exact 1.26.52.3 engine
-    // layout analyzed from Apollon's bundled libminecraftpe.so.
+    // Version guard for Minecraft 1.26.60. The target RVA was remapped by
+    // matching the listener-vector dispatch flow against Apollon's original
+    // 1.26.52.3 target; the function's first four ARM64 instructions are also
+    // checked below before any detour is installed.
     constexpr std::uint32_t expectedPrologue[] = {
         0xD10303FFu, // sub sp, sp, #0xc0
         0xA9067BFDu, // stp x29, x30, [sp, #0x60]
@@ -730,9 +733,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
-    const bool nativeHooksMissing = !g_blockUpdateHook ||
-        std::any_of(g_apollonEventHooks.begin(), g_apollonEventHooks.end(),
-                    [](const auto hook) { return hook == nullptr; });
+    const bool nativeHooksMissing = !g_blockUpdateHook;
     if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
          !g_blockSourceTessellationGetBlockHook || nativeHooksMissing) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
