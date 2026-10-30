@@ -652,10 +652,11 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
+    // Keep the module independent from Apollon v6.7's fixed Minecraft 26.52.3
+    // RVAs. Those hooks are not validated for 26.60 and must not be installed
+    // during world startup. Discovery uses the tick-driven bounded scanner until
+    // version-matched event signatures are available.
     resolveBlockGetBlock();
-    installBlockUpdateHook();
-    installApollonBlockEventHooks();
-    installBlockSourceTessellationGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
 }
@@ -694,16 +695,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
-    const bool missingSpecializedHook = std::any_of(
-        g_apollonEventHooks.begin(), g_apollonEventHooks.end(),
-        [](const auto hook) { return hook == nullptr; });
-    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) || !g_blockUpdateHook || missingSpecializedHook ||
-         !g_blockSourceTessellationGetBlockHook) && m_tickCount - m_lastResolveAttemptTick >= 40) {
+    if (!g_blockEspGetBlock.load(std::memory_order_acquire) &&
+        m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
-        installBlockUpdateHook();
-        installApollonBlockEventHooks();
-        installBlockSourceTessellationGetBlockHook();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
