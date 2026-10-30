@@ -549,18 +549,18 @@ class MainActivity : Activity() {
         }
 
         val script = """
-            printf 'BEDAIM BRIDGE TOOLCHAIN\\n'
+            printf 'BEDAIM BRIDGE TOOLCHAIN\n'
             for tool in apktool aapt apksigner zipalign git python python3 clang cmake ninja gradle; do
               if command -v "$tool" >/dev/null 2>&1; then
-                printf '%-12s %s\\n' "$tool" "$(command -v "$tool")"
+                printf '%-12s %s\n' "$tool" "$(command -v "$tool")"
               else
-                printf '%-12s missing\\n' "$tool"
+                printf '%-12s missing\n' "$tool"
               fi
             done
             if [ -d "$HOME/storage/shared" ]; then
-              printf 'shared-storage %s\\n' 'available'
+              printf 'shared-storage %s\n' 'available'
             else
-              printf 'shared-storage %s\\n' 'not linked'
+              printf 'shared-storage %s\n' 'not linked'
             fi
         """.trimIndent()
 
