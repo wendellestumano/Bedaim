@@ -229,7 +229,6 @@ class MainActivity : Activity() {
         refresh()
     }
 
-    @Suppress("DEPRECATION")
     private fun refreshLogs() {
         if (!::logsValue.isInitialized) return
         logsValue.text = BridgeStatus.history().take(25).ifEmpty { listOf("Nenhum evento registrado.") }.joinToString("\\n")
@@ -249,6 +248,7 @@ class MainActivity : Activity() {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun chooseApk() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -338,6 +338,8 @@ class MainActivity : Activity() {
         statusValue.text = "Estado: ${BridgeStatus.state}\n${BridgeStatus.detail}"
         deviceValue.text = deviceDiagnostics()
         accessValue.text = accessDiagnostics()
+        refreshLogs()
+        refreshWorkspace()
     }
 
     private fun deviceDiagnostics(): String {
@@ -357,7 +359,10 @@ class MainActivity : Activity() {
             "Bateria: ${if (battery >= 0) "$battery%" else "indisponível"}\n" +
             "RAM disponível: ${formatBytes(memory.availMem)} / ${formatBytes(memory.totalMem)}\n" +
             "Armazenamento interno: ${formatBytes(used)} usados / ${formatBytes(total)} total\n" +
-            "CPU lógica: ${Runtime.getRuntime().availableProcessors()} núcleos\\n" +\n            "ABIs: ${Build.SUPPORTED_ABIS.take(4).joinToString() }\\n" +\n            "PID do Bridge: ${android.os.Process.myPid()}\\n" +\n            "Conexão: $network"
+            "CPU lógica: ${Runtime.getRuntime().availableProcessors()} núcleos\n" +
+            "ABIs: ${Build.SUPPORTED_ABIS.take(4).joinToString()}\n" +
+            "PID do Bridge: ${android.os.Process.myPid()}\n" +
+            "Conexão: $network"
     }
 
     private fun accessDiagnostics(): String {
