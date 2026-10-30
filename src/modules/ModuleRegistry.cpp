@@ -14,6 +14,7 @@
 #include "misc/modulediagnostics.hpp"
 #include "misc/configurations.hpp"
 #include "misc/seedmap.hpp"
+#include "misc/seedmap.hpp"
 
 ModuleRegistry& ModuleRegistry::get() {
     static ModuleRegistry registry;
@@ -78,5 +79,6 @@ void registerAllModules() {
     registry.emplace<UltrakillHudModule>();
     registry.emplace<ModuleDiagnosticsModule>();
     registry.emplace<ConfigurationsModule>();
+    registry.emplace<SeedMapModule>();
     registry.emplace<SeedMapModule>();
 }
