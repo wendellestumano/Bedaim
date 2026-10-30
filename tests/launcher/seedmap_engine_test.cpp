@@ -22,6 +22,19 @@ int main() {
         assert(!first[i].possibleTypes.empty());
     }
 
+    // Fixed oracle point: SeedForge's Bedrock MT19937/region formula gives
+    // the village attempt at (264, 232) for this seed in region (0, 0).
+    const auto oracle = findStructureAttempts(
+        123456789ULL, Dimension::Overworld, 0, 0, 8192, 256);
+    bool foundVillageOracle = false;
+    for (const auto& marker : oracle) {
+        if (marker.x == 264 && marker.z == 232) {
+            foundVillageOracle = true;
+            break;
+        }
+    }
+    assert(foundVillageOracle);
+
     // A seed change must affect at least one candidate in a nontrivial window.
     const auto other = findStructureAttempts(
         987654321ULL, Dimension::Overworld, 0, 0, 8192, 256);
