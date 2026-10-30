@@ -1044,7 +1044,9 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         const std::string_view resolvedName = candidate.blockNameLength
             ? std::string_view(candidate.blockName.data(), candidate.blockNameLength)
             : std::string_view{};
-        inspectBlock(candidate.position, true, resolvedName);
+        const bedrocktools::sdk::BlockPos candidatePosition{
+            candidate.position.x, candidate.position.y, candidate.position.z};
+        inspectBlock(candidatePosition, true, resolvedName);
     }
 
     // Reserve half the budget for the same-height-first local sweep. Priority
