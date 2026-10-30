@@ -165,6 +165,7 @@ class MainActivity : Activity() {
             runTermuxToolchainCheck()
         }
         actionButton(termuxCard, "INSTALAR APKTOOL NO TERMUX", false) { confirmInstallApktool() }
+        actionButton(termuxCard, "INSTALAR CLOUDFLARED NO TERMUX", true) { confirmInstallCloudflared() }
         actionButton(termuxCard, "CONFIGURAR PERMISSÃO RUN_COMMAND", false) {
             openPackageSettings("com.termux")
         }
@@ -654,6 +655,34 @@ class MainActivity : Activity() {
             .onFailure { Toast.makeText(this, "Erro: ${it.message}", Toast.LENGTH_LONG).show() }
     }
 
+    private fun confirmInstallCloudflared() {
+        AlertDialog.Builder(this)
+            .setTitle("Instalar cloudflared no Termux?")
+            .setMessage("O Termux executará pkg install cloudflared. Isso instala o cliente do Cloudflare Tunnel. Nenhum túnel será criado ou iniciado automaticamente.")
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Instalar") { _, _ ->
+                if (packageManager.getLaunchIntentForPackage("com.termux") == null) {
+                    Toast.makeText(this, "Termux não está instalado.", Toast.LENGTH_SHORT).show()
+                } else if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != PackageManager.PERMISSION_GRANTED) {
+                    Toast.makeText(this, "Conceda RUN_COMMAND primeiro.", Toast.LENGTH_LONG).show()
+                    openPackageSettings(packageName)
+                } else {
+                    val started = runTermuxCommand(
+                        "/data/data/com.termux/files/usr/bin/pkg",
+                        arrayOf("install", "-y", "cloudflared"),
+                        "Install Cloudflared",
+                        "Installs the Cloudflare Tunnel client from the configured Termux package repositories."
+                    )
+                    Toast.makeText(
+                        this,
+                        if (started) "Instalação enviada ao Termux. Confira os logs." else "Não foi possível iniciar a instalação.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+            .show()
+    }
+
     private fun confirmInstallApktool() {
         AlertDialog.Builder(this)
             .setTitle("Instalar Apktool no Termux?")
@@ -691,7 +720,7 @@ class MainActivity : Activity() {
 
         val script = """
             printf 'BEDAIM BRIDGE TOOLCHAIN\\n'
-            for tool in apktool aapt apksigner zipalign git python python3 clang cmake ninja gradle; do
+            for tool in apktool aapt apksigner zipalign git python python3 clang cmake ninja gradle cloudflared; do
               if command -v "${'$'}tool" >/dev/null 2>&1; then
                 printf '%-12s %s\\n' "${'$'}tool" "${'$'}(command -v "${'$'}tool")"
               else
