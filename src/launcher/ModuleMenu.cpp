@@ -56,7 +56,7 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         const bool editingIdentifier =
             key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier";
         const bool editingSeedMapText =
-            mod->moduleId == "bedrocktools.SeedMap" && (key == "seed" || key == "version");
+            mod->moduleId == "bedrocktools.SeedMap" && key == "seed";
         if (!editingIdentifier && !editingSeedMapText) {
             nlohmann::json snapshot;
             mod->saveConfig(snapshot);
