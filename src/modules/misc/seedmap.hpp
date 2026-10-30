@@ -45,7 +45,7 @@ private:
                         int centerX, int centerZ, int radius);
     void drawMap(float screenW, float screenH,
                  const std::vector<bedaim::seedmap::StructureMarker>& markers,
-                 int playerX, int playerZ, bedaim::seedmap::Dimension dimension,
+                 int playerX, int playerY, int playerZ, bedaim::seedmap::Dimension dimension,
                  bool hasSeed, int mapRadius, bool bigMap);
 
     mutable std::mutex m_stateMutex;
@@ -53,6 +53,7 @@ private:
     std::string m_dimensionName{"overworld"};
     bedaim::seedmap::Dimension m_dimension{bedaim::seedmap::Dimension::Overworld};
     int m_playerX = 0;
+    int m_playerY = 0;
     int m_playerZ = 0;
     bool m_hasPlayerPosition = false;
     bool m_markersDirty = true;
