@@ -71,8 +71,11 @@ bool isValidEventPosition(const bedrocktools::sdk::BlockPos& position) noexcept 
 }
 
 void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& position) noexcept {
-    if (!source || reinterpret_cast<std::uintptr_t>(source) <= 0x1000u ||
-        !isValidEventPosition(position)) return;
+    // Specialized Apollon dispatchers do not all pass the active BlockSource
+    // as their second argument. Keep the pointer only as diagnostic metadata;
+    // the candidate is revalidated against the current BlockSource on the tick.
+    (void)source;
+    if (!isValidEventPosition(position)) return;
 
     std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
     // Prefer recent updates over a backlog of candidates from older chunks.
@@ -120,10 +123,14 @@ std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t m
     std::vector<bedrocktools::sdk::BlockPos> result;
     result.reserve(maximum);
     std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
+    (void)expectedSource;
     const std::size_t count = std::min(maximum, g_blockEventCandidates.count);
     for (std::size_t i = 0; i < count; ++i) {
         const auto& candidate = g_blockEventCandidates.candidates[g_blockEventCandidates.head];
-        if (candidate.source == expectedSource) result.push_back(candidate.position);
+        // Do not reject specialized callback candidates by pointer identity:
+        // several Apollon dispatchers use a different context object here.
+        // The current BlockSource is used later to validate the actual block.
+        result.push_back(candidate.position);
         g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
         --g_blockEventCandidates.count;
     }
@@ -442,8 +449,13 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
     // Bedrock block identifiers are canonical lowercase names. Strip the
     // namespace as a view so the hot scan loop does not allocate a string for
     // every air/stone block it inspects.
+    // Some Bedrock builds expose legacy tile.* identifiers instead of the
+    // canonical minecraft:* form. Normalize both forms without allocating in
+    // the per-block scan hot path.
+    if (raw.starts_with("tile.")) raw.remove_prefix(5);
     const auto namespaceEnd = raw.find(':');
     if (namespaceEnd != std::string_view::npos) raw.remove_prefix(namespaceEnd + 1);
+    if (raw.starts_with("tile.")) raw.remove_prefix(5);
     const std::string_view name = raw;
     // Treat every chest variant as storage, including copper chests and any
     // future vanilla/custom names that follow the chest naming convention.
