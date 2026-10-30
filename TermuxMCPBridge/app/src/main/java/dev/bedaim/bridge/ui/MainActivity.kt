@@ -196,6 +196,7 @@ class MainActivity : Activity() {
         actionButton(apkCard, "SELECIONAR APK", true) { chooseApk() }
         actionButton(apkCard, "ANALISAR NOVAMENTE", false) { selectedApk?.let { analyzeApk(it) } }
         actionButton(apkCard, "DUPLICAR APK COMO BACKUP", false) { duplicateSelectedApk() }
+        actionButton(apkCard, "EXTRAIR CONTEÚDO ZIP", false) { extractSelectedApk() }
         actionButton(apkCard, "EXPORTAR APK PARA DOWNLOADS", false) { exportSelectedApk() }
         actionButton(apkCard, "COPIAR RELATÓRIO", false) {
             if (selectedApk == null) {
@@ -394,6 +395,37 @@ class MainActivity : Activity() {
                 runOnUiThread { apkReportValue.text = report }
             } catch (error: Throwable) {
                 runOnUiThread { apkReportValue.text = "Falha na análise: ${error.message}" }
+            }
+        }.start()
+    }
+
+    private fun extractSelectedApk() {
+        val source = selectedApk
+        if (source == null || !source.isFile) {
+            Toast.makeText(this, "Selecione um APK primeiro.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        apkReportValue.append("\n\nExtraindo estrutura ZIP…")
+        Thread {
+            try {
+                val destination = File(
+                    filesDir,
+                    "workspace/apk-extracted/${source.nameWithoutExtension}_${System.currentTimeMillis()}"
+                )
+                val result = ApkLab.extractArchive(source, destination)
+                runOnUiThread {
+                    apkReportValue.append(
+                        "\nExtraídos: ${result.filesExtracted} arquivos • ${formatBytes(result.bytesExtracted)}" +
+                            "\nPasta: ${result.directory.absolutePath}"
+                    )
+                    refreshWorkspace()
+                    Toast.makeText(this, "Estrutura extraída para o workspace.", Toast.LENGTH_LONG).show()
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    apkReportValue.append("\nFalha na extração: ${error.message}")
+                    Toast.makeText(this, "Extração interrompida.", Toast.LENGTH_LONG).show()
+                }
             }
         }.start()
     }
