@@ -620,32 +620,41 @@ bool BlockEspModule::markQueryPosition(const PositionKey& position) noexcept {
     return false;
 }
 bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
-    // Keep Apollon's legacy identifier convention explicit: every supported
-    // target is matched as tile.<block_name>. Modern BedrockTools may expose
-    // minecraft:<block_name> or the bare name, so normalize those representations
-    // to the same tile suffix without allocating in the scan hot path.
+    // Engine builds expose equivalent IDs in several forms:
+    // minecraft:crafting_table, tile.crafting_table, and legacy tile.shulkerBox.
+    // Normalize once into a bounded stack buffer before matching. This keeps
+    // the tessellation hook allocation-free and makes ID matching case-insensitive.
     const auto namespaceEnd = raw.find(':');
     if (namespaceEnd != std::string_view::npos) raw.remove_prefix(namespaceEnd + 1);
-    if (raw.starts_with("tile.")) raw.remove_prefix(5);
-    const std::string_view tileName = raw;
+    if (raw.size() >= 5u &&
+        (raw[0] == 't' || raw[0] == 'T') &&
+        (raw[1] == 'i' || raw[1] == 'I') &&
+        (raw[2] == 'l' || raw[2] == 'L') &&
+        (raw[3] == 'e' || raw[3] == 'E') && raw[4] == '.') raw.remove_prefix(5u);
+    if (raw.empty() || raw.size() >= 256u) return false;
 
-    // Apollon's fast storage targets: tile.chest, tile.trapped_chest,
-    // tile.ender_chest, tile.shulkerBox / tile.shulker_box and tile.barrel.
-    if (tileName == "shulkerBox" || tileName == "shulkerbox" || tileName == "shulker_box" ||
+    std::array<char, 256> normalized{};
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+        const unsigned char ch = static_cast<unsigned char>(raw[i]);
+        normalized[i] = static_cast<char>(std::tolower(ch));
+    }
+    const std::string_view tileName(normalized.data(), raw.size());
+
+    // Preserve the canonical distinctions between chest families and all
+    // other target IDs; only the visual Kind is shared by related block types.
+    if (tileName == "shulkerbox" || tileName == "shulker_box" ||
         tileName.find("shulker_box") != std::string_view::npos) kind = Kind::Shulker;
     else if (tileName == "ender_chest") kind = Kind::EnderChest;
     else if (tileName == "copper_chest") kind = Kind::Utility;
     else if (tileName == "chest" || tileName == "trapped_chest" ||
              tileName.find("chest") != std::string_view::npos) kind = Kind::Chest;
     else if (tileName == "vault") kind = Kind::Vault;
-    // All Apollon spawner families are explicit tile IDs.
     else if (tileName == "mob_spawner" || tileName == "trial_spawner" ||
              tileName == "sculk_shrieker" || tileName.find("spawner") != std::string_view::npos) kind = Kind::Spawner;
     else if (tileName == "hopper") kind = Kind::Hopper;
     else if (tileName == "dispenser") kind = Kind::Dispenser;
     else if (tileName == "dropper") kind = Kind::Dropper;
     else if (tileName == "barrel") kind = Kind::Barrel;
-    // The three furnace identifiers used by Apollon.
     else if (tileName == "furnace" || tileName == "blast_furnace" ||
              tileName == "smoker") kind = Kind::Furnace;
     else if (tileName == "crafting_table" || tileName == "brewing_stand" || tileName == "anvil" ||
