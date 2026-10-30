@@ -419,6 +419,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     std::string seedText;
     bool hasPosition = false;
     bool selectedValid = false;
+    bool featuresExpanded = true;
+    std::array<bool, 17> structureVisible{};
     int panOffsetX = 0;
     int panOffsetZ = 0;
     int selectedX = 0;
@@ -438,6 +440,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         showStructures = m_showStructures;
         showChunkGrid = m_showChunkGrid;
         showCoordinates = m_showCoordinates;
+        featuresExpanded = m_featuresExpanded;
+        structureVisible = m_structureVisible;
         dimensionName = m_dimensionName;
         seedText = m_seed;
         hasPosition = m_hasPlayerPosition;
@@ -453,11 +457,20 @@ void SeedMapModule::drawMap(float screenW, float screenH,
             ? std::min(screenH * 0.92f, 1400.0f)
             : panelSize;
         m_lastMapRadius = static_cast<float>(mapRadius);
-        m_lastMapLeft = panelX + 6.0f;
+        m_lastFeaturesLeft = panelX + 6.0f;
+        m_lastFeaturesTop = panelY + (bigMap
+            ? std::clamp(std::min(screenH * 0.92f, 1400.0f) * 0.075f, 52.0f, 76.0f)
+            : std::clamp(panelSize * 0.19f, 40.0f, 54.0f));
+        m_lastFeaturesWidth = bigMap && featuresExpanded
+            ? std::clamp(panelSize * 0.28f, 132.0f, 210.0f) : 0.0f;
+        m_lastFeaturesHeight = panelHeight - (m_lastFeaturesTop - panelY) -
+            (bigMap ? std::clamp(panelHeight * 0.08f, 52.0f, 76.0f)
+                    : std::clamp(panelSize * 0.19f, 34.0f, 58.0f));
+        m_lastMapLeft = panelX + 6.0f + m_lastFeaturesWidth;
         m_lastMapTop = panelY + (bigMap
             ? std::clamp(std::min(screenH * 0.92f, 1400.0f) * 0.075f, 52.0f, 76.0f)
             : std::clamp(panelSize * 0.19f, 40.0f, 54.0f));
-        m_lastMapWidth = panelSize - 12.0f;
+        m_lastMapWidth = panelSize - 12.0f - m_lastFeaturesWidth;
         m_lastMapHeight = panelHeight - headerH - footerH;
         m_lastBigMap = bigMap;
     }
@@ -474,8 +487,10 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     const float mapTop = panelY + headerH;
     const float mapBottom = panelY + panelHeight - footerH;
     const float mapHeight = std::max(1.0f, mapBottom - mapTop);
-    const float mapWidth = std::max(1.0f, panelSize - 12.0f);
-    const float mapLeft = panelX + 6.0f;
+    const float mapWidth = std::max(1.0f, panelSize - 12.0f - featuresWidth);
+    const float featuresWidth = bigMap && featuresExpanded
+        ? std::clamp(panelSize * 0.28f, 132.0f, 210.0f) : 0.0f;
+    const float mapLeft = panelX + 6.0f + featuresWidth;
     const float mapRight = mapLeft + mapWidth;
     const float centerX = (mapLeft + mapRight) * 0.5f;
     const float centerY = (mapTop + mapBottom) * 0.5f;
@@ -534,6 +549,9 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     text(panelX + 11.0f, panelY + 30.0f,
          "SEED " + (seedText.empty() ? std::string("NOT SET") : seedText),
          6.2f * textScale, 0xFF8FD8CB);
+    text(panelX + 11.0f, panelY + (bigMap ? 44.0f : 40.0f),
+         featuresExpanded ? "FEATURES  v" : "FEATURES  >",
+         6.2f * textScale, 0xFF8FD8CB);
 
     if (showCoordinates && hasPosition) {
         text(panelX + panelSize * 0.47f, panelY + 9.0f,
@@ -550,6 +568,24 @@ void SeedMapModule::drawMap(float screenW, float screenH,
          bigMap ? "X" : "B", 12.0f * textScale, 0xFFDAE5EE);
 
     // The map surface is clipped by geometry bounds before any marker is drawn.
+    if (featuresWidth > 0.0f) {
+        const float featuresX = panelX + 6.0f;
+        rect(featuresX, mapTop, featuresWidth - 6.0f, mapHeight, 0xFF151E28, 3.0f, true);
+        text(featuresX + 8.0f, mapTop + 7.0f, "FEATURES", 8.0f * textScale, 0xFFEAF0F5);
+        static constexpr std::array<std::string_view, 17> featureNames{
+            "Village", "Mansion", "End City", "Monument", "Ancient City",
+            "Outpost", "Buried Treasure", "Ocean Ruin", "Shipwreck",
+            "Nether Fortress", "Bastion", "Desert Pyramid", "Igloo",
+            "Swamp Hut", "Jungle Temple", "Ruined Portal", "Nether Portal"};
+        const float rowH = std::max(15.0f, (mapHeight - 26.0f) / 17.0f);
+        for (std::size_t i = 0; i < featureNames.size(); ++i) {
+            const float rowY = mapTop + 24.0f + static_cast<float>(i) * rowH;
+            const auto color = structureVisible[i] ? 0xFF55C6B0u : 0xFF56616C;
+            rect(featuresX + 7.0f, rowY + 2.0f, 9.0f, 9.0f, color, 2.0f, true);
+            text(featuresX + 22.0f, rowY, std::string(featureNames[i]),
+                 6.8f * textScale, structureVisible[i] ? 0xFFEAF0F5 : 0xFF71808D);
+        }
+    }
     rect(mapLeft, mapTop, mapWidth, mapHeight, 0xFF101820, 3.0f, true);
     const int gridStep = mapRadius <= 512 ? 16 : (mapRadius <= 4096 ? 128 : 256);
     if (showChunkGrid) {
@@ -584,6 +620,12 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     if (hasSeed && showStructures) {
         for (const auto& marker : markers) {
             if (marker.possibleTypes.empty()) continue;
+            const bool typeVisible = std::any_of(marker.possibleTypes.begin(), marker.possibleTypes.end(),
+                [&](auto type) {
+                    const auto index = static_cast<std::size_t>(type);
+                    return index < structureVisible.size() && structureVisible[index];
+                });
+            if (!typeVisible) continue;
             const float px = centerX + (marker.x - viewCenterX) * scale;
             const float py = centerY + (marker.z - viewCenterZ) * scale;
             if (px < mapLeft + 4.0f || px > mapRight - 4.0f ||
@@ -675,6 +717,9 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     const float y = event.y;
     const bool inside = x >= m_lastPanelX && x <= m_lastPanelX + m_lastPanelSize &&
         y >= m_lastPanelY && y <= m_lastPanelY + m_lastPanelHeight;
+    const bool insideFeatures = m_lastFeaturesWidth > 0.0f &&
+        x >= m_lastFeaturesLeft && x <= m_lastFeaturesLeft + m_lastFeaturesWidth &&
+        y >= m_lastFeaturesTop && y <= m_lastFeaturesTop + m_lastFeaturesHeight;
     const bool insideMap = x >= m_lastMapLeft && x <= m_lastMapLeft + m_lastMapWidth &&
         y >= m_lastMapTop && y <= m_lastMapTop + m_lastMapHeight;
 
@@ -730,6 +775,17 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     const bool tap = !m_touchMoved;
     if (tap) {
         if (inside) {
+            const float featuresButtonY = m_lastPanelY + (m_lastBigMap ? 44.0f : 40.0f);
+            if (x >= m_lastPanelX + 8.0f && x <= m_lastPanelX + 104.0f &&
+                y >= featuresButtonY - 3.0f && y <= featuresButtonY + 12.0f) {
+                m_featuresExpanded = !m_featuresExpanded;
+            } else if (insideFeatures && m_lastFeaturesHeight > 0.0f) {
+                const float rowH = std::max(15.0f, (m_lastFeaturesHeight - 26.0f) / 17.0f);
+                const int index = static_cast<int>((y - (m_lastFeaturesTop + 24.0f)) / rowH);
+                if (index >= 0 && index < static_cast<int>(m_structureVisible.size()))
+                    m_structureVisible[static_cast<std::size_t>(index)] =
+                        !m_structureVisible[static_cast<std::size_t>(index)];
+            } else {
             const float buttonSize = std::clamp(m_lastPanelSize * 0.13f, 24.0f, 34.0f);
             const float actionX = m_lastPanelX + m_lastPanelSize - buttonSize - 7.0f;
             const float actionY = m_lastPanelY + 6.0f;
@@ -784,6 +840,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
                         m_hasSelectedMarker = false;
                     }
                 }
+            }
             }
         }
     }
