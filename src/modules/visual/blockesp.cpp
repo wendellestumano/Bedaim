@@ -652,11 +652,13 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
-    // Keep the module independent from Apollon v6.7's fixed Minecraft 26.52.3
-    // RVAs. Those hooks are not validated for 26.60 and must not be installed
-    // during world startup. Discovery uses the tick-driven bounded scanner until
-    // version-matched event signatures are available.
+    // Preserve Apollon's bounded candidate queue and tick-side revalidation.
+    // The old Apollon fixed RVAs are still not valid evidence for 26.60, so the
+    // specialized dispatchers remain dormant until their current engine entries
+    // are mapped. For now, use the upstream 26.60 signature for the vanilla
+    // BlockSource tessellation lookup as an event-driven source of candidates.
     resolveBlockGetBlock();
+    installBlockSourceTessellationGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
 }
@@ -695,10 +697,12 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
-    if (!g_blockEspGetBlock.load(std::memory_order_acquire) &&
+    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
+         !g_blockSourceTessellationGetBlockHook) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
+        installBlockSourceTessellationGetBlockHook();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
