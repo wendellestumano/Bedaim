@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 
 namespace bedrocktools::sdk::offsets {
 
@@ -24,6 +25,21 @@ inline constexpr std::size_t mForceDisableVibrantVisuals = 0x33;
 
 namespace ResourcePackStackPacket {
 inline constexpr std::size_t mResourcePackRequired = 0x68;
+}
+
+namespace PlayerListEntry {
+inline constexpr std::size_t Size = 0xB8;
+inline constexpr std::size_t mUuid = 0x08;
+inline constexpr std::size_t mName = 0x20;
+inline constexpr std::size_t mSkin = 0x88;
+inline constexpr std::size_t mVariantIndex = 0xB0;
+inline constexpr std::int32_t AddVariant = 1;
+inline constexpr std::int32_t RemoveVariant = 0;
+}
+
+namespace PlayerListPacket {
+inline constexpr std::size_t mEntriesBegin = 0x30;
+inline constexpr std::size_t mEntriesEnd = 0x38;
 }
 
 namespace TextPacketPayload {
