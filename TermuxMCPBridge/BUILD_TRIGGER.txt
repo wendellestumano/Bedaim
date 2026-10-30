@@ -1,1 +1,1 @@
-Retriggering after the Android SDK workflow fix.
+Build trigger after removing redundant Kotlin Android plugin.
