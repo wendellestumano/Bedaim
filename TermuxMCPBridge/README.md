@@ -5,7 +5,8 @@ Native Android app hosting an authenticated MCP Streamable HTTP endpoint on `127
 ## Implemented
 - Black/dark device dashboard with quick actions.
 - Device diagnostics: model, Android/API level, chipset, battery, RAM, internal storage and network transport.
-- Launch shortcuts for Termux and Shizuku, Shizuku permission request, root capability probe and Android settings shortcuts.\n- Termux RUN_COMMAND integration for a fixed, read-only development-tool inventory (apktool, aapt, apksigner, zipalign, Git, Python, Clang, CMake, Ninja and Gradle); command output is returned to the local event log. No arbitrary shell input is exposed.
+- Launch shortcuts for Termux and Shizuku, Shizuku permission request, root capability probe and Android settings shortcuts.\n- Termux RUN_COMMAND integration for a fixed, read-only development-tool inventory (apktool, aapt, apksigner, zipalign, Git, Python, Clang, CMake, Ninja, Gradle and cloudflared); command output is returned to the local event log. No arbitrary shell input is exposed.
+- Explicit user-confirmed installation of the `cloudflared` package through Termux `pkg`; this only installs the client and does not create or start a tunnel.
 - Local MCP foreground service and authenticated loopback endpoint.
 - Per-install 256-bit bearer token, masked by default, with copy and rotation controls.
 - MCP workspace tools: `bridge_status`, `workspace_list`, `workspace_read`, `workspace_write`.
