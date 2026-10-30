@@ -36,7 +36,7 @@ bedrocktools::hooks::Handle g_blockUpdateHook = nullptr;
 // Apollon also hooks specialized block-event dispatchers. Their wrappers feed
 // the same candidate routine as its generic update hook, but use two distinct
 // position layouts (a BlockPos at +0x8 or a float Vec3 at +0x10).
-constexpr std::size_t kApollonEventHookCount = 4u;
+constexpr std::size_t kApollonEventHookCount = 12u;
 std::array<void*, kApollonEventHookCount> g_apollonEventOriginals{};
 std::array<bedrocktools::hooks::Handle, kApollonEventHookCount> g_apollonEventHooks{};
 
@@ -165,6 +165,20 @@ void blockEventPositionHook1(void* eventObject, void* blockSource) {
     if (original) original(eventObject, blockSource);
 }
 
+// The remaining Apollon wrappers all follow the same two-argument ABI and
+// differ only in where the position is stored inside the event object.
+template <std::size_t Index, bool VectorCoordinates>
+void apollonAdditionalBlockEventHook(void* eventObject, void* blockSource) {
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire)) {
+        if constexpr (VectorCoordinates)
+            enqueueApollonVectorCandidate(eventObject, blockSource);
+        else
+            enqueueBlockEventCandidate(eventObject, blockSource);
+    }
+    const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[Index]);
+    if (original) original(eventObject, blockSource);
+}
+
 bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
                              std::uintptr_t rva, const std::uint32_t (&expected)[4],
                              void* replacement) {
@@ -210,6 +224,31 @@ bool installApollonBlockEventHooks() {
         0xA9BA7BFDu, 0xF9000BFCu, 0xA90267FAu, 0xA9035FF8u
     }; // 0x106C5628
 
+    constexpr std::uint32_t observerBlockPrologue[] = {
+        0xD10203FFu, 0xA9057BFDu, 0xF90033F5u, 0xA9074FF4u
+    }; // 0x1062B4CC
+    constexpr std::uint32_t redstoneBlockPrologue[] = {
+        0xD10603FFu, 0xFD008BEAu, 0x6D11A3E9u, 0xA912FBFDu
+    }; // 0x106F96C8
+    constexpr std::uint32_t utilityVectorPrologue[] = {
+        0xA9BE7BFDu, 0xA9014FF4u, 0x910003FDu, 0xD1010014u
+    }; // 0x106C8340
+    constexpr std::uint32_t utilityCounterPrologue[] = {
+        0xB9400808u, 0x39403009u, 0x11000508u, 0xB9000808u
+    }; // 0x10636614; Apollon intentionally hooks this interior method entry.
+    constexpr std::uint32_t utilityDispatchPrologue[] = {
+        0xD101C3FFu, 0x6D0323E9u, 0xA9047BFDu, 0xA90557F6u
+    }; // 0x106FF2B4
+    constexpr std::uint32_t storageDispatchPrologue[] = {
+        0xA9BB7BFDu, 0xF9000BFCu, 0xA9025FF8u, 0xA90357F6u
+    }; // 0x106E2760
+    constexpr std::uint32_t blockSourceDispatchPrologue[] = {
+        0xD101C3FFu, 0xA9027BFDu, 0xA90367FAu, 0xA9045FF8u
+    }; // 0x1062D6F0
+    constexpr std::uint32_t blockStateDispatchPrologue[] = {
+        0xD10203FFu, 0xA9057BFDu, 0xA90657F6u, 0xA9074FF4u
+    }; // 0x1072AB54
+
     bool installedAny = false;
     installedAny |= installApollonEventHook(0u, engineBase, 0x106D0930u,
                                             mobSpawnerPrologue,
@@ -223,6 +262,33 @@ bool installApollonBlockEventHooks() {
     installedAny |= installApollonEventHook(3u, engineBase, 0x106C5628u,
                                             furnacePrologue,
                                             reinterpret_cast<void*>(blockEventPositionHook1));
+
+    // Additional specialized hooks registered by Apollon's JNI_OnLoad installer.
+    // Their original implementations are still called after lightweight capture.
+    installedAny |= installApollonEventHook(4u, engineBase, 0x1062B4CCu,
+                                            observerBlockPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<4u, false>));
+    installedAny |= installApollonEventHook(5u, engineBase, 0x106F96C8u,
+                                            redstoneBlockPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<5u, false>));
+    installedAny |= installApollonEventHook(6u, engineBase, 0x106C8340u,
+                                            utilityVectorPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<6u, true>));
+    installedAny |= installApollonEventHook(7u, engineBase, 0x10636614u,
+                                            utilityCounterPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<7u, true>));
+    installedAny |= installApollonEventHook(8u, engineBase, 0x106FF2B4u,
+                                            utilityDispatchPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<8u, false>));
+    installedAny |= installApollonEventHook(9u, engineBase, 0x106E2760u,
+                                            storageDispatchPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<9u, false>));
+    installedAny |= installApollonEventHook(10u, engineBase, 0x1062D6F0u,
+                                            blockSourceDispatchPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<10u, false>));
+    installedAny |= installApollonEventHook(11u, engineBase, 0x1072AB54u,
+                                            blockStateDispatchPrologue,
+                                            reinterpret_cast<void*>(apollonAdditionalBlockEventHook<11u, false>));
     return installedAny;
 }
 
@@ -535,7 +601,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
-    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) || !g_blockUpdateHook) &&
+    const bool missingSpecializedHook = std::any_of(
+        g_apollonEventHooks.begin(), g_apollonEventHooks.end(),
+        [](const auto hook) { return hook == nullptr; });
+    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) || !g_blockUpdateHook || missingSpecializedHook) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
