@@ -4,6 +4,7 @@
 #include "../ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/world/BlockSource.hpp>
@@ -667,6 +668,25 @@ void BlockEspModule::onInit() {
     installBlockSourceTessellationGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
+    // Player-driven block changes are observable before the next chunk
+    // tessellation pass. Queue their coordinates immediately, then let the
+    // normal player-tick path resolve the live BlockSource and update the cache.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
+        [this](auto& event) {
+            if (!g_blockEspCaptureEvents.load(std::memory_order_acquire) ||
+                !event.hasBlockPosition) return;
+            using Action = bedrocktools::events::GameModeAction;
+            switch (event.action) {
+                case Action::StartDestroyBlock:
+                case Action::StopDestroyBlock:
+                case Action::StartBuildBlock:
+                case Action::UseItemOn:
+                    enqueueBlockEventPosition(nullptr, event.blockPosition);
+                    break;
+                default:
+                    break;
+            }
+        });
 }
 void BlockEspModule::onEnable() {
     g_blockEspCaptureEvents.store(true, std::memory_order_release);
