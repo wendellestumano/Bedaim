@@ -470,20 +470,16 @@ void SeedMapModule::drawMap(float screenW, float screenH,
             ? std::min(screenH * 0.92f, 1400.0f)
             : panelSize;
         m_lastMapRadius = static_cast<float>(mapRadius);
-        m_lastFeaturesLeft = panelX + 6.0f;
-        m_lastFeaturesTop = panelY + (bigMap
-            ? std::clamp(std::min(screenH * 0.92f, 1400.0f) * 0.075f, 52.0f, 76.0f)
-            : std::clamp(panelSize * 0.19f, 40.0f, 54.0f));
-        m_lastFeaturesWidth = bigMap && featuresExpanded
-            ? std::clamp(panelSize * 0.28f, 132.0f, 210.0f) : 0.0f;
-        m_lastFeaturesHeight = panelHeight - (m_lastFeaturesTop - panelY) -
-            (bigMap ? std::clamp(panelHeight * 0.08f, 52.0f, 76.0f)
-                    : std::clamp(panelSize * 0.19f, 34.0f, 58.0f));
-        m_lastMapLeft = panelX + 6.0f + m_lastFeaturesWidth;
+        m_lastFeaturesLeft = panelX + 8.0f;
+        m_lastFeaturesTop = panelY + 82.0f;
+        m_lastFeaturesWidth = bigMap && featuresExpanded ? panelSize - 16.0f : 0.0f;
+        m_lastFeaturesHeight = bigMap && featuresExpanded ? 48.0f : 0.0f;
+        m_lastMapLeft = panelX + 6.0f;
         m_lastMapTop = panelY + (bigMap
-            ? std::clamp(std::min(screenH * 0.92f, 1400.0f) * 0.075f, 52.0f, 76.0f)
+            ? (featuresExpanded ? std::clamp(panelHeight * 0.16f, 120.0f, 150.0f)
+                                : std::clamp(panelHeight * 0.11f, 84.0f, 104.0f))
             : std::clamp(panelSize * 0.19f, 40.0f, 54.0f));
-        m_lastMapWidth = panelSize - 12.0f - m_lastFeaturesWidth;
+        m_lastMapWidth = panelSize - 12.0f;
         m_lastMapHeight = m_lastFeaturesHeight;
         m_lastBigMap = bigMap;
     }
@@ -492,18 +488,18 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         ? std::min(screenH * 0.92f, 1400.0f)
         : panelSize;
     const float headerH = bigMap
-        ? std::clamp(panelHeight * 0.075f, 52.0f, 76.0f)
+        ? (featuresExpanded ? std::clamp(panelHeight * 0.16f, 120.0f, 150.0f)
+                            : std::clamp(panelHeight * 0.11f, 84.0f, 104.0f))
         : std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
     const float footerH = bigMap
-        ? std::clamp(panelHeight * 0.08f, 52.0f, 76.0f)
+        ? std::clamp(panelHeight * 0.08f, 56.0f, 70.0f)
         : std::clamp(panelSize * 0.19f, 34.0f, 58.0f);
     const float mapTop = panelY + headerH;
     const float mapBottom = panelY + panelHeight - footerH;
     const float mapHeight = std::max(1.0f, mapBottom - mapTop);
-    const float featuresWidth = bigMap && featuresExpanded
-        ? std::clamp(panelSize * 0.28f, 132.0f, 210.0f) : 0.0f;
-    const float mapWidth = std::max(1.0f, panelSize - 12.0f - featuresWidth);
-    const float mapLeft = panelX + 6.0f + featuresWidth;
+    const float featuresWidth = 0.0f;
+    const float mapWidth = std::max(1.0f, panelSize - 12.0f);
+    const float mapLeft = panelX + 6.0f;
     const float mapRight = mapLeft + mapWidth;
     const float centerX = (mapLeft + mapRight) * 0.5f;
     const float centerY = (mapTop + mapBottom) * 0.5f;
