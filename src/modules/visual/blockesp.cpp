@@ -81,9 +81,9 @@ void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
 
 std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t maximum, void* expectedSource) {
     std::vector<bedrocktools::sdk::BlockPos> result;
+    result.reserve(maximum);
     std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
     const std::size_t count = std::min(maximum, g_blockEventCandidates.count);
-    result.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
         const auto& candidate = g_blockEventCandidates.candidates[g_blockEventCandidates.head];
         if (candidate.source == expectedSource) result.push_back(candidate.position);
@@ -199,8 +199,7 @@ const std::vector<std::string>& utilityBlockNames() {
         "lever","target","block_button","redstone_torch","redstone_wire","redstone_lamp",
         "block_pressure_plate",
         // Additional BlockESP targets also exposed by Apollon.
-        "bed","creaking_heart","shelf_facing_east","shelf_facing_north",
-        "shelf_facing_south","shelf_facing_west","shelf_mushroom"
+        "bed","creaking_heart","shelf"
     };
     return names;
 }
@@ -358,7 +357,7 @@ std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) co
     if (name == "observer" || name == "piston" || name == "sticky_piston" || name == "crafter") return 0xFF8E9A9Fu;
     if (name == "bed") return 0xFF5FA8E8u;
     if (name == "creaking_heart") return 0xFFB06B52u;
-    if (name.starts_with("shelf_")) return 0xFFD5A76Bu;
+    if (name == "shelf" || name.starts_with("shelf_")) return 0xFFD5A76Bu;
     return utilityColor;
 }
 void BlockEspModule::clearCache() {
@@ -529,6 +528,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::string normalizedName = stripNamespace(*name);
         if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
         if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
+        if (normalizedName.starts_with("shelf_")) normalizedName = "shelf";
         foundOutlines.push_back(Outline{pos, colorForBlock(kind, normalizedName), kind, std::move(normalizedName)});
         return true;
     };
