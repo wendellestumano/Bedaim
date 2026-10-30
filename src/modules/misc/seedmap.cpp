@@ -118,7 +118,7 @@ std::uint32_t markerColor(bedaim::seedmap::StructureType type) {
 }
 
 std::string markerLabel(const bedaim::seedmap::StructureMarker& marker) {
-    if (marker.possibleTypes.size() > 1) return "T";
+    if (marker.possibleTypes.size() > 1) return "?";
     return std::string(bedaim::seedmap::structureShortName(marker.possibleTypes.front()));
 }
 
@@ -128,7 +128,7 @@ std::string markerDescription(const bedaim::seedmap::StructureMarker& marker) {
         if (!result.empty()) result += " / ";
         result += bedaim::seedmap::structureName(type);
     }
-    return result;
+    return marker.possibleTypes.size() > 1 ? "SHARED GRID: " + result : "POSSIBLE: " + result;
 }
 
 } // namespace
@@ -288,6 +288,7 @@ void SeedMapModule::onPlayerTick(bedrocktools::sdk::Player* player) {
             static_cast<double>(std::numeric_limits<int>::max())));
     };
     const int x = toBlock(position.x);
+    const int y = toBlock(position.y);
     const int z = toBlock(position.z);
 
     int dimensionId = -1;
@@ -314,6 +315,7 @@ void SeedMapModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_markersDirty = true;
     }
     m_playerX = x;
+    m_playerY = y;
     m_playerZ = z;
     m_hasPlayerPosition = true;
 }
@@ -345,6 +347,7 @@ void SeedMapModule::onFrame() {
 
     std::string seedText;
     int playerX = 0;
+    int playerY = 0;
     int playerZ = 0;
     int radius = 1024;
     bool hasPosition = false;
@@ -356,6 +359,7 @@ void SeedMapModule::onFrame() {
         std::lock_guard lock(m_stateMutex);
         seedText = m_seed;
         playerX = m_playerX;
+        playerY = m_playerY;
         playerZ = m_playerZ;
         hasPosition = m_hasPlayerPosition;
         dimension = m_dimension;
@@ -392,13 +396,13 @@ void SeedMapModule::onFrame() {
 
     const auto surface = pl::modmenu::getHudSurfaceSize();
     if (!(surface.width > 0.0f && surface.height > 0.0f)) return;
-    drawMap(surface.width, surface.height, markers, playerX, playerZ,
+    drawMap(surface.width, surface.height, markers, playerX, playerY, playerZ,
         dimension, hasSeed && hasPosition, radius, bigMap);
 }
 
 void SeedMapModule::drawMap(float screenW, float screenH,
     const std::vector<bedaim::seedmap::StructureMarker>& markers,
-    int playerX, int playerZ, bedaim::seedmap::Dimension dimension,
+    int playerX, int playerY, int playerZ, bedaim::seedmap::Dimension dimension,
     bool hasSeed, int mapRadius, bool bigMap) {
 
     float panelX = 0.0f;
@@ -438,7 +442,7 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         m_lastBigMap = bigMap;
     }
 
-    const float headerH = std::clamp(panelSize * 0.15f, 28.0f, 42.0f);
+    const float headerH = std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
     const float footerH = std::clamp(panelSize * 0.19f, 34.0f, 58.0f);
     const float mapTop = panelY + headerH;
     const float mapBottom = panelY + panelSize - footerH;
@@ -496,13 +500,17 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     rect(panelX + 1.0f, panelY + 1.0f, panelSize - 2.0f, 2.0f,
          0xFF55C6B0, 0.0f, true);
     text(panelX + 11.0f, panelY + 7.0f, "SEEDMAP", 12.0f * textScale, 0xFFF1F4F8);
-    text(panelX + 11.0f, panelY + 21.0f, "BEDROCK 26.60 / " + dimensionName,
+    text(panelX + 11.0f, panelY + 20.0f, "BEDROCK 26.60 / " + dimensionName,
          7.0f * textScale, 0xFF9EABB9);
+    text(panelX + 11.0f, panelY + 30.0f,
+         "SEED " + (seedText.empty() ? std::string("NOT SET") : seedText),
+         6.2f * textScale, 0xFF8FD8CB);
 
     if (showCoordinates && hasPosition) {
         text(panelX + panelSize * 0.47f, panelY + 9.0f,
-            "X " + std::to_string(playerX) + "  Z " + std::to_string(playerZ),
-            8.0f * textScale, 0xFFE1E7ED);
+            "X " + std::to_string(playerX) + " Y " + std::to_string(playerY) +
+            " Z " + std::to_string(playerZ),
+            7.0f * textScale, 0xFFE1E7ED);
     }
 
     const float buttonSize = std::clamp(panelSize * 0.13f, 24.0f, 34.0f);
@@ -554,14 +562,18 @@ void SeedMapModule::drawMap(float screenW, float screenH,
             const bool selected = selectedValid &&
                 marker.x == selectedX && marker.z == selectedZ;
             const auto color = markerColor(marker.possibleTypes.front());
-            circle(px, py, selected ? 6.5f : 4.2f,
+            const float badge = panelSize >= 300.0f ? 6.0f : 4.8f;
+            circle(px, py, selected ? badge + 2.5f : badge + 1.2f,
                    selected ? 0xFFFFFFFFu : 0xFF0B1118u);
-            circle(px, py, selected ? 4.7f : 2.9f,
+            circle(px, py, badge,
                    marker.possibleTypes.size() > 1 ? 0xFFFFD76A : color);
-            if (panelSize >= 300.0f) {
-                text(px + 5.0f, py - 5.0f, markerLabel(marker),
-                     7.0f * textScale, 0xFFEAF0F5);
-            }
+            // Compact, structure-specific glyphs: unlike a generic dot, each
+            // marker keeps a stable two-letter identity at every map size.
+            const std::string glyph = marker.possibleTypes.size() > 1
+                ? "?" : markerLabel(marker);
+            text(px - (glyph.size() > 1 ? 4.0f : 2.0f),
+                 py - 3.2f, glyph, (panelSize >= 300.0f ? 7.0f : 5.6f) * textScale,
+                 0xFF101820);
         }
     }
 
@@ -616,7 +628,7 @@ void SeedMapModule::drawMap(float screenW, float screenH,
             std::to_string(markers.size()) + " STRUCTURE ATTEMPTS",
             8.0f * textScale, 0xFFEAF0F5);
         text(panelX + 11.0f, footerY + 19.0f,
-            "ATTEMPTS ONLY - BIOME CHECK PENDING",
+            "CANDIDATES - BIOME NOT VERIFIED",
             6.6f * textScale, 0xFFFFC56A);
     }
 
@@ -695,7 +707,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
                     m_mapRadiusBlocks = std::min(8192, m_mapRadiusBlocks * 2);
                     m_markersDirty = true;
                 } else {
-                    const float headerH = std::clamp(m_lastPanelSize * 0.15f, 28.0f, 42.0f);
+                    const float headerH = std::clamp(m_lastPanelSize * 0.19f, 40.0f, 54.0f);
                     const float footerH = std::clamp(m_lastPanelSize * 0.19f, 34.0f, 58.0f);
                     const float mapLeft = m_lastPanelX + 6.0f;
                     const float mapTop = m_lastPanelY + headerH;
