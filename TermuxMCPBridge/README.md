@@ -5,7 +5,7 @@ Native Android app hosting an authenticated MCP Streamable HTTP endpoint on `127
 ## Implemented
 - Black/dark device dashboard with quick actions.
 - Device diagnostics: model, Android/API level, chipset, battery, RAM, internal storage and network transport.
-- Launch shortcuts for Termux and Shizuku, Shizuku permission request, root capability probe and Android settings shortcuts.
+- Launch shortcuts for Termux and Shizuku, Shizuku permission request, root capability probe and Android settings shortcuts.\n- Termux RUN_COMMAND integration for a fixed, read-only development-tool inventory (apktool, aapt, apksigner, zipalign, Git, Python, Clang, CMake, Ninja and Gradle); command output is returned to the local event log. No arbitrary shell input is exposed.
 - Local MCP foreground service and authenticated loopback endpoint.
 - Per-install 256-bit bearer token, masked by default, with copy and rotation controls.
 - MCP workspace tools: `bridge_status`, `workspace_list`, `workspace_read`, `workspace_write`.
@@ -16,7 +16,7 @@ Native Android app hosting an authenticated MCP Streamable HTTP endpoint on `127
 ## Not yet implemented
 - Full Apktool-style binary XML/resource decoding and decompilation; current extraction is raw ZIP extraction, not resource decompilation.
 - Repackaging or package-identity cloning. APK Lab currently inspects and backs up APK files without altering their signatures.
-- Termux command execution, process manager and build orchestration.
+- General Termux command execution, process manager and build orchestration. The current Termux integration only runs a fixed toolchain diagnostic.
 - Shizuku-backed file/process operations beyond current permission/capability checks.
 - Cloudflare Tunnel and remote ChatGPT connectivity.
 - Root command execution.
