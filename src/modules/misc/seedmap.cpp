@@ -51,7 +51,7 @@ void clearJniException(JNIEnv* env) {
 } // namespace
 
 SeedMapModule::SeedMapModule()
-    : Module("SeedMap", "Open the current Bedrock world in Chunkbase Seed Map, using the captured seed and live player coordinates.") {
+    : Module("SeedMap", "Open the current Bedrock world in Seeder, using the captured seed and matching generation version.") {
     showInMenu = true;
 }
 
@@ -302,9 +302,12 @@ bool SeedMapModule::openSeedMap() {
     // not documented, so do not invent query parameters for it.
 
     const bool opened = openUrlInBrowser(url);
+    const std::string playerContext = "player_x=" + std::to_string(x) +
+        ",player_z=" + std::to_string(z) + ",dimension=" + dimension;
     bedrocktools::diagnostics::log(opened ? bedrocktools::diagnostics::Level::Info
                                           : bedrocktools::diagnostics::Level::Error,
-        "SeedMap", opened ? "browser_open=success" : "browser_open=failed: Android application context or Intent unavailable");
+        "SeedMap", opened ? "browser_open=success; " + playerContext
+                          : "browser_open=failed: Android application context or Intent unavailable");
     return opened;
 }
 
@@ -312,10 +315,18 @@ void SeedMapModule::onMenuRegistered() {
     using namespace pl::modmenu;
     std::string seedValue;
     std::string versionValue;
+    std::string dimensionValue;
+    int playerX = 0;
+    int playerZ = 0;
+    bool hasPlayerPosition = false;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         seedValue = m_seed;
         versionValue = m_version;
+        dimensionValue = m_dimension;
+        playerX = m_playerX;
+        playerZ = m_playerZ;
+        hasPlayerPosition = m_hasPlayerPosition;
     }
     ConfigSchemaBuilder schema;
     schema.defaultCategory("world")
@@ -365,7 +376,10 @@ void SeedMapModule::onMenuRegistered() {
     info.key = "seedCaptureInfo";
     info.category = "world";
     info.title = "Automatic seed capture";
-    info.description = "The module listens for incoming chat messages that explicitly contain 'seed' and a numeric value. If a multiplayer server does not send the seed to clients, enter it manually; this module does not guess hidden server data.";
+    info.description = "The module listens for incoming chat messages that explicitly contain 'seed' and a numeric value. If a multiplayer server does not send the seed to clients, enter it manually; this module does not guess hidden server data. " +
+        (hasPlayerPosition ? ("Current player position: X=" + std::to_string(playerX) +
+            ", Z=" + std::to_string(playerZ) + ", dimension=" + dimensionValue + ".")
+                           : "Player position is not available until you join a world.");
     info.type = ConfigControlTypeV2::Info;
     schema.node(std::move(info));
 
