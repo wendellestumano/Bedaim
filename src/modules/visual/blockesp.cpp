@@ -4,6 +4,7 @@
 #include "../ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include <bedrocktools/events/EventBus.hpp>
+#include <bedrocktools/events/GameModeActionEvent.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/world/BlockSource.hpp>
@@ -522,41 +523,47 @@ bool BlockEspModule::markQueryPosition(const PositionKey& position) noexcept {
     return false;
 }
 bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
-    // Bedrock block identifiers are canonical lowercase names. Strip the
-    // namespace as a view so the hot scan loop does not allocate a string for
-    // every air/stone block it inspects.
-    // Some Bedrock builds expose legacy tile.* identifiers instead of the
-    // canonical minecraft:* form. Normalize both forms without allocating in
-    // the per-block scan hot path.
-    if (raw.starts_with("tile.")) raw.remove_prefix(5);
+    // Keep Apollon's legacy identifier convention explicit: every supported
+    // target is matched as tile.<block_name>. Modern BedrockTools may expose
+    // minecraft:<block_name> or the bare name, so normalize those representations
+    // to the same tile suffix without allocating in the scan hot path.
     const auto namespaceEnd = raw.find(':');
     if (namespaceEnd != std::string_view::npos) raw.remove_prefix(namespaceEnd + 1);
     if (raw.starts_with("tile.")) raw.remove_prefix(5);
-    const std::string_view name = raw;
-    // Treat every chest variant as storage, including copper chests and any
-    // future vanilla/custom names that follow the chest naming convention.
-    if (name == "shulkerBox" || name.find("shulker_box") != std::string_view::npos) kind = Kind::Shulker;
-    else if (name == "ender_chest") kind = Kind::EnderChest;
-    // Apollon exposes copper chests as a distinct target category.
-    else if (name == "copper_chest") kind = Kind::Utility;
-    else if (name.find("chest") != std::string_view::npos) kind = Kind::Chest;
-    else if (name.find("vault") != std::string_view::npos) kind = Kind::Vault;
-    else if (name.find("spawner") != std::string_view::npos || name == "mob_spawner" || name == "sculk_shrieker") kind = Kind::Spawner;
-    else if (name == "hopper") kind = Kind::Hopper;
-    else if (name == "dispenser") kind = Kind::Dispenser;
-    else if (name == "dropper") kind = Kind::Dropper;
-    else if (name == "barrel") kind = Kind::Barrel;
-    else if (name == "furnace" || name == "blast_furnace" || name == "smoker") kind = Kind::Furnace;
-    else if (name == "crafting_table" || name == "brewing_stand" || name == "anvil" ||
-             name == "chipped_anvil" || name == "damaged_anvil" || name == "smithing_table" ||
-             name == "enchanting_table" || name == "loom" || name == "stonecutter" ||
-             name == "cartography_table" || name == "fletching_table" || name == "grindstone" ||
-             name == "composter" || name == "lectern" || name == "beacon" || name == "bell" ||
-             name == "jukebox" || name == "note_block" || name == "observer" ||
-             name == "piston" || name == "sticky_piston" || name == "crafter" ||
-             name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp" || name == "lever" || name.find("button") != std::string_view::npos ||
-             name.find("pressure_plate") != std::string_view::npos || name == "target" ||
-             name == "bed" || name == "creaking_heart" || name.starts_with("shelf_")) kind = Kind::Utility;
+    const std::string_view tileName = raw;
+
+    // Apollon's fast storage targets: tile.chest, tile.trapped_chest,
+    // tile.ender_chest, tile.shulkerBox / tile.shulker_box and tile.barrel.
+    if (tileName == "shulkerBox" || tileName == "shulkerbox" || tileName == "shulker_box" ||
+        tileName.find("shulker_box") != std::string_view::npos) kind = Kind::Shulker;
+    else if (tileName == "ender_chest") kind = Kind::EnderChest;
+    else if (tileName == "copper_chest") kind = Kind::Utility;
+    else if (tileName == "chest" || tileName == "trapped_chest" ||
+             tileName.find("chest") != std::string_view::npos) kind = Kind::Chest;
+    else if (tileName == "vault") kind = Kind::Vault;
+    // All Apollon spawner families are explicit tile IDs.
+    else if (tileName == "mob_spawner" || tileName == "trial_spawner" ||
+             tileName == "sculk_shrieker" || tileName.find("spawner") != std::string_view::npos) kind = Kind::Spawner;
+    else if (tileName == "hopper") kind = Kind::Hopper;
+    else if (tileName == "dispenser") kind = Kind::Dispenser;
+    else if (tileName == "dropper") kind = Kind::Dropper;
+    else if (tileName == "barrel") kind = Kind::Barrel;
+    // The three furnace identifiers used by Apollon.
+    else if (tileName == "furnace" || tileName == "blast_furnace" ||
+             tileName == "smoker") kind = Kind::Furnace;
+    else if (tileName == "crafting_table" || tileName == "brewing_stand" || tileName == "anvil" ||
+             tileName == "chipped_anvil" || tileName == "damaged_anvil" || tileName == "smithing_table" ||
+             tileName == "enchanting_table" || tileName == "loom" || tileName == "stonecutter" ||
+             tileName == "cartography_table" || tileName == "fletching_table" || tileName == "grindstone" ||
+             tileName == "composter" || tileName == "lectern" || tileName == "beacon" || tileName == "bell" ||
+             tileName == "jukebox" || tileName == "note_block" || tileName == "observer" ||
+             tileName == "piston" || tileName == "sticky_piston" || tileName == "crafter" ||
+             tileName == "redstone_block" || tileName == "redstone_torch" || tileName == "redstone_wire" ||
+             tileName == "redstone_lamp" || tileName == "lever" ||
+             tileName.find("button") != std::string_view::npos ||
+             tileName.find("pressure_plate") != std::string_view::npos || tileName == "target" ||
+             tileName == "bed" || tileName == "creaking_heart" || tileName == "shelf" ||
+             tileName.starts_with("shelf_")) kind = Kind::Utility;
     else return false;
     return true;
 }
@@ -667,6 +674,25 @@ void BlockEspModule::onInit() {
     installBlockSourceTessellationGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
+    // Player-driven block changes are observable before the next chunk
+    // tessellation pass. Queue their coordinates immediately, then let the
+    // normal player-tick path resolve the live BlockSource and update the cache.
+    bedrocktools::events::bus().subscribe<bedrocktools::events::GameModeActionEvent>(
+        [this](auto& event) {
+            if (!g_blockEspCaptureEvents.load(std::memory_order_acquire) ||
+                !event.hasBlockPosition) return;
+            using Action = bedrocktools::events::GameModeAction;
+            switch (event.action) {
+                case Action::StartDestroyBlock:
+                case Action::StopDestroyBlock:
+                case Action::StartBuildBlock:
+                case Action::UseItemOn:
+                    enqueueBlockEventPosition(nullptr, event.blockPosition);
+                    break;
+                default:
+                    break;
+            }
+        });
 }
 void BlockEspModule::onEnable() {
     g_blockEspCaptureEvents.store(true, std::memory_order_release);

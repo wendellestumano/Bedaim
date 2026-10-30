@@ -614,13 +614,15 @@ void gameModeStopDestroyBlockDetour(void* gameMode, const void* position) {
 void gameModeStartBuildBlockDetour(void* gameMode, const void* position, std::uint8_t face, std::uint32_t interactionMode) {
     GameModeActionScope scope{GameModeType::GameMode, gameMode};
     if (gameModeStartBuildBlockOriginal) gameModeStartBuildBlockOriginal(gameMode, position, face, interactionMode);
-    scope.publish(GameModeAction::StartBuildBlock);
+    scope.publish(GameModeAction::StartBuildBlock, false, false,
+                  reinterpret_cast<const bedrocktools::sdk::BlockPos*>(position));
 }
 
 void survivalModeStartBuildBlockDetour(void* gameMode, const void* position, std::uint8_t face, std::uint32_t interactionMode) {
     GameModeActionScope scope{GameModeType::SurvivalMode, gameMode};
     if (survivalModeStartBuildBlockOriginal) survivalModeStartBuildBlockOriginal(gameMode, position, face, interactionMode);
-    scope.publish(GameModeAction::StartBuildBlock);
+    scope.publish(GameModeAction::StartBuildBlock, false, false,
+                  reinterpret_cast<const bedrocktools::sdk::BlockPos*>(position));
 }
 
 bool gameModeUseItemDetour(void* gameMode, void* item, std::uint32_t interactionMode) {
@@ -654,14 +656,16 @@ bool survivalModeUseItemAsAttackDetour(void* gameMode, void* item, const void* d
 InteractionResultValue gameModeUseItemOnDetour(void* gameMode, void* item, const void* position, std::uint8_t face, const void* hit, std::uint32_t interactionMode, const void* block, bool firstEvent) {
     GameModeActionScope scope{GameModeType::GameMode, gameMode};
     const auto result = gameModeUseItemOnOriginal ? gameModeUseItemOnOriginal(gameMode, item, position, face, hit, interactionMode, block, firstEvent) : InteractionResultValue{};
-    if (firstEvent && (interactionSucceeded(result) || (interactionSwings(result) && itemStackHasItem(item)))) scope.publish(GameModeAction::UseItemOn);
+    if (firstEvent && (interactionSucceeded(result) || (interactionSwings(result) && itemStackHasItem(item)))) scope.publish(GameModeAction::UseItemOn, true, interactionSucceeded(result),
+                       reinterpret_cast<const bedrocktools::sdk::BlockPos*>(position));
     return result;
 }
 
 InteractionResultValue survivalModeUseItemOnDetour(void* gameMode, void* item, const void* position, std::uint8_t face, const void* hit, std::uint32_t interactionMode, const void* block, bool firstEvent) {
     GameModeActionScope scope{GameModeType::SurvivalMode, gameMode};
     const auto result = survivalModeUseItemOnOriginal ? survivalModeUseItemOnOriginal(gameMode, item, position, face, hit, interactionMode, block, firstEvent) : InteractionResultValue{};
-    if (firstEvent && (interactionSucceeded(result) || (interactionSwings(result) && itemStackHasItem(item)))) scope.publish(GameModeAction::UseItemOn);
+    if (firstEvent && (interactionSucceeded(result) || (interactionSwings(result) && itemStackHasItem(item)))) scope.publish(GameModeAction::UseItemOn, true, interactionSucceeded(result),
+                       reinterpret_cast<const bedrocktools::sdk::BlockPos*>(position));
     return result;
 }
 
