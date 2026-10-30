@@ -1,4 +1,4 @@
-#include "../src/modules/visual/BlockEventQueue.hpp"
+#include "modules/visual/BlockEventQueue.hpp"
 
 #include <cassert>
 #include <string_view>
