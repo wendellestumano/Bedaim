@@ -59,6 +59,12 @@ jobs:
           gradle-version: '9.5.0'
       - name: Run unit tests
         run: gradle --no-daemon :app:testDebugUnitTest
+      - name: Require persistent signing key
+        run: |
+          if [ -z "$BRIDGE_SIGNING_STORE_FILE" ]; then
+            echo "Persistent signing key missing; no update APK will be published."
+            exit 1
+          fi
       - name: Assemble debug APK
         run: gradle --no-daemon :app:assembleDebug
       - name: Verify APK signature
