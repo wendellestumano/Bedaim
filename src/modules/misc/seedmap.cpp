@@ -496,7 +496,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     rect(panelX + 1.0f, panelY + 1.0f, panelSize - 2.0f, 2.0f,
          0xFF55C6B0, 0.0f, true);
     text(panelX + 11.0f, panelY + 7.0f, "SEEDMAP", 12.0f * textScale, 0xFFF1F4F8);
-    text(panelX + 11.0f, panelY + 21.0f, dimensionName, 7.5f * textScale, 0xFF9EABB9);
+    text(panelX + 11.0f, panelY + 21.0f, "BEDROCK 26.60 / " + dimensionName,
+         7.0f * textScale, 0xFF9EABB9);
 
     if (showCoordinates && hasPosition) {
         text(panelX + panelSize * 0.47f, panelY + 9.0f,
