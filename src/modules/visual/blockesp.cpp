@@ -38,8 +38,12 @@ constexpr std::uintptr_t kBlockSourceGetBlockRva = 0x0FB91918u;
 constexpr std::uintptr_t kApollonBlockUpdateRva = 0x106EEED4u;
 constexpr std::size_t kMaxEventCandidates = 4096u;
 
+struct BlockEventCandidate {
+    void* source = nullptr;
+    bedrocktools::sdk::BlockPos position{};
+};
 struct BlockEventCandidateQueue {
-    std::array<bedrocktools::sdk::BlockPos, kMaxEventCandidates> positions{};
+    std::array<BlockEventCandidate, kMaxEventCandidates> candidates{};
     std::size_t head = 0;
     std::size_t count = 0;
     std::mutex mutex;
@@ -52,8 +56,9 @@ void clearBlockEventCandidates() {
     g_blockEventCandidates.count = 0u;
 }
 
-void enqueueBlockEventCandidate(void* updateObject) noexcept {
-    if (!updateObject || reinterpret_cast<std::uintptr_t>(updateObject) <= 0x1000u) return;
+void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
+    if (!updateObject || reinterpret_cast<std::uintptr_t>(updateObject) <= 0x1000u ||
+        !source || reinterpret_cast<std::uintptr_t>(source) <= 0x1000u) return;
 
     // The Apollon callback passes updateObject + 8 as a three-int BlockPos.
     // Copy it immediately: the engine may destroy or recycle the event object.
@@ -64,19 +69,24 @@ void enqueueBlockEventCandidate(void* updateObject) noexcept {
         position.y < -4096 || position.y > 4096) return;
 
     std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
-    if (g_blockEventCandidates.count >= kMaxEventCandidates) return;
+    // Prefer recent updates over a backlog of candidates from older chunks.
+    if (g_blockEventCandidates.count >= kMaxEventCandidates) {
+        g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
+        --g_blockEventCandidates.count;
+    }
     const std::size_t tail = (g_blockEventCandidates.head + g_blockEventCandidates.count) % kMaxEventCandidates;
-    g_blockEventCandidates.positions[tail] = position;
+    g_blockEventCandidates.candidates[tail] = BlockEventCandidate{source, position};
     ++g_blockEventCandidates.count;
 }
 
-std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t maximum) {
+std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t maximum, void* expectedSource) {
     std::vector<bedrocktools::sdk::BlockPos> result;
     std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
     const std::size_t count = std::min(maximum, g_blockEventCandidates.count);
     result.reserve(count);
     for (std::size_t i = 0; i < count; ++i) {
-        result.push_back(g_blockEventCandidates.positions[g_blockEventCandidates.head]);
+        const auto& candidate = g_blockEventCandidates.candidates[g_blockEventCandidates.head];
+        if (candidate.source == expectedSource) result.push_back(candidate.position);
         g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
         --g_blockEventCandidates.count;
     }
@@ -85,7 +95,7 @@ std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t m
 
 void blockUpdateHook(void* updateObject, void* blockSource) {
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource)
-        enqueueBlockEventCandidate(updateObject);
+        enqueueBlockEventCandidate(updateObject, blockSource);
 
     // This target is a void, two-argument engine routine in the analyzed build.
     // Always forward the original call, even while BlockESP is disabled.
@@ -744,7 +754,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // the current BlockSource. This avoids invoking engine getters/classifiers
     // from inside the hooked update method.
     const std::size_t eventBudget = std::min<std::size_t>(512u, scanBudget / 8u);
-    const auto eventCandidates = drainBlockEventCandidates(eventBudget);
+    const auto eventCandidates = drainBlockEventCandidates(eventBudget, source);
     for (const auto& candidate : eventCandidates) inspectBlock(candidate);
 
     // Reserve half the budget for the same-height-first local sweep. Priority
