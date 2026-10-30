@@ -349,6 +349,8 @@ void SeedMapModule::onFrame() {
     int playerX = 0;
     int playerY = 0;
     int playerZ = 0;
+    int panOffsetX = 0;
+    int panOffsetZ = 0;
     int radius = 1024;
     bool hasPosition = false;
     bool bigMap = false;
@@ -361,6 +363,8 @@ void SeedMapModule::onFrame() {
         playerX = m_playerX;
         playerY = m_playerY;
         playerZ = m_playerZ;
+        panOffsetX = m_panOffsetX;
+        panOffsetZ = m_panOffsetZ;
         hasPosition = m_hasPlayerPosition;
         dimension = m_dimension;
         bigMap = m_bigMap;
@@ -372,8 +376,8 @@ void SeedMapModule::onFrame() {
         dirty = hasSeed && hasPosition &&
             (m_markersDirty || parsedSeed != m_cachedSeed ||
              dimension != m_cachedDimension || radius != m_cachedRadius ||
-             std::abs(playerX - m_cachedCenterX) >= 64 ||
-             std::abs(playerZ - m_cachedCenterZ) >= 64 ||
+             std::abs((playerX + panOffsetX) - m_cachedCenterX) >= 64 ||
+             std::abs((playerZ + panOffsetZ) - m_cachedCenterZ) >= 64 ||
              m_lastMarkerRefresh.time_since_epoch().count() == 0 ||
              now - m_lastMarkerRefresh > std::chrono::seconds(2));
     }
@@ -386,7 +390,7 @@ void SeedMapModule::onFrame() {
 
     std::uint64_t seed = 0;
     const bool hasSeed = parseSeedBits(seedText, seed);
-    if (dirty) refreshMarkers(seed, dimension, playerX, playerZ, radius);
+    if (dirty) refreshMarkers(seed, dimension, playerX + panOffsetX, playerZ + panOffsetZ, radius);
 
     std::vector<bedaim::seedmap::StructureMarker> markers;
     {
@@ -450,7 +454,9 @@ void SeedMapModule::drawMap(float screenW, float screenH,
             : panelSize;
         m_lastMapRadius = static_cast<float>(mapRadius);
         m_lastMapLeft = panelX + 6.0f;
-        m_lastMapTop = panelY + std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
+        m_lastMapTop = panelY + (bigMap
+            ? std::clamp(std::min(screenH * 0.92f, 1400.0f) * 0.075f, 52.0f, 76.0f)
+            : std::clamp(panelSize * 0.19f, 40.0f, 54.0f));
         m_lastMapWidth = panelSize - 12.0f;
         m_lastMapHeight = panelHeight - headerH - footerH;
         m_lastBigMap = bigMap;
@@ -547,10 +553,10 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     rect(mapLeft, mapTop, mapWidth, mapHeight, 0xFF101820, 3.0f, true);
     const int gridStep = mapRadius <= 512 ? 16 : (mapRadius <= 4096 ? 128 : 256);
     if (showChunkGrid) {
-        const int minX = playerX - mapRadius;
-        const int maxX = playerX + mapRadius;
-        const int minZ = playerZ - mapRadius;
-        const int maxZ = playerZ + mapRadius;
+        const int minX = viewCenterX - mapRadius;
+        const int maxX = viewCenterX + mapRadius;
+        const int minZ = viewCenterZ - mapRadius;
+        const int maxZ = viewCenterZ + mapRadius;
         const int startX = floorDiv(minX, gridStep) * gridStep;
         const int startZ = floorDiv(minZ, gridStep) * gridStep;
         for (int worldX = startX; worldX <= maxX; worldX += gridStep) {
