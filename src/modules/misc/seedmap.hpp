@@ -24,7 +24,10 @@ public:
 private:
     bool installTextHook();
     bool openSeedMap();
+    bool pasteClipboardSeed();
     static std::string parseSeedAnnouncement(std::string_view message);
+    static bool isValidSeedNumber(std::string_view value);
+    static std::string readClipboardText();
     static std::string urlEncode(std::string_view value);
     static bool openUrlInBrowser(std::string_view url);
 
