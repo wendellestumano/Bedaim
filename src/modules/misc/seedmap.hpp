@@ -83,6 +83,14 @@ private:
     int m_panOffsetZ = 0;
     bool m_touchStartedOnMap = false;
     bool m_touchMoved = false;
+    bool m_pinchActive = false;
+    int m_secondPointerId = -1;
+    float m_touchCurrentX = 0.0f;
+    float m_touchCurrentY = 0.0f;
+    float m_secondPointerX = 0.0f;
+    float m_secondPointerY = 0.0f;
+    float m_pinchStartDistance = 0.0f;
+    int m_pinchStartRadius = 1024;
 
     bool m_hasSelectedMarker = false;
     int m_selectedMarkerX = 0;
