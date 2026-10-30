@@ -195,7 +195,7 @@ class MainActivity : Activity() {
             "Chipset: ${model.ifBlank { "não informado" }}\n" +
             "Bateria: ${if (battery >= 0) "$battery%" else "indisponível"}\n" +
             "RAM disponível: ${formatBytes(memory.availMem)} / ${formatBytes(memory.totalMem)}\n" +
-            "Armazenamento do app: ${formatBytes(used)} usados / ${formatBytes(total)} total\n" +
+            "Armazenamento interno: ${formatBytes(used)} usados / ${formatBytes(total)} total\n" +
             "Conexão: $network"
     }
 
