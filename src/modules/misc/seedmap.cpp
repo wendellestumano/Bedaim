@@ -497,7 +497,6 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     const float mapTop = panelY + headerH;
     const float mapBottom = panelY + panelHeight - footerH;
     const float mapHeight = std::max(1.0f, mapBottom - mapTop);
-    const float featuresWidth = 0.0f;
     const float mapWidth = std::max(1.0f, panelSize - 12.0f);
     const float mapLeft = panelX + 6.0f;
     const float mapRight = mapLeft + mapWidth;
@@ -507,7 +506,6 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         (2.0f * static_cast<float>(std::max(1, mapRadius)));
     const int viewCenterX = playerX + panOffsetX;
     const int viewCenterZ = playerZ + panOffsetZ;
-    const float blocksPerPixel = 1.0f / std::max(scale, 0.00001f);
     const float textScale = std::clamp(panelSize / 260.0f, 0.72f, 1.45f);
 
     std::vector<pl::modmenu::DrawCommand> commands;
