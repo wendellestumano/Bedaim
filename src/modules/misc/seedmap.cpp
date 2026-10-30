@@ -273,14 +273,14 @@ bool SeedMapModule::openUrlInBrowser(std::string_view url) {
 
 bool SeedMapModule::openSeedMap() {
     std::string seed;
-    std::string platform;
+    std::string version;
     std::string dimension;
     int x = 0;
     int z = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         seed = m_seed;
-        platform = m_platform;
+        version = m_version;
         dimension = m_dimension;
         if (m_hasPlayerPosition) {
             x = m_playerX;
@@ -295,11 +295,11 @@ bool SeedMapModule::openSeedMap() {
         return false;
     }
 
-    std::string url = "https://www.chunkbase.com/apps/seed-map#seed=" + urlEncode(seed);
-    if (!platform.empty()) url += "&platform=" + urlEncode(platform);
-    url += "&dimension=" + urlEncode(dimension);
-    url += "&x=" + std::to_string(x);
-    url += "&z=" + std::to_string(z);
+    std::string url = "https://mcseeder.com/seed/?edition=bedrock&seed=" + urlEncode(seed);
+    if (!version.empty()) url += "&version=" + urlEncode(version);
+    // Seeder's documented deep link accepts seed and version. The current
+    // player coordinates are tracked, but its map-coordinate URL format is
+    // not documented, so do not invent query parameters for it.
 
     const bool opened = openUrlInBrowser(url);
     bedrocktools::diagnostics::log(opened ? bedrocktools::diagnostics::Level::Info
@@ -311,16 +311,16 @@ bool SeedMapModule::openSeedMap() {
 void SeedMapModule::onMenuRegistered() {
     using namespace pl::modmenu;
     std::string seedValue;
-    std::string platformValue;
+    std::string versionValue;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         seedValue = m_seed;
-        platformValue = m_platform;
+        versionValue = m_version;
     }
     ConfigSchemaBuilder schema;
     schema.defaultCategory("world")
-        .category("world", "World seed", "Capture or enter the seed, then open the map at your current coordinates.")
-        .category("map", "Map version", "Optional Chunkbase platform identifier. Leave blank to choose the version in the browser.");
+        .category("world", "World seed", "Capture or enter the seed, then open the Bedrock map for the matching generation version.")
+        .category("map", "Map version", "Seeder version group used for Bedrock world generation.");
 
     ConfigNodeV2 seed;
     seed.id = "seed";
@@ -341,23 +341,23 @@ void SeedMapModule::onMenuRegistered() {
     open.key = "openSeedMap";
     open.category = "world";
     open.title = "Open SeedMap";
-    open.description = "Open Chunkbase Seed Map with the saved seed, current dimension and player X/Z.";
+    open.description = "Open Seeder with the saved seed and selected Bedrock version group.";
     open.type = ConfigControlTypeV2::Button;
     open.actionValue = "open";
     schema.node(std::move(open));
 
     ConfigNodeV2 platform;
-    platform.id = "platform";
-    platform.key = "platform";
+    platform.id = "version";
+    platform.key = "version";
     platform.category = "map";
-    platform.title = "Platform identifier";
-    platform.description = "Optional Chunkbase platform/version identifier, for example bedrock_1_21_120. Leave blank to select the version manually.";
+    platform.title = "Bedrock version group";
+    platform.description = "26.50 covers Bedrock 26.50, 26.51, 26.52 and 26.60. Change this only if the world was generated on an older version.";
     platform.type = ConfigControlTypeV2::Text;
-    platform.defaultValue = "";
-    platform.currentValue = platformValue;
+    platform.defaultValue = "26.50";
+    platform.currentValue = versionValue;
     platform.hasCurrentValue = true;
-    platform.placeholder = "bedrock_...";
-    platform.maxLength = 40;
+    platform.placeholder = "26.50";
+    platform.maxLength = 12;
     schema.node(std::move(platform));
 
     ConfigNodeV2 info;
@@ -382,9 +382,9 @@ bool SeedMapModule::onMenuConfigChanged(std::string_view key, std::string_view v
         m_seed = trimCopy(value);
         return true;
     }
-    if (key == "platform") {
+    if (key == "version") {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        m_platform = trimCopy(value);
+        m_version = trimCopy(value);
         return true;
     }
     return false;
@@ -394,12 +394,12 @@ void SeedMapModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     m_seed = json.value("seed", m_seed);
-    m_platform = json.value("platform", m_platform);
+    m_version = json.value("version", json.value("platform", m_version));
 }
 
 void SeedMapModule::saveConfig(nlohmann::json& json) {
     Module::saveConfig(json);
     std::lock_guard<std::mutex> lock(m_stateMutex);
     json["seed"] = m_seed;
-    json["platform"] = m_platform;
+    json["version"] = m_version;
 }
