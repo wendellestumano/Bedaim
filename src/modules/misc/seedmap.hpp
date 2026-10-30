@@ -78,6 +78,7 @@ private:
     int m_panOffsetX = 0;
     int m_panOffsetZ = 0;
     bool m_touchStartedOnMap = false;
+    bool m_touchMoved = false;
 
     bool m_hasSelectedMarker = false;
     int m_selectedMarkerX = 0;
