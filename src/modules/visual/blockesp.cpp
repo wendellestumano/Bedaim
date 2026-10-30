@@ -1,4 +1,5 @@
 #include "blockesp.hpp"
+#include "BlockEventQueue.hpp"
 #include "hitbox.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
@@ -35,6 +36,7 @@ std::atomic<std::uint64_t> g_eventCandidatesQueued{0};
 std::atomic<std::uint64_t> g_eventCandidatesDrained{0};
 std::atomic<std::uint64_t> g_eventCandidatesDropped{0};
 std::atomic<std::uint64_t> g_eventCandidatesClassified{0};
+std::atomic<std::uint64_t> g_eventCandidatesMerged{0};
 
 // Apollon's BlockESP observes block-update callbacks, queues only their BlockPos,
 // then validates candidates against the live BlockSource before rendering them.
@@ -59,24 +61,12 @@ constexpr std::uintptr_t kBlockSourceGetBlockRva = 0x0FB91918u;
 constexpr std::uintptr_t kApollonBlockUpdateRva = 0x106EEED4u;
 constexpr std::size_t kMaxEventCandidates = 4096u;
 
-struct BlockEventCandidate {
-    void* source = nullptr;
-    bedrocktools::sdk::BlockPos position{};
-    std::array<char, 128> blockName{};
-    std::uint8_t blockNameLength = 0;
-};
-struct BlockEventCandidateQueue {
-    std::array<BlockEventCandidate, kMaxEventCandidates> candidates{};
-    std::size_t head = 0;
-    std::size_t count = 0;
-    std::mutex mutex;
-};
-BlockEventCandidateQueue g_blockEventCandidates;
+using BlockEventCandidate = bedaim::visual::BlockEventCandidate;
+using BlockEventQueue = bedaim::visual::BlockEventQueue<kMaxEventCandidates, 8192u>;
+BlockEventQueue g_blockEventCandidates;
 
 void clearBlockEventCandidates() {
-    std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
-    g_blockEventCandidates.head = 0u;
-    g_blockEventCandidates.count = 0u;
+    g_blockEventCandidates.clear();
 }
 
 bool isValidEventPosition(const bedrocktools::sdk::BlockPos& position) noexcept {
@@ -93,25 +83,14 @@ void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& 
     (void)source;
     if (!isValidEventPosition(position)) return;
 
-    std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
-    // Prefer recent updates over a backlog of candidates from older chunks.
-    if (g_blockEventCandidates.count >= kMaxEventCandidates) {
-        g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
-        --g_blockEventCandidates.count;
+    const auto outcome = g_blockEventCandidates.enqueue(
+        source, bedaim::visual::BlockEventPosition{position.x, position.y, position.z}, resolvedBlockName);
+    if (outcome.droppedOldest)
         g_eventCandidatesDropped.fetch_add(1u, std::memory_order_relaxed);
-    }
-    const std::size_t tail = (g_blockEventCandidates.head + g_blockEventCandidates.count) % kMaxEventCandidates;
-    auto& candidate = g_blockEventCandidates.candidates[tail];
-    candidate = {};
-    candidate.source = source;
-    candidate.position = position;
-    if (!resolvedBlockName.empty()) {
-        const auto length = std::min(resolvedBlockName.size(), candidate.blockName.size() - 1u);
-        std::memcpy(candidate.blockName.data(), resolvedBlockName.data(), length);
-        candidate.blockNameLength = static_cast<std::uint8_t>(length);
-    }
-    ++g_blockEventCandidates.count;
-    g_eventCandidatesQueued.fetch_add(1u, std::memory_order_relaxed);
+    if (outcome.inserted)
+        g_eventCandidatesQueued.fetch_add(1u, std::memory_order_relaxed);
+    if (outcome.merged)
+        g_eventCandidatesMerged.fetch_add(1u, std::memory_order_relaxed);
 }
 
 void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
@@ -146,20 +125,8 @@ void enqueueApollonVectorCandidate(void* eventObject, void* source) noexcept {
 }
 
 std::vector<BlockEventCandidate> drainBlockEventCandidates(std::size_t maximum, void* expectedSource) {
-    std::vector<BlockEventCandidate> result;
-    result.reserve(maximum);
-    std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
     (void)expectedSource;
-    const std::size_t count = std::min(maximum, g_blockEventCandidates.count);
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto& candidate = g_blockEventCandidates.candidates[g_blockEventCandidates.head];
-        // Do not reject specialized callback candidates by pointer identity:
-        // several Apollon dispatchers use a different context object here.
-        // The current BlockSource is used later to validate the actual block.
-        result.push_back(candidate);
-        g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
-        --g_blockEventCandidates.count;
-    }
+    auto result = g_blockEventCandidates.drain(maximum);
     g_eventCandidatesDrained.fetch_add(static_cast<std::uint64_t>(result.size()), std::memory_order_relaxed);
     return result;
 }
@@ -725,11 +692,12 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::size_t installedMask = 0u;
         std::size_t offset = static_cast<std::size_t>(std::snprintf(
             state, sizeof(state),
-            "generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            "generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
             static_cast<unsigned long long>(genericCalls),
             static_cast<unsigned long long>(g_blockSourceTessellationGetBlockCalls.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_blockSourceTessellationCandidateCalls.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_eventCandidatesQueued.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesMerged.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_eventCandidatesDrained.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_eventCandidatesClassified.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_eventCandidatesDropped.load(std::memory_order_relaxed))));
