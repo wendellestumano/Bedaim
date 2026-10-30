@@ -178,8 +178,14 @@ const void* blockSourceTessellationGetBlockHook(
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource && position &&
         reinterpret_cast<std::uintptr_t>(position) > 0x1000u && block &&
         reinterpret_cast<std::uintptr_t>(block) > 0x1000u && isValidEventPosition(*position)) {
-        g_blockSourceTessellationCandidateCalls.fetch_add(1u, std::memory_order_relaxed);
-        enqueueBlockEventPosition(blockSource, *position);
+        // The Block returned by this renderer lookup is already resolved. Filter
+        // non-target terrain here so the bounded queue isn't flooded by stone,
+        // dirt and other ordinary blocks from a freshly tessellated chunk.
+        const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(block)->fullName();
+        if (name && !name->empty() && BlockEspModule::isSupportedBlockName(*name)) {
+            g_blockSourceTessellationCandidateCalls.fetch_add(1u, std::memory_order_relaxed);
+            enqueueBlockEventPosition(blockSource, *position);
+        }
     }
     return block;
 }
@@ -546,6 +552,10 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
              name == "bed" || name == "creaking_heart" || name.starts_with("shelf_")) kind = Kind::Utility;
     else return false;
     return true;
+}
+bool BlockEspModule::isSupportedBlockName(std::string_view name) {
+    Kind ignored{};
+    return classify(name, ignored);
 }
 std::uint32_t BlockEspModule::defaultColor(Kind kind) noexcept {
     switch (kind) {
