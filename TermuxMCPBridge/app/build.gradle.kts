@@ -26,9 +26,9 @@ android {
         if (hasPersistentSigning) {
             create("bridgePersistent") {
                 storeFile = file(persistentStoreFile!!)
-                storePassword = persistentStorePassword
-                keyAlias = persistentKeyAlias
-                keyPassword = persistentKeyPassword
+                storePassword = persistentStorePassword!!
+                keyAlias = persistentKeyAlias!!
+                keyPassword = persistentKeyPassword!!
             }
         }
     }
