@@ -471,13 +471,13 @@ void SeedMapModule::drawMap(float screenW, float screenH,
             : panelSize;
         m_lastMapRadius = static_cast<float>(mapRadius);
         m_lastFeaturesLeft = panelX + 8.0f;
-        m_lastFeaturesTop = panelY + 82.0f;
+        m_lastFeaturesTop = panelY + 88.0f;
         m_lastFeaturesWidth = bigMap && featuresExpanded ? panelSize - 16.0f : 0.0f;
-        m_lastFeaturesHeight = bigMap && featuresExpanded ? 48.0f : 0.0f;
+        m_lastFeaturesHeight = bigMap && featuresExpanded ? 54.0f : 0.0f;
         m_lastMapLeft = panelX + 6.0f;
         m_lastMapTop = panelY + (bigMap
-            ? (featuresExpanded ? std::clamp(panelHeight * 0.16f, 120.0f, 150.0f)
-                                : std::clamp(panelHeight * 0.11f, 84.0f, 104.0f))
+            ? (featuresExpanded ? std::clamp(panelHeight * 0.18f, 140.0f, 164.0f)
+                                : std::clamp(panelHeight * 0.12f, 88.0f, 112.0f))
             : std::clamp(panelSize * 0.19f, 40.0f, 54.0f));
         m_lastMapWidth = panelSize - 12.0f;
         m_lastMapHeight = m_lastFeaturesHeight;
@@ -488,8 +488,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         ? std::min(screenH * 0.92f, 1400.0f)
         : panelSize;
     const float headerH = bigMap
-        ? (featuresExpanded ? std::clamp(panelHeight * 0.16f, 120.0f, 150.0f)
-                            : std::clamp(panelHeight * 0.11f, 84.0f, 104.0f))
+        ? (featuresExpanded ? std::clamp(panelHeight * 0.18f, 140.0f, 164.0f)
+                            : std::clamp(panelHeight * 0.12f, 88.0f, 112.0f))
         : std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
     const float footerH = bigMap
         ? std::clamp(panelHeight * 0.08f, 56.0f, 70.0f)
@@ -546,56 +546,89 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         commands.push_back(std::move(cmd));
     };
 
-    // LeviMap-inspired compact panel: dark translucent shell, thin border,
-    // restrained accent, coordinate header and a north-up chunk grid.
-    rect(panelX, panelY, panelSize, panelHeight, 0xE810141B, 8.0f, true);
-    rect(panelX, panelY, panelSize, panelHeight, 0xFF536273, 8.0f, false);
+    // Chunkbase-style layout: seed/version/dimension controls above a feature
+    // icon strip, a full-width map canvas, and navigation details below it.
+    rect(panelX, panelY, panelSize, panelHeight, 0xFFE5EEF5, 6.0f, true);
+    rect(panelX, panelY, panelSize, panelHeight, 0xFF8DAFC4, 6.0f, false);
     rect(panelX + 1.0f, panelY + 1.0f, panelSize - 2.0f, 2.0f,
-         0xFF55C6B0, 0.0f, true);
-    text(panelX + 11.0f, panelY + 7.0f, "SEED MAP", 12.0f * textScale, 0xFFF1F4F8);
-    text(panelX + 11.0f, panelY + 20.0f, "BEDROCK 26.60 / " + dimensionName,
-         7.0f * textScale, 0xFF9EABB9);
-    text(panelX + 11.0f, panelY + 30.0f,
-         "SEED " + (seedText.empty() ? std::string("NOT SET") : seedText),
-         6.2f * textScale, 0xFF8FD8CB);
-    text(panelX + 11.0f, panelY + (bigMap ? 44.0f : 40.0f),
-         featuresExpanded ? "FEATURES  v" : "FEATURES  >",
-         6.2f * textScale, 0xFF8FD8CB);
+         0xFF5B8EAD, 0.0f, true);
 
-    if (showCoordinates && hasPosition) {
-        text(panelX + panelSize * 0.47f, panelY + 9.0f,
-            "X " + std::to_string(playerX) + " Y " + std::to_string(playerY) +
-            " Z " + std::to_string(playerZ),
-            7.0f * textScale, 0xFFE1E7ED);
+    if (bigMap) {
+        text(panelX + 10.0f, panelY + 8.0f, "Seed:", 8.0f * textScale, 0xFF263746);
+        rect(panelX + 48.0f, panelY + 5.0f, panelSize * 0.48f, 23.0f,
+             0xFFFFFFFF, 2.0f, true);
+        rect(panelX + 48.0f, panelY + 5.0f, panelSize * 0.48f, 23.0f,
+             0xFF9CB6C8, 2.0f, false);
+        text(panelX + 54.0f, panelY + 10.0f,
+             seedText.empty() ? "Enter the seed of your world" : seedText,
+             7.2f * textScale, 0xFF263746);
+        text(panelX + panelSize * 0.58f, panelY + 10.0f,
+             "PASTE", 7.0f * textScale, 0xFF315C79);
+        text(panelX + 10.0f, panelY + 36.0f, "Version:", 7.4f * textScale, 0xFF263746);
+        rect(panelX + 58.0f, panelY + 32.0f, panelSize * 0.34f, 22.0f,
+             0xFFFFFFFF, 2.0f, true);
+        text(panelX + 64.0f, panelY + 37.0f, "Bedrock 26.60",
+             7.0f * textScale, 0xFF263746);
+        text(panelX + panelSize * 0.53f, panelY + 36.0f, "Dimension:",
+             7.4f * textScale, 0xFF263746);
+        rect(panelX + panelSize * 0.70f, panelY + 32.0f, panelSize * 0.23f, 22.0f,
+             0xFFFFFFFF, 2.0f, true);
+        text(panelX + panelSize * 0.72f, panelY + 37.0f, dimensionName,
+             6.8f * textScale, 0xFF263746);
+        text(panelX + 10.0f, panelY + 66.0f, "Features",
+             7.6f * textScale, 0xFF263746);
+        text(panelX + 62.0f, panelY + 66.0f,
+             "Zoom in to show all selected features",
+             6.4f * textScale, 0xFF7B6330);
+        if (featuresExpanded) {
+            const float iconSize = std::clamp(panelSize * 0.055f, 18.0f, 28.0f);
+            const float iconGap = 4.0f;
+            const float startX = panelX + 10.0f;
+            const float startY = panelY + 88.0f;
+            for (std::size_t i = 0; i < structureVisible.size(); ++i) {
+                const int col = static_cast<int>(i % 9);
+                const int row = static_cast<int>(i / 9);
+                const float ix = startX + col * (iconSize + iconGap);
+                const float iy = startY + row * (iconSize + iconGap);
+                const auto type = static_cast<bedaim::seedmap::StructureType>(i);
+                rect(ix, iy, iconSize, iconSize,
+                     structureVisible[i] ? markerColor(type) : 0xFFB5C2CB,
+                     2.0f, true);
+                rect(ix, iy, iconSize, iconSize, 0xFF66869A, 2.0f, false);
+                const auto glyph = bedaim::seedmap::structureShortName(type);
+                text(ix + (iconSize - static_cast<float>(glyph.size()) * 4.0f) * 0.5f,
+                     iy + iconSize * 0.28f, std::string(glyph),
+                     6.4f * textScale, 0xFF172A38);
+            }
+        }
+    } else {
+        text(panelX + 11.0f, panelY + 7.0f, "SEED MAP", 12.0f * textScale, 0xFF263746);
+        text(panelX + 11.0f, panelY + 21.0f,
+             "BEDROCK 26.60 / " + dimensionName,
+             7.0f * textScale, 0xFF536A7A);
+        text(panelX + 11.0f, panelY + 30.0f,
+             "SEED " + (seedText.empty() ? std::string("NOT SET") : seedText),
+             6.2f * textScale, 0xFF315C79);
+        if (showCoordinates && hasPosition) {
+            text(panelX + panelSize * 0.47f, panelY + 9.0f,
+                "X " + std::to_string(playerX) + " Y " + std::to_string(playerY) +
+                " Z " + std::to_string(playerZ),
+                7.0f * textScale, 0xFF263746);
+        }
     }
 
     const float buttonSize = std::clamp(panelSize * 0.13f, 24.0f, 34.0f);
     const float actionX = panelX + panelSize - buttonSize - 7.0f;
     const float actionY = panelY + 6.0f;
-    rect(actionX, actionY, buttonSize, buttonSize, 0xFF293541, 5.0f, true);
+    rect(actionX, actionY, buttonSize, buttonSize, 0xFFD1E1EB, 4.0f, true);
+    rect(actionX, actionY, buttonSize, buttonSize, 0xFF8DAFC4, 4.0f, false);
     text(actionX + buttonSize * 0.34f, actionY + buttonSize * 0.20f,
-         bigMap ? "X" : "B", 12.0f * textScale, 0xFFDAE5EE);
+         bigMap ? "X" : "B", 12.0f * textScale, 0xFF263746);
 
-    // The map surface is clipped by geometry bounds before any marker is drawn.
-    if (featuresWidth > 0.0f) {
-        const float featuresX = panelX + 6.0f;
-        rect(featuresX, mapTop, featuresWidth - 6.0f, mapHeight, 0xFF151E28, 3.0f, true);
-        text(featuresX + 8.0f, mapTop + 7.0f, "FEATURES", 8.0f * textScale, 0xFFEAF0F5);
-        static constexpr std::array<std::string_view, 17> featureNames{
-            "Village", "Mansion", "End City", "Monument", "Ancient City",
-            "Outpost", "Buried Treasure", "Ocean Ruin", "Shipwreck",
-            "Nether Fortress", "Bastion", "Desert Pyramid", "Igloo",
-            "Swamp Hut", "Jungle Temple", "Ruined Portal", "Nether Portal"};
-        const float rowH = std::max(15.0f, (mapHeight - 26.0f) / 17.0f);
-        for (std::size_t i = 0; i < featureNames.size(); ++i) {
-            const float rowY = mapTop + 24.0f + static_cast<float>(i) * rowH;
-            const auto color = structureVisible[i] ? 0xFF55C6B0u : 0xFF56616C;
-            rect(featuresX + 7.0f, rowY + 2.0f, 9.0f, 9.0f, color, 2.0f, true);
-            text(featuresX + 22.0f, rowY, std::string(featureNames[i]),
-                 6.8f * textScale, structureVisible[i] ? 0xFFEAF0F5 : 0xFF71808D);
-        }
-    }
-    rect(mapLeft, mapTop, mapWidth, mapHeight, 0xFF101820, 3.0f, true);
+    // The map canvas remains explicitly schematic until biome generation is integrated.
+    rect(mapLeft, mapTop, mapWidth, mapHeight, 0xFFB8C9C9, 3.0f, true);
+    text(mapLeft + 8.0f, mapTop + 7.0f, "BIOME LAYER NOT AVAILABLE",
+         6.2f * textScale, 0xFF596D77);
     const int gridStep = mapRadius <= 512 ? 16 : (mapRadius <= 4096 ? 128 : 256);
     if (showChunkGrid) {
         const int minX = viewCenterX - mapRadius;
@@ -845,14 +878,18 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     const bool tap = !m_touchMoved;
     if (tap) {
         if (inside) {
-            const float featuresButtonY = m_lastPanelY + (m_lastBigMap ? 44.0f : 40.0f);
-            if (x >= m_lastPanelX + 8.0f && x <= m_lastPanelX + 104.0f &&
+            const float featuresButtonY = m_lastPanelY + 66.0f;
+            if (m_lastBigMap && x >= m_lastPanelX + 8.0f && x <= m_lastPanelX + 104.0f &&
                 y >= featuresButtonY - 3.0f && y <= featuresButtonY + 12.0f) {
                 m_featuresExpanded = !m_featuresExpanded;
             } else if (insideFeatures && m_lastFeaturesHeight > 0.0f) {
-                const float rowH = std::max(15.0f, (m_lastFeaturesHeight - 26.0f) / 17.0f);
-                const int index = static_cast<int>((y - (m_lastFeaturesTop + 24.0f)) / rowH);
-                if (index >= 0 && index < static_cast<int>(m_structureVisible.size()))
+                const float iconSize = std::clamp(m_lastPanelSize * 0.055f, 18.0f, 28.0f);
+                const float iconGap = 4.0f;
+                const int col = static_cast<int>((x - (m_lastPanelX + 10.0f)) / (iconSize + iconGap));
+                const int row = static_cast<int>((y - m_lastFeaturesTop) / (iconSize + iconGap));
+                const int index = row * 9 + col;
+                if (col >= 0 && col < 9 && row >= 0 && row < 2 &&
+                    index >= 0 && index < static_cast<int>(m_structureVisible.size()))
                     m_structureVisible[static_cast<std::size_t>(index)] =
                         !m_structureVisible[static_cast<std::size_t>(index)];
             } else {
