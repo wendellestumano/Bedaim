@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.app.PendingIntent
 import android.content.ClipData
 import android.content.Context
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -18,6 +19,8 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.StatFs
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.net.Uri
 import android.view.Gravity
@@ -212,6 +215,7 @@ class MainActivity : Activity() {
         actionButton(apkCard, "ANALISAR NOVAMENTE", false) { selectedApk?.let { analyzeApk(it) } }
         actionButton(apkCard, "DUPLICAR APK COMO BACKUP", false) { duplicateSelectedApk() }
         actionButton(apkCard, "EXTRAIR CONTEÚDO ZIP", false) { extractSelectedApk() }
+        actionButton(apkCard, "DECOMPILAR RECURSOS COM APKTOOL", true) { decodeSelectedApkWithApktool() }
         actionButton(apkCard, "EXPORTAR APK PARA DOWNLOADS", false) { exportSelectedApk() }
         actionButton(apkCard, "COPIAR RELATÓRIO", false) {
             if (selectedApk == null) {
@@ -412,6 +416,114 @@ class MainActivity : Activity() {
                 runOnUiThread { apkReportValue.text = "Falha na análise: ${error.message}" }
             }
         }.start()
+    }
+
+    private fun decodeSelectedApkWithApktool() {
+        val source = selectedApk
+        if (source == null || !source.isFile) {
+            Toast.makeText(this, "Selecione um APK primeiro.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            Toast.makeText(this, "A integração automática exige Android 10 ou superior.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (packageManager.getLaunchIntentForPackage("com.termux") == null) {
+            Toast.makeText(this, "Instale o Termux primeiro.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "Conceda RUN_COMMAND nas permissões adicionais do Bridge.", Toast.LENGTH_LONG).show()
+            openPackageSettings(packageName)
+            return
+        }
+
+        apkReportValue.append("\n\nPreparando APK para o Termux…")
+        Thread {
+            var exportedUri: Uri? = null
+            try {
+                val safeBase = source.nameWithoutExtension.replace(Regex("[^A-Za-z0-9_-]"), "_")
+                val exportName = "${safeBase}_${System.currentTimeMillis()}.apk"
+                val relativePath = Environment.DIRECTORY_DOWNLOADS + "/BedAimBridge/"
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, exportName)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
+                    put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: error("Não foi possível criar o APK em Downloads.")
+                exportedUri = uri
+                val output = contentResolver.openOutputStream(uri) ?: error("Não foi possível gravar o APK exportado.")
+                source.inputStream().use { input -> output.use { input.copyTo(it) } }
+                contentResolver.update(uri, ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                }, null, null)
+
+                val inputPath = "/storage/emulated/0/Download/BedAimBridge/$exportName"
+                val outputPath = "/storage/emulated/0/Download/BedAimBridge/decoded_$safeBase"
+                val started = runTermuxCommand(
+                    "/data/data/com.termux/files/usr/bin/apktool",
+                    arrayOf("d", "-f", inputPath, "-o", outputPath),
+                    "APKTool decode: $exportName",
+                    "Decompiles a user-selected APK into an isolated Downloads folder."
+                )
+                runOnUiThread {
+                    apkReportValue.append("\nAPK copiado para: $inputPath\nSaída esperada: $outputPath")
+                    if (started) {
+                        Toast.makeText(this, "APKTool iniciado pelo Termux. Confira os logs.", Toast.LENGTH_LONG).show()
+                    }
+                }
+            } catch (error: Throwable) {
+                exportedUri?.let { runCatching { contentResolver.delete(it, null, null) } }
+                runOnUiThread {
+                    apkReportValue.append("\nFalha ao iniciar Apktool: ${error.message}")
+                    Toast.makeText(this, "Falha na preparação do APK.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun runTermuxCommand(
+        commandPath: String,
+        arguments: Array<String>,
+        label: String,
+        description: String
+    ): Boolean {
+        if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Termux: permissão RUN_COMMAND não concedida.")
+            return false
+        }
+        val resultIntent = Intent(this, dev.bedaim.bridge.service.TermuxCommandResultService::class.java)
+        val pendingFlags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            this,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            resultIntent,
+            pendingFlags
+        )
+        val command = Intent().apply {
+            setClassName("com.termux", "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", commandPath)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arguments)
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            startService(command)
+            BridgeStatus.recordEvent("Termux: iniciado — $label")
+            refreshLogs()
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Termux: falha ao iniciar $label — ${error.javaClass.simpleName}")
+            refreshLogs()
+            false
+        }
     }
 
     private fun extractSelectedApk() {
