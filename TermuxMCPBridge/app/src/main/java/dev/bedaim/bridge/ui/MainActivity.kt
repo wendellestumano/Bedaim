@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.ActivityManager
 import android.content.ClipboardManager
+import android.app.PendingIntent
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
@@ -149,6 +150,20 @@ class MainActivity : Activity() {
                 }
             }.start()
         }
+
+        val termuxCard = card(root)
+        sectionTitle(termuxCard, "TERMUX TOOLCHAIN")
+        termuxCard.addView(label(
+            "Verifica ferramentas instaladas sem aceitar comandos arbitrários. Requer a permissão RUN_COMMAND e allow-external-apps=true no Termux.",
+            12f, secondaryText
+        ))
+        actionButton(termuxCard, "VERIFICAR APKTOOL / AAPT / GIT / PYTHON / CLANG", true) {
+            runTermuxToolchainCheck()
+        }
+        actionButton(termuxCard, "CONFIGURAR PERMISSÃO RUN_COMMAND", false) {
+            openPackageSettings("com.termux")
+        }
+        actionButton(termuxCard, "ABRIR TERMUX", false) { openPackage("com.termux") }
 
         val settingsCard = card(root)
         sectionTitle(settingsCard, "ATALHOS DO ANDROID")
@@ -520,6 +535,72 @@ class MainActivity : Activity() {
         }
         runCatching { Shizuku.requestPermission(9021) }
             .onFailure { Toast.makeText(this, "Erro: ${it.message}", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun runTermuxToolchainCheck() {
+        if (packageManager.getLaunchIntentForPackage("com.termux") == null) {
+            Toast.makeText(this, "Termux não está instalado.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "Conceda RUN_COMMAND nas permissões adicionais do Termux Bridge.", Toast.LENGTH_LONG).show()
+            openPackageSettings(packageName)
+            return
+        }
+
+        val script = """
+            printf 'BEDAIM BRIDGE TOOLCHAIN\\n'
+            for tool in apktool aapt apksigner zipalign git python python3 clang cmake ninja gradle; do
+              if command -v "$tool" >/dev/null 2>&1; then
+                printf '%-12s %s\\n' "$tool" "$(command -v "$tool")"
+              else
+                printf '%-12s missing\\n' "$tool"
+              fi
+            done
+            if [ -d "$HOME/storage/shared" ]; then
+              printf 'shared-storage %s\\n' 'available'
+            else
+              printf 'shared-storage %s\\n' 'not linked'
+            fi
+        """.trimIndent()
+
+        val resultIntent = Intent(this, dev.bedaim.bridge.service.TermuxCommandResultService::class.java)
+        val pendingFlags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            this,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            resultIntent,
+            pendingFlags
+        )
+        val command = Intent().apply {
+            setClassName("com.termux", "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/usr/bin/bash")
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "BedAim Bridge toolchain check")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Checks installed development tools. No arbitrary command input is accepted.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        try {
+            startService(command)
+            BridgeStatus.recordEvent("Termux: diagnóstico de toolchain solicitado.")
+            refreshLogs()
+            Toast.makeText(this, "Diagnóstico enviado ao Termux. Atualize os logs em instantes.", Toast.LENGTH_LONG).show()
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Termux: falha ao iniciar comando — ${error.javaClass.simpleName}")
+            Toast.makeText(this, "Termux recusou o comando. Verifique RUN_COMMAND e allow-external-apps.", Toast.LENGTH_LONG).show()
+            refreshLogs()
+        }
+    }
+
+    private fun openPackageSettings(packageName: String) {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+        runCatching { startActivity(intent) }.onFailure {
+            Toast.makeText(this, "Não foi possível abrir as permissões do aplicativo.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun openSystemSettings(action: String) {
