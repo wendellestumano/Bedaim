@@ -167,23 +167,23 @@ std::string_view structureName(StructureType type) noexcept {
 
 std::string_view structureShortName(StructureType type) noexcept {
     switch (type) {
-        case StructureType::Village: return "V";
-        case StructureType::Mansion: return "M";
-        case StructureType::EndCity: return "E";
-        case StructureType::Monument: return "O";
-        case StructureType::AncientCity: return "A";
-        case StructureType::Outpost: return "P";
-        case StructureType::BuriedTreasure: return "T";
-        case StructureType::OceanRuin: return "R";
-        case StructureType::Shipwreck: return "S";
-        case StructureType::Fortress: return "F";
-        case StructureType::Bastion: return "B";
-        case StructureType::DesertPyramid: return "D";
-        case StructureType::Igloo: return "I";
-        case StructureType::SwampHut: return "W";
-        case StructureType::JungleTemple: return "J";
-        case StructureType::RuinedPortal: return "N";
-        case StructureType::NetherRuinedPortal: return "N";
+        case StructureType::Village: return "Vi";
+        case StructureType::Mansion: return "WM";
+        case StructureType::EndCity: return "EC";
+        case StructureType::Monument: return "OM";
+        case StructureType::AncientCity: return "AC";
+        case StructureType::Outpost: return "PO";
+        case StructureType::BuriedTreasure: return "BT";
+        case StructureType::OceanRuin: return "OR";
+        case StructureType::Shipwreck: return "Sh";
+        case StructureType::Fortress: return "NF";
+        case StructureType::Bastion: return "Ba";
+        case StructureType::DesertPyramid: return "DP";
+        case StructureType::Igloo: return "Ig";
+        case StructureType::SwampHut: return "WH";
+        case StructureType::JungleTemple: return "JT";
+        case StructureType::RuinedPortal: return "RP";
+        case StructureType::NetherRuinedPortal: return "NP";
     }
     return "?";
 }
