@@ -534,7 +534,7 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
 
     // Apollon's fast storage targets: tile.chest, tile.trapped_chest,
     // tile.ender_chest, tile.shulkerBox / tile.shulker_box and tile.barrel.
-    if (tileName == "shulkerBox" || tileName == "shulker_box" ||
+    if (tileName == "shulkerBox" || tileName == "shulkerbox" || tileName == "shulker_box" ||
         tileName.find("shulker_box") != std::string_view::npos) kind = Kind::Shulker;
     else if (tileName == "ender_chest") kind = Kind::EnderChest;
     else if (tileName == "copper_chest") kind = Kind::Utility;
@@ -562,7 +562,8 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
              tileName == "redstone_lamp" || tileName == "lever" ||
              tileName.find("button") != std::string_view::npos ||
              tileName.find("pressure_plate") != std::string_view::npos || tileName == "target" ||
-             tileName == "bed" || tileName == "creaking_heart" || tileName.starts_with("shelf_")) kind = Kind::Utility;
+             tileName == "bed" || tileName == "creaking_heart" || tileName == "shelf" ||
+             tileName.starts_with("shelf_")) kind = Kind::Utility;
     else return false;
     return true;
 }
