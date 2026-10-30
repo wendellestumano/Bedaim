@@ -35,6 +35,24 @@ int main() {
     }
     assert(foundVillageOracle);
 
+    // Negative region coordinates must use mathematical floor division.
+    const auto negativeRegion = findStructureAttempts(
+        1ULL, Dimension::Overworld, -152, 216, 16, 16);
+    bool foundNegativeRegion = false;
+    for (const auto& marker : negativeRegion) {
+        if (marker.x == -152 && marker.z == 216) foundNegativeRegion = true;
+    }
+    assert(foundNegativeRegion);
+
+    // Bedrock structure placement consumes only the low 32 seed bits.
+    const auto low32Alias = findStructureAttempts(
+        123456789ULL + 0x100000000ULL, Dimension::Overworld, 0, 0, 8192, 256);
+    assert(first.size() == low32Alias.size());
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        assert(first[i].x == low32Alias[i].x);
+        assert(first[i].z == low32Alias[i].z);
+    }
+
     // A seed change must affect at least one candidate in a nontrivial window.
     const auto other = findStructureAttempts(
         987654321ULL, Dimension::Overworld, 0, 0, 8192, 256);
