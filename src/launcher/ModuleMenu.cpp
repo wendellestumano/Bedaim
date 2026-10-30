@@ -55,7 +55,9 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         // can leave focus-search pointing at a non-focusable view and crash on key-up.
         const bool editingIdentifier =
             key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier";
-        if (!editingIdentifier) {
+        const bool editingSeedMapText =
+            mod->moduleId == "bedrocktools.SeedMap" && (key == "seed" || key == "platform");
+        if (!editingIdentifier && !editingSeedMapText) {
             nlohmann::json snapshot;
             mod->saveConfig(snapshot);
             scheduleModuleConfigSchemaRefresh(mod, key, snapshot);
