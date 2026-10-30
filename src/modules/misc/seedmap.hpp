@@ -70,6 +70,10 @@ private:
     bool m_showStructures = true;
     bool m_showChunkGrid = true;
     bool m_showCoordinates = true;
+    bool m_featuresExpanded = true;
+    std::array<bool, 17> m_structureVisible{
+        true, true, true, true, true, true, true, true, true,
+        true, true, true, true, true, true, true, true};
     bool m_bigMap = false;
     float hudPosX = 18.0f;
     float hudPosY = 82.0f;
@@ -99,5 +103,9 @@ private:
     float m_lastMapTop = 0.0f;
     float m_lastMapWidth = 0.0f;
     float m_lastMapHeight = 0.0f;
+    float m_lastFeaturesLeft = 0.0f;
+    float m_lastFeaturesTop = 0.0f;
+    float m_lastFeaturesWidth = 0.0f;
+    float m_lastFeaturesHeight = 0.0f;
     bool m_lastBigMap = false;
 };
