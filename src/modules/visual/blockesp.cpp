@@ -15,6 +15,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include "core/memory/Hooks.hpp"
