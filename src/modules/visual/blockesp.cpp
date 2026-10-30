@@ -863,8 +863,9 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 return aBlockDistance < bBlockDistance;
             });
         std::vector<int> localVertical;
-        localVertical.reserve(160u);
-        for (int i = 0; i < 160; ++i) localVertical.push_back(centerOutOffset(i));
+        localVertical.reserve(static_cast<std::size_t>(kLocalHalfHeight * 2));
+        for (int i = 0; i < kLocalHalfHeight * 2; ++i)
+            localVertical.push_back(centerOutOffset(i));
         for (const int dy : localVertical) {
             for (const auto& [dx, dz] : localHorizontal) {
                 m_localScanOffsets.push_back({dx, dy, dz});
