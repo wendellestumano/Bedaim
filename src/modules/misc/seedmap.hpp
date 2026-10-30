@@ -93,6 +93,7 @@ private:
     float m_lastPanelX = 0.0f;
     float m_lastPanelY = 0.0f;
     float m_lastPanelSize = 0.0f;
+    float m_lastPanelHeight = 0.0f;
     float m_lastMapRadius = 0.0f;
     float m_lastMapLeft = 0.0f;
     float m_lastMapTop = 0.0f;
