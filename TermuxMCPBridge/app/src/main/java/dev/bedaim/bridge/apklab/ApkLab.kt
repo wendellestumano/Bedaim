@@ -16,6 +16,9 @@ data class ApkReport(
     val versionCode: Long,
     val minSdk: Int?,
     val targetSdk: Int?,
+    val componentSummary: String,
+    val requestedPermissions: List<String>,
+    val sensitivePermissions: List<String>,
     val signerSha256: List<String>,
     val entryCount: Int,
     val dexCount: Int,
@@ -31,6 +34,12 @@ data class ApkReport(
         appendLine("Versão: $versionName ($versionCode)")
         appendLine("SDK mínimo: ${minSdk ?: "não identificado"}")
         appendLine("SDK alvo: ${targetSdk ?: "não identificado"}")
+        appendLine("Componentes: $componentSummary")
+        appendLine("Permissões solicitadas: ${requestedPermissions.size}")
+        if (sensitivePermissions.isNotEmpty()) {
+            appendLine("Permissões sensíveis para revisão:")
+            sensitivePermissions.forEach { appendLine("  $it") }
+        }
         appendLine("Entradas ZIP: $entryCount")
         appendLine("DEX: $dexCount")
         appendLine("Bibliotecas nativas: $nativeLibraries")
@@ -60,6 +69,23 @@ data class ApkReport(
 object ApkLab {
     private const val MAX_APK_SIZE = 1_500L * 1024L * 1024L
     private const val MAX_ENTRIES_TO_REPORT = 30
+    private val SENSITIVE_PERMISSIONS = setOf(
+        "android.permission.READ_SMS",
+        "android.permission.RECEIVE_SMS",
+        "android.permission.SEND_SMS",
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.MANAGE_EXTERNAL_STORAGE",
+        "android.permission.QUERY_ALL_PACKAGES",
+        "android.permission.READ_CALL_LOG",
+        "android.permission.WRITE_CALL_LOG"
+    )
 
     fun inspect(file: File, packageManager: PackageManager): ApkReport {
         require(file.isFile) { "Selecione um arquivo APK válido." }
@@ -85,6 +111,9 @@ object ApkLab {
                 versionCode = versionCode(info),
                 minSdk = info.applicationInfo?.minSdkVersion,
                 targetSdk = info.applicationInfo?.targetSdkVersion,
+                componentSummary = "activities=${info.activities?.size ?: 0}, services=${info.services?.size ?: 0}, receivers=${info.receivers?.size ?: 0}, providers=${info.providers?.size ?: 0}",
+                requestedPermissions = info.requestedPermissions?.toList().orEmpty().sorted(),
+                sensitivePermissions = info.requestedPermissions?.filter { it in SENSITIVE_PERMISSIONS }?.sorted().orEmpty(),
                 signerSha256 = signers,
                 entryCount = all.size,
                 dexCount = names.count { it.matches(Regex("""classes(\d*)\.dex""")) },
