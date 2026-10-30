@@ -554,7 +554,7 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     rect(panelX, panelY, panelSize, panelHeight, 0xFF536273, 8.0f, false);
     rect(panelX + 1.0f, panelY + 1.0f, panelSize - 2.0f, 2.0f,
          0xFF55C6B0, 0.0f, true);
-    text(panelX + 11.0f, panelY + 7.0f, "SEEDMAP", 12.0f * textScale, 0xFFF1F4F8);
+    text(panelX + 11.0f, panelY + 7.0f, "SEED MAP", 12.0f * textScale, 0xFFF1F4F8);
     text(panelX + 11.0f, panelY + 20.0f, "BEDROCK 26.60 / " + dimensionName,
          7.0f * textScale, 0xFF9EABB9);
     text(panelX + 11.0f, panelY + 30.0f,
@@ -1187,6 +1187,7 @@ void SeedMapModule::loadConfig(const nlohmann::json& json) {
         m_showStructures = json.value("m_showStructures", m_showStructures);
         m_showChunkGrid = json.value("m_showChunkGrid", m_showChunkGrid);
         m_showCoordinates = json.value("m_showCoordinates", m_showCoordinates);
+        m_featuresExpanded = json.value("m_featuresExpanded", m_featuresExpanded);
         for (std::size_t i = 0; i < kFeatureKeys.size(); ++i)
             m_structureVisible[i] = json.value(kFeatureKeys[i], m_structureVisible[i]);
         m_mapRadiusBlocks = std::clamp(json.value("m_mapRadiusBlocks", m_mapRadiusBlocks), 256, 8192);
@@ -1210,6 +1211,7 @@ void SeedMapModule::saveConfig(nlohmann::json& json) {
     json["m_showStructures"] = m_showStructures;
     json["m_showChunkGrid"] = m_showChunkGrid;
     json["m_showCoordinates"] = m_showCoordinates;
+    json["m_featuresExpanded"] = m_featuresExpanded;
     for (std::size_t i = 0; i < kFeatureKeys.size(); ++i)
         json[kFeatureKeys[i]] = m_structureVisible[i];
     json["m_mapRadiusBlocks"] = m_mapRadiusBlocks;
