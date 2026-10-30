@@ -25,6 +25,15 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
+using BlockSourceGetBlockForTessellationFn = const void* (*)(void*, const bedrocktools::sdk::BlockPos*, std::int32_t);
+void* g_blockSourceTessellationGetBlockOriginal = nullptr;
+bedrocktools::hooks::Handle g_blockSourceTessellationGetBlockHook = nullptr;
+std::atomic<std::uint64_t> g_blockSourceTessellationGetBlockCalls{0};
+std::atomic<std::uint64_t> g_blockSourceTessellationCandidateCalls{0};
+std::atomic<std::uint64_t> g_eventCandidatesQueued{0};
+std::atomic<std::uint64_t> g_eventCandidatesDrained{0};
+std::atomic<std::uint64_t> g_eventCandidatesDropped{0};
+std::atomic<std::uint64_t> g_eventCandidatesClassified{0};
 
 // Apollon's BlockESP observes block-update callbacks, queues only their BlockPos,
 // then validates candidates against the live BlockSource before rendering them.
@@ -85,10 +94,12 @@ void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& 
     if (g_blockEventCandidates.count >= kMaxEventCandidates) {
         g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
         --g_blockEventCandidates.count;
+        g_eventCandidatesDropped.fetch_add(1u, std::memory_order_relaxed);
     }
     const std::size_t tail = (g_blockEventCandidates.head + g_blockEventCandidates.count) % kMaxEventCandidates;
     g_blockEventCandidates.candidates[tail] = BlockEventCandidate{source, position};
     ++g_blockEventCandidates.count;
+    g_eventCandidatesQueued.fetch_add(1u, std::memory_order_relaxed);
 }
 
 void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
@@ -137,6 +148,7 @@ std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t m
         g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
         --g_blockEventCandidates.count;
     }
+    g_eventCandidatesDrained.fetch_add(static_cast<std::uint64_t>(result.size()), std::memory_order_relaxed);
     return result;
 }
 
@@ -149,6 +161,46 @@ void blockUpdateHook(void* updateObject, void* blockSource) {
     // Always forward the original call, even while BlockESP is disabled.
     const auto original = reinterpret_cast<BlockUpdateFn>(g_blockUpdateOriginal);
     if (original) original(updateObject, blockSource);
+}
+
+// BedrockTools resolves this exact lookup used by chunk tessellation. Unlike a
+// radius scan, it is called with the real BlockSource and BlockPos as the game
+// builds geometry for a loaded chunk, including chunks far from the player.
+// Capture only the position here; BlockSource::getBlock and classification are
+// deferred to the player tick so this render-thread hook stays lightweight.
+const void* blockSourceTessellationGetBlockHook(
+    void* blockSource, const bedrocktools::sdk::BlockPos* position, std::int32_t layer) {
+    g_blockSourceTessellationGetBlockCalls.fetch_add(1u, std::memory_order_relaxed);
+    const auto original = reinterpret_cast<BlockSourceGetBlockForTessellationFn>(
+        g_blockSourceTessellationGetBlockOriginal);
+    const void* block = original ? original(blockSource, position, layer) : nullptr;
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource && position &&
+        reinterpret_cast<std::uintptr_t>(position) > 0x1000u && block &&
+        reinterpret_cast<std::uintptr_t>(block) > 0x1000u && isValidEventPosition(*position)) {
+        g_blockSourceTessellationCandidateCalls.fetch_add(1u, std::memory_order_relaxed);
+        enqueueBlockEventPosition(blockSource, *position);
+    }
+    return block;
+}
+
+bool installBlockSourceTessellationGetBlockHook() {
+    if (g_blockSourceTessellationGetBlockHook) return true;
+    const auto address = bedrocktools::memory::resolve(
+        bedrocktools::memory::SignatureId::BlockSourceGetBlockForTessellation);
+    if (!address) return false;
+
+    g_blockSourceTessellationGetBlockOriginal = nullptr;
+    auto hook = bedrocktools::hooks::install(
+        reinterpret_cast<void*>(address),
+        reinterpret_cast<void*>(blockSourceTessellationGetBlockHook),
+        &g_blockSourceTessellationGetBlockOriginal);
+    if (!hook || !g_blockSourceTessellationGetBlockOriginal) {
+        if (hook) bedrocktools::hooks::remove(hook);
+        g_blockSourceTessellationGetBlockOriginal = nullptr;
+        return false;
+    }
+    g_blockSourceTessellationGetBlockHook = hook;
+    return true;
 }
 
 void blockEventVectorHook0(void* eventObject, void* blockSource) {
@@ -585,6 +637,7 @@ void BlockEspModule::onInit() {
     resolveBlockGetBlock();
     installBlockUpdateHook();
     installApollonBlockEventHooks();
+    installBlockSourceTessellationGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
 }
@@ -626,12 +679,13 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     const bool missingSpecializedHook = std::any_of(
         g_apollonEventHooks.begin(), g_apollonEventHooks.end(),
         [](const auto hook) { return hook == nullptr; });
-    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) || !g_blockUpdateHook || missingSpecializedHook) &&
-        m_tickCount - m_lastResolveAttemptTick >= 40) {
+    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) || !g_blockUpdateHook || missingSpecializedHook ||
+         !g_blockSourceTessellationGetBlockHook) && m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
         installBlockUpdateHook();
         installApollonBlockEventHooks();
+        installBlockSourceTessellationGetBlockHook();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
@@ -640,12 +694,19 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // The counters distinguish installed hooks from callbacks that actually fire
     // in the current world; a later event-only migration must pass this check.
     if ((m_tickCount % 200u) == 0u) {
-        char state[384]{};
+        char state[512]{};
         const auto genericCalls = g_genericBlockUpdateCalls.load(std::memory_order_relaxed);
         std::size_t installedMask = 0u;
         std::size_t offset = static_cast<std::size_t>(std::snprintf(
-            state, sizeof(state), "generic=%llu;installed=",
-            static_cast<unsigned long long>(genericCalls)));
+            state, sizeof(state),
+            "generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            static_cast<unsigned long long>(genericCalls),
+            static_cast<unsigned long long>(g_blockSourceTessellationGetBlockCalls.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_blockSourceTessellationCandidateCalls.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesQueued.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesDrained.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesClassified.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesDropped.load(std::memory_order_relaxed))));
         for (std::size_t i = 0; i < kApollonEventHookCount && offset < sizeof(state); ++i) {
             if (g_apollonEventHooks[i]) installedMask |= (std::size_t{1} << i);
             const int written = std::snprintf(state + offset, sizeof(state) - offset,
@@ -654,9 +715,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
             if (written <= 0) break;
             offset += static_cast<std::size_t>(written);
         }
-        char detail[96]{};
-        std::snprintf(detail, sizeof(detail), "specialized_hook_mask=0x%03llX; 0=not installed, counts=cumulative",
-                      static_cast<unsigned long long>(installedMask));
+        char detail[128]{};
+        std::snprintf(detail, sizeof(detail),
+            "tessellation_lookup_hook=%s; specialized_hook_mask=0x%03llX; counts=cumulative",
+            g_blockSourceTessellationGetBlockHook ? "installed" : "missing",
+            static_cast<unsigned long long>(installedMask));
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
             "BlockESP", "native_event_activity", state, detail);
     }
@@ -727,7 +790,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_queryGeneration = 1u;
     }
     m_uniqueQueriesThisTick = 0u;
-    auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos) -> bool {
+    auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos, bool eventCandidate = false) -> bool {
         const PositionKey key = keyFor(pos);
         if (!markQueryPosition(key)) return false;
         // A successful scan invalidates the old outline first; a currently valid
@@ -741,6 +804,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
 
         Kind kind{};
         if (!classify(*name, kind)) return true;
+        if (eventCandidate) g_eventCandidatesClassified.fetch_add(1u, std::memory_order_relaxed);
 
         // Do not require adjacent air/water for utility targets. That extra
         // six-neighbour query made distant workstations (notably crafting tables)
@@ -975,9 +1039,9 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // Event observations are serviced first, but validated on this tick using
     // the current BlockSource. This avoids invoking engine getters/classifiers
     // from inside the hooked update method.
-    const std::size_t eventBudget = std::min<std::size_t>(1024u, scanBudget / 4u);
+    const std::size_t eventBudget = std::min<std::size_t>(2048u, scanBudget / 2u);
     const auto eventCandidates = drainBlockEventCandidates(eventBudget, source);
-    for (const auto& candidate : eventCandidates) inspectBlock(candidate);
+    for (const auto& candidate : eventCandidates) inspectBlock(candidate, true);
 
     // Reserve half the budget for the same-height-first local sweep. Priority
     // and wide scans consume only the unique-query budget that remains after
