@@ -48,6 +48,10 @@ std::atomic<std::uint64_t> g_eventCandidatesDrained{0};
 std::atomic<std::uint64_t> g_eventCandidatesDropped{0};
 std::atomic<std::uint64_t> g_eventCandidatesClassified{0};
 std::atomic<std::uint64_t> g_eventCandidatesMerged{0};
+std::atomic<std::uint64_t> g_eventCandidatesNamedDrained{0};
+std::atomic<std::uint64_t> g_eventCandidatesDedupBypassed{0};
+std::atomic<std::uint64_t> g_eventCandidatesClassifyRejected{0};
+std::atomic<std::uint64_t> g_eventCandidatesOutlines{0};
 
 // Apollon's BlockESP observes block-update callbacks, queues only their BlockPos,
 // then validates candidates against the live BlockSource before rendering them.
@@ -875,7 +879,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::size_t installedMask = 0u;
         std::size_t offset = static_cast<std::size_t>(std::snprintf(
             state, sizeof(state),
-            "block_get_hook=%s;block_get_calls=%llu;block_get_capture=%llu;generic_hook=%s;generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            "block_get_hook=%s;block_get_calls=%llu;block_get_capture=%llu;generic_hook=%s;generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;named_drained=%llu;dedup_bypassed=%llu;classify_rejected=%llu;event_outlines=%llu;installed=",
             g_blockSourceGetBlockHook ? "installed" : "missing",
             static_cast<unsigned long long>(g_blockSourceGetBlockCalls.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_blockSourceGetBlockCandidateCalls.load(std::memory_order_relaxed)),
@@ -887,7 +891,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
             static_cast<unsigned long long>(g_eventCandidatesMerged.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_eventCandidatesDrained.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_eventCandidatesClassified.load(std::memory_order_relaxed)),
-            static_cast<unsigned long long>(g_eventCandidatesDropped.load(std::memory_order_relaxed))));
+            static_cast<unsigned long long>(g_eventCandidatesDropped.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesNamedDrained.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesDedupBypassed.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesClassifyRejected.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_eventCandidatesOutlines.load(std::memory_order_relaxed))));
         for (std::size_t i = 0; i < kApollonEventHookCount && offset < sizeof(state); ++i) {
             if (g_apollonEventHooks[i]) installedMask |= (std::size_t{1} << i);
             const int written = std::snprintf(state + offset, sizeof(state) - offset,
@@ -979,11 +987,19 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     auto inspectBlock = [&](const bedrocktools::sdk::BlockPos& pos, bool eventCandidate = false,
                             std::string_view resolvedName = {}) -> bool {
         const PositionKey key = keyFor(pos);
-        if (!markQueryPosition(key)) return false;
-        // A successful scan invalidates the old outline first; a currently valid
-        // target block is reinserted below. This also removes stale cached blocks
-        // when the native lookup says the chunk/position is no longer available.
-        scannedPositions.push_back(key);
+        const bool firstQueryThisTick = markQueryPosition(key);
+        // A renderer/BlockSource observation that already carries the resolved
+        // identifier is authoritative. Do not discard it merely because another
+        // scan queried this coordinate earlier in the same tick: that earlier
+        // query may have seen an unavailable/stale block. Only position-only
+        // events need to be rejected by the native-query deduplication gate.
+        if (!firstQueryThisTick && resolvedName.empty()) return false;
+        // A successful first query invalidates the old outline before inserting
+        // the current result. If the coordinate was already queried, its key is
+        // already present in scannedPositions for this tick.
+        if (firstQueryThisTick) scannedPositions.push_back(key);
+        else if (eventCandidate && !resolvedName.empty())
+            g_eventCandidatesDedupBypassed.fetch_add(1u, std::memory_order_relaxed);
         std::string_view blockName = resolvedName;
         if (blockName.empty()) {
             const auto internalLookup = g_blockSourceGetBlockHook
@@ -1000,7 +1016,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
 
         Kind kind{};
-        if (!classify(blockName, kind)) return true;
+        if (!classify(blockName, kind)) {
+            if (eventCandidate)
+                g_eventCandidatesClassifyRejected.fetch_add(1u, std::memory_order_relaxed);
+            return true;
+        }
         if (eventCandidate) g_eventCandidatesClassified.fetch_add(1u, std::memory_order_relaxed);
 
         // Do not require adjacent air/water for utility targets. That extra
@@ -1013,6 +1033,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         if (normalizedName.ends_with("_pressure_plate")) normalizedName = "block_pressure_plate";
         if (normalizedName.starts_with("shelf_")) normalizedName = "shelf";
         foundOutlines.push_back(Outline{pos, colorForBlock(kind, normalizedName), kind, std::move(normalizedName)});
+        if (eventCandidate) g_eventCandidatesOutlines.fetch_add(1u, std::memory_order_relaxed);
         return true;
     };
 
@@ -1242,6 +1263,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         const std::string_view resolvedName = candidate.blockNameLength
             ? std::string_view(candidate.blockName.data(), candidate.blockNameLength)
             : std::string_view{};
+        if (!resolvedName.empty())
+            g_eventCandidatesNamedDrained.fetch_add(1u, std::memory_order_relaxed);
         const bedrocktools::sdk::BlockPos candidatePosition{
             candidate.position.x, candidate.position.y, candidate.position.z};
         inspectBlock(candidatePosition, true, resolvedName);
