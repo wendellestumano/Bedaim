@@ -46,7 +46,7 @@ private:
     void drawMap(float screenW, float screenH,
                  const std::vector<bedaim::seedmap::StructureMarker>& markers,
                  int playerX, int playerZ, bedaim::seedmap::Dimension dimension,
-                 bool hasSeed);
+                 bool hasSeed, int mapRadius, bool bigMap);
 
     mutable std::mutex m_stateMutex;
     std::string m_seed;
@@ -59,6 +59,7 @@ private:
     std::uint64_t m_cachedSeed = 0;
     int m_cachedCenterX = 0;
     int m_cachedCenterZ = 0;
+    int m_cachedRadius = 0;
     bedaim::seedmap::Dimension m_cachedDimension{bedaim::seedmap::Dimension::Overworld};
     std::chrono::steady_clock::time_point m_lastMarkerRefresh{};
     std::vector<bedaim::seedmap::StructureMarker> m_markers;
