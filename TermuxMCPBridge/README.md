@@ -9,14 +9,14 @@ Native Android app hosting an authenticated MCP Streamable HTTP endpoint on `127
 - Local MCP foreground service and authenticated loopback endpoint.
 - Per-install 256-bit bearer token, masked by default, with copy and rotation controls.
 - MCP workspace tools: `bridge_status`, `workspace_list`, `workspace_read`, `workspace_write`.
-- APK Lab: import a user-selected APK, parse package/version/SDK metadata, list requested permissions and sensitive permissions, inventory app components, enumerate ZIP contents, count DEX/native libraries/resources/assets and calculate signer certificate SHA-256 fingerprints. It can safely extract the raw ZIP archive with path traversal and decompression-size limits.
+- APK Lab: import a user-selected APK, parse package/version/SDK metadata, list requested permissions and sensitive permissions, inventory app components, enumerate ZIP contents, count DEX/native libraries/resources/assets and calculate signer certificate SHA-256 fingerprints. It can safely extract the raw ZIP archive with path traversal and decompression-size limits, and invoke Apktool through Termux to decode a selected APK into Downloads/BedAimBridge.
 - APK file backup/duplication inside the app-private workspace, raw archive extraction and export through Android document picker. Duplication preserves the original bytes and does not modify package identity or signature.
 - File access restricted to app-private workspace with path traversal checks and size limits.
 
 ## Not yet implemented
 - Full Apktool-style binary XML/resource decoding and decompilation; current extraction is raw ZIP extraction, not resource decompilation.
 - Repackaging or package-identity cloning. APK Lab currently inspects and backs up APK files without altering their signatures.
-- General Termux command execution, process manager and build orchestration. The current Termux integration only runs a fixed toolchain diagnostic.
+- General Termux command execution, process manager and build orchestration. The Termux integration runs a fixed toolchain diagnostic and an explicit Apktool decode action for the APK currently selected by the user; arbitrary shell input remains disabled.
 - Shizuku-backed file/process operations beyond current permission/capability checks.
 - Cloudflare Tunnel and remote ChatGPT connectivity.
 - Root command execution.
