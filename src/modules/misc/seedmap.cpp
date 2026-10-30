@@ -607,13 +607,13 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         const int startX = floorDiv(minX, gridStep) * gridStep;
         const int startZ = floorDiv(minZ, gridStep) * gridStep;
         for (int worldX = startX; worldX <= maxX; worldX += gridStep) {
-            const float px = centerX + (worldX - playerX) * scale;
+            const float px = centerX + (worldX - viewCenterX) * scale;
             if (px >= mapLeft && px <= mapRight)
                 line(px, mapTop, 0.0f, mapHeight, 0.65f,
                      gridStep == 16 ? 0x383E5967 : 0x604A6875);
         }
         for (int worldZ = startZ; worldZ <= maxZ; worldZ += gridStep) {
-            const float py = centerY + (worldZ - playerZ) * scale;
+            const float py = centerY + (worldZ - viewCenterZ) * scale;
             if (py >= mapTop && py <= mapBottom)
                 line(mapLeft, py, mapWidth, 0.0f, 0.65f,
                      gridStep == 16 ? 0x383E5967 : 0x604A6875);
@@ -833,6 +833,12 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
                     float bestDistanceSquared = 24.0f * 24.0f;
                     const bedaim::seedmap::StructureMarker* best = nullptr;
                     for (const auto& marker : m_markers) {
+                        const bool typeVisible = std::any_of(marker.possibleTypes.begin(), marker.possibleTypes.end(),
+                            [this](auto type) {
+                                const auto index = static_cast<std::size_t>(type);
+                                return index < m_structureVisible.size() && m_structureVisible[index];
+                            });
+                        if (!typeVisible) continue;
                         const float px = cx + (marker.x - viewCenterX) * scale;
                         const float py = cy + (marker.z - viewCenterZ) * scale;
                         const float mx = px - x;
