@@ -29,11 +29,13 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import dev.bedaim.bridge.core.BridgeStatus
+import dev.bedaim.bridge.apklab.ApkLab
 import dev.bedaim.bridge.core.RootAdapter
 import dev.bedaim.bridge.security.BridgePreferences
 import dev.bedaim.bridge.service.BridgeService
 import rikka.shizuku.Shizuku
 import java.io.File
+import java.io.FileOutputStream
 import java.util.Locale
 
 class MainActivity : Activity() {
@@ -42,6 +44,8 @@ class MainActivity : Activity() {
     private lateinit var deviceValue: TextView
     private lateinit var accessValue: TextView
     private lateinit var tokenValue: TextView
+    private lateinit var apkReportValue: TextView
+    private var selectedApk: File? = null
 
     private val background = Color.rgb(7, 8, 11)
     private val surface = Color.rgb(17, 19, 24)
@@ -159,6 +163,20 @@ class MainActivity : Activity() {
             }
         }
 
+        val apkCard = card(root)
+        sectionTitle(apkCard, "APK LAB • INSPEÇÃO E BACKUP")
+        apkReportValue = label("Nenhum APK selecionado. Escolha um arquivo para analisar metadados, assinatura e estrutura ZIP.", 12f, primaryText)
+        apkReportValue.setLineSpacing(dp(4).toFloat(), 1f)
+        apkCard.addView(apkReportValue)
+        actionButton(apkCard, "SELECIONAR APK", true) { chooseApk() }
+        actionButton(apkCard, "ANALISAR NOVAMENTE", false) { selectedApk?.let { analyzeApk(it) } }
+        actionButton(apkCard, "DUPLICAR APK COMO BACKUP", false) { duplicateSelectedApk() }
+        actionButton(apkCard, "COPIAR RELATÓRIO", false) {
+            if (selectedApk == null) {
+                Toast.makeText(this, "Selecione um APK primeiro.", Toast.LENGTH_SHORT).show()
+            } else copyText("APK report", apkReportValue.text.toString())
+        }
+
         val securityCard = card(root)
         sectionTitle(securityCard, "SEGURANÇA MCP")
         securityCard.addView(label("Endpoint local", 11f, secondaryText, true))
@@ -185,6 +203,88 @@ class MainActivity : Activity() {
             setPadding(dp(2), dp(10), dp(2), dp(12))
         })
         refresh()
+    }
+
+    private fun chooseApk() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/vnd.android.package-archive"
+        }
+        runCatching { startActivityForResult(intent, REQUEST_APK) }.onFailure {
+            Toast.makeText(this, "Não foi possível abrir o seletor de arquivos.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    @Deprecated("Using the platform document picker for broad Android compatibility")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_APK || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        apkReportValue.text = "Importando APK selecionado…"
+        Thread {
+            try {
+                val directory = File(cacheDir, "apk-lab/imported").apply { mkdirs() }
+                val imported = File(directory, "selected_${System.currentTimeMillis()}.apk")
+                val input = contentResolver.openInputStream(uri) ?: error("Não foi possível abrir o arquivo.")
+                input.use { source ->
+                    FileOutputStream(imported).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val count = source.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= 1_500L * 1024L * 1024L) { "APK excede o limite de 1,5 GiB." }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+                val report = ApkLab.inspect(imported, packageManager).asText()
+                runOnUiThread {
+                    selectedApk = imported
+                    apkReportValue.text = report
+                    Toast.makeText(this, "APK analisado.", Toast.LENGTH_SHORT).show()
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    apkReportValue.text = "Falha na análise: ${error.message ?: error.javaClass.simpleName}"
+                    Toast.makeText(this, "Não foi possível analisar o APK.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun analyzeApk(file: File) {
+        apkReportValue.text = "Analisando APK…"
+        Thread {
+            try {
+                val report = ApkLab.inspect(file, packageManager).asText()
+                runOnUiThread { apkReportValue.text = report }
+            } catch (error: Throwable) {
+                runOnUiThread { apkReportValue.text = "Falha na análise: ${error.message}" }
+            }
+        }.start()
+    }
+
+    private fun duplicateSelectedApk() {
+        val source = selectedApk
+        if (source == null) {
+            Toast.makeText(this, "Selecione um APK primeiro.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        Thread {
+            try {
+                val destination = ApkLab.duplicateAsBackup(source, File(filesDir, "workspace/apk-backups"))
+                runOnUiThread {
+                    Toast.makeText(this, "Backup salvo: ${destination.name}", Toast.LENGTH_LONG).show()
+                    apkReportValue.append("\\n\\nBackup: ${destination.absolutePath}")
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    Toast.makeText(this, "Falha no backup: ${error.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
     }
 
     private fun refresh() {
@@ -337,4 +437,8 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private const val REQUEST_APK = 4102
+    }
 }
