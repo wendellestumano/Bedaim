@@ -49,7 +49,7 @@ class MainActivity : Activity() {
     private lateinit var workspaceValue: TextView
     private var selectedApk: File? = null
 
-    private val background = Color.rgb(7, 8, 11)
+    private val bgColor = Color.rgb(7, 8, 11)
     private val surface = Color.rgb(17, 19, 24)
     private val surfaceAlt = Color.rgb(25, 28, 35)
     private val accent = Color.rgb(0, 220, 160)
@@ -58,8 +58,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = background
-        window.navigationBarColor = background
+        window.statusBarColor = bgColor
+        window.navigationBarColor = bgColor
         window.decorView.systemUiVisibility = 0
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -76,7 +76,7 @@ class MainActivity : Activity() {
 
     private fun render() {
         val scroll = ScrollView(this).apply {
-            setBackgroundColor(background)
+            setBackgroundColor(bgColor)
             clipToPadding = false
             setPadding(dp(18), dp(14), dp(18), dp(28))
         }
@@ -534,7 +534,7 @@ class MainActivity : Activity() {
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             isAllCaps = false
-            setTextColor(if (primary) background else primaryText)
+            setTextColor(if (primary) bgColor else primaryText)
             background = rounded(if (primary) accent else surfaceAlt, 12)
             stateListAnimator = null
             setPadding(dp(12), dp(7), dp(12), dp(7))
