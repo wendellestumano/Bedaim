@@ -459,21 +459,23 @@ class MainActivity : Activity() {
                 val output = contentResolver.openOutputStream(uri) ?: error("Não foi possível gravar o APK exportado.")
                 source.inputStream().use { input -> output.use { input.copyTo(it) } }
                 contentResolver.update(uri, ContentValues().apply {
-                    put(MediaStore.Downloads.IS_PENDING, 0)
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
                 }, null, null)
 
                 val inputPath = "/storage/emulated/0/Download/BedAimBridge/$exportName"
                 val outputPath = "/storage/emulated/0/Download/BedAimBridge/decoded_$safeBase"
-                val started = runTermuxCommand(
-                    "/data/data/com.termux/files/usr/bin/apktool",
-                    arrayOf("d", "-f", inputPath, "-o", outputPath),
-                    "APKTool decode: $exportName",
-                    "Decompiles a user-selected APK into an isolated Downloads folder."
-                )
                 runOnUiThread {
                     apkReportValue.append("\nAPK copiado para: $inputPath\nSaída esperada: $outputPath")
+                    val started = runTermuxCommand(
+                        "/data/data/com.termux/files/usr/bin/apktool",
+                        arrayOf("d", "-f", inputPath, "-o", outputPath),
+                        "APKTool decode: $exportName",
+                        "Decompiles a user-selected APK into an isolated Downloads folder."
+                    )
                     if (started) {
                         Toast.makeText(this, "APKTool iniciado pelo Termux. Confira os logs.", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(this, "APK copiado, mas o Termux não iniciou Apktool. Verifique a permissão.", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (error: Throwable) {
