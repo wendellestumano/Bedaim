@@ -627,8 +627,9 @@ void SeedMapModule::drawMap(float screenW, float screenH,
 
     // The map canvas remains explicitly schematic until biome generation is integrated.
     rect(mapLeft, mapTop, mapWidth, mapHeight, 0xFFB8C9C9, 3.0f, true);
-    text(mapLeft + 8.0f, mapTop + 7.0f, "BIOME LAYER NOT AVAILABLE",
-         6.2f * textScale, 0xFF596D77);
+    if (bigMap)
+        text(mapLeft + 8.0f, mapTop + 7.0f, "BIOME LAYER NOT AVAILABLE",
+             6.2f * textScale, 0xFF596D77);
     const int gridStep = mapRadius <= 512 ? 16 : (mapRadius <= 4096 ? 128 : 256);
     if (showChunkGrid) {
         const int minX = viewCenterX - mapRadius;
@@ -715,6 +716,12 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     rect(panelX + 1.0f, footerY, panelSize - 2.0f, footerH - 1.0f,
          0xE91A222C, 6.0f, true);
 
+    if (bigMap && showCoordinates && hasPosition) {
+        text(panelX + 11.0f, footerY + 4.0f,
+            "PLAYER X " + std::to_string(playerX) + " Y " +
+            std::to_string(playerY) + " Z " + std::to_string(playerZ),
+            7.0f * textScale, 0xFF263746);
+    }
     if (!hasPosition) {
         text(panelX + 12.0f, footerY + 9.0f,
              "WAITING FOR PLAYER", 8.0f * textScale, 0xFFFFC56A);
@@ -727,24 +734,24 @@ void SeedMapModule::drawMap(float screenW, float screenH,
                 return marker.x == selectedX && marker.z == selectedZ;
             });
         if (selected != markers.end()) {
-            text(panelX + 11.0f, footerY + 5.0f,
-                markerDescription(*selected), 8.0f * textScale, 0xFFEAF0F5);
-            text(panelX + 11.0f, footerY + 19.0f,
+            text(panelX + 11.0f, footerY + (bigMap ? 20.0f : 5.0f),
+                markerDescription(*selected), 8.0f * textScale, 0xFF263746);
+            text(panelX + 11.0f, footerY + (bigMap ? 35.0f : 19.0f),
                 "X " + std::to_string(selected->x) + "  Z " +
                 std::to_string(selected->z) + "  " +
                 std::to_string(static_cast<int>(selected->distance)) + "m",
-                7.0f * textScale, 0xFF9EABB9);
+                7.0f * textScale, 0xFF536A7A);
         } else {
             text(panelX + 11.0f, footerY + 9.0f,
-                "NO STRUCTURE SELECTED", 8.0f * textScale, 0xFF9EABB9);
+                "NO STRUCTURE SELECTED", 8.0f * textScale, 0xFF536A7A);
         }
     } else {
-        text(panelX + 11.0f, footerY + 6.0f,
-            std::to_string(markers.size()) + " STRUCTURE ATTEMPTS",
-            8.0f * textScale, 0xFFEAF0F5);
-        text(panelX + 11.0f, footerY + 19.0f,
-            "CANDIDATES - BIOME NOT VERIFIED",
-            6.6f * textScale, 0xFFFFC56A);
+        text(panelX + 11.0f, footerY + (bigMap ? 20.0f : 6.0f),
+            std::to_string(markers.size()) + " STRUCTURE CANDIDATES",
+            8.0f * textScale, 0xFF263746);
+        text(panelX + 11.0f, footerY + (bigMap ? 35.0f : 19.0f),
+            "BIOME / TERRAIN VALIDATION PENDING",
+            6.6f * textScale, 0xFF8B6330);
     }
 
     pl::modmenu::submitDrawCommands(moduleId, commands);
@@ -752,7 +759,7 @@ void SeedMapModule::drawMap(float screenW, float screenH,
 
 bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     if (!enabled) return false;
-    std::lock_guard lock(m_stateMutex);
+    std::unique_lock lock(m_stateMutex);
     if (!m_showMap) return false;
 
     const float x = event.x;
@@ -762,6 +769,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     const bool insideFeatures = m_lastFeaturesWidth > 0.0f &&
         x >= m_lastFeaturesLeft && x <= m_lastFeaturesLeft + m_lastFeaturesWidth &&
         y >= m_lastFeaturesTop && y <= m_lastFeaturesTop + m_lastFeaturesHeight;
+    bool requestPasteSeed = false;
     const bool insideMap = x >= m_lastMapLeft && x <= m_lastMapLeft + m_lastMapWidth &&
         y >= m_lastMapTop && y <= m_lastMapTop + m_lastMapHeight;
 
@@ -879,7 +887,13 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     if (tap) {
         if (inside) {
             const float featuresButtonY = m_lastPanelY + 66.0f;
-            if (m_lastBigMap && x >= m_lastPanelX + 8.0f && x <= m_lastPanelX + 104.0f &&
+            if (m_lastBigMap &&
+                x >= m_lastPanelX + m_lastPanelSize * 0.58f &&
+                x <= m_lastPanelX + m_lastPanelSize * 0.69f &&
+                y >= m_lastPanelY + 4.0f && y <= m_lastPanelY + 29.0f) {
+                requestPasteSeed = true;
+            } else if (m_lastBigMap && x >= m_lastPanelX + 8.0f &&
+                x <= m_lastPanelX + 104.0f &&
                 y >= featuresButtonY - 3.0f && y <= featuresButtonY + 12.0f) {
                 m_featuresExpanded = !m_featuresExpanded;
             } else if (insideFeatures && m_lastFeaturesHeight > 0.0f) {
@@ -964,6 +978,8 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     m_touchMoved = false;
     m_pinchActive = false;
     m_secondPointerId = -1;
+    lock.unlock();
+    if (requestPasteSeed) pasteClipboardSeed();
     return true;
 }
 
