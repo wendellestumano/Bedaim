@@ -482,7 +482,7 @@ void SeedMapModule::drawMap(float screenW, float screenH,
             ? std::clamp(std::min(screenH * 0.92f, 1400.0f) * 0.075f, 52.0f, 76.0f)
             : std::clamp(panelSize * 0.19f, 40.0f, 54.0f));
         m_lastMapWidth = panelSize - 12.0f - m_lastFeaturesWidth;
-        m_lastMapHeight = panelHeight - headerH - footerH;
+        m_lastMapHeight = m_lastFeaturesHeight;
         m_lastBigMap = bigMap;
     }
 
@@ -498,9 +498,9 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     const float mapTop = panelY + headerH;
     const float mapBottom = panelY + panelHeight - footerH;
     const float mapHeight = std::max(1.0f, mapBottom - mapTop);
-    const float mapWidth = std::max(1.0f, panelSize - 12.0f - featuresWidth);
     const float featuresWidth = bigMap && featuresExpanded
         ? std::clamp(panelSize * 0.28f, 132.0f, 210.0f) : 0.0f;
+    const float mapWidth = std::max(1.0f, panelSize - 12.0f - featuresWidth);
     const float mapLeft = panelX + 6.0f + featuresWidth;
     const float mapRight = mapLeft + mapWidth;
     const float centerX = (mapLeft + mapRight) * 0.5f;
