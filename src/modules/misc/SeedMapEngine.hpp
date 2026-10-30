@@ -53,6 +53,6 @@ std::vector<StructureMarker> findStructureAttempts(
     int centerX,
     int centerZ,
     int radiusBlocks,
-    std::size_t maxMarkers = 256);
+    std::size_t maxMarkers = 512);
 
 } // namespace bedaim::seedmap
