@@ -205,6 +205,7 @@ class MainActivity : Activity() {
         refresh()
     }
 
+    @Suppress("DEPRECATION")
     private fun chooseApk() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -215,7 +216,7 @@ class MainActivity : Activity() {
         }
     }
 
-    @Deprecated("Using the platform document picker for broad Android compatibility")
+    @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != REQUEST_APK || resultCode != RESULT_OK) return
@@ -277,7 +278,7 @@ class MainActivity : Activity() {
                 val destination = ApkLab.duplicateAsBackup(source, File(filesDir, "workspace/apk-backups"))
                 runOnUiThread {
                     Toast.makeText(this, "Backup salvo: ${destination.name}", Toast.LENGTH_LONG).show()
-                    apkReportValue.append("\\n\\nBackup: ${destination.absolutePath}")
+                    apkReportValue.append("\n\nBackup: ${destination.absolutePath}")
                 }
             } catch (error: Throwable) {
                 runOnUiThread {
