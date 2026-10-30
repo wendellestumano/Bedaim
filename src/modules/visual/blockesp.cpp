@@ -187,7 +187,10 @@ const std::vector<std::string>& utilityBlockNames() {
         "fletching_table","grindstone","composter","lectern","beacon","bell","jukebox",
         "note_block","observer","piston","sticky_piston","crafter","redstone_block",
         "lever","target","block_button","redstone_torch","redstone_wire","redstone_lamp",
-        "block_pressure_plate"
+        "block_pressure_plate",
+        // Additional BlockESP targets also exposed by Apollon.
+        "bed","creaking_heart","shelf_facing_east","shelf_facing_north",
+        "shelf_facing_south","shelf_facing_west","shelf_mushroom"
     };
     return names;
 }
@@ -264,7 +267,8 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
              name == "jukebox" || name == "note_block" || name == "observer" ||
              name == "piston" || name == "sticky_piston" || name == "crafter" ||
              name == "redstone_block" || name == "redstone_torch" || name == "redstone_wire" || name == "redstone_lamp" || name == "lever" || name.find("button") != std::string_view::npos ||
-             name.find("pressure_plate") != std::string_view::npos || name == "target") kind = Kind::Utility;
+             name.find("pressure_plate") != std::string_view::npos || name == "target" ||
+             name == "bed" || name == "creaking_heart" || name.starts_with("shelf_")) kind = Kind::Utility;
     else return false;
     return true;
 }
@@ -342,6 +346,9 @@ std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) co
     if (name == "bell") return 0xFFFFD05Au;
     if (name == "jukebox" || name == "note_block") return 0xFF9A633Au;
     if (name == "observer" || name == "piston" || name == "sticky_piston" || name == "crafter") return 0xFF8E9A9Fu;
+    if (name == "bed") return 0xFF5FA8E8u;
+    if (name == "creaking_heart") return 0xFFB06B52u;
+    if (name.starts_with("shelf_")) return 0xFFD5A76Bu;
     return utilityColor;
 }
 void BlockEspModule::clearCache() {
