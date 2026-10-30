@@ -651,6 +651,7 @@ void SeedMapModule::drawMap(float screenW, float screenH,
 bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     if (!enabled) return false;
     std::lock_guard lock(m_stateMutex);
+    if (!m_showMap) return false;
 
     const float x = event.x;
     const float y = event.y;
@@ -670,6 +671,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
         m_touchStartHudX = hudPosX;
         m_touchStartHudY = hudPosY;
         m_touchStartedOnMap = insideMap;
+        m_touchMoved = false;
         return true;
     }
 
@@ -677,6 +679,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
 
     if (event.action == kActionMove) {
         if (std::fabs(x - m_touchDownX) > 5.0f || std::fabs(y - m_touchDownY) > 5.0f) {
+            m_touchMoved = true;
             if (m_touchStartedOnMap) {
                 const float scale = std::min(m_lastMapWidth, m_lastMapHeight) /
                     (2.0f * std::max(1.0f, m_lastMapRadius));
@@ -699,14 +702,14 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     if (event.action == kActionCancel) {
         m_touchTracking = false;
         m_touchPointerId = -1;
+        m_touchStartedOnMap = false;
+        m_touchMoved = false;
         return true;
     }
 
     if (event.action != kActionUp) return true;
 
-    const float dx = x - m_touchDownX;
-    const float dy = y - m_touchDownY;
-    const bool tap = (dx * dx + dy * dy) <= 64.0f;
+    const bool tap = !m_touchMoved;
     if (tap) {
         if (inside) {
             const float buttonSize = std::clamp(m_lastPanelSize * 0.13f, 24.0f, 34.0f);
@@ -743,7 +746,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
                     const float viewCenterZ = static_cast<float>(m_playerZ + m_panOffsetZ);
                     const float scale = std::min(mapWidth, mapHeight) /
                         (2.0f * std::max(1.0f, m_lastMapRadius));
-                    float bestDistanceSquared = 14.0f * 14.0f;
+                    float bestDistanceSquared = 24.0f * 24.0f;
                     const bedaim::seedmap::StructureMarker* best = nullptr;
                     for (const auto& marker : m_markers) {
                         const float px = cx + (marker.x - viewCenterX) * scale;
@@ -771,6 +774,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     m_touchTracking = false;
     m_touchPointerId = -1;
     m_touchStartedOnMap = false;
+    m_touchMoved = false;
     return true;
 }
 
