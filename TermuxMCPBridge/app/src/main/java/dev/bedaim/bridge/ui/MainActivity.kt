@@ -157,7 +157,7 @@ class MainActivity : Activity() {
         val termuxCard = card(root)
         sectionTitle(termuxCard, "TERMUX TOOLCHAIN")
         termuxCard.addView(label(
-            "Verifica ferramentas instaladas sem aceitar comandos arbitrários. Requer a permissão RUN_COMMAND e allow-external-apps=true no Termux.",
+            "Verifica ferramentas instaladas sem aceitar comandos arbitrários. Para Apktool, conceda RUN_COMMAND, defina allow-external-apps=true e execute termux-setup-storage no Termux.",
             12f, secondaryText
         ))
         actionButton(termuxCard, "VERIFICAR APKTOOL / AAPT / GIT / PYTHON / CLANG", true) {
@@ -446,10 +446,10 @@ class MainActivity : Activity() {
                 val exportName = "${safeBase}_${System.currentTimeMillis()}.apk"
                 val relativePath = Environment.DIRECTORY_DOWNLOADS + "/BedAimBridge/"
                 val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, exportName)
-                    put(MediaStore.Downloads.MIME_TYPE, "application/vnd.android.package-archive")
-                    put(MediaStore.Downloads.RELATIVE_PATH, relativePath)
-                    put(MediaStore.Downloads.IS_PENDING, 1)
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, exportName)
+                    put(MediaStore.MediaColumns.MIME_TYPE, "application/vnd.android.package-archive")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath)
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
                 }
                 val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                     ?: error("Não foi possível criar o APK em Downloads.")
