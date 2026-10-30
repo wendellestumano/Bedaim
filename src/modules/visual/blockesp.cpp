@@ -32,6 +32,14 @@ std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
 using BlockUpdateFn = void (*)(void*, void*);
 void* g_blockUpdateOriginal = nullptr;
 bedrocktools::hooks::Handle g_blockUpdateHook = nullptr;
+
+// Apollon also hooks specialized block-event dispatchers. Their wrappers feed
+// the same candidate routine as its generic update hook, but use two distinct
+// position layouts (a BlockPos at +0x8 or a float Vec3 at +0x10).
+constexpr std::size_t kApollonEventHookCount = 4u;
+std::array<void*, kApollonEventHookCount> g_apollonEventOriginals{};
+std::array<bedrocktools::hooks::Handle, kApollonEventHookCount> g_apollonEventHooks{};
+
 std::atomic<bool> g_blockEspCaptureEvents{false};
 
 constexpr std::uintptr_t kBlockSourceGetBlockRva = 0x0FB91918u;
@@ -56,17 +64,15 @@ void clearBlockEventCandidates() {
     g_blockEventCandidates.count = 0u;
 }
 
-void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
-    if (!updateObject || reinterpret_cast<std::uintptr_t>(updateObject) <= 0x1000u ||
-        !source || reinterpret_cast<std::uintptr_t>(source) <= 0x1000u) return;
+bool isValidEventPosition(const bedrocktools::sdk::BlockPos& position) noexcept {
+    return position.x >= -30000000 && position.x <= 30000000 &&
+           position.z >= -30000000 && position.z <= 30000000 &&
+           position.y >= -4096 && position.y <= 4096;
+}
 
-    // The Apollon callback passes updateObject + 8 as a three-int BlockPos.
-    // Copy it immediately: the engine may destroy or recycle the event object.
-    bedrocktools::sdk::BlockPos position{};
-    std::memcpy(&position, static_cast<const std::uint8_t*>(updateObject) + 8u, sizeof(position));
-    if (position.x < -30000000 || position.x > 30000000 ||
-        position.z < -30000000 || position.z > 30000000 ||
-        position.y < -4096 || position.y > 4096) return;
+void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& position) noexcept {
+    if (!source || reinterpret_cast<std::uintptr_t>(source) <= 0x1000u ||
+        !isValidEventPosition(position)) return;
 
     std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
     // Prefer recent updates over a backlog of candidates from older chunks.
@@ -77,6 +83,37 @@ void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
     const std::size_t tail = (g_blockEventCandidates.head + g_blockEventCandidates.count) % kMaxEventCandidates;
     g_blockEventCandidates.candidates[tail] = BlockEventCandidate{source, position};
     ++g_blockEventCandidates.count;
+}
+
+void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
+    if (!updateObject || reinterpret_cast<std::uintptr_t>(updateObject) <= 0x1000u) return;
+
+    // The Apollon generic callback passes updateObject + 8 as a three-int BlockPos.
+    // Copy it immediately: the engine may destroy or recycle the event object.
+    bedrocktools::sdk::BlockPos position{};
+    std::memcpy(&position, static_cast<const std::uint8_t*>(updateObject) + 8u, sizeof(position));
+    enqueueBlockEventPosition(source, position);
+}
+
+void enqueueApollonVectorCandidate(void* eventObject, void* source) noexcept {
+    if (!eventObject || reinterpret_cast<std::uintptr_t>(eventObject) <= 0x1000u) return;
+
+    // Apollon's spawner callbacks convert the float Vec3 at eventObject + 0x10
+    // to integer block coordinates (FCVTZS), then pass those coordinates to
+    // its common candidate insertion routine.
+    std::array<float, 3> coordinates{};
+    std::memcpy(coordinates.data(), static_cast<const std::uint8_t*>(eventObject) + 0x10u,
+                sizeof(coordinates));
+    for (const float coordinate : coordinates) {
+        if (!std::isfinite(coordinate) || coordinate < -30000000.0f || coordinate > 30000000.0f)
+            return;
+    }
+
+    const bedrocktools::sdk::BlockPos position{
+        static_cast<int>(coordinates[0]),
+        static_cast<int>(coordinates[1]),
+        static_cast<int>(coordinates[2])};
+    enqueueBlockEventPosition(source, position);
 }
 
 std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t maximum, void* expectedSource) {
@@ -101,6 +138,92 @@ void blockUpdateHook(void* updateObject, void* blockSource) {
     // Always forward the original call, even while BlockESP is disabled.
     const auto original = reinterpret_cast<BlockUpdateFn>(g_blockUpdateOriginal);
     if (original) original(updateObject, blockSource);
+}
+
+void blockEventVectorHook0(void* eventObject, void* blockSource) {
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
+        enqueueApollonVectorCandidate(eventObject, blockSource);
+    const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[0]);
+    if (original) original(eventObject, blockSource);
+}
+void blockEventVectorHook1(void* eventObject, void* blockSource) {
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
+        enqueueApollonVectorCandidate(eventObject, blockSource);
+    const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[1]);
+    if (original) original(eventObject, blockSource);
+}
+void blockEventPositionHook0(void* eventObject, void* blockSource) {
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
+        enqueueBlockEventCandidate(eventObject, blockSource);
+    const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[2]);
+    if (original) original(eventObject, blockSource);
+}
+void blockEventPositionHook1(void* eventObject, void* blockSource) {
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
+        enqueueBlockEventCandidate(eventObject, blockSource);
+    const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[3]);
+    if (original) original(eventObject, blockSource);
+}
+
+bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
+                             std::uintptr_t rva, const std::uint32_t (&expected)[4],
+                             void* replacement) {
+    if (index >= kApollonEventHookCount) return false;
+    if (g_apollonEventHooks[index]) return true;
+
+    auto* target = reinterpret_cast<std::uint8_t*>(engineBase + rva);
+    if (std::memcmp(target, expected, sizeof(std::uint32_t) * 4u) != 0) return false;
+
+    g_apollonEventOriginals[index] = nullptr;
+    auto hook = bedrocktools::hooks::install(
+        target, replacement, &g_apollonEventOriginals[index]);
+    if (!hook || !g_apollonEventOriginals[index]) {
+        if (hook) bedrocktools::hooks::remove(hook);
+        g_apollonEventOriginals[index] = nullptr;
+        return false;
+    }
+    g_apollonEventHooks[index] = hook;
+    return true;
+}
+
+bool installApollonBlockEventHooks() {
+    const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
+    if (!getBlock) return false;
+
+    const auto getBlockAddress = reinterpret_cast<std::uintptr_t>(getBlock);
+    if (getBlockAddress <= kBlockSourceGetBlockRva) return false;
+    const auto engineBase = getBlockAddress - kBlockSourceGetBlockRva;
+
+    // These RVAs and prologues were verified against the same libminecraftpe.so
+    // bundled with Apollon. Each callback mirrors the matching Apollon wrapper:
+    // two event types store a float Vec3 at +0x10; two store BlockPos at +0x8.
+    constexpr std::uint32_t mobSpawnerPrologue[] = {
+        0xA9BE7BFDu, 0xA9014FF4u, 0x910003FDu, 0xAA0003F4u
+    }; // 0x106D0930
+    constexpr std::uint32_t trialSpawnerPrologue[] = {
+        0xA9BD7BFDu, 0xF9000BF5u, 0xA9024FF4u, 0x910003FDu
+    }; // 0x1063617C
+    constexpr std::uint32_t vaultPrologue[] = {
+        0xFC170FECu, 0x6D012BEBu, 0x6D0223E9u, 0xA9037BFDu
+    }; // 0x106376D4
+    constexpr std::uint32_t furnacePrologue[] = {
+        0xA9BA7BFDu, 0xF9000BFCu, 0xA90267FAu, 0xA9035FF8u
+    }; // 0x106C5628
+
+    bool installedAny = false;
+    installedAny |= installApollonEventHook(0u, engineBase, 0x106D0930u,
+                                            mobSpawnerPrologue,
+                                            reinterpret_cast<void*>(blockEventVectorHook0));
+    installedAny |= installApollonEventHook(1u, engineBase, 0x1063617Cu,
+                                            trialSpawnerPrologue,
+                                            reinterpret_cast<void*>(blockEventVectorHook1));
+    installedAny |= installApollonEventHook(2u, engineBase, 0x106376D4u,
+                                            vaultPrologue,
+                                            reinterpret_cast<void*>(blockEventPositionHook0));
+    installedAny |= installApollonEventHook(3u, engineBase, 0x106C5628u,
+                                            furnacePrologue,
+                                            reinterpret_cast<void*>(blockEventPositionHook1));
+    return installedAny;
 }
 
 bool installBlockUpdateHook() {
@@ -373,6 +496,7 @@ void BlockEspModule::clearCache() {
 void BlockEspModule::onInit() {
     resolveBlockGetBlock();
     installBlockUpdateHook();
+    installApollonBlockEventHooks();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
 }
@@ -416,6 +540,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
         installBlockUpdateHook();
+        installApollonBlockEventHooks();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
@@ -734,7 +859,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // Event observations are serviced first, but validated on this tick using
     // the current BlockSource. This avoids invoking engine getters/classifiers
     // from inside the hooked update method.
-    const std::size_t eventBudget = std::min<std::size_t>(512u, scanBudget / 8u);
+    const std::size_t eventBudget = std::min<std::size_t>(1024u, scanBudget / 4u);
     const auto eventCandidates = drainBlockEventCandidates(eventBudget, source);
     for (const auto& candidate : eventCandidates) inspectBlock(candidate);
 
