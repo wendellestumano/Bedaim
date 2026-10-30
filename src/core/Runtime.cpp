@@ -105,9 +105,13 @@ bool Runtime::install() {
     if (installed.load(std::memory_order_acquire)) return true;
     if (!resolved.load(std::memory_order_acquire) && !resolveSignatures()) return false;
     bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "installing game hooks and modules");
-    if (!gamehooks::install()) {
-        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Error, "Runtime", "game hook installation failed");
-        return false;
+    // Module registration must not depend on every optional gameplay hook being
+    // available. On a new Minecraft build, one stale signature used to abort this
+    // function before the launcher ever received the module list.
+    const bool gameHooksReady = gamehooks::install();
+    if (!gameHooksReady) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning,
+            "Runtime", "one or more required gameplay hooks are unavailable; registering modules in degraded mode");
     }
     registerAllModules();
     wireEvents();
@@ -115,7 +119,9 @@ bool Runtime::install() {
     bedrocktools::config::ConfigManager::get().load();
     registerModulesWithLauncher();
     installed.store(true, std::memory_order_release);
-    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime", "runtime installed and launcher modules registered");
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "Runtime",
+        gameHooksReady ? "runtime installed and launcher modules registered"
+                       : "modules registered; gameplay hooks are running in degraded mode");
     return true;
 }
 
