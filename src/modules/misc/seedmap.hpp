@@ -1,12 +1,19 @@
 #pragma once
 
 #include "../Module.hpp"
+#include "SeedMapEngine.hpp"
+
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/network/Packet.hpp>
+#include <pl/Input.hpp>
+
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class SeedMapModule final : public Module {
 public:
@@ -14,6 +21,8 @@ public:
 
     void onInit() override;
     void onEnable() override;
+    void onDisable() override;
+    void onFrame() override;
     void onMenuRegistered() override;
     bool onMenuConfigChanged(std::string_view key, std::string_view value) override;
     void loadConfig(const nlohmann::json& json) override;
@@ -24,19 +33,59 @@ public:
 
 private:
     bool installTextHook();
-    bool openSeedMap();
     bool pasteClipboardSeed();
+    bool onTouch(const pl::input::TouchEvent& event);
+
     static std::string parseSeedAnnouncement(std::string_view message);
+    static bool parseSeedBits(std::string_view value, std::uint64_t& out);
     static bool isValidSeedNumber(std::string_view value);
     static std::string readClipboardText();
-    static std::string urlEncode(std::string_view value);
-    static bool openUrlInBrowser(std::string_view url);
+
+    void refreshMarkers(std::uint64_t seed, bedaim::seedmap::Dimension dimension,
+                        int centerX, int centerZ, int radius);
+    void drawMap(float screenW, float screenH,
+                 const std::vector<bedaim::seedmap::StructureMarker>& markers,
+                 int playerX, int playerZ, bedaim::seedmap::Dimension dimension,
+                 bool hasSeed);
 
     mutable std::mutex m_stateMutex;
     std::string m_seed;
-    std::string m_version{"26.50"};
-    std::string m_dimension{"overworld"};
+    std::string m_dimensionName{"overworld"};
+    bedaim::seedmap::Dimension m_dimension{bedaim::seedmap::Dimension::Overworld};
     int m_playerX = 0;
     int m_playerZ = 0;
     bool m_hasPlayerPosition = false;
+    bool m_markersDirty = true;
+    std::uint64_t m_cachedSeed = 0;
+    int m_cachedCenterX = 0;
+    int m_cachedCenterZ = 0;
+    bedaim::seedmap::Dimension m_cachedDimension{bedaim::seedmap::Dimension::Overworld};
+    std::chrono::steady_clock::time_point m_lastMarkerRefresh{};
+    std::vector<bedaim::seedmap::StructureMarker> m_markers;
+
+    bool m_showMap = true;
+    bool m_showStructures = true;
+    bool m_showChunkGrid = true;
+    bool m_showCoordinates = true;
+    bool m_bigMap = false;
+    float hudPosX = 18.0f;
+    float hudPosY = 82.0f;
+    float m_mapSize = 230.0f;
+    int m_mapRadiusBlocks = 1024;
+
+    bool m_hasSelectedMarker = false;
+    int m_selectedMarkerX = 0;
+    int m_selectedMarkerZ = 0;
+
+    bool m_touchTracking = false;
+    int m_touchPointerId = -1;
+    float m_touchDownX = 0.0f;
+    float m_touchDownY = 0.0f;
+    float m_touchStartHudX = 0.0f;
+    float m_touchStartHudY = 0.0f;
+    float m_lastPanelX = 0.0f;
+    float m_lastPanelY = 0.0f;
+    float m_lastPanelSize = 0.0f;
+    float m_lastMapRadius = 0.0f;
+    bool m_lastBigMap = false;
 };
