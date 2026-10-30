@@ -596,6 +596,12 @@ bool BlockEspModule::isKindEnabled(Kind kind) const noexcept {
 }
 bool BlockEspModule::isBlockEnabled(const Outline& outline) const {
     if (outline.kind != Kind::Utility) return isKindEnabled(outline.kind);
+
+    // The master utility toggle must gate every individually configurable
+    // Apollon/Bedaim workstation target. Previously this setting was persisted
+    // and exposed in the config but never consulted by the renderer filter.
+    if (!showUtilityBlocks) return false;
+
     const auto it = m_utilityFilters.find(outline.blockName);
     return it != m_utilityFilters.end() && it->second;
 }
@@ -1244,6 +1250,7 @@ void BlockEspModule::onMenuRegistered() {
     toggle("showDroppers","Droppers","Droppers.",true,"types");
     toggle("showBarrels","Barrels","Barrels.",true,"types");
     toggle("showFurnaces","Furnaces","Furnaces, blast furnaces and smokers.",true,"types");
+    toggle("showUtilityBlocks","Utility blocks","Master switch for workstations and other individually configurable utility targets.",true,"types");
     for (const auto& name : utilityBlockNames()) {
         const std::string key = "showBlock_" + name;
         const std::string title = utilityTitle(name);
