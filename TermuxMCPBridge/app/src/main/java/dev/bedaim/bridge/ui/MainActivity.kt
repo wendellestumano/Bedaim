@@ -170,6 +170,7 @@ class MainActivity : Activity() {
         workspaceValue = label("Preparando espaço de trabalho…", 12f, primaryText)
         workspaceCard.addView(workspaceValue)
         actionButton(workspaceCard, "ATUALIZAR ARQUIVOS", false) { refreshWorkspace() }
+        actionButton(workspaceCard, "IMPORTAR ARQUIVO PARA WORKSPACE", true) { chooseWorkspaceImport() }
         actionButton(workspaceCard, "ABRIR PASTA NO GERENCIADOR", false) {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
             runCatching { startActivity(intent) }.onFailure {
@@ -195,6 +196,7 @@ class MainActivity : Activity() {
         actionButton(apkCard, "SELECIONAR APK", true) { chooseApk() }
         actionButton(apkCard, "ANALISAR NOVAMENTE", false) { selectedApk?.let { analyzeApk(it) } }
         actionButton(apkCard, "DUPLICAR APK COMO BACKUP", false) { duplicateSelectedApk() }
+        actionButton(apkCard, "EXPORTAR APK PARA DOWNLOADS", false) { exportSelectedApk() }
         actionButton(apkCard, "COPIAR RELATÓRIO", false) {
             if (selectedApk == null) {
                 Toast.makeText(this, "Selecione um APK primeiro.", Toast.LENGTH_SHORT).show()
@@ -262,8 +264,17 @@ class MainActivity : Activity() {
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_APK || resultCode != RESULT_OK) return
+        if (resultCode != RESULT_OK) return
         val uri = data?.data ?: return
+        if (requestCode == REQUEST_WORKSPACE_IMPORT) {
+            importWorkspaceFile(uri)
+            return
+        }
+        if (requestCode == REQUEST_APK_EXPORT) {
+            exportApkToUri(uri)
+            return
+        }
+        if (requestCode != REQUEST_APK) return
         apkReportValue.text = "Importando APK selecionado…"
         Thread {
             try {
@@ -293,6 +304,83 @@ class MainActivity : Activity() {
                 runOnUiThread {
                     apkReportValue.text = "Falha na análise: ${error.message ?: error.javaClass.simpleName}"
                     Toast.makeText(this, "Não foi possível analisar o APK.", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun chooseWorkspaceImport() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        @Suppress("DEPRECATION")
+        runCatching { startActivityForResult(intent, REQUEST_WORKSPACE_IMPORT) }.onFailure {
+            Toast.makeText(this, "Não foi possível abrir o seletor de arquivos.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun importWorkspaceFile(uri: Uri) {
+        Thread {
+            try {
+                val directory = File(filesDir, "workspace/imports").apply { mkdirs() }.canonicalFile
+                val destination = File(directory, "import_${System.currentTimeMillis()}.bin").canonicalFile
+                require(destination.parentFile == directory) { "Destino inválido." }
+                val input = contentResolver.openInputStream(uri) ?: error("Não foi possível abrir o arquivo.")
+                input.use { source ->
+                    FileOutputStream(destination).use { output ->
+                        val buffer = ByteArray(32 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val count = source.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= 32L * 1024L * 1024L) { "Limite de importação: 32 MiB." }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+                runOnUiThread {
+                    refreshWorkspace()
+                    Toast.makeText(this, "Arquivo importado para workspace/imports.", Toast.LENGTH_LONG).show()
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    Toast.makeText(this, "Falha na importação: ${error.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun exportSelectedApk() {
+        val source = selectedApk
+        if (source == null || !source.isFile) {
+            Toast.makeText(this, "Selecione um APK primeiro.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/vnd.android.package-archive"
+            putExtra(Intent.EXTRA_TITLE, source.name)
+        }
+        @Suppress("DEPRECATION")
+        runCatching { startActivityForResult(intent, REQUEST_APK_EXPORT) }.onFailure {
+            Toast.makeText(this, "Não foi possível abrir o exportador de arquivos.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun exportApkToUri(uri: Uri) {
+        val source = selectedApk ?: return
+        Thread {
+            try {
+                val output = contentResolver.openOutputStream(uri) ?: error("Não foi possível criar o destino.")
+                source.inputStream().use { input -> output.use { input.copyTo(it) } }
+                runOnUiThread {
+                    Toast.makeText(this, "APK exportado com sucesso.", Toast.LENGTH_LONG).show()
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    Toast.makeText(this, "Falha na exportação: ${error.message}", Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -489,5 +577,7 @@ class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_APK = 4102
+        private const val REQUEST_WORKSPACE_IMPORT = 4103
+        private const val REQUEST_APK_EXPORT = 4104
     }
 }
