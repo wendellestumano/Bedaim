@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace bedaim::seedmap {
 namespace {
@@ -198,6 +199,10 @@ std::vector<StructureMarker> findStructureAttempts(
 
     for (const auto& config : kConfigs) {
         if (config.dimension != dimension) continue;
+        // Buried treasure is extremely dense (one attempt every 4 chunks).
+        // Like Chunkbase, keep this layer hidden until the user zooms in.
+        if (config.type == StructureType::BuriedTreasure && radiusBlocks > 512)
+            continue;
         const int regionBlocks = config.spacing * 16;
         const int rx0 = floorDiv(centerX - radiusBlocks, regionBlocks);
         const int rx1 = floorDiv(centerX + radiusBlocks, regionBlocks);
