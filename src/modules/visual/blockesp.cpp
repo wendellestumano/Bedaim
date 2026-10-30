@@ -59,7 +59,7 @@ std::atomic<std::uint64_t> g_genericBlockUpdateCalls{0};
 
 std::atomic<bool> g_blockEspCaptureEvents{false};
 
-constexpr std::uintptr_t kApollonBlockUpdateRva = 0x106EEED4u;
+constexpr std::uintptr_t kApollonBlockUpdateRva = 0x10F7FDE0u;
 
 // Use the real ELF image base. BlockSourceGetBlock may move between Bedrock
 // releases, so reconstructing the base from an RVA copied from Apollon's
@@ -155,11 +155,16 @@ std::vector<BlockEventCandidate> drainBlockEventCandidates(std::size_t maximum, 
 
 void blockUpdateHook(void* updateObject, void* blockSource) {
     g_genericBlockUpdateCalls.fetch_add(1u, std::memory_order_relaxed);
-    if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource)
+    // The generic event broadcaster can dispatch block events whose second
+    // context argument is null. The event object's BlockPos is still valid;
+    // candidates are resolved later against the active player BlockSource.
+    // Do not use the optional context pointer as a capture gate.
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
         enqueueBlockEventCandidate(updateObject, blockSource);
 
-    // This target is a void, two-argument engine routine in the analyzed build.
-    // Always forward the original call, even while BlockESP is disabled.
+    // The 26.60 target is the matching two-argument event broadcaster. The
+    // Apollon wrapper reads the BlockPos from argument 0 + 8 and forwards both
+    // original arguments unchanged. Always forward, even while BlockESP is off.
     const auto original = reinterpret_cast<BlockUpdateFn>(g_blockUpdateOriginal);
     if (original) original(updateObject, blockSource);
 }
@@ -385,8 +390,10 @@ bool installBlockUpdateHook() {
     auto* target = reinterpret_cast<std::uint8_t*>(engineBase + kApollonBlockUpdateRva);
     if (!isAddressInMinecraftImage(target, engineBase)) return false;
 
-    // Version guard: the offset is only valid for the exact 1.26.52.3 engine
-    // layout analyzed from Apollon's bundled libminecraftpe.so.
+    // Version guard for Minecraft 1.26.60. The target RVA was remapped by
+    // matching the listener-vector dispatch flow against Apollon's original
+    // 1.26.52.3 target; the function's first four ARM64 instructions are also
+    // checked below before any detour is installed.
     constexpr std::uint32_t expectedPrologue[] = {
         0xD10303FFu, // sub sp, sp, #0xc0
         0xA9067BFDu, // stp x29, x30, [sp, #0x60]
@@ -665,12 +672,13 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
-    // Preserve Apollon's bounded candidate queue and tick-side revalidation.
-    // The old Apollon fixed RVAs are still not valid evidence for 26.60, so the
-    // specialized dispatchers remain dormant until their current engine entries
-    // are mapped. For now, use the upstream 26.60 signature for the vanilla
-    // BlockSource tessellation lookup as an event-driven source of candidates.
+    // EXPERIMENTAL: restore the native capture installation used by Apollon v6.7
+    // in PR #123. The original RVAs/prologue guards are intentionally retained
+    // for this first compatibility test; a 26.60 mismatch must fail closed.
+    // Keep the 26.60 tessellation hook and player-tick validation as fallbacks.
     resolveBlockGetBlock();
+    installBlockUpdateHook();
+    installApollonBlockEventHooks();
     installBlockSourceTessellationGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
@@ -729,12 +737,18 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
+    const bool nativeHooksMissing = !g_blockUpdateHook;
     if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
-         !g_blockSourceTessellationGetBlockHook) &&
+         !g_blockSourceTessellationGetBlockHook || nativeHooksMissing) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
         installBlockSourceTessellationGetBlockHook();
+        // Signature resolution may finish after module initialization. Retry
+        // native hooks on the same bounded cadence instead of permanently
+        // missing the event path when the first onInit attempt runs too early.
+        installBlockUpdateHook();
+        installApollonBlockEventHooks();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
@@ -748,7 +762,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::size_t installedMask = 0u;
         std::size_t offset = static_cast<std::size_t>(std::snprintf(
             state, sizeof(state),
-            "generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            "generic_hook=%s;generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            g_blockUpdateHook ? "installed" : "missing",
             static_cast<unsigned long long>(genericCalls),
             static_cast<unsigned long long>(g_blockSourceTessellationGetBlockCalls.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_blockSourceTessellationCandidateCalls.load(std::memory_order_relaxed)),
@@ -767,7 +782,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
         char detail[128]{};
         std::snprintf(detail, sizeof(detail),
-            "tessellation_lookup_hook=%s; specialized_hook_mask=0x%03llX; counts=cumulative",
+            "block_update_hook=%s; tessellation_lookup_hook=%s; specialized_hook_mask=0x%03llX; counts=cumulative",
+            g_blockUpdateHook ? "installed" : "missing",
             g_blockSourceTessellationGetBlockHook ? "installed" : "missing",
             static_cast<unsigned long long>(installedMask));
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
