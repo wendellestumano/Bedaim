@@ -1,6 +1,7 @@
 #include "blockesp.hpp"
 #include "hitbox.hpp"
 #include "../ModuleRegistry.hpp"
+#include "../../core/Diagnostics.hpp"
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
@@ -39,6 +40,8 @@ bedrocktools::hooks::Handle g_blockUpdateHook = nullptr;
 constexpr std::size_t kApollonEventHookCount = 12u;
 std::array<void*, kApollonEventHookCount> g_apollonEventOriginals{};
 std::array<bedrocktools::hooks::Handle, kApollonEventHookCount> g_apollonEventHooks{};
+std::array<std::atomic<std::uint64_t>, kApollonEventHookCount> g_apollonEventCalls{};
+std::atomic<std::uint64_t> g_genericBlockUpdateCalls{0};
 
 std::atomic<bool> g_blockEspCaptureEvents{false};
 
@@ -138,6 +141,7 @@ std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t m
 }
 
 void blockUpdateHook(void* updateObject, void* blockSource) {
+    g_genericBlockUpdateCalls.fetch_add(1u, std::memory_order_relaxed);
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource)
         enqueueBlockEventCandidate(updateObject, blockSource);
 
@@ -148,24 +152,28 @@ void blockUpdateHook(void* updateObject, void* blockSource) {
 }
 
 void blockEventVectorHook0(void* eventObject, void* blockSource) {
+    g_apollonEventCalls[0].fetch_add(1u, std::memory_order_relaxed);
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
         enqueueApollonVectorCandidate(eventObject, blockSource);
     const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[0]);
     if (original) original(eventObject, blockSource);
 }
 void blockEventVectorHook1(void* eventObject, void* blockSource) {
+    g_apollonEventCalls[1].fetch_add(1u, std::memory_order_relaxed);
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
         enqueueApollonVectorCandidate(eventObject, blockSource);
     const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[1]);
     if (original) original(eventObject, blockSource);
 }
 void blockEventPositionHook0(void* eventObject, void* blockSource) {
+    g_apollonEventCalls[2].fetch_add(1u, std::memory_order_relaxed);
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
         enqueueBlockEventCandidate(eventObject, blockSource);
     const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[2]);
     if (original) original(eventObject, blockSource);
 }
 void blockEventPositionHook1(void* eventObject, void* blockSource) {
+    g_apollonEventCalls[3].fetch_add(1u, std::memory_order_relaxed);
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
         enqueueBlockEventCandidate(eventObject, blockSource);
     const auto original = reinterpret_cast<BlockUpdateFn>(g_apollonEventOriginals[3]);
@@ -176,6 +184,7 @@ void blockEventPositionHook1(void* eventObject, void* blockSource) {
 // differ only in where the position is stored inside the event object.
 template <std::size_t Index, bool VectorCoordinates>
 void apollonAdditionalBlockEventHook(void* eventObject, void* blockSource) {
+    g_apollonEventCalls[Index].fetch_add(1u, std::memory_order_relaxed);
     if (g_blockEspCaptureEvents.load(std::memory_order_acquire)) {
         if constexpr (VectorCoordinates)
             enqueueApollonVectorCandidate(eventObject, blockSource);
@@ -626,6 +635,31 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
+
+    // Keep the native event path observable before removing the fallback scanner.
+    // The counters distinguish installed hooks from callbacks that actually fire
+    // in the current world; a later event-only migration must pass this check.
+    if ((m_tickCount % 200u) == 0u) {
+        char state[384]{};
+        const auto genericCalls = g_genericBlockUpdateCalls.load(std::memory_order_relaxed);
+        std::size_t installedMask = 0u;
+        std::size_t offset = static_cast<std::size_t>(std::snprintf(
+            state, sizeof(state), "generic=%llu;installed=",
+            static_cast<unsigned long long>(genericCalls)));
+        for (std::size_t i = 0; i < kApollonEventHookCount && offset < sizeof(state); ++i) {
+            if (g_apollonEventHooks[i]) installedMask |= (std::size_t{1} << i);
+            const int written = std::snprintf(state + offset, sizeof(state) - offset,
+                "%s%llu", i ? "," : "", static_cast<unsigned long long>(
+                    g_apollonEventCalls[i].load(std::memory_order_relaxed)));
+            if (written <= 0) break;
+            offset += static_cast<std::size_t>(written);
+        }
+        char detail[96]{};
+        std::snprintf(detail, sizeof(detail), "specialized_hook_mask=0x%03llX; 0=not installed, counts=cumulative",
+                      static_cast<unsigned long long>(installedMask));
+        bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
+            "BlockESP", "native_event_activity", state, detail);
+    }
 
     const auto p = player->position();
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return;
