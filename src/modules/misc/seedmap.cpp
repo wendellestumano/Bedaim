@@ -94,6 +94,28 @@ bool SeedMapModule::installTextHook() {
     return true;
 }
 
+bool SeedMapModule::isValidSeedNumber(std::string_view value) {
+    if (value.empty()) return false;
+    bool negative = false;
+    if (value.front() == '-' || value.front() == '+') {
+        negative = value.front() == '-';
+        value.remove_prefix(1);
+    }
+    if (value.empty()) return false;
+    if (!std::all_of(value.begin(), value.end(),
+        [](unsigned char ch) { return std::isdigit(ch); })) return false;
+
+    if (negative) {
+        std::int64_t parsed = 0;
+        const auto result = std::from_chars(value.data(), value.data() + value.size(), parsed);
+        return result.ec == std::errc{} && result.ptr == value.data() + value.size();
+    }
+
+    std::uint64_t parsed = 0;
+    const auto result = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    return result.ec == std::errc{} && result.ptr == value.data() + value.size();
+}
+
 std::string SeedMapModule::parseSeedAnnouncement(std::string_view message) {
     std::string lower(message);
     std::transform(lower.begin(), lower.end(), lower.begin(),
@@ -120,14 +142,7 @@ std::string SeedMapModule::parseSeedAnnouncement(std::string_view message) {
     if (cursor == digitsStart) return {};
 
     const auto candidate = message.substr(start, cursor - start);
-    std::int64_t parsed = 0;
-    const char* parseBegin = candidate.data();
-    if (!candidate.empty() && candidate.front() == '+') ++parseBegin;
-    const auto result = std::from_chars(parseBegin,
-        candidate.data() + candidate.size(), parsed);
-    if (result.ec != std::errc{} || result.ptr != candidate.data() + candidate.size())
-        return {};
-    return std::string(candidate);
+    return isValidSeedNumber(candidate) ? std::string(candidate) : std::string{};
 }
 
 void SeedMapModule::observeTextPacket(const bedrocktools::sdk::TextPacket& packet) {
@@ -289,9 +304,13 @@ bool SeedMapModule::openSeedMap() {
     }
 
     seed = trimCopy(seed);
+    if (seed.empty() && pasteClipboardSeed()) {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        seed = m_seed;
+    }
     if (seed.empty()) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "SeedMap",
-            "open_blocked=no_seed: enter the world seed or wait for a numeric seed announcement in chat");
+            "open_blocked=no_seed: enter a seed or copy it to the Android clipboard first");
         return false;
     }
 
@@ -347,6 +366,16 @@ void SeedMapModule::onMenuRegistered() {
     seed.maxLength = 32;
     schema.node(std::move(seed));
 
+    ConfigNodeV2 paste;
+    paste.id = "pasteClipboardSeed";
+    paste.key = "pasteClipboardSeed";
+    paste.category = "world";
+    paste.title = "Use clipboard seed";
+    paste.description = "Read the numeric seed copied from the in-game world settings or Déesse UI's Seed World Copy option.";
+    paste.type = ConfigControlTypeV2::Button;
+    paste.actionValue = "paste";
+    schema.node(std::move(paste));
+
     ConfigNodeV2 open;
     open.id = "openSeedMap";
     open.key = "openSeedMap";
@@ -376,7 +405,7 @@ void SeedMapModule::onMenuRegistered() {
     info.key = "seedCaptureInfo";
     info.category = "world";
     info.title = "Automatic seed capture";
-    info.description = "The module listens for incoming chat messages that explicitly contain 'seed' and a numeric value. If a multiplayer server does not send the seed to clients, enter it manually; this module does not guess hidden server data. " +
+    info.description = "The module listens for incoming chat messages that explicitly contain 'seed' and a numeric value. It can also read a numeric seed from the Android clipboard, including a seed copied from Déesse UI's in-game Seed World Copy option. If neither source exposes the seed, enter it manually. " +
         (hasPlayerPosition ? ("Current player position: X=" + std::to_string(playerX) +
             ", Z=" + std::to_string(playerZ) + ", dimension=" + dimensionValue + ".")
                            : "Player position is not available until you join a world.");
@@ -387,6 +416,10 @@ void SeedMapModule::onMenuRegistered() {
 }
 
 bool SeedMapModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    if (key == "pasteClipboardSeed") {
+        pasteClipboardSeed();
+        return true;
+    }
     if (key == "openSeedMap") {
         openSeedMap();
         return true;
@@ -417,3 +450,142 @@ void SeedMapModule::saveConfig(nlohmann::json& json) {
     json["seed"] = m_seed;
     json["version"] = m_version;
 }
+std::string SeedMapModule::readClipboardText() {
+    JavaVM* vm = bedrocktools::core::javaVm();
+    if (!vm) return {};
+
+    JNIEnv* env = nullptr;
+    bool attachedHere = false;
+    const jint getEnvResult = vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+    if (getEnvResult == JNI_EDETACHED) {
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return {};
+        attachedHere = true;
+    } else if (getEnvResult != JNI_OK || !env) {
+        return {};
+    }
+
+    std::string result;
+    jclass activityThread = nullptr;
+    jclass contextClass = nullptr;
+    jclass clipboardClass = nullptr;
+    jclass clipDataClass = nullptr;
+    jclass itemClass = nullptr;
+    jclass charSequenceClass = nullptr;
+    jobject application = nullptr;
+    jobject clipboardManager = nullptr;
+    jobject clipData = nullptr;
+    jobject item = nullptr;
+    jobject charSequence = nullptr;
+    jstring serviceName = nullptr;
+    jstring textString = nullptr;
+
+    activityThread = env->FindClass("android/app/ActivityThread");
+    if (activityThread && !env->ExceptionCheck()) {
+        const jmethodID currentApplication = env->GetStaticMethodID(activityThread,
+            "currentApplication", "()Landroid/app/Application;");
+        if (currentApplication && !env->ExceptionCheck())
+            application = env->CallStaticObjectMethod(activityThread, currentApplication);
+    }
+
+    if (application && !env->ExceptionCheck()) {
+        contextClass = env->FindClass("android/content/Context");
+        if (contextClass && !env->ExceptionCheck()) {
+            const jmethodID getSystemService = env->GetMethodID(contextClass,
+                "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
+            serviceName = env->NewStringUTF("clipboard");
+            if (getSystemService && serviceName && !env->ExceptionCheck())
+                clipboardManager = env->CallObjectMethod(application, getSystemService, serviceName);
+        }
+    }
+
+    if (clipboardManager && !env->ExceptionCheck()) {
+        clipboardClass = env->FindClass("android/content/ClipboardManager");
+        if (clipboardClass && !env->ExceptionCheck()) {
+            const jmethodID getPrimaryClip = env->GetMethodID(clipboardClass,
+                "getPrimaryClip", "()Landroid/content/ClipData;");
+            if (getPrimaryClip && !env->ExceptionCheck())
+                clipData = env->CallObjectMethod(clipboardManager, getPrimaryClip);
+        }
+    }
+
+    if (clipData && !env->ExceptionCheck()) {
+        clipDataClass = env->FindClass("android/content/ClipData");
+        if (clipDataClass && !env->ExceptionCheck()) {
+            const jmethodID getItemCount = env->GetMethodID(clipDataClass, "getItemCount", "()I");
+            const jmethodID getItemAt = env->GetMethodID(clipDataClass, "getItemAt",
+                "(I)Landroid/content/ClipData$Item;");
+            if (getItemCount && getItemAt && !env->ExceptionCheck()) {
+                const jint count = env->CallIntMethod(clipData, getItemCount);
+                if (count > 0 && !env->ExceptionCheck())
+                    item = env->CallObjectMethod(clipData, getItemAt, static_cast<jint>(0));
+            }
+        }
+    }
+
+    if (item && !env->ExceptionCheck()) {
+        itemClass = env->FindClass("android/content/ClipData$Item");
+        if (itemClass && !env->ExceptionCheck()) {
+            const jmethodID coerceToText = env->GetMethodID(itemClass, "coerceToText",
+                "(Landroid/content/Context;)Ljava/lang/CharSequence;");
+            if (coerceToText && !env->ExceptionCheck())
+                charSequence = env->CallObjectMethod(item, coerceToText, application);
+        }
+    }
+
+    if (charSequence && !env->ExceptionCheck()) {
+        charSequenceClass = env->GetObjectClass(charSequence);
+        if (charSequenceClass && !env->ExceptionCheck()) {
+            const jmethodID toString = env->GetMethodID(charSequenceClass, "toString", "()Ljava/lang/String;");
+            if (toString && !env->ExceptionCheck())
+                textString = static_cast<jstring>(env->CallObjectMethod(charSequence, toString));
+        }
+    }
+
+    if (textString && !env->ExceptionCheck()) {
+        const char* utf = env->GetStringUTFChars(textString, nullptr);
+        if (utf) {
+            result.assign(utf);
+            env->ReleaseStringUTFChars(textString, utf);
+        }
+    }
+
+    clearJniException(env);
+    if (textString) env->DeleteLocalRef(textString);
+    if (charSequenceClass) env->DeleteLocalRef(charSequenceClass);
+    if (charSequence) env->DeleteLocalRef(charSequence);
+    if (itemClass) env->DeleteLocalRef(itemClass);
+    if (item) env->DeleteLocalRef(item);
+    if (clipDataClass) env->DeleteLocalRef(clipDataClass);
+    if (clipData) env->DeleteLocalRef(clipData);
+    if (clipboardClass) env->DeleteLocalRef(clipboardClass);
+    if (clipboardManager) env->DeleteLocalRef(clipboardManager);
+    if (serviceName) env->DeleteLocalRef(serviceName);
+    if (contextClass) env->DeleteLocalRef(contextClass);
+    if (application) env->DeleteLocalRef(application);
+    if (activityThread) env->DeleteLocalRef(activityThread);
+    if (attachedHere) vm->DetachCurrentThread();
+    return result;
+}
+
+bool SeedMapModule::pasteClipboardSeed() {
+    const std::string clipboard = readClipboardText();
+    std::string detected = parseSeedAnnouncement(clipboard);
+    if (detected.empty()) {
+        const std::string candidate = trimCopy(clipboard);
+        if (isValidSeedNumber(candidate)) detected = candidate;
+    }
+    if (detected.empty()) {
+        bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "SeedMap",
+            "clipboard_seed=unavailable: no valid numeric seed found");
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_seed = detected;
+    }
+    bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "SeedMap",
+        "clipboard_seed=success: loaded numeric world seed");
+    return true;
+}
+
