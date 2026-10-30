@@ -7,6 +7,7 @@
 #include <bedrocktools/sdk/network/Packet.hpp>
 #include <pl/Input.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -74,6 +75,9 @@ private:
     float hudPosY = 82.0f;
     float m_mapSize = 230.0f;
     int m_mapRadiusBlocks = 1024;
+    int m_panOffsetX = 0;
+    int m_panOffsetZ = 0;
+    bool m_touchStartedOnMap = false;
 
     bool m_hasSelectedMarker = false;
     int m_selectedMarkerX = 0;
@@ -89,5 +93,9 @@ private:
     float m_lastPanelY = 0.0f;
     float m_lastPanelSize = 0.0f;
     float m_lastMapRadius = 0.0f;
+    float m_lastMapLeft = 0.0f;
+    float m_lastMapTop = 0.0f;
+    float m_lastMapWidth = 0.0f;
+    float m_lastMapHeight = 0.0f;
     bool m_lastBigMap = false;
 };
