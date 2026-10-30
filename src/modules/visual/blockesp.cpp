@@ -155,7 +155,11 @@ std::vector<BlockEventCandidate> drainBlockEventCandidates(std::size_t maximum, 
 
 void blockUpdateHook(void* updateObject, void* blockSource) {
     g_genericBlockUpdateCalls.fetch_add(1u, std::memory_order_relaxed);
-    if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource)
+    // The generic event broadcaster can dispatch block events whose second
+    // context argument is null. The event object's BlockPos is still valid;
+    // candidates are resolved later against the active player BlockSource.
+    // Do not use the optional context pointer as a capture gate.
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire))
         enqueueBlockEventCandidate(updateObject, blockSource);
 
     // The 26.60 target is the matching two-argument event broadcaster. The
