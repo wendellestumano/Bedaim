@@ -66,6 +66,8 @@ data class ApkReport(
     }
 }
 
+data class ApkExtractionResult(val directory: File, val filesExtracted: Int, val bytesExtracted: Long)
+
 object ApkLab {
     private const val MAX_APK_SIZE = 1_500L * 1024L * 1024L
     private const val MAX_ENTRIES_TO_REPORT = 30
@@ -147,6 +149,55 @@ object ApkLab {
         } else {
             packageManager.getPackageArchiveInfo(file.absolutePath, flags)
         }
+    }
+
+    fun extractArchive(source: File, destinationRoot: File): ApkExtractionResult {
+        require(source.isFile && source.length() in 1..MAX_APK_SIZE) { "APK de origem inválido." }
+        val destination = destinationRoot.canonicalFile
+        if (!destination.exists() && !destination.mkdirs()) {
+            throw IllegalStateException("Não foi possível criar a pasta de extração.")
+        }
+        var extractedFiles = 0
+        var totalBytes = 0L
+        ZipFile(source).use { zip ->
+            val entries = zip.entries()
+            var entryCount = 0
+            while (entries.hasMoreElements()) {
+                val entry = entries.nextElement()
+                entryCount++
+                require(entryCount <= 10_000) { "APK excede o limite de 10.000 entradas." }
+                val name = entry.name
+                require(name.isNotBlank() && !name.startsWith("/") && !name.startsWith("\\\\")) {
+                    "Entrada ZIP com caminho absoluto bloqueada."
+                }
+                val target = File(destination, name).canonicalFile
+                require(target.path.startsWith(destination.path + File.separator)) {
+                    "Entrada ZIP tentou escapar da pasta de extração."
+                }
+                if (entry.isDirectory) {
+                    if (!target.exists() && !target.mkdirs()) error("Falha ao criar diretório extraído.")
+                    continue
+                }
+                target.parentFile?.let { if (!it.exists() && !it.mkdirs()) error("Falha ao criar diretório pai.") }
+                var entryBytes = 0L
+                zip.getInputStream(entry).use { input ->
+                    target.outputStream().use { output ->
+                        val buffer = ByteArray(32 * 1024)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            entryBytes += count
+                            totalBytes += count
+                            require(entryBytes <= 32L * 1024L * 1024L) { "Arquivo extraído excede 32 MiB." }
+                            require(totalBytes <= 256L * 1024L * 1024L) { "Extração excede o limite total de 256 MiB." }
+                            output.write(buffer, 0, count)
+                        }
+                    }
+                }
+                extractedFiles++
+            }
+        }
+        return ApkExtractionResult(destination, extractedFiles, totalBytes)
     }
 
     fun duplicateAsBackup(source: File, backupDirectory: File): File {
