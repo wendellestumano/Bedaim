@@ -29,6 +29,15 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
+void* g_blockSourceGetBlockOriginal = nullptr;
+bedrocktools::hooks::Handle g_blockSourceGetBlockHook = nullptr;
+std::atomic<std::uint64_t> g_blockSourceGetBlockCalls{0};
+std::atomic<std::uint64_t> g_blockSourceGetBlockCandidateCalls{0};
+std::atomic<void*> g_blockEspActiveBlockSource{nullptr};
+std::atomic<int> g_blockEspCaptureCenterX{0};
+std::atomic<int> g_blockEspCaptureCenterY{0};
+std::atomic<int> g_blockEspCaptureCenterZ{0};
+thread_local bool g_blockEspInternalBlockLookup = false;
 using BlockSourceGetBlockForTessellationFn = const void* (*)(void*, const bedrocktools::sdk::BlockPos*, std::int32_t);
 void* g_blockSourceTessellationGetBlockOriginal = nullptr;
 bedrocktools::hooks::Handle g_blockSourceTessellationGetBlockHook = nullptr;
@@ -113,6 +122,47 @@ void enqueueBlockEventPosition(void* source, const bedrocktools::sdk::BlockPos& 
         g_eventCandidatesQueued.fetch_add(1u, std::memory_order_relaxed);
     if (outcome.merged)
         g_eventCandidatesMerged.fetch_add(1u, std::memory_order_relaxed);
+}
+
+// Broad fallback for supported block types that do not have an Apollon-specific
+// dispatcher. Observe normal engine BlockSource lookups, but only queue blocks
+// outside the immediate player area; the existing local scanner remains the
+// near-player path. Internal BlockESP lookups are guarded to prevent recursion.
+void* blockSourceGetBlockHook(void* blockSource,
+                              const bedrocktools::sdk::BlockPos& position) {
+    const bool internalLookup = g_blockEspInternalBlockLookup;
+    const auto original = reinterpret_cast<BlockSourceGetBlockFn>(g_blockSourceGetBlockOriginal);
+    if (!original) return nullptr;
+
+    g_blockEspInternalBlockLookup = true;
+    void* block = original(blockSource, position);
+    g_blockEspInternalBlockLookup = internalLookup;
+
+    if (internalLookup || !g_blockEspCaptureEvents.load(std::memory_order_acquire))
+        return block;
+
+    g_blockSourceGetBlockCalls.fetch_add(1u, std::memory_order_relaxed);
+    if (!blockSource || blockSource != g_blockEspActiveBlockSource.load(std::memory_order_acquire) ||
+        !block || reinterpret_cast<std::uintptr_t>(block) <= 0x1000u ||
+        !isValidEventPosition(position)) return block;
+
+    const std::int64_t dx = static_cast<std::int64_t>(position.x) -
+        g_blockEspCaptureCenterX.load(std::memory_order_relaxed);
+    const std::int64_t dy = static_cast<std::int64_t>(position.y) -
+        g_blockEspCaptureCenterY.load(std::memory_order_relaxed);
+    const std::int64_t dz = static_cast<std::int64_t>(position.z) -
+        g_blockEspCaptureCenterZ.load(std::memory_order_relaxed);
+    // Avoid spending hook/queue work on the immediate area already refreshed
+    // every other tick by BlockESP's local scanner.
+    if (dx * dx + dy * dy + dz * dz <= 64) return block;
+
+    const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(block)->fullName();
+    if (!name || name->empty() || !BlockEspModule::isSupportedBlockName(*name))
+        return block;
+
+    g_blockSourceGetBlockCandidateCalls.fetch_add(1u, std::memory_order_relaxed);
+    enqueueBlockEventPosition(blockSource, position, *name);
+    return block;
 }
 
 void enqueueBlockEventCandidate(void* updateObject, void* source) noexcept {
@@ -437,6 +487,24 @@ void resolveBlockGetBlock() {
     const auto address = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceGetBlock);
     if (address) g_blockEspGetBlock.store(reinterpret_cast<BlockSourceGetBlockFn>(address), std::memory_order_release);
 }
+bool installBlockSourceGetBlockHook() {
+    if (g_blockSourceGetBlockHook) return true;
+    const auto target = g_blockEspGetBlock.load(std::memory_order_acquire);
+    if (!target) return false;
+
+    g_blockSourceGetBlockOriginal = nullptr;
+    auto hook = bedrocktools::hooks::install(
+        reinterpret_cast<void*>(target),
+        reinterpret_cast<void*>(blockSourceGetBlockHook),
+        &g_blockSourceGetBlockOriginal);
+    if (!hook || !g_blockSourceGetBlockOriginal) {
+        if (hook) bedrocktools::hooks::remove(hook);
+        g_blockSourceGetBlockOriginal = nullptr;
+        return false;
+    }
+    g_blockSourceGetBlockHook = hook;
+    return true;
+}
 std::string configText(const nlohmann::json& j, const char* key, const char* fallback) {
     auto it = j.find(key);
     if (it == j.end() || it->is_null()) return fallback;
@@ -695,6 +763,7 @@ void BlockEspModule::onInit() {
     installBlockUpdateHook();
     installApollonBlockEventHooks();
     installBlockSourceTessellationGetBlockHook();
+    installBlockSourceGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
     // Player-driven block changes are observable before the next chunk
@@ -718,6 +787,7 @@ void BlockEspModule::onInit() {
         });
 }
 void BlockEspModule::onEnable() {
+    g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
     g_blockEspCaptureEvents.store(true, std::memory_order_release);
     clearBlockEventCandidates();
     if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
@@ -730,6 +800,7 @@ void BlockEspModule::onEnable() {
 }
 void BlockEspModule::onDisable() {
     g_blockEspCaptureEvents.store(false, std::memory_order_release);
+    g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
     clearBlockEventCandidates();
     m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
     m_priorityScanActive = false; m_hasPriorityCenter = false; m_priorityDirectionDirty = false; m_priorityScanCursor = 0;
@@ -743,6 +814,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     auto* dimension = player->dimension();
     auto* source = dimension ? dimension->blockSource() : nullptr;
     if (!source) return;
+    g_blockEspActiveBlockSource.store(source, std::memory_order_release);
     if (source != m_blockSource) {
         m_blockSource = source;
         m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
@@ -752,7 +824,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
-    const bool nativeHooksMissing = !g_blockUpdateHook;
+    const bool nativeHooksMissing = !g_blockUpdateHook || !g_blockSourceGetBlockHook;
     if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
          !g_blockSourceTessellationGetBlockHook || nativeHooksMissing) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
@@ -764,6 +836,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         // missing the event path when the first onInit attempt runs too early.
         installBlockUpdateHook();
         installApollonBlockEventHooks();
+        installBlockSourceGetBlockHook();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
@@ -777,7 +850,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::size_t installedMask = 0u;
         std::size_t offset = static_cast<std::size_t>(std::snprintf(
             state, sizeof(state),
-            "generic_hook=%s;generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            "block_get_hook=%s;block_get_calls=%llu;block_get_capture=%llu;generic_hook=%s;generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            g_blockSourceGetBlockHook ? "installed" : "missing",
+            static_cast<unsigned long long>(g_blockSourceGetBlockCalls.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_blockSourceGetBlockCandidateCalls.load(std::memory_order_relaxed)),
             g_blockUpdateHook ? "installed" : "missing",
             static_cast<unsigned long long>(genericCalls),
             static_cast<unsigned long long>(g_blockSourceTessellationGetBlockCalls.load(std::memory_order_relaxed)),
@@ -797,7 +873,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
         char detail[128]{};
         std::snprintf(detail, sizeof(detail),
-            "block_update_hook=%s; tessellation_lookup_hook=%s; specialized_hook_mask=0x%03llX; counts=cumulative",
+            "block_get_hook=%s; block_update_hook=%s; tessellation_lookup_hook=%s; specialized_hook_mask=0x%03llX; counts=cumulative",
+            g_blockSourceGetBlockHook ? "installed" : "missing",
             g_blockUpdateHook ? "installed" : "missing",
             g_blockSourceTessellationGetBlockHook ? "installed" : "missing",
             static_cast<unsigned long long>(installedMask));
@@ -809,6 +886,9 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return;
     const bedrocktools::sdk::BlockPos current{
         static_cast<int>(std::floor(p.x)), static_cast<int>(std::floor(p.y)), static_cast<int>(std::floor(p.z))};
+    g_blockEspCaptureCenterX.store(current.x, std::memory_order_relaxed);
+    g_blockEspCaptureCenterY.store(current.y, std::memory_order_relaxed);
+    g_blockEspCaptureCenterZ.store(current.z, std::memory_order_relaxed);
 
     // Infer horizontal movement from successive positions instead of relying on a
     // version-specific velocity accessor. This also works with Elytra and knockback.
@@ -881,7 +961,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         scannedPositions.push_back(key);
         std::string_view blockName = resolvedName;
         if (blockName.empty()) {
+            const bool previousLookupGuard = g_blockEspInternalBlockLookup;
+            g_blockEspInternalBlockLookup = true;
             void* raw = getBlock(source, pos);
+            g_blockEspInternalBlockLookup = previousLookupGuard;
             if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return true;
             const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
             if (!name || name->empty()) return true;
