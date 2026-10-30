@@ -32,6 +32,23 @@ jobs:
           packages: platform-tools
       - name: Install Android SDK packages
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Prepare persistent signing key (when configured)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BRIDGE_SIGNING_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.BRIDGE_SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BRIDGE_SIGNING_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BRIDGE_SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > "$GITHUB_WORKSPACE/TermuxMCPBridge/bridge-signing.jks"
+            echo "BRIDGE_SIGNING_STORE_FILE=$GITHUB_WORKSPACE/TermuxMCPBridge/bridge-signing.jks" >> "$GITHUB_ENV"
+            echo "BRIDGE_SIGNING_STORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "BRIDGE_SIGNING_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "BRIDGE_SIGNING_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "Persistent signing key configured."
+          else
+            echo "Persistent signing secrets are not configured; this build uses the ephemeral Android debug key and cannot guarantee in-place updates."
+          fi
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -40,6 +57,11 @@ jobs:
         run: gradle --no-daemon :app:testDebugUnitTest
       - name: Assemble debug APK
         run: gradle --no-daemon :app:assembleDebug
+      - name: Verify APK signature
+        run: |
+          APK="$(find app/build/outputs/apk/debug -maxdepth 1 -name '*.apk' -print -quit)"
+          test -n "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK"
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
