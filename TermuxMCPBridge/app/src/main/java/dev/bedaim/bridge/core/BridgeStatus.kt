@@ -25,5 +25,12 @@ object BridgeStatus {
     }
 
     @Synchronized
+    fun recordEvent(message: String) {
+        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
+        events.addFirst("[$stamp] $message")
+        while (events.size > MAX_EVENTS) events.removeLast()
+    }
+
+    @Synchronized
     fun history(): List<String> = events.toList()
 }
