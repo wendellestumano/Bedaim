@@ -55,7 +55,9 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         // can leave focus-search pointing at a non-focusable view and crash on key-up.
         const bool editingIdentifier =
             key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier";
-        if (!editingIdentifier) {
+        const bool editingSeedMapText =
+            mod->moduleId == "bedrocktools.SeedMap" && key == "seed";
+        if (!editingIdentifier && !editingSeedMapText) {
             nlohmann::json snapshot;
             mod->saveConfig(snapshot);
             scheduleModuleConfigSchemaRefresh(mod, key, snapshot);
@@ -730,7 +732,10 @@ void registerModulesWithLauncher() {
                 } else {
                     int minVal = 0;
                     int maxVal = 200;
-                    if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" &&
+                    if (mod->moduleId == "bedrocktools.SeedMap" && kLower == "m_mapradiusblocks") {
+                        minVal = 256;
+                        maxVal = 8192;
+                    } else if (mod->moduleId == "bedrocktools.ULTRAKILL HUD" &&
                         kLower == "m_hitstopdurationms") {
                         minVal = 250;
                         maxVal = 750;
@@ -753,7 +758,10 @@ void registerModulesWithLauncher() {
 
                 float minVal = 0.0f;
                 float maxVal = 100.0f;
-                if (mod->moduleId == "bedrocktools.Hitbox Expander" && kLower == "m_hitboxsize") {
+                if (mod->moduleId == "bedrocktools.SeedMap" && kLower == "m_mapsize") {
+                    minVal = 160.0f;
+                    maxVal = 420.0f;
+                } else if (mod->moduleId == "bedrocktools.Hitbox Expander" && kLower == "m_hitboxsize") {
                     minVal = 1.0f;
                     maxVal = 200.0f;
                 } else if (mod->moduleId == "bedrocktools.Mace Swapper" && kLower == "m_attackrange") {
