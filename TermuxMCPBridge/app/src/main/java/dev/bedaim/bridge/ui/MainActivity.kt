@@ -45,6 +45,8 @@ class MainActivity : Activity() {
     private lateinit var accessValue: TextView
     private lateinit var tokenValue: TextView
     private lateinit var apkReportValue: TextView
+    private lateinit var logsValue: TextView
+    private lateinit var workspaceValue: TextView
     private var selectedApk: File? = null
 
     private val background = Color.rgb(7, 8, 11)
@@ -163,6 +165,28 @@ class MainActivity : Activity() {
             }
         }
 
+        val workspaceCard = card(root)
+        sectionTitle(workspaceCard, "WORKSPACE LOCAL")
+        workspaceValue = label("Preparando espaço de trabalho…", 12f, primaryText)
+        workspaceCard.addView(workspaceValue)
+        actionButton(workspaceCard, "ATUALIZAR ARQUIVOS", false) { refreshWorkspace() }
+        actionButton(workspaceCard, "ABRIR PASTA NO GERENCIADOR", false) {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            runCatching { startActivity(intent) }.onFailure {
+                Toast.makeText(this, "Gerenciador de arquivos indisponível.", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        val logsCard = card(root)
+        sectionTitle(logsCard, "LOGS DO BRIDGE")
+        logsValue = label("Nenhum evento registrado.", 12f, primaryText)
+        logsValue.setLineSpacing(dp(3).toFloat(), 1f)
+        logsCard.addView(logsValue)
+        actionButton(logsCard, "ATUALIZAR LOGS", false) { refreshLogs() }
+        actionButton(logsCard, "COPIAR LOGS", false) {
+            copyText("Bridge logs", BridgeStatus.history().joinToString("\\n"))
+        }
+
         val apkCard = card(root)
         sectionTitle(apkCard, "APK LAB • INSPEÇÃO E BACKUP")
         apkReportValue = label("Nenhum APK selecionado. Escolha um arquivo para analisar metadados, assinatura e estrutura ZIP.", 12f, primaryText)
@@ -206,6 +230,25 @@ class MainActivity : Activity() {
     }
 
     @Suppress("DEPRECATION")
+    private fun refreshLogs() {
+        if (!::logsValue.isInitialized) return
+        logsValue.text = BridgeStatus.history().take(25).ifEmpty { listOf("Nenhum evento registrado.") }.joinToString("\\n")
+    }
+
+    private fun refreshWorkspace() {
+        if (!::workspaceValue.isInitialized) return
+        val root = File(filesDir, "workspace").apply { mkdirs() }
+        val files = root.walkTopDown().maxDepth(4).filter { it.isFile }.take(80).toList()
+        workspaceValue.text = if (files.isEmpty()) {
+            "Workspace vazio. Arquivos criados pelas ferramentas MCP aparecerão aqui."
+        } else {
+            files.joinToString("\\n") {
+                val relative = it.relativeTo(root).path
+                "$relative  •  ${formatBytes(it.length())}"
+            }
+        }
+    }
+
     private fun chooseApk() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -314,7 +357,7 @@ class MainActivity : Activity() {
             "Bateria: ${if (battery >= 0) "$battery%" else "indisponível"}\n" +
             "RAM disponível: ${formatBytes(memory.availMem)} / ${formatBytes(memory.totalMem)}\n" +
             "Armazenamento interno: ${formatBytes(used)} usados / ${formatBytes(total)} total\n" +
-            "Conexão: $network"
+            "CPU lógica: ${Runtime.getRuntime().availableProcessors()} núcleos\\n" +\n            "ABIs: ${Build.SUPPORTED_ABIS.take(4).joinToString() }\\n" +\n            "PID do Bridge: ${android.os.Process.myPid()}\\n" +\n            "Conexão: $network"
     }
 
     private fun accessDiagnostics(): String {
