@@ -2,6 +2,7 @@ package dev.bedaim.bridge.ui
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.ActivityManager
 import android.content.ClipboardManager
 import android.app.PendingIntent
@@ -163,6 +164,7 @@ class MainActivity : Activity() {
         actionButton(termuxCard, "VERIFICAR APKTOOL / AAPT / GIT / PYTHON / CLANG", true) {
             runTermuxToolchainCheck()
         }
+        actionButton(termuxCard, "INSTALAR APKTOOL NO TERMUX", false) { confirmInstallApktool() }
         actionButton(termuxCard, "CONFIGURAR PERMISSÃO RUN_COMMAND", false) {
             openPackageSettings("com.termux")
         }
@@ -648,6 +650,30 @@ class MainActivity : Activity() {
         }
         runCatching { Shizuku.requestPermission(9021) }
             .onFailure { Toast.makeText(this, "Erro: ${it.message}", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun confirmInstallApktool() {
+        AlertDialog.Builder(this)
+            .setTitle("Instalar Apktool no Termux?")
+            .setMessage("O Termux executará pkg install apktool. Isso instalará o decodificador no ambiente Termux e pode baixar dependências.")
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Instalar") { _, _ ->
+                if (packageManager.getLaunchIntentForPackage("com.termux") == null) {
+                    Toast.makeText(this, "Termux não está instalado.", Toast.LENGTH_SHORT).show()
+                } else if (checkSelfPermission("com.termux.permission.RUN_COMMAND") != PackageManager.PERMISSION_GRANTED) {
+                    Toast.makeText(this, "Conceda RUN_COMMAND primeiro.", Toast.LENGTH_LONG).show()
+                    openPackageSettings(packageName)
+                } else {
+                    runTermuxCommand(
+                        "/data/data/com.termux/files/usr/bin/pkg",
+                        arrayOf("install", "-y", "apktool"),
+                        "Install Apktool",
+                        "Installs the Apktool package in the user's Termux environment."
+                    )
+                    Toast.makeText(this, "Instalação enviada ao Termux. Confira os logs.", Toast.LENGTH_LONG).show()
+                }
+            }
+            .show()
     }
 
     private fun runTermuxToolchainCheck() {
