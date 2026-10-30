@@ -167,7 +167,7 @@ object ApkLab {
                 entryCount++
                 require(entryCount <= 10_000) { "APK excede o limite de 10.000 entradas." }
                 val name = entry.name
-                require(name.isNotBlank() && !name.startsWith("/") && !name.startsWith("\\\\")) {
+                require(name.isNotBlank() && !name.startsWith("/") && !name.startsWith("\\")) {
                     "Entrada ZIP com caminho absoluto bloqueada."
                 }
                 val target = File(destination, name).canonicalFile
