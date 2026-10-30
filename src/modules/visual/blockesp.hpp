@@ -31,6 +31,7 @@ public:
     void saveConfig(nlohmann::json& j) override;
     void onPlayerTick(bedrocktools::sdk::Player* player);
     void getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosition, std::vector<Outline>& output) const;
+    static bool isSupportedBlockName(std::string_view name);
 
     bool showTracer = true;
     bool showShulkers = true;
