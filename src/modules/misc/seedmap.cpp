@@ -121,7 +121,9 @@ std::string SeedMapModule::parseSeedAnnouncement(std::string_view message) {
 
     const auto candidate = message.substr(start, cursor - start);
     std::int64_t parsed = 0;
-    const auto result = std::from_chars(candidate.data(),
+    const char* parseBegin = candidate.data();
+    if (!candidate.empty() && candidate.front() == '+') ++parseBegin;
+    const auto result = std::from_chars(parseBegin,
         candidate.data() + candidate.size(), parsed);
     if (result.ec != std::errc{} || result.ptr != candidate.data() + candidate.size())
         return {};
@@ -308,6 +310,13 @@ bool SeedMapModule::openSeedMap() {
 
 void SeedMapModule::onMenuRegistered() {
     using namespace pl::modmenu;
+    std::string seedValue;
+    std::string platformValue;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        seedValue = m_seed;
+        platformValue = m_platform;
+    }
     ConfigSchemaBuilder schema;
     schema.defaultCategory("world")
         .category("world", "World seed", "Capture or enter the seed, then open the map at your current coordinates.")
@@ -321,7 +330,7 @@ void SeedMapModule::onMenuRegistered() {
     seed.description = "Numeric or text seed. Incoming chat messages containing 'seed' followed by a 64-bit integer are captured while this module is enabled.";
     seed.type = ConfigControlTypeV2::Text;
     seed.defaultValue = "";
-    seed.currentValue = m_seed;
+    seed.currentValue = seedValue;
     seed.hasCurrentValue = true;
     seed.placeholder = "Enter world seed";
     seed.maxLength = 32;
@@ -345,7 +354,7 @@ void SeedMapModule::onMenuRegistered() {
     platform.description = "Optional Chunkbase platform/version identifier, for example bedrock_1_21_120. Leave blank to select the version manually.";
     platform.type = ConfigControlTypeV2::Text;
     platform.defaultValue = "";
-    platform.currentValue = m_platform;
+    platform.currentValue = platformValue;
     platform.hasCurrentValue = true;
     platform.placeholder = "bedrock_...";
     platform.maxLength = 40;
