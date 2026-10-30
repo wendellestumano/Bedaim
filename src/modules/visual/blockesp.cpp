@@ -730,12 +730,20 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
+    const bool nativeHooksMissing = !g_blockUpdateHook ||
+        std::any_of(g_apollonEventHooks.begin(), g_apollonEventHooks.end(),
+                    [](const auto hook) { return hook == nullptr; });
     if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
-         !g_blockSourceTessellationGetBlockHook) &&
+         !g_blockSourceTessellationGetBlockHook || nativeHooksMissing) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
         installBlockSourceTessellationGetBlockHook();
+        // Signature resolution may finish after module initialization. Retry
+        // native hooks on the same bounded cadence instead of permanently
+        // missing the event path when the first onInit attempt runs too early.
+        installBlockUpdateHook();
+        installApollonBlockEventHooks();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
@@ -749,7 +757,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::size_t installedMask = 0u;
         std::size_t offset = static_cast<std::size_t>(std::snprintf(
             state, sizeof(state),
-            "generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            "generic_hook=%s;generic=%llu;tess_lookup=%llu;tess_capture=%llu;queued=%llu;merged=%llu;drained=%llu;matched=%llu;dropped=%llu;installed=",
+            g_blockUpdateHook ? "installed" : "missing",
             static_cast<unsigned long long>(genericCalls),
             static_cast<unsigned long long>(g_blockSourceTessellationGetBlockCalls.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_blockSourceTessellationCandidateCalls.load(std::memory_order_relaxed)),
@@ -768,7 +777,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
         char detail[128]{};
         std::snprintf(detail, sizeof(detail),
-            "tessellation_lookup_hook=%s; specialized_hook_mask=0x%03llX; counts=cumulative",
+            "block_update_hook=%s; tessellation_lookup_hook=%s; specialized_hook_mask=0x%03llX; counts=cumulative",
+            g_blockUpdateHook ? "installed" : "missing",
             g_blockSourceTessellationGetBlockHook ? "installed" : "missing",
             static_cast<unsigned long long>(installedMask));
         bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Info,
