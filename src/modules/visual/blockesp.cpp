@@ -199,7 +199,7 @@ const std::vector<std::string>& utilityBlockNames() {
         "lever","target","block_button","redstone_torch","redstone_wire","redstone_lamp",
         "block_pressure_plate",
         // Additional BlockESP targets also exposed by Apollon.
-        "bed","creaking_heart","shelf"
+        "bed","creaking_heart","shelf","copper_chest"
     };
     return names;
 }
@@ -258,8 +258,10 @@ bool BlockEspModule::classify(std::string_view raw, Kind& kind) {
     const std::string_view name = raw;
     // Treat every chest variant as storage, including copper chests and any
     // future vanilla/custom names that follow the chest naming convention.
-    if (name.find("shulker_box") != std::string_view::npos) kind = Kind::Shulker;
+    if (name == "shulkerBox" || name.find("shulker_box") != std::string_view::npos) kind = Kind::Shulker;
     else if (name == "ender_chest") kind = Kind::EnderChest;
+    // Apollon exposes copper chests as a distinct target category.
+    else if (name == "copper_chest") kind = Kind::Utility;
     else if (name.find("chest") != std::string_view::npos) kind = Kind::Chest;
     else if (name.find("vault") != std::string_view::npos) kind = Kind::Vault;
     else if (name.find("spawner") != std::string_view::npos || name == "mob_spawner" || name == "sculk_shrieker") kind = Kind::Spawner;
@@ -344,6 +346,7 @@ std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) co
     if (name == "target") return 0xFFFF5252u;
     if (name == "beacon") return 0xFF6DF7F0u;
     if (name == "crafting_table") return 0xFFB77A42u;
+    if (name == "copper_chest") return 0xFFB87333u;
     if (name == "brewing_stand") return 0xFF9A78D1u;
     if (name == "anvil" || name == "chipped_anvil" || name == "damaged_anvil") return 0xFF777F8Au;
     if (name == "smithing_table" || name == "stonecutter") return 0xFF9BA7B0u;
@@ -358,6 +361,7 @@ std::uint32_t BlockEspModule::colorForBlock(Kind kind, std::string_view name) co
     if (name == "bed") return 0xFF5FA8E8u;
     if (name == "creaking_heart") return 0xFFB06B52u;
     if (name == "shelf" || name.starts_with("shelf_")) return 0xFFD5A76Bu;
+    if (name == "copper_chest") return 0xFFB87333u;
     return utilityColor;
 }
 void BlockEspModule::clearCache() {
@@ -497,33 +501,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         Kind kind{};
         if (!classify(*name, kind)) return true;
 
-        // Surface filtering is useful for ordinary utility blocks, but storage
-        // targets must remain discoverable when intentionally buried (for example,
-        // a buried treasure chest). Only apply the exposure test to utility blocks.
-        // Air and water count as exposure so underwater/cave targets still qualify.
-        if (kind == Kind::Utility) {
-            constexpr bedrocktools::sdk::BlockPos kFaceOffsets[] = {
-                { 1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
-                {0,-1, 0}, {0, 0, 1}, {0, 0,-1}
-            };
-            bool exposed = false;
-            for (const auto& face : kFaceOffsets) {
-                const bedrocktools::sdk::BlockPos neighbour{pos.x + face.x, pos.y + face.y, pos.z + face.z};
-                void* neighbourRaw = getBlock(source, neighbour);
-                if (!neighbourRaw || reinterpret_cast<std::uintptr_t>(neighbourRaw) <= 0x1000) continue;
-                const auto* neighbourName = reinterpret_cast<const bedrocktools::sdk::Block*>(neighbourRaw)->fullName();
-                if (!neighbourName || neighbourName->empty()) continue;
-                std::string_view exposedName(*neighbourName);
-                const auto namespaceEnd = exposedName.find(':');
-                if (namespaceEnd != std::string_view::npos) exposedName.remove_prefix(namespaceEnd + 1);
-                if (exposedName == "air" || exposedName == "cave_air" || exposedName == "void_air" ||
-                    exposedName == "water" || exposedName == "flowing_water" || exposedName == "bubble_column") {
-                    exposed = true;
-                    break;
-                }
-            }
-            if (!exposed) return true;
-        }
+        // Do not require adjacent air/water for utility targets. That extra
+        // six-neighbour query made distant workstations (notably crafting tables)
+        // disappear whenever neighbouring chunk lookups were unavailable. The
+        // classifier and per-block filters are the sole inclusion criteria.
 
         std::string normalizedName = stripNamespace(*name);
         if (normalizedName.size() >= 7 && normalizedName.ends_with("_button")) normalizedName = "block_button";
