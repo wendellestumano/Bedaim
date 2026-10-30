@@ -38,6 +38,17 @@ constexpr int kActionDown = 0;
 constexpr int kActionUp = 1;
 constexpr int kActionMove = 2;
 constexpr int kActionCancel = 3;
+constexpr std::array<const char*, 17> kFeatureKeys{
+    "feature_village", "feature_mansion", "feature_end_city", "feature_monument",
+    "feature_ancient_city", "feature_outpost", "feature_buried_treasure",
+    "feature_ocean_ruin", "feature_shipwreck", "feature_fortress", "feature_bastion",
+    "feature_desert_pyramid", "feature_igloo", "feature_swamp_hut",
+    "feature_jungle_temple", "feature_ruined_portal", "feature_nether_portal"};
+constexpr std::array<const char*, 17> kFeatureLabels{
+    "Village", "Woodland Mansion", "End City", "Ocean Monument", "Ancient City",
+    "Pillager Outpost", "Buried Treasure", "Ocean Ruin", "Shipwreck",
+    "Nether Fortress", "Bastion Remnant", "Desert Pyramid", "Igloo",
+    "Witch Hut", "Jungle Temple", "Ruined Portal", "Nether Ruined Portal"};
 
 void handleTextDetour(void* handler, const bedrocktools::sdk::TextPacket& packet) {
     if (auto* module = g_seedMapModule.load(std::memory_order_acquire))
@@ -998,7 +1009,8 @@ void SeedMapModule::onMenuRegistered() {
     ConfigSchemaBuilder schema;
     schema.defaultCategory("seed")
         .category("seed", "Seed Map", "The in-game map uses the world seed to calculate Bedrock structure candidates around your live position.")
-        .category("appearance", "Map appearance", "Configure the minimap overlay and its placement.");
+        .category("appearance", "Map appearance", "Configure the map overlay, navigation and placement.")
+        .category("features", "Features", "Choose which structure types appear on the map.");
 
     ConfigNodeV2 seed;
     seed.id = "seed";
@@ -1088,6 +1100,19 @@ void SeedMapModule::onMenuRegistered() {
                      "m_mapRadiusBlocks", m_mapRadiusBlocks, 256, 8192, 256, "blocks");
         addSliderFloat("mapSize", "Map size", "Size of the compact in-game map.",
                        "m_mapSize", m_mapSize, 160.0f, 420.0f, 10.0f, "px");
+        for (std::size_t i = 0; i < kFeatureKeys.size(); ++i) {
+            ConfigNodeV2 feature;
+            feature.id = kFeatureKeys[i];
+            feature.key = kFeatureKeys[i];
+            feature.category = "features";
+            feature.title = kFeatureLabels[i];
+            feature.description = "Show or hide this structure type on the map.";
+            feature.type = ConfigControlTypeV2::Toggle;
+            feature.defaultValue = "true";
+            feature.currentValue = m_structureVisible[i] ? "true" : "false";
+            feature.hasCurrentValue = true;
+            schema.node(std::move(feature));
+        }
     }
 
     setConfigSchemaJson(moduleId, schema.toJson());
@@ -1115,6 +1140,10 @@ bool SeedMapModule::onMenuConfigChanged(std::string_view key, std::string_view v
     if (key == "m_showStructures") return parseBoolValue(value, m_showStructures);
     if (key == "m_showChunkGrid") return parseBoolValue(value, m_showChunkGrid);
     if (key == "m_showCoordinates") return parseBoolValue(value, m_showCoordinates);
+    for (std::size_t i = 0; i < kFeatureKeys.size(); ++i) {
+        if (key == kFeatureKeys[i])
+            return parseBoolValue(value, m_structureVisible[i]);
+    }
     if (key == "m_mapRadiusBlocks") {
         int parsed = 0;
         if (!parseIntValue(value, parsed)) return false;
@@ -1152,6 +1181,8 @@ void SeedMapModule::loadConfig(const nlohmann::json& json) {
         m_showStructures = json.value("m_showStructures", m_showStructures);
         m_showChunkGrid = json.value("m_showChunkGrid", m_showChunkGrid);
         m_showCoordinates = json.value("m_showCoordinates", m_showCoordinates);
+        for (std::size_t i = 0; i < kFeatureKeys.size(); ++i)
+            m_structureVisible[i] = json.value(kFeatureKeys[i], m_structureVisible[i]);
         m_mapRadiusBlocks = std::clamp(json.value("m_mapRadiusBlocks", m_mapRadiusBlocks), 256, 8192);
         m_mapSize = std::clamp(json.value("m_mapSize", m_mapSize), 160.0f, 420.0f);
         m_panOffsetX = json.value("m_panOffsetX", m_panOffsetX);
@@ -1173,6 +1204,8 @@ void SeedMapModule::saveConfig(nlohmann::json& json) {
     json["m_showStructures"] = m_showStructures;
     json["m_showChunkGrid"] = m_showChunkGrid;
     json["m_showCoordinates"] = m_showCoordinates;
+    for (std::size_t i = 0; i < kFeatureKeys.size(); ++i)
+        json[kFeatureKeys[i]] = m_structureVisible[i];
     json["m_mapRadiusBlocks"] = m_mapRadiusBlocks;
     json["m_panOffsetX"] = m_panOffsetX;
     json["m_panOffsetZ"] = m_panOffsetZ;
