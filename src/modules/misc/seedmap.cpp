@@ -851,6 +851,10 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
             }
             return true;
         }
+        if (event.pointerId == m_touchPointerId) {
+            m_touchCurrentX = x;
+            m_touchCurrentY = y;
+        }
         if (event.pointerId == m_touchPointerId &&
             (std::fabs(x - m_touchDownX) > 5.0f || std::fabs(y - m_touchDownY) > 5.0f)) {
             m_touchMoved = true;
