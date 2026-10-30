@@ -800,14 +800,13 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
     }
 
-    // Incremental local scan: 32x48x32 (49,152 positions). This is a quick
-    // nearby safety net; the wide scanner owns long-range discovery. Scan complete
-    // horizontal slices first:
+    // Incremental local scan: 64x160x64 (655,360 positions). Unlike the
+    // previous x/z-column-major order, scan complete horizontal slices first:
     // same-height chests across the nearby chunks are now discovered immediately,
     // while vertical coverage continues center-out in subsequent slices.
-    constexpr int kLocalHalfWidth = 16;
-    constexpr int kLocalHalfHeight = 24;
-    constexpr std::size_t kLocalVolumeSize = 32u * 48u * 32u;
+    constexpr int kLocalHalfWidth = 32;
+    constexpr int kLocalHalfHeight = 80;
+    constexpr std::size_t kLocalVolumeSize = 64u * 160u * 64u;
     bool localMovedFar = false;
     if (m_hasLocalScanOrigin) {
         const int dx = current.x - m_localScanOrigin.x;
@@ -832,7 +831,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
             return (index & 1) ? -magnitude : magnitude;
         };
         std::vector<std::pair<int, int>> localHorizontal;
-        localHorizontal.reserve(16u * 16u);
+        localHorizontal.reserve(32u * 32u);
         for (int dx = -kLocalHalfWidth; dx < kLocalHalfWidth; ++dx) {
             for (int dz = -kLocalHalfWidth; dz < kLocalHalfWidth; ++dz)
                 localHorizontal.emplace_back(dx, dz);
@@ -863,9 +862,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
                 return aBlockDistance < bBlockDistance;
             });
         std::vector<int> localVertical;
-        localVertical.reserve(static_cast<std::size_t>(kLocalHalfHeight * 2));
-        for (int i = 0; i < kLocalHalfHeight * 2; ++i)
-            localVertical.push_back(centerOutOffset(i));
+        localVertical.reserve(160u);
+        for (int i = 0; i < 160; ++i) localVertical.push_back(centerOutOffset(i));
         for (const int dy : localVertical) {
             for (const auto& [dx, dz] : localHorizontal) {
                 m_localScanOffsets.push_back({dx, dy, dz});
@@ -977,15 +975,15 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     // Event observations are serviced first, but validated on this tick using
     // the current BlockSource. This avoids invoking engine getters/classifiers
     // from inside the hooked update method.
-    const std::size_t eventBudget = std::min<std::size_t>(256u, scanBudget / 16u);
+    const std::size_t eventBudget = std::min<std::size_t>(1024u, scanBudget / 4u);
     const auto eventCandidates = drainBlockEventCandidates(eventBudget, source);
     for (const auto& candidate : eventCandidates) inspectBlock(candidate);
 
-    // Keep the local sweep deliberately small: the wide center-out scan is the
-    // path that discovers distant blocks. Priority and wide scans consume the
-    // remaining unique-query budget after refreshes and event candidates.
+    // Reserve half the budget for the same-height-first local sweep. Priority
+    // and wide scans consume only the unique-query budget that remains after
+    // immediate refreshes, cache validation and event candidates.
     const std::size_t localBudget = std::min<std::size_t>(
-        512u, scanBudget > m_uniqueQueriesThisTick ? scanBudget - m_uniqueQueriesThisTick : 0u);
+        scanBudget / 2u, scanBudget > m_uniqueQueriesThisTick ? scanBudget - m_uniqueQueriesThisTick : 0u);
     if (m_localScanActive) {
         const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
         for (std::size_t index = m_localScanCursor; index < end; ++index) {
@@ -999,7 +997,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         if (m_localScanCursor >= m_localScanOffsets.size()) m_localScanActive = false;
     }
     const std::size_t priorityBudget = std::min<std::size_t>(
-        256u, scanBudget > m_uniqueQueriesThisTick ? scanBudget - m_uniqueQueriesThisTick : 0u);
+        scanBudget / 8u, scanBudget > m_uniqueQueriesThisTick ? scanBudget - m_uniqueQueriesThisTick : 0u);
     if (m_priorityScanActive) {
         const std::size_t end = std::min(m_priorityScanOffsets.size(), m_priorityScanCursor + priorityBudget);
         for (std::size_t index = m_priorityScanCursor; index < end; ++index) {
