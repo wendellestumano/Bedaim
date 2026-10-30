@@ -30,7 +30,7 @@ private:
 
     mutable std::mutex m_stateMutex;
     std::string m_seed;
-    std::string m_platform;
+    std::string m_version{"26.50"};
     std::string m_dimension{"overworld"};
     int m_playerX = 0;
     int m_playerZ = 0;
