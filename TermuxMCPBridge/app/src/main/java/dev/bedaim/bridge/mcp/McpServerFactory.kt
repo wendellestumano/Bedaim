@@ -20,7 +20,7 @@ object McpServerFactory {
             val shizuku = runCatching { rikka.shizuku.Shizuku.pingBinder() }.getOrDefault(false)
             val granted = shizuku && runCatching { rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED }.getOrDefault(false)
             val root = listOf("/system/bin/su","/system/xbin/su","/sbin/su").any { File(it).canExecute() }
-            CallToolResult(content=listOf(TextContent("Bridge online\nDevice: ${Build.MANUFACTURER} ${Build.MODEL}\nAndroid API: ${Build.VERSION.SDK_INT}\nShizuku: ${if(shizuku) "available" else "not detected"} / ${if(granted) "authorized" else "not authorized"}\nRoot binary: ${if(root) "detected (not validated)" else "not detected"}\nAPK Lab: metadata, signer SHA-256 and ZIP inventory available in the Android UI\nTermux command execution: not implemented yet")))
+            CallToolResult(content=listOf(TextContent("Bridge online\nDevice: ${Build.MANUFACTURER} ${Build.MODEL}\nAndroid API: ${Build.VERSION.SDK_INT}\nShizuku: ${if(shizuku) "available" else "not detected"} / ${if(granted) "authorized" else "not authorized"}\nRoot binary: ${if(root) "detected (not validated)" else "not detected"}\nAPK Lab: metadata, signer SHA-256 and ZIP inventory available in the Android UI\nTermux fixed toolchain diagnostic: available in Android UI\nArbitrary Termux command execution: disabled")))
         }
         server.addTool("workspace_list","Lists files inside the private workspace. Optional relative path.",
             ToolSchema(properties=buildJsonObject { putJsonObject("path"){put("type","string")} })) { req ->
