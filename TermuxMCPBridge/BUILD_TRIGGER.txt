@@ -1,1 +1,1 @@
-Build trigger after removing redundant Kotlin Android plugin.
+Build trigger after switching Kotlin compiler target configuration to compilerOptions for AGP 9.
