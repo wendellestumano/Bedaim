@@ -665,12 +665,13 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
-    // Preserve Apollon's bounded candidate queue and tick-side revalidation.
-    // The old Apollon fixed RVAs are still not valid evidence for 26.60, so the
-    // specialized dispatchers remain dormant until their current engine entries
-    // are mapped. For now, use the upstream 26.60 signature for the vanilla
-    // BlockSource tessellation lookup as an event-driven source of candidates.
+    // EXPERIMENTAL: restore the native capture installation used by Apollon v6.7
+    // in PR #123. The original RVAs/prologue guards are intentionally retained
+    // for this first compatibility test; a 26.60 mismatch must fail closed.
+    // Keep the 26.60 tessellation hook and player-tick validation as fallbacks.
     resolveBlockGetBlock();
+    installBlockUpdateHook();
+    installApollonBlockEventHooks();
     installBlockSourceTessellationGetBlockHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
