@@ -958,6 +958,60 @@ void SeedMapModule::onMenuRegistered() {
     info.type = ConfigControlTypeV2::Info;
     schema.node(std::move(info));
 
+    auto addToggle = [&](const char* id, const char* title, const char* description,
+                         const char* key, bool current) {
+        ConfigNodeV2 node;
+        node.id = id; node.key = key; node.category = "appearance";
+        node.title = title; node.description = description;
+        node.type = ConfigControlTypeV2::Toggle;
+        node.defaultValue = current ? "true" : "false";
+        node.currentValue = node.defaultValue; node.hasCurrentValue = true;
+        schema.node(std::move(node));
+    };
+    auto addSliderInt = [&](const char* id, const char* title, const char* description,
+                            const char* key, int current, int minimum, int maximum,
+                            int step, const char* unit) {
+        ConfigNodeV2 node;
+        node.id = id; node.key = key; node.category = "appearance";
+        node.title = title; node.description = description;
+        node.type = ConfigControlTypeV2::SliderInt;
+        node.defaultValue = std::to_string(current);
+        node.currentValue = node.defaultValue; node.hasCurrentValue = true;
+        node.minValue = std::to_string(minimum);
+        node.maxValue = std::to_string(maximum);
+        node.step = std::to_string(step); node.unit = unit;
+        schema.node(std::move(node));
+    };
+    auto addSliderFloat = [&](const char* id, const char* title, const char* description,
+                              const char* key, float current, float minimum,
+                              float maximum, float step, const char* unit) {
+        ConfigNodeV2 node;
+        node.id = id; node.key = key; node.category = "appearance";
+        node.title = title; node.description = description;
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.defaultValue = std::to_string(current);
+        node.currentValue = node.defaultValue; node.hasCurrentValue = true;
+        node.minValue = std::to_string(minimum);
+        node.maxValue = std::to_string(maximum);
+        node.step = std::to_string(step); node.unit = unit;
+        schema.node(std::move(node));
+    };
+    {
+        std::lock_guard lock(m_stateMutex);
+        addToggle("showMap", "Show map", "Display the in-game Seed Map overlay.",
+                  "m_showMap", m_showMap);
+        addToggle("showStructures", "Show structures", "Show or hide structure candidates.",
+                  "m_showStructures", m_showStructures);
+        addToggle("showGrid", "Grid lines", "Display chunk grid lines over the map.",
+                  "m_showChunkGrid", m_showChunkGrid);
+        addToggle("showCoordinates", "Coordinates", "Display live player and selected marker coordinates.",
+                  "m_showCoordinates", m_showCoordinates);
+        addSliderInt("mapRadius", "Map radius", "World blocks visible from the map center.",
+                     "m_mapRadiusBlocks", m_mapRadiusBlocks, 256, 8192, 256, "blocks");
+        addSliderFloat("mapSize", "Map size", "Size of the compact in-game map.",
+                       "m_mapSize", m_mapSize, 160.0f, 420.0f, 10.0f, "px");
+    }
+
     setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -1013,17 +1067,24 @@ bool SeedMapModule::onMenuConfigChanged(std::string_view key, std::string_view v
 
 void SeedMapModule::loadConfig(const nlohmann::json& json) {
     Module::loadConfig(json);
-    std::lock_guard lock(m_stateMutex);
-    m_seed = json.value("seed", m_seed);
-    m_showMap = json.value("m_showMap", m_showMap);
-    m_showStructures = json.value("m_showStructures", m_showStructures);
-    m_showChunkGrid = json.value("m_showChunkGrid", m_showChunkGrid);
-    m_showCoordinates = json.value("m_showCoordinates", m_showCoordinates);
-    m_mapRadiusBlocks = std::clamp(json.value("m_mapRadiusBlocks", m_mapRadiusBlocks), 256, 8192);
-    m_mapSize = std::clamp(json.value("m_mapSize", m_mapSize), 160.0f, 420.0f);
-    hudPosX = std::max(4.0f, json.value("hudPosX", hudPosX));
-    hudPosY = std::max(4.0f, json.value("hudPosY", hudPosY));
-    m_markersDirty = true;
+    {
+        std::lock_guard lock(m_stateMutex);
+        m_seed = json.value("seed", m_seed);
+        m_showMap = json.value("m_showMap", m_showMap);
+        m_showStructures = json.value("m_showStructures", m_showStructures);
+        m_showChunkGrid = json.value("m_showChunkGrid", m_showChunkGrid);
+        m_showCoordinates = json.value("m_showCoordinates", m_showCoordinates);
+        m_mapRadiusBlocks = std::clamp(json.value("m_mapRadiusBlocks", m_mapRadiusBlocks), 256, 8192);
+        m_mapSize = std::clamp(json.value("m_mapSize", m_mapSize), 160.0f, 420.0f);
+        m_panOffsetX = json.value("m_panOffsetX", m_panOffsetX);
+        m_panOffsetZ = json.value("m_panOffsetZ", m_panOffsetZ);
+        hudPosX = std::max(4.0f, json.value("hudPosX", hudPosX));
+        hudPosY = std::max(4.0f, json.value("hudPosY", hudPosY));
+        m_markersDirty = true;
+    }
+    // The menu schema may have been registered before persisted settings were
+    // loaded. Re-publish it so every control displays the restored value.
+    onMenuRegistered();
 }
 
 void SeedMapModule::saveConfig(nlohmann::json& json) {
@@ -1035,6 +1096,8 @@ void SeedMapModule::saveConfig(nlohmann::json& json) {
     json["m_showChunkGrid"] = m_showChunkGrid;
     json["m_showCoordinates"] = m_showCoordinates;
     json["m_mapRadiusBlocks"] = m_mapRadiusBlocks;
+    json["m_panOffsetX"] = m_panOffsetX;
+    json["m_panOffsetZ"] = m_panOffsetZ;
     json["m_mapSize"] = m_mapSize;
     json["hudPosX"] = hudPosX;
     json["hudPosY"] = hudPosY;
