@@ -17,6 +17,8 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.StatFs
+import android.provider.Settings
+import android.net.Uri
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -142,6 +144,21 @@ class MainActivity : Activity() {
             }.start()
         }
 
+        val settingsCard = card(root)
+        sectionTitle(settingsCard, "ATALHOS DO ANDROID")
+        actionButton(settingsCard, "CONFIGURAÇÕES DE WI-FI E REDE", false) {
+            openSystemSettings(Settings.ACTION_WIFI_SETTINGS)
+        }
+        actionButton(settingsCard, "CONFIGURAÇÕES DE BATERIA", false) {
+            openSystemSettings(Settings.ACTION_BATTERY_SAVER_SETTINGS)
+        }
+        actionButton(settingsCard, "INFORMAÇÕES DO APLICATIVO", false) {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null))
+            runCatching { startActivity(intent) }.onFailure {
+                Toast.makeText(this, "Não foi possível abrir as configurações.", Toast.LENGTH_SHORT).show()
+            }
+        }
+
         val securityCard = card(root)
         sectionTitle(securityCard, "SEGURANÇA MCP")
         securityCard.addView(label("Endpoint local", 11f, secondaryText, true))
@@ -234,6 +251,12 @@ class MainActivity : Activity() {
         }
         runCatching { Shizuku.requestPermission(9021) }
             .onFailure { Toast.makeText(this, "Erro: ${it.message}", Toast.LENGTH_LONG).show() }
+    }
+
+    private fun openSystemSettings(action: String) {
+        runCatching { startActivity(Intent(action)) }.onFailure {
+            Toast.makeText(this, "Configuração não disponível neste Android.", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun openPackage(packageName: String) {
