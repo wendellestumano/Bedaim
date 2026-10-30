@@ -422,12 +422,15 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     {
         std::lock_guard lock(m_stateMutex);
         panelSize = bigMap
-            ? std::min({screenW * 0.84f, screenH * 0.84f, 720.0f})
+            ? std::min(screenW * 0.96f, 980.0f)
             : std::clamp(m_mapSize, 160.0f, 420.0f);
+        const float panelHeight = bigMap
+            ? std::min(screenH * 0.92f, 1400.0f)
+            : panelSize;
         panelX = bigMap ? (screenW - panelSize) * 0.5f
                         : std::clamp(hudPosX, 4.0f, std::max(4.0f, screenW - panelSize - 4.0f));
-        panelY = bigMap ? (screenH - panelSize) * 0.5f
-                        : std::clamp(hudPosY, 4.0f, std::max(4.0f, screenH - panelSize - 4.0f));
+        panelY = bigMap ? (screenH - panelHeight) * 0.5f
+                        : std::clamp(hudPosY, 4.0f, std::max(4.0f, screenH - panelHeight - 4.0f));
         showStructures = m_showStructures;
         showChunkGrid = m_showChunkGrid;
         showCoordinates = m_showCoordinates;
@@ -442,19 +445,28 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         m_lastPanelX = panelX;
         m_lastPanelY = panelY;
         m_lastPanelSize = panelSize;
+        m_lastPanelHeight = bigMap
+            ? std::min(screenH * 0.92f, 1400.0f)
+            : panelSize;
         m_lastMapRadius = static_cast<float>(mapRadius);
         m_lastMapLeft = panelX + 6.0f;
         m_lastMapTop = panelY + std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
         m_lastMapWidth = panelSize - 12.0f;
-        m_lastMapHeight = panelSize - std::clamp(panelSize * 0.19f, 40.0f, 54.0f) -
-            std::clamp(panelSize * 0.19f, 34.0f, 58.0f);
+        m_lastMapHeight = panelHeight - headerH - footerH;
         m_lastBigMap = bigMap;
     }
 
-    const float headerH = std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
-    const float footerH = std::clamp(panelSize * 0.19f, 34.0f, 58.0f);
+    const float panelHeight = bigMap
+        ? std::min(screenH * 0.92f, 1400.0f)
+        : panelSize;
+    const float headerH = bigMap
+        ? std::clamp(panelHeight * 0.075f, 52.0f, 76.0f)
+        : std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
+    const float footerH = bigMap
+        ? std::clamp(panelHeight * 0.08f, 52.0f, 76.0f)
+        : std::clamp(panelSize * 0.19f, 34.0f, 58.0f);
     const float mapTop = panelY + headerH;
-    const float mapBottom = panelY + panelSize - footerH;
+    const float mapBottom = panelY + panelHeight - footerH;
     const float mapHeight = std::max(1.0f, mapBottom - mapTop);
     const float mapWidth = std::max(1.0f, panelSize - 12.0f);
     const float mapLeft = panelX + 6.0f;
@@ -506,8 +518,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
 
     // LeviMap-inspired compact panel: dark translucent shell, thin border,
     // restrained accent, coordinate header and a north-up chunk grid.
-    rect(panelX, panelY, panelSize, panelSize, 0xE810141B, 8.0f, true);
-    rect(panelX, panelY, panelSize, panelSize, 0xFF536273, 8.0f, false);
+    rect(panelX, panelY, panelSize, panelHeight, 0xE810141B, 8.0f, true);
+    rect(panelX, panelY, panelSize, panelHeight, 0xFF536273, 8.0f, false);
     rect(panelX + 1.0f, panelY + 1.0f, panelSize - 2.0f, 2.0f,
          0xFF55C6B0, 0.0f, true);
     text(panelX + 11.0f, panelY + 7.0f, "SEEDMAP", 12.0f * textScale, 0xFFF1F4F8);
@@ -609,7 +621,7 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     text(zoomX + zoomButton * 0.34f, zoomMinusY + zoomButton * 0.12f,
          "-", 15.0f * textScale, 0xFFEAF0F5);
 
-    const float footerY = panelY + panelSize - footerH;
+    const float footerY = panelY + panelHeight - footerH;
     rect(panelX + 1.0f, footerY, panelSize - 2.0f, footerH - 1.0f,
          0xE91A222C, 6.0f, true);
 
@@ -656,7 +668,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     const float x = event.x;
     const float y = event.y;
     const bool inside = x >= m_lastPanelX && x <= m_lastPanelX + m_lastPanelSize &&
-        y >= m_lastPanelY && y <= m_lastPanelY + m_lastPanelSize;
+        y >= m_lastPanelY && y <= m_lastPanelY + m_lastPanelHeight;
     const bool insideMap = x >= m_lastMapLeft && x <= m_lastMapLeft + m_lastMapWidth &&
         y >= m_lastMapTop && y <= m_lastMapTop + m_lastMapHeight;
 
@@ -723,8 +735,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
             } else {
                 const float zoomButton = std::clamp(m_lastPanelSize * 0.12f, 22.0f, 32.0f);
                 const float zoomX = m_lastPanelX + m_lastPanelSize - zoomButton - 8.0f;
-                const float mapBottom = m_lastPanelY + m_lastPanelSize -
-                    std::clamp(m_lastPanelSize * 0.19f, 34.0f, 58.0f);
+                const float mapBottom = m_lastMapTop + m_lastMapHeight;
                 const float plusY = mapBottom - zoomButton * 2.0f - 5.0f;
                 const float minusY = mapBottom - zoomButton - 1.0f;
                 if (x >= zoomX && x <= zoomX + zoomButton &&
