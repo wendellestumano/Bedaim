@@ -46,7 +46,7 @@ int main() {
 
     // Bedrock structure placement consumes only the low 32 seed bits.
     const auto low32Alias = findStructureAttempts(
-        123456789ULL + 0x100000000ULL, Dimension::Overworld, 0, 0, 8192, 256);
+        1234567890123456789ULL + 0x100000000ULL, Dimension::Overworld, 0, 0, 8192, 256);
     assert(first.size() == low32Alias.size());
     for (std::size_t i = 0; i < first.size(); ++i) {
         assert(first[i].x == low32Alias[i].x);
