@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
+#include <dlfcn.h>
 #include <limits>
 #include "core/memory/Hooks.hpp"
 #include <string>
@@ -59,6 +60,27 @@ std::atomic<bool> g_blockEspCaptureEvents{false};
 
 constexpr std::uintptr_t kBlockSourceGetBlockRva = 0x0FB91918u;
 constexpr std::uintptr_t kApollonBlockUpdateRva = 0x106EEED4u;
+
+// Use the real ELF image base. BlockSourceGetBlock may move between Bedrock
+// releases, so reconstructing the base from an RVA copied from Apollon's
+// older engine can create an invalid pointer before the prologue guard runs.
+bool getMinecraftImageBase(const void* address, std::uintptr_t& imageBase) noexcept {
+    imageBase = 0;
+    if (!address) return false;
+    Dl_info info{};
+    if (!dladdr(address, &info) || !info.dli_fbase || !info.dli_fname) return false;
+    if (std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos)
+        return false;
+    imageBase = reinterpret_cast<std::uintptr_t>(info.dli_fbase);
+    return imageBase != 0;
+}
+
+bool isAddressInMinecraftImage(const void* address, std::uintptr_t expectedBase) noexcept {
+    if (!address || !expectedBase) return false;
+    Dl_info info{};
+    return dladdr(address, &info) && info.dli_fbase &&
+        reinterpret_cast<std::uintptr_t>(info.dli_fbase) == expectedBase;
+}
 constexpr std::size_t kMaxEventCandidates = 4096u;
 
 using BlockEventCandidate = bedaim::visual::BlockEventCandidate;
@@ -243,6 +265,9 @@ bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
     if (g_apollonEventHooks[index]) return true;
 
     auto* target = reinterpret_cast<std::uint8_t*>(engineBase + rva);
+    // Treat legacy RVAs as candidates only. Verify the address belongs to the
+    // same mapped Minecraft image before reading memory or installing a hook.
+    if (!isAddressInMinecraftImage(target, engineBase)) return false;
     if (std::memcmp(target, expected, sizeof(std::uint32_t) * 4u) != 0) return false;
 
     g_apollonEventOriginals[index] = nullptr;
@@ -261,9 +286,9 @@ bool installApollonBlockEventHooks() {
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return false;
 
-    const auto getBlockAddress = reinterpret_cast<std::uintptr_t>(getBlock);
-    if (getBlockAddress <= kBlockSourceGetBlockRva) return false;
-    const auto engineBase = getBlockAddress - kBlockSourceGetBlockRva;
+    std::uintptr_t engineBase = 0;
+    if (!getMinecraftImageBase(reinterpret_cast<const void*>(getBlock), engineBase))
+        return false;
 
     // These RVAs and prologues were verified against the same libminecraftpe.so
     // bundled with Apollon. Each callback mirrors the matching Apollon wrapper:
@@ -354,10 +379,11 @@ bool installBlockUpdateHook() {
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return false;
 
-    const auto getBlockAddress = reinterpret_cast<std::uintptr_t>(getBlock);
-    if (getBlockAddress <= kBlockSourceGetBlockRva) return false;
-    const auto engineBase = getBlockAddress - kBlockSourceGetBlockRva;
+    std::uintptr_t engineBase = 0;
+    if (!getMinecraftImageBase(reinterpret_cast<const void*>(getBlock), engineBase))
+        return false;
     auto* target = reinterpret_cast<std::uint8_t*>(engineBase + kApollonBlockUpdateRva);
+    if (!isAddressInMinecraftImage(target, engineBase)) return false;
 
     // Version guard: the offset is only valid for the exact 1.26.52.3 engine
     // layout analyzed from Apollon's bundled libminecraftpe.so.
