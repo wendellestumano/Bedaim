@@ -973,7 +973,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
             const auto internalLookup = g_blockSourceGetBlockHook
                 ? reinterpret_cast<BlockSourceGetBlockFn>(g_blockSourceGetBlockOriginal)
                 : getBlock;
+            const bool previousLookupGuard = g_blockEspInternalBlockLookup;
+            g_blockEspInternalBlockLookup = true;
             void* raw = internalLookup(source, pos);
+            g_blockEspInternalBlockLookup = previousLookupGuard;
             if (!raw || reinterpret_cast<std::uintptr_t>(raw) <= 0x1000) return true;
             const auto* name = reinterpret_cast<const bedrocktools::sdk::Block*>(raw)->fullName();
             if (!name || name->empty()) return true;
