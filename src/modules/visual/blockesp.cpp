@@ -671,11 +671,6 @@ void BlockEspModule::onInit() {
     // BlockSource tessellation lookup as an event-driven source of candidates.
     resolveBlockGetBlock();
     installBlockSourceTessellationGetBlockHook();
-    // These installers were previously dead code: defining the Apollon wrappers
-    // did not install them. Attempt only after resolving the active engine image;
-    // every legacy target remains guarded by its exact prologue before patching.
-    installBlockUpdateHook();
-    installApollonBlockEventHooks();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
     // Player-driven block changes are observable before the next chunk
@@ -739,10 +734,6 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
         installBlockSourceTessellationGetBlockHook();
-        // Retry native event-hook installation when signatures/image readiness
-        // were not available during module initialization.
-        installBlockUpdateHook();
-        installApollonBlockEventHooks();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
