@@ -167,8 +167,9 @@ void blockUpdateHook(void* updateObject, void* blockSource) {
 // BedrockTools resolves this exact lookup used by chunk tessellation. Unlike a
 // radius scan, it is called with the real BlockSource and BlockPos as the game
 // builds geometry for a loaded chunk, including chunks far from the player.
-// Capture only the position here; BlockSource::getBlock and classification are
-// deferred to the player tick so this render-thread hook stays lightweight.
+// Read only the already-resolved block name to reject ordinary terrain; do
+// not call BlockSource::getBlock or mutate the ESP cache on the render thread.
+// Candidate positions are revalidated and cached on the player tick.
 const void* blockSourceTessellationGetBlockHook(
     void* blockSource, const bedrocktools::sdk::BlockPos* position, std::int32_t layer) {
     g_blockSourceTessellationGetBlockCalls.fetch_add(1u, std::memory_order_relaxed);
