@@ -415,6 +415,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     std::string seedText;
     bool hasPosition = false;
     bool selectedValid = false;
+    int panOffsetX = 0;
+    int panOffsetZ = 0;
     int selectedX = 0;
     int selectedZ = 0;
     {
@@ -433,12 +435,19 @@ void SeedMapModule::drawMap(float screenW, float screenH,
         seedText = m_seed;
         hasPosition = m_hasPlayerPosition;
         selectedValid = m_hasSelectedMarker;
+        panOffsetX = m_panOffsetX;
+        panOffsetZ = m_panOffsetZ;
         selectedX = m_selectedMarkerX;
         selectedZ = m_selectedMarkerZ;
         m_lastPanelX = panelX;
         m_lastPanelY = panelY;
         m_lastPanelSize = panelSize;
         m_lastMapRadius = static_cast<float>(mapRadius);
+        m_lastMapLeft = panelX + 6.0f;
+        m_lastMapTop = panelY + std::clamp(panelSize * 0.19f, 40.0f, 54.0f);
+        m_lastMapWidth = panelSize - 12.0f;
+        m_lastMapHeight = panelSize - std::clamp(panelSize * 0.19f, 40.0f, 54.0f) -
+            std::clamp(panelSize * 0.19f, 34.0f, 58.0f);
         m_lastBigMap = bigMap;
     }
 
@@ -454,6 +463,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     const float centerY = (mapTop + mapBottom) * 0.5f;
     const float scale = std::min(mapWidth, mapHeight) /
         (2.0f * static_cast<float>(std::max(1, mapRadius)));
+    const int viewCenterX = playerX + panOffsetX;
+    const int viewCenterZ = playerZ + panOffsetZ;
     const float blocksPerPixel = 1.0f / std::max(scale, 0.00001f);
     const float textScale = std::clamp(panelSize / 260.0f, 0.72f, 1.45f);
 
@@ -545,8 +556,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     }
 
     // Origin axes provide orientation without rotating the player-following map.
-    const float originX = centerX + (0 - playerX) * scale;
-    const float originY = centerY + (0 - playerZ) * scale;
+    const float originX = centerX + (0 - viewCenterX) * scale;
+    const float originY = centerY + (0 - viewCenterZ) * scale;
     if (originX >= mapLeft && originX <= mapRight)
         line(originX, mapTop, 0.0f, mapHeight, 1.0f, 0x704E6D7B);
     if (originY >= mapTop && originY <= mapBottom)
@@ -555,8 +566,8 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     if (hasSeed && showStructures) {
         for (const auto& marker : markers) {
             if (marker.possibleTypes.empty()) continue;
-            const float px = centerX + (marker.x - playerX) * scale;
-            const float py = centerY + (marker.z - playerZ) * scale;
+            const float px = centerX + (marker.x - viewCenterX) * scale;
+            const float py = centerY + (marker.z - viewCenterZ) * scale;
             if (px < mapLeft + 4.0f || px > mapRight - 4.0f ||
                 py < mapTop + 4.0f || py > mapBottom - 4.0f) continue;
             const bool selected = selectedValid &&
@@ -578,11 +589,13 @@ void SeedMapModule::drawMap(float screenW, float screenH,
     }
 
     // Player marker is fixed at the centre; the map moves beneath it.
-    circle(centerX, centerY, 8.0f, 0xE80A1016);
-    circle(centerX, centerY, 5.0f, 0xFFFFFFFF);
-    circle(centerX, centerY, 2.6f, 0xFF55C6B0);
-    line(centerX - 10.0f, centerY, 20.0f, 0.0f, 1.0f, 0xAA55C6B0);
-    line(centerX, centerY - 10.0f, 0.0f, 20.0f, 1.0f, 0xAA55C6B0);
+    const float playerMarkerX = centerX + (playerX - viewCenterX) * scale;
+    const float playerMarkerY = centerY + (playerZ - viewCenterZ) * scale;
+    circle(playerMarkerX, playerMarkerY, 8.0f, 0xE80A1016);
+    circle(playerMarkerX, playerMarkerY, 5.0f, 0xFFFFFFFF);
+    circle(playerMarkerX, playerMarkerY, 2.6f, 0xFF55C6B0);
+    line(playerMarkerX - 10.0f, playerMarkerY, 20.0f, 0.0f, 1.0f, 0xAA55C6B0);
+    line(playerMarkerX, playerMarkerY - 10.0f, 0.0f, 20.0f, 1.0f, 0xAA55C6B0);
 
     // Zoom controls.
     const float zoomButton = std::clamp(panelSize * 0.12f, 22.0f, 32.0f);
@@ -643,27 +656,42 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
     const float y = event.y;
     const bool inside = x >= m_lastPanelX && x <= m_lastPanelX + m_lastPanelSize &&
         y >= m_lastPanelY && y <= m_lastPanelY + m_lastPanelSize;
+    const bool insideMap = x >= m_lastMapLeft && x <= m_lastMapLeft + m_lastMapWidth &&
+        y >= m_lastMapTop && y <= m_lastMapTop + m_lastMapHeight;
 
     if (event.action == kActionDown) {
-        if (!inside && !m_bigMap) return false;
+        // Never capture touches outside the actual map panel. In expanded mode
+        // the old code swallowed every screen touch and immediately collapsed.
+        if (!inside) return false;
         m_touchTracking = true;
         m_touchPointerId = event.pointerId;
         m_touchDownX = x;
         m_touchDownY = y;
         m_touchStartHudX = hudPosX;
         m_touchStartHudY = hudPosY;
+        m_touchStartedOnMap = insideMap;
         return true;
     }
 
     if (!m_touchTracking || event.pointerId != m_touchPointerId) return false;
 
     if (event.action == kActionMove) {
-        if (!m_lastBigMap &&
-            (std::fabs(x - m_touchDownX) > 7.0f || std::fabs(y - m_touchDownY) > 7.0f)) {
-            hudPosX = std::clamp(m_touchStartHudX + x - m_touchDownX,
-                4.0f, 4096.0f);
-            hudPosY = std::clamp(m_touchStartHudY + y - m_touchDownY,
-                4.0f, 4096.0f);
+        if (std::fabs(x - m_touchDownX) > 5.0f || std::fabs(y - m_touchDownY) > 5.0f) {
+            if (m_touchStartedOnMap) {
+                const float scale = std::min(m_lastMapWidth, m_lastMapHeight) /
+                    (2.0f * std::max(1.0f, m_lastMapRadius));
+                if (scale > 0.00001f) {
+                    m_panOffsetX -= static_cast<int>(std::lround((x - m_touchDownX) / scale));
+                    m_panOffsetZ -= static_cast<int>(std::lround((y - m_touchDownY) / scale));
+                    m_touchDownX = x;
+                    m_touchDownY = y;
+                }
+            } else if (!m_lastBigMap) {
+                hudPosX = std::clamp(m_touchStartHudX + x - m_touchDownX,
+                    4.0f, 4096.0f);
+                hudPosY = std::clamp(m_touchStartHudY + y - m_touchDownY,
+                    4.0f, 4096.0f);
+            }
         }
         return true;
     }
@@ -678,11 +706,9 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
 
     const float dx = x - m_touchDownX;
     const float dy = y - m_touchDownY;
-    const bool tap = (dx * dx + dy * dy) <= 100.0f;
+    const bool tap = (dx * dx + dy * dy) <= 64.0f;
     if (tap) {
-        if (m_bigMap && !inside) {
-            m_bigMap = false;
-        } else if (inside) {
+        if (inside) {
             const float buttonSize = std::clamp(m_lastPanelSize * 0.13f, 24.0f, 34.0f);
             const float actionX = m_lastPanelX + m_lastPanelSize - buttonSize - 7.0f;
             const float actionY = m_lastPanelY + 6.0f;
@@ -707,21 +733,21 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
                     m_mapRadiusBlocks = std::min(8192, m_mapRadiusBlocks * 2);
                     m_markersDirty = true;
                 } else {
-                    const float headerH = std::clamp(m_lastPanelSize * 0.19f, 40.0f, 54.0f);
-                    const float footerH = std::clamp(m_lastPanelSize * 0.19f, 34.0f, 58.0f);
-                    const float mapLeft = m_lastPanelX + 6.0f;
-                    const float mapTop = m_lastPanelY + headerH;
-                    const float mapWidth = m_lastPanelSize - 12.0f;
-                    const float mapHeight = m_lastPanelSize - headerH - footerH;
+                    const float mapLeft = m_lastMapLeft;
+                    const float mapTop = m_lastMapTop;
+                    const float mapWidth = m_lastMapWidth;
+                    const float mapHeight = m_lastMapHeight;
                     const float cx = mapLeft + mapWidth * 0.5f;
                     const float cy = mapTop + mapHeight * 0.5f;
+                    const float viewCenterX = static_cast<float>(m_playerX + m_panOffsetX);
+                    const float viewCenterZ = static_cast<float>(m_playerZ + m_panOffsetZ);
                     const float scale = std::min(mapWidth, mapHeight) /
                         (2.0f * std::max(1.0f, m_lastMapRadius));
                     float bestDistanceSquared = 14.0f * 14.0f;
                     const bedaim::seedmap::StructureMarker* best = nullptr;
                     for (const auto& marker : m_markers) {
-                        const float px = cx + (marker.x - m_playerX) * scale;
-                        const float py = cy + (marker.z - m_playerZ) * scale;
+                        const float px = cx + (marker.x - viewCenterX) * scale;
+                        const float py = cy + (marker.z - viewCenterZ) * scale;
                         const float mx = px - x;
                         const float my = py - y;
                         const float d2 = mx * mx + my * my;
@@ -744,6 +770,7 @@ bool SeedMapModule::onTouch(const pl::input::TouchEvent& event) {
 
     m_touchTracking = false;
     m_touchPointerId = -1;
+    m_touchStartedOnMap = false;
     return true;
 }
 
