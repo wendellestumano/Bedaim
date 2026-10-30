@@ -263,8 +263,9 @@ void apollonAdditionalBlockEventHook(void* eventObject, void* blockSource) {
     if (original) original(eventObject, blockSource);
 }
 
+template <std::size_t ExpectedWords>
 bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
-                             std::uintptr_t rva, const std::uint32_t (&expected)[4],
+                             std::uintptr_t rva, const std::uint32_t (&expected)[ExpectedWords],
                              void* replacement) {
     if (index >= kApollonEventHookCount) return false;
     if (g_apollonEventHooks[index]) return true;
@@ -273,7 +274,7 @@ bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
     // Treat legacy RVAs as candidates only. Verify the address belongs to the
     // same mapped Minecraft image before reading memory or installing a hook.
     if (!isAddressInMinecraftImage(target, engineBase)) return false;
-    if (std::memcmp(target, expected, sizeof(std::uint32_t) * 4u) != 0) return false;
+    if (std::memcmp(target, expected, sizeof(expected)) != 0) return false;
 
     g_apollonEventOriginals[index] = nullptr;
     auto hook = bedrocktools::hooks::install(
@@ -304,9 +305,15 @@ bool installApollonBlockEventHooks() {
     constexpr std::uint32_t trialSpawnerPrologue[] = {
         0xA9BD7BFDu, 0xF9000BF5u, 0xA9024FF4u, 0x910003FDu
     }; // 0x1063617C
+    // Minecraft 26.60 equivalent of Apollon's Vault callback target.
+    // 64 exact bytes match the 26.52.3 function; the later member offsets
+    // were adjusted by +8 in 26.60, so retain a full 16-instruction guard.
     constexpr std::uint32_t vaultPrologue[] = {
-        0xFC170FECu, 0x6D012BEBu, 0x6D0223E9u, 0xA9037BFDu
-    }; // 0x106376D4
+        0xFC170FECu, 0x6D012BEBu, 0x6D0223E9u, 0xA9037BFdu,
+        0xA9046FFCu, 0xA90567FAu, 0xA9065FF8u, 0xA90757F6u,
+        0xA9084FF4u, 0x9100C3FDu, 0xD10643FFu, 0xD53BD059u,
+        0xAA0103F4u, 0xAA0003F3u, 0xF9401728u, 0xF81C03A8u
+    }; // 26.60 RVA 0x10E6A098
     constexpr std::uint32_t furnacePrologue[] = {
         0xA9BA7BFDu, 0xF9000BFCu, 0xA90267FAu, 0xA9035FF8u
     }; // 0x106C5628
@@ -326,12 +333,20 @@ bool installApollonBlockEventHooks() {
     constexpr std::uint32_t utilityDispatchPrologue[] = {
         0xD101C3FFu, 0x6D0323E9u, 0xA9047BFDu, 0xA90557F6u
     }; // 0x106FF2B4
+    // 26.60 storage dispatcher candidate: 48-byte sequence match against
+    // Apollon's 26.52.3 target, followed by the same two-argument flow.
     constexpr std::uint32_t storageDispatchPrologue[] = {
-        0xA9BB7BFDu, 0xF9000BFCu, 0xA9025FF8u, 0xA90357F6u
-    }; // 0x106E2760
+        0xA9BB7BFDu, 0xF9000BFCu, 0xA9025FF8u, 0xA90357F6u,
+        0xA9044FF4u, 0x910003FDu, 0xD10903FFu, 0xD53BD056u,
+        0xAA0003F3u, 0xAA0103F4u, 0xF94016C8u, 0xF81F83A8u
+    }; // 26.60 RVA 0x10F73930
+    // 26.60 BlockSource dispatcher candidate: 64-byte exact sequence match.
     constexpr std::uint32_t blockSourceDispatchPrologue[] = {
-        0xD101C3FFu, 0xA9027BFDu, 0xA90367FAu, 0xA9045FF8u
-    }; // 0x1062D6F0
+        0xD101C3FFu, 0xA9027BFDu, 0xA90367FAu, 0xA9045FF8u,
+        0xA90557F6u, 0xA9064FF4u, 0x910083FDu, 0xD53BD057u,
+        0xAA0103F3u, 0xAA0003F4u, 0xF94016E8u, 0xF81F83A8u,
+        0xF9400028u, 0x91002001u, 0xAA1303E0u, 0xF9400908u
+    }; // 26.60 RVA 0x10F3B7F0
     constexpr std::uint32_t blockStateDispatchPrologue[] = {
         0xD10203FFu, 0xA9057BFDu, 0xA90657F6u, 0xA9074FF4u
     }; // 0x1072AB54
@@ -343,7 +358,7 @@ bool installApollonBlockEventHooks() {
     installedAny |= installApollonEventHook(1u, engineBase, 0x1063617Cu,
                                             trialSpawnerPrologue,
                                             reinterpret_cast<void*>(blockEventVectorHook1));
-    installedAny |= installApollonEventHook(2u, engineBase, 0x106376D4u,
+    installedAny |= installApollonEventHook(2u, engineBase, 0x10E6A098u,
                                             vaultPrologue,
                                             reinterpret_cast<void*>(blockEventPositionHook0));
     installedAny |= installApollonEventHook(3u, engineBase, 0x106C5628u,
@@ -367,10 +382,10 @@ bool installApollonBlockEventHooks() {
     installedAny |= installApollonEventHook(8u, engineBase, 0x106FF2B4u,
                                             utilityDispatchPrologue,
                                             reinterpret_cast<void*>(apollonAdditionalBlockEventHook<8u, false>));
-    installedAny |= installApollonEventHook(9u, engineBase, 0x106E2760u,
+    installedAny |= installApollonEventHook(9u, engineBase, 0x10F73930u,
                                             storageDispatchPrologue,
                                             reinterpret_cast<void*>(apollonAdditionalBlockEventHook<9u, false>));
-    installedAny |= installApollonEventHook(10u, engineBase, 0x1062D6F0u,
+    installedAny |= installApollonEventHook(10u, engineBase, 0x10F3B7F0u,
                                             blockSourceDispatchPrologue,
                                             reinterpret_cast<void*>(apollonAdditionalBlockEventHook<10u, false>));
     installedAny |= installApollonEventHook(11u, engineBase, 0x1072AB54u,
