@@ -555,7 +555,14 @@ void loadColor(const nlohmann::json& j, const char* key, std::uint32_t& value) {
 std::string stripNamespace(std::string_view name) {
     const auto pos = name.find(':');
     if (pos != std::string_view::npos) name.remove_prefix(pos + 1);
-    if (name.starts_with("tile.")) name.remove_prefix(5);
+    // Match classify(): legacy tile. prefixes may also be capitalized by
+    // Bedrock's block-name wrappers. Strip before lowercasing so utility IDs
+    // still match their individual config keys (crafting_table, piston, etc.).
+    if (name.size() >= 5u &&
+        (name[0] == 't' || name[0] == 'T') &&
+        (name[1] == 'i' || name[1] == 'I') &&
+        (name[2] == 'l' || name[2] == 'L') &&
+        (name[3] == 'e' || name[3] == 'E') && name[4] == '.') name.remove_prefix(5u);
     std::string out(name);
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return out;
