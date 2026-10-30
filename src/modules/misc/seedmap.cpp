@@ -60,12 +60,15 @@ void SeedMapModule::onInit() {
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
 
+}
+
+void SeedMapModule::onEnable() {
     if (installTextHook()) {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Info, "SeedMap",
-            "seed_capture=ready: listening for incoming chat messages containing a numeric seed announcement");
+            "seed_capture=ready: chat hook installed after module enable");
     } else {
         bedrocktools::diagnostics::log(bedrocktools::diagnostics::Level::Warning, "SeedMap",
-            "seed_capture=unavailable: manual seed entry remains available");
+            "seed_capture=unavailable: clipboard and manual seed entry remain available");
     }
 }
 
