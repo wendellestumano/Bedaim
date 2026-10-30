@@ -101,7 +101,7 @@ object ApkLab {
                 PackageManager.GET_SERVICES or PackageManager.GET_RECEIVERS or
                 PackageManager.GET_PROVIDERS or PackageManager.GET_PERMISSIONS
         }
-        val info = packageManager.getPackageArchiveInfo(file.absolutePath, flags)
+        val info = loadPackageInfo(packageManager, file, flags)
             ?: throw IllegalArgumentException("O Android não reconheceu este arquivo como APK válido.")
         val signers = signerDigests(info)
         return ZipFile(file).use { zip ->
@@ -130,6 +130,22 @@ object ApkLab {
                         it.startsWith("lib/") || it.startsWith("META-INF/")
                 }.take(MAX_ENTRIES_TO_REPORT)
             )
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun loadPackageInfo(
+        packageManager: PackageManager,
+        file: File,
+        flags: Int
+    ): PackageInfo? {
+        return if (Build.VERSION.SDK_INT >= 33) {
+            packageManager.getPackageArchiveInfo(
+                file.absolutePath,
+                PackageManager.PackageInfoFlags.of(flags.toLong())
+            )
+        } else {
+            packageManager.getPackageArchiveInfo(file.absolutePath, flags)
         }
     }
 
