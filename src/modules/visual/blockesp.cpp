@@ -9,11 +9,14 @@
 #include <bedrocktools/sdk/render/Block.hpp>
 #include <pl/ModMenu.hpp>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
+#include "core/memory/Hooks.hpp"
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -21,6 +24,107 @@
 namespace {
 using BlockSourceGetBlockFn = void* (*)(void*, const bedrocktools::sdk::BlockPos&);
 std::atomic<BlockSourceGetBlockFn> g_blockEspGetBlock{nullptr};
+
+// Apollon's BlockESP observes block-update callbacks, queues only their BlockPos,
+// then validates candidates against the live BlockSource before rendering them.
+// Bedaim mirrors that split: the native hook is intentionally lightweight and
+// never calls BlockSource or performs classification while inside the engine.
+using BlockUpdateFn = void (*)(void*, void*);
+void* g_blockUpdateOriginal = nullptr;
+bedrocktools::hooks::Handle g_blockUpdateHook = nullptr;
+std::atomic<bool> g_blockEspCaptureEvents{false};
+
+constexpr std::uintptr_t kBlockSourceGetBlockRva = 0x0FB91918u;
+constexpr std::uintptr_t kApollonBlockUpdateRva = 0x106EEED4u;
+constexpr std::size_t kMaxEventCandidates = 4096u;
+
+struct BlockEventCandidateQueue {
+    std::array<bedrocktools::sdk::BlockPos, kMaxEventCandidates> positions{};
+    std::size_t head = 0;
+    std::size_t count = 0;
+    std::mutex mutex;
+};
+BlockEventCandidateQueue g_blockEventCandidates;
+
+void clearBlockEventCandidates() {
+    std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
+    g_blockEventCandidates.head = 0u;
+    g_blockEventCandidates.count = 0u;
+}
+
+void enqueueBlockEventCandidate(void* updateObject) noexcept {
+    if (!updateObject || reinterpret_cast<std::uintptr_t>(updateObject) <= 0x1000u) return;
+
+    // The Apollon callback passes updateObject + 8 as a three-int BlockPos.
+    // Copy it immediately: the engine may destroy or recycle the event object.
+    bedrocktools::sdk::BlockPos position{};
+    std::memcpy(&position, static_cast<const std::uint8_t*>(updateObject) + 8u, sizeof(position));
+    if (position.x < -30000000 || position.x > 30000000 ||
+        position.z < -30000000 || position.z > 30000000 ||
+        position.y < -4096 || position.y > 4096) return;
+
+    std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
+    if (g_blockEventCandidates.count >= kMaxEventCandidates) return;
+    const std::size_t tail = (g_blockEventCandidates.head + g_blockEventCandidates.count) % kMaxEventCandidates;
+    g_blockEventCandidates.positions[tail] = position;
+    ++g_blockEventCandidates.count;
+}
+
+std::vector<bedrocktools::sdk::BlockPos> drainBlockEventCandidates(std::size_t maximum) {
+    std::vector<bedrocktools::sdk::BlockPos> result;
+    std::lock_guard<std::mutex> lock(g_blockEventCandidates.mutex);
+    const std::size_t count = std::min(maximum, g_blockEventCandidates.count);
+    result.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        result.push_back(g_blockEventCandidates.positions[g_blockEventCandidates.head]);
+        g_blockEventCandidates.head = (g_blockEventCandidates.head + 1u) % kMaxEventCandidates;
+        --g_blockEventCandidates.count;
+    }
+    return result;
+}
+
+void blockUpdateHook(void* updateObject, void* blockSource) {
+    if (g_blockEspCaptureEvents.load(std::memory_order_acquire) && blockSource)
+        enqueueBlockEventCandidate(updateObject);
+
+    // This target is a void, two-argument engine routine in the analyzed build.
+    // Always forward the original call, even while BlockESP is disabled.
+    const auto original = reinterpret_cast<BlockUpdateFn>(g_blockUpdateOriginal);
+    if (original) original(updateObject, blockSource);
+}
+
+bool installBlockUpdateHook() {
+    if (g_blockUpdateHook) return true;
+    const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
+    if (!getBlock) return false;
+
+    const auto getBlockAddress = reinterpret_cast<std::uintptr_t>(getBlock);
+    if (getBlockAddress <= kBlockSourceGetBlockRva) return false;
+    const auto engineBase = getBlockAddress - kBlockSourceGetBlockRva;
+    auto* target = reinterpret_cast<std::uint8_t*>(engineBase + kApollonBlockUpdateRva);
+
+    // Version guard: the offset is only valid for the exact 1.26.52.3 engine
+    // layout analyzed from Apollon's bundled libminecraftpe.so.
+    constexpr std::uint32_t expectedPrologue[] = {
+        0xD10303FFu, // sub sp, sp, #0xc0
+        0xA9067BFDu, // stp x29, x30, [sp, #0x60]
+        0xF9003BFBu, // str x27, [sp, #0x70]
+        0xA90867FAu  // stp x26, x25, [sp, #0x80]
+    };
+    if (std::memcmp(target, expectedPrologue, sizeof(expectedPrologue)) != 0) return false;
+
+    g_blockUpdateOriginal = nullptr;
+    auto hook = bedrocktools::hooks::install(
+        target, reinterpret_cast<void*>(blockUpdateHook), &g_blockUpdateOriginal);
+    if (!hook || !g_blockUpdateOriginal) {
+        if (hook) bedrocktools::hooks::remove(hook);
+        g_blockUpdateOriginal = nullptr;
+        return false;
+    }
+    g_blockUpdateHook = hook;
+    return true;
+}
+
 constexpr std::size_t kMaxBlockEspCache = 32768;
 constexpr std::size_t kMaxBlockEspRendered = 1024;
 
@@ -248,10 +352,13 @@ void BlockEspModule::clearCache() {
 }
 void BlockEspModule::onInit() {
     resolveBlockGetBlock();
+    installBlockUpdateHook();
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
 }
 void BlockEspModule::onEnable() {
+    g_blockEspCaptureEvents.store(true, std::memory_order_release);
+    clearBlockEventCandidates();
     if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
         static_cast<HitboxModule*>(hitbox)->ensureRenderHook();
     m_blockSource = nullptr; m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
@@ -261,6 +368,8 @@ void BlockEspModule::onEnable() {
     clearCache();
 }
 void BlockEspModule::onDisable() {
+    g_blockEspCaptureEvents.store(false, std::memory_order_release);
+    clearBlockEventCandidates();
     m_scanActive = false; m_hasCenter = false; m_scanCursor = 0; m_scanTotal = 0;
     m_priorityScanActive = false; m_hasPriorityCenter = false; m_priorityDirectionDirty = false; m_priorityScanCursor = 0;
     m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
@@ -280,10 +389,13 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_localScanActive = false; m_hasLocalScanOrigin = false; m_localScanCursor = 0;
         m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
         clearCache();
+        clearBlockEventCandidates();
     }
-    if (!g_blockEspGetBlock.load(std::memory_order_acquire) && m_tickCount - m_lastResolveAttemptTick >= 40) {
+    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) || !g_blockUpdateHook) &&
+        m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
+        installBlockUpdateHook();
     }
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return;
@@ -449,11 +561,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         }
     }
 
-    // Experimental expanded local scan: 64x160x64 (655,360 block positions).
-    // The larger horizontal footprint tests whether the old 32x32 area was the
-    // reason distant blocks were missed. It remains incremental to avoid a single
-    // tick spike; horizontal chunk order and vertical center-out ordering prioritize
-    // nearby positions while allowing discovery up to 32 blocks in X/Z.
+    // Incremental local scan: 64x160x64 (655,360 positions). Unlike the
+    // previous x/z-column-major order, scan complete horizontal slices first:
+    // same-height chests across the nearby chunks are now discovered immediately,
+    // while vertical coverage continues center-out in subsequent slices.
     constexpr int kLocalHalfWidth = 32;
     constexpr int kLocalHalfHeight = 80;
     constexpr std::size_t kLocalVolumeSize = 64u * 160u * 64u;
@@ -514,8 +625,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         std::vector<int> localVertical;
         localVertical.reserve(160u);
         for (int i = 0; i < 160; ++i) localVertical.push_back(centerOutOffset(i));
-        for (const auto& [dx, dz] : localHorizontal) {
-            for (const int dy : localVertical) {
+        for (const int dy : localVertical) {
+            for (const auto& [dx, dz] : localHorizontal) {
                 m_localScanOffsets.push_back({dx, dy, dz});
             }
         }
@@ -622,12 +733,18 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_scanActive = true;
     }
 
-    // Experiment: give the local volume 75% of the configured query budget
-    // to test whether the local scan window is the part users need expanded.
-    // Priority keeps its 12.5% reserve; the wide pass consumes whatever unique
-    // query budget remains after overlaps are deduplicated.
-    const std::size_t localBudget = (scanBudget * 3u) / 4u;
-    const std::size_t priorityBudget = scanBudget / 8u;
+    // Event observations are serviced first, but validated on this tick using
+    // the current BlockSource. This avoids invoking engine getters/classifiers
+    // from inside the hooked update method.
+    const std::size_t eventBudget = std::min<std::size_t>(512u, scanBudget / 8u);
+    const auto eventCandidates = drainBlockEventCandidates(eventBudget);
+    for (const auto& candidate : eventCandidates) inspectBlock(candidate);
+
+    // Reserve half the budget for the same-height-first local sweep. Priority
+    // and wide scans consume only the unique-query budget that remains after
+    // immediate refreshes, cache validation and event candidates.
+    const std::size_t localBudget = std::min<std::size_t>(
+        scanBudget / 2u, scanBudget > m_uniqueQueriesThisTick ? scanBudget - m_uniqueQueriesThisTick : 0u);
     if (m_localScanActive) {
         const std::size_t end = std::min(m_localScanOffsets.size(), m_localScanCursor + localBudget);
         for (std::size_t index = m_localScanCursor; index < end; ++index) {
@@ -640,6 +757,8 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         m_localScanCursor = end;
         if (m_localScanCursor >= m_localScanOffsets.size()) m_localScanActive = false;
     }
+    const std::size_t priorityBudget = std::min<std::size_t>(
+        scanBudget / 8u, scanBudget > m_uniqueQueriesThisTick ? scanBudget - m_uniqueQueriesThisTick : 0u);
     if (m_priorityScanActive) {
         const std::size_t end = std::min(m_priorityScanOffsets.size(), m_priorityScanCursor + priorityBudget);
         for (std::size_t index = m_priorityScanCursor; index < end; ++index) {
