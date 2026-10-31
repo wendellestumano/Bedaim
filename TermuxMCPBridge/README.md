@@ -6,7 +6,7 @@ Native Android app that hosts an authenticated MCP Streamable HTTP endpoint at `
 
 When the app opens, it starts the local MCP foreground service. The service then asks Termux to start or reuse an ngrok tunnel targeting port `8765`. It supports ngrok installed directly in Termux or inside the `debian` proot-distro environment. The app launches ngrok with the configured account-assigned static dev domain (`--url`) and reads ngrok's local agent API at `127.0.0.1:4040` to verify that the expected HTTPS URL is active. The dashboard includes a one-time domain editor; the initial value is the ngrok dev URL used in earlier Bridge testing.
 
-While the MCP service is running, a lightweight watchdog checks the tunnel every 60 seconds and requests a restart if the ngrok agent is no longer reachable. The service uses Android `START_STICKY` so Android may recreate it after process reclamation. A boot receiver also requests startup after device reboot and after app updates; this is enabled by default and can be disabled in the dashboard. Explicitly stopping the service disables reboot autostart until the app is opened again. The dashboard includes a one-tap **Connect everything / repair connection** action, remote endpoint copy, and a combined endpoint + Bearer configuration copy action.
+While the MCP service is running, a lightweight watchdog checks the tunnel every 60 seconds and requests a restart if the ngrok agent is no longer reachable. The service uses Android `START_STICKY` so Android may recreate it after process reclamation. A boot receiver also requests startup after device reboot and after app updates; this is enabled by default and can be disabled in the dashboard. Explicitly stopping the service disables reboot autostart until the app is opened again. The dashboard includes a one-tap **Connect everything / repair connection** action, remote endpoint copy, and a combined endpoint + Bearer configuration copy action. The remote endpoint copy now includes a high-entropy `access_token` query parameter for MCP clients that cannot configure a static Authorization header.
 
 The watchdog only stops a tunnel whose PID file was created by this Bridge. It does not kill an unrelated ngrok process. Stopping the MCP service also stops the Bridge-owned tunnel.
 
@@ -23,15 +23,15 @@ The ngrok Free plan assigns an account development domain that remains assigned 
 
 ## One-time ChatGPT/client registration
 
-The app cannot silently register a remote MCP server inside ChatGPT. Copy the remote endpoint from the dashboard and configure it once in the MCP client, with the Bearer token copied by the app. After that registration, reopening the Bridge should bring the same ngrok development domain online again, so the endpoint does not need to be changed on every restart.
+The app cannot silently register a remote MCP server inside ChatGPT. Copy **COPIAR ENDPOINT MCP REMOTO** from the dashboard. In ChatGPT's custom MCP connector choose **Sem autenticação** and paste this complete URL. The URL includes a random 256-bit `access_token` capability, which the Bridge validates in constant time; it is not an open unauthenticated endpoint. Keep the URL private. Clients that support custom Authorization headers can continue using the plain `/mcp` endpoint with `Authorization: Bearer <token>` from **COPIAR CONFIGURAÇÃO DO CLIENTE MCP**. After registration, reopening the Bridge should bring the same ngrok development domain online again.
 
-The public endpoint remains protected by the per-install 256-bit Bearer token. Treat the combined configuration copied by the app as a password and do not share it. Rotating the token invalidates existing MCP client credentials.
+The public endpoint remains protected by the per-install 256-bit secret, accepted either as a Bearer token or as the `access_token` query parameter for clients without header-auth configuration. Treat the complete capability URL as a password: anyone possessing it can access the MCP tools. Query credentials can appear in URL history or infrastructure logs, so use only over HTTPS and do not share it. Rotating the Bridge token invalidates both Bearer and capability-URL credentials.
 
 ## Implemented
 
 - Dark Android dashboard with device diagnostics and event log.
 - Foreground MCP server bound to loopback only.
-- Per-install 256-bit Bearer token with copy and rotation controls.
+- Per-install 256-bit access secret with copy and rotation controls; supports Bearer headers and a protected `access_token` URL parameter for no-auth MCP client profiles.
 - Automatic MCP startup when the app opens.
 - ngrok startup/reuse through fixed Termux RUN_COMMAND scripts with an explicit stable account dev domain; stale Bridge-owned tunnels are replaced when the configured domain changes. No arbitrary shell command tool is exposed.
 - ngrok URL discovery through the local agent API and persistent display in the dashboard.
@@ -71,4 +71,4 @@ Keep an offline backup of the keystore and credentials. Never commit them to the
 
 ## Security
 
-The MCP listener remains bound to `127.0.0.1`; ngrok is the only public ingress. Every MCP request requires the Bearer token. The tunnel manager invokes a fixed, app-authored script and never accepts arbitrary shell input from MCP callers.
+The MCP listener remains bound to `127.0.0.1`; ngrok is the only public ingress. Every MCP request requires the per-install secret, supplied either as a Bearer token or as the `access_token` query parameter. The tunnel manager invokes a fixed, app-authored script and never accepts arbitrary shell input from MCP callers.
