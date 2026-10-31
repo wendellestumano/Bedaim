@@ -107,7 +107,7 @@ inline int inspectMinecraftImage(struct dl_phdr_info* info, std::size_t, void* o
             remaining -= descBytes;
 
             if (note.n_type != NT_GNU_BUILD_ID || note.n_namesz != 4u ||
-                std::memcmp(name, "GNU\\0", 4u) != 0) {
+                std::memcmp(name, "GNU\0", 4u) != 0) {
                 continue;
             }
 
