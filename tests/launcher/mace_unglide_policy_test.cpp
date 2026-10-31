@@ -1,5 +1,3 @@
-[Reading 76 lines from start (total: 76 lines, 0 remaining)]
-
 #include "modules/player/MaceFallPolicy.hpp"
 
 #include <cmath>
@@ -76,5 +74,3 @@ int main() {
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
-
-[executed on device: localhost (af746c64-8377-46c3-ba81-f7d94cf8ef4b)]
