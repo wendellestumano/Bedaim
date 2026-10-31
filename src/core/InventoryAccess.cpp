@@ -187,25 +187,38 @@ int inspectMinecraftExecutableAddress(struct dl_phdr_info* info, std::size_t, vo
 
 bool isMinecraftFunction(const void* address) {
     if (!address) return false;
+    const auto addressValue = reinterpret_cast<std::uintptr_t>(address);
+    struct CacheEntry { std::uintptr_t address{}; bool executable{}; };
+    thread_local std::array<CacheEntry, 64> cache{};
+    thread_local std::size_t nextCacheEntry = 0;
+    for (const auto& entry : cache) {
+        if (entry.address == addressValue) return entry.executable;
+    }
+    auto remember = [&](bool executable) {
+        cache[nextCacheEntry++ % cache.size()] = {addressValue, executable};
+        return executable;
+    };
+
     Dl_info info{};
-    if (dladdr(address, &info) == 0 || !info.dli_fname || !info.dli_fbase) return false;
+    if (dladdr(address, &info) == 0 || !info.dli_fname || !info.dli_fbase)
+        return remember(false);
     const std::string_view imageName(info.dli_fname);
     const auto slash = imageName.find_last_of('/');
     const auto basename = slash == std::string_view::npos
         ? imageName : imageName.substr(slash + 1);
-    if (basename != "libminecraftpe.so") return false;
+    if (basename != "libminecraftpe.so") return remember(false);
 
     // dladdr alone also accepts data addresses inside the shared object.
     // A vtable entry must resolve into an executable PT_LOAD segment before
     // InventoryAccess is allowed to call it as a native function.
     MinecraftExecutableAddressQuery query{
         reinterpret_cast<std::uintptr_t>(info.dli_fbase),
-        reinterpret_cast<std::uintptr_t>(address),
+        addressValue,
         false
     };
-    if (!query.imageBase || !query.address) return false;
+    if (!query.imageBase || !query.address) return remember(false);
     dl_iterate_phdr(&inspectMinecraftExecutableAddress, &query);
-    return query.found;
+    return remember(query.found);
 }
 
 void* resolveMinecraftSymbol(const char* symbol) {
@@ -328,7 +341,8 @@ std::string InventoryAccess::stackIdentifier(const void* stack) const {
 
     std::uintptr_t methodAddress = 0;
     if (!safeRead(vtable, ItemGetDescriptionIdVtableIndex * sizeof(std::uintptr_t), methodAddress) ||
-        methodAddress == 0) return {};
+        methodAddress == 0 ||
+        !isMinecraftFunction(reinterpret_cast<const void*>(methodAddress))) return {};
 
     using GetDescriptionIdFn = const std::string& (*)(const void*);
     try {
