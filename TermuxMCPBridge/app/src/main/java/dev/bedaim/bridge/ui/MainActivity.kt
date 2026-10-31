@@ -172,7 +172,9 @@ class MainActivity : Activity() {
                 Toast.makeText(this, "Túnel ainda não detectado. Aguarde ou toque em Conectar tudo.", Toast.LENGTH_LONG).show()
                 refreshTunnelStatusAsync()
             } else {
-                copyText("Remote MCP endpoint", "$base/mcp")
+                val capabilityUrl = "$base/mcp?access_token=${BridgePreferences.getOrCreateToken(this)}"
+                copyText("Remote MCP endpoint (secret URL)", capabilityUrl)
+                Toast.makeText(this, "Endpoint protegido copiado. Trate a URL como uma senha.", Toast.LENGTH_LONG).show()
             }
         }
         actionButton(tunnelCard, "COPIAR CONFIGURAÇÃO DO CLIENTE MCP", false) {
@@ -304,7 +306,7 @@ class MainActivity : Activity() {
             statusValue.postDelayed({ refresh() }, 700)
         }
 
-        root.addView(label("O endpoint remoto exige cadastro único no cliente MCP e autenticação Bearer. Não compartilhe o token.", 11f, secondaryText).apply {
+        root.addView(label("Para clientes MCP sem campo Bearer (como o cadastro personalizado do ChatGPT), use o endpoint remoto com access_token na URL e selecione Sem autenticação. A URL contém uma credencial secreta; não compartilhe. O Bearer continua disponível para clientes que aceitam cabeçalhos.", 11f, secondaryText).apply {
             setPadding(dp(2), dp(10), dp(2), dp(12))
         })
         refresh()
