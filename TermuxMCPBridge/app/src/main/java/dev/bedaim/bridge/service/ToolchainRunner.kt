@@ -59,6 +59,12 @@ object ToolchainRunner {
             "cwd deve permanecer dentro de $SHARED_ROOT"
         }
         require(directory.isDirectory) { "Diretório de trabalho não encontrado." }
+        args.filter { !it.startsWith("-") }.forEach { value ->
+            val candidate = File(value).let { if (it.isAbsolute) it else File(directory, it.path) }.canonicalFile
+            require(candidate.path == canonicalRoot.path || candidate.path.startsWith(canonicalRoot.path + File.separator)) {
+                "Arquivos de entrada devem permanecer dentro de $SHARED_ROOT"
+            }
+        }
         if (tool == "unzip") require(args.firstOrNull() == "-l") { "unzip aceita somente -l (listagem)." }
         return execute(context, tool, args, directory.path)
     }
