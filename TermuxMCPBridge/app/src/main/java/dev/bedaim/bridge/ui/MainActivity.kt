@@ -663,7 +663,8 @@ class MainActivity : Activity() {
                 } else {
                     BridgePreferences.saveTunnelUrl(this, null)
                     updateNgrokDomainLabel()
-                    Toast.makeText(this, "Domínio salvo. Use Conectar tudo para aplicar.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Domínio salvo. Reconectando o túnel…", Toast.LENGTH_LONG).show()
+                    connectAll(silent = true)
                 }
             }
             .show()
