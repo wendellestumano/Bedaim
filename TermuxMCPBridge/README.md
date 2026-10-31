@@ -66,7 +66,7 @@ Do not select **No authentication** and do not paste the legacy capability URL w
 - Android battery management, force-stop, reboot policy, and OEM background restrictions can still stop services. Boot recovery is best-effort; if Android or the device manufacturer blocks it, open the Bridge once. Shizuku may separately need to be started/authorized again after reboot.
 - Shizuku must be running and authorized for shared-storage file operations. Shizuku is not root; private data belonging to other apps and restricted Android/data or obb paths may remain inaccessible.
 - Remote access is available only while the local MCP service, ngrok agent, and network connection are online.
-- No arbitrary shell execution, root command execution, process manager, or build orchestration is exposed.
+- No arbitrary shell execution, root command execution, process manager, or build orchestration is exposed. The MCP toolchain is intentionally restricted to a small read-only executable allowlist and a fixed diagnostic.
 
 ## Build
 
