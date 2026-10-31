@@ -33,6 +33,8 @@ public:
     int selectedHotbarSlot(const sdk::Player* player) const;
     std::string selectedHotbarIdentifier(const sdk::Player* player) const;
     std::string offhandIdentifier(const sdk::Player* player) const;
+    bool readOffhandState(const sdk::Player* player, std::string& identifier, bool& empty,
+                          std::string* error = nullptr) const;
     bool readOffhandIdentifier(const sdk::Player* player, std::string& identifier,
                                std::string* error = nullptr) const;
     bool selectHotbarSlot(sdk::Player* player, int slot) const;
