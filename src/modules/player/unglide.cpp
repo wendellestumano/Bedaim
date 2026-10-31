@@ -1,5 +1,3 @@
-[Reading 648 lines from start (total: 648 lines, 0 remaining)]
-
 #include "unglide.hpp"
 #include "aimassist.hpp"
 #include "MaceFallPolicy.hpp"
@@ -648,5 +646,3 @@ bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
  if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
  try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
 }
-
-[executed on device: localhost (af746c64-8377-46c3-ba81-f7d94cf8ef4b)]
