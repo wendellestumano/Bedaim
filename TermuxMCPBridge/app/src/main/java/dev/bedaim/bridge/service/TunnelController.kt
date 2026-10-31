@@ -59,7 +59,7 @@ object TunnelController {
               echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
               exit 0
             fi
-            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "${'$'}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            nohup ngrok http 8765 --url $domain --log=stdout --log-format=logfmt > "${'$'}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
             echo "${'$'}!" > "${'$'}PID_FILE"
             echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
           '
