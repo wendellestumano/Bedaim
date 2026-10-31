@@ -330,7 +330,8 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto& inventory = bedrocktools::core::InventoryAccess::get();
     std::string offhandId;
     std::string offhandError;
-    if (!inventory.readOffhandIdentifier(player, offhandId, &offhandError)) {
+    bool offhandEmpty = false;
+    if (!inventory.readOffhandState(player, offhandId, offhandEmpty, &offhandError)) {
         if (!g_loggedOffhandReadFailure.exchange(true, std::memory_order_acq_rel))
             bedrocktools::diagnostics::probe(
                 bedrocktools::diagnostics::Level::Error, "AutoTotem", "offhand_state", "unreadable",
@@ -339,7 +340,6 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const bool offhandHasTotem = containsTotem(offhandId);
-    const bool offhandEmpty = offhandId.empty();
     const int totemSlot = inventory.findInventorySlot(player, "totem");
 
     bool inCombat = player->hurtTime() > 0;
