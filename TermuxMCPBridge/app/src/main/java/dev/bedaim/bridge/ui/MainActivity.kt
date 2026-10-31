@@ -234,6 +234,8 @@ class MainActivity : Activity() {
             12f, secondaryText
         ))
         actionButton(termuxCard, "VERIFICAR APKTOOL / AAPT / GIT / PYTHON / CLANG", true) {
+            runTermuxToolchainCheck()
+        }
         actionButton(termuxCard, "ALTERNAR ACESSO REMOTO AO SHELL DO TERMUX", false) {
             val enabled = !BridgePreferences.isTermuxRemoteShellEnabled(this)
             if (enabled) {
@@ -255,8 +257,6 @@ class MainActivity : Activity() {
             "Shell remoto: ${if (BridgePreferences.isTermuxRemoteShellEnabled(this)) "ATIVADO" else "desativado"}. O controle é local e vem desativado por padrão.",
             12f, secondaryText
         ).apply { setPadding(0, dp(6), 0, dp(2)) })
-            runTermuxToolchainCheck()
-        }
         actionButton(termuxCard, "INSTALAR APKTOOL NO TERMUX", false) { confirmInstallApktool() }
         actionButton(termuxCard, "INSTALAR CLOUDFLARED NO TERMUX", true) { confirmInstallCloudflared() }
         actionButton(termuxCard, "CONFIGURAR PERMISSÃO RUN_COMMAND", false) {
