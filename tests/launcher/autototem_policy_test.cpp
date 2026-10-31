@@ -74,6 +74,15 @@ int main() {
     check(!shouldRetryDispatch(false, 0),
           "retry requires an actual failed dispatch attempt");
 
+    check(!bedaim::autototem::confirmationTimedOut(false, false, true),
+          "no confirmation timeout exists without an accepted pending broadcast");
+    check(!bedaim::autototem::confirmationTimedOut(true, true, true),
+          "observed offhand totem completes confirmation");
+    check(!bedaim::autototem::confirmationTimedOut(true, false, false),
+          "confirmation window remains open before its deadline");
+    check(bedaim::autototem::confirmationTimedOut(true, false, true),
+          "missing offhand change is reported after confirmation deadline");
+
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
