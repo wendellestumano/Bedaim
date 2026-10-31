@@ -8,6 +8,7 @@ object BridgePreferences {
     private const val PREFS = "bridge_private_settings"
     private const val TOKEN = "mcp_bearer_token"
     private const val TUNNEL_URL = "ngrok_public_url"
+    private const val AUTO_START = "bridge_auto_start"
 
     @Synchronized
     fun getOrCreateToken(context: Context): String {
@@ -20,6 +21,16 @@ object BridgePreferences {
     fun rotateToken(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return generateAndStore(prefs)
+    }
+
+    fun isAutoStartEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(AUTO_START, true)
+
+    fun setAutoStartEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(AUTO_START, enabled)
+            .apply()
     }
 
     fun saveTunnelUrl(context: Context, url: String?) {
