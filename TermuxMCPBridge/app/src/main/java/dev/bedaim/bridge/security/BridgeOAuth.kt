@@ -39,7 +39,7 @@ object BridgeOAuth {
     }.getOrDefault(false)
 
     suspend fun handle(call: ApplicationCall, issuerInput: String): Boolean {
-        val issuer = issuerInput.trimEnd("/")
+        val issuer = issuerInput.trimEnd('/')
         val resource = "$issuer$RESOURCE_PATH"
         val path = call.request.path()
         when {
@@ -174,7 +174,7 @@ object BridgeOAuth {
 
     fun isValidAccessToken(value: String, issuerInput: String): Boolean {
         val item = access[value] ?: return false
-        if (item.expires < now() || item.resource != "${issuerInput.trimEnd("/")}/mcp" ||
+        if (item.expires < now() || item.resource != "${issuerInput.trimEnd('/')}/mcp" ||
             "mcp" !in item.scope.split(" ")) {
             access.remove(value); return false
         }
