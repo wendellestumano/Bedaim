@@ -12,6 +12,7 @@ import dev.bedaim.bridge.R
 import dev.bedaim.bridge.core.*
 import dev.bedaim.bridge.mcp.McpServerFactory
 import dev.bedaim.bridge.security.BridgePreferences
+import dev.bedaim.bridge.security.BridgeOAuth
 import io.ktor.server.cio.CIO
 import io.ktor.server.engine.*
 import io.ktor.server.application.*
@@ -103,20 +104,24 @@ class BridgeService : Service() {
         try {
             server = embeddedServer(CIO, host = "127.0.0.1", port = PORT) {
                 intercept(ApplicationCallPipeline.Call) {
+                    val issuer = BridgePreferences.getConfiguredNgrokDomain(this@BridgeService).trimEnd('/')
+                    if (BridgeOAuth.handle(call, issuer)) finish()
                     if (call.request.path().startsWith("/mcp")) {
                         val header = call.request.headers[HttpHeaders.Authorization].orEmpty()
                         val bearerSupplied = header.takeIf { it.startsWith("Bearer ", ignoreCase = true) }
                             ?.substringAfter(' ')
-                        // ChatGPT's custom MCP connector currently offers OAuth or no-auth,
-                        // but no static Bearer header field. Support a high-entropy capability
-                        // URL for clients that cannot attach Authorization headers. HTTPS is
-                        // mandatory for the public ngrok endpoint; rotating the Bridge token
-                        // revokes both Bearer and capability-URL access.
-                        val urlSupplied = call.request.queryParameters["access_token"]
-                        val supplied = bearerSupplied ?: urlSupplied.orEmpty()
-                        val ok = (bearerSupplied != null || !urlSupplied.isNullOrBlank()) &&
-                            MessageDigest.isEqual(token.toByteArray(), supplied.toByteArray())
-                        if (!ok) {
+                        val legacyQueryToken = call.request.queryParameters["access_token"]
+                        val oauthValid = bearerSupplied?.let { BridgeOAuth.isValidAccessToken(it, issuer) } == true
+                        val legacyValid = bearerSupplied?.let {
+                            MessageDigest.isEqual(token.toByteArray(), it.toByteArray())
+                        } == true || legacyQueryToken?.let {
+                            MessageDigest.isEqual(token.toByteArray(), it.toByteArray())
+                        } == true
+                        if (!oauthValid && !legacyValid) {
+                            call.response.headers.append(
+                                HttpHeaders.WWWAuthenticate,
+                                """Bearer resource_metadata="$issuer/.well-known/oauth-protected-resource", scope="mcp""""
+                            )
                             call.respond(HttpStatusCode.Unauthorized)
                             finish()
                         }
