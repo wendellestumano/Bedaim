@@ -234,6 +234,27 @@ class MainActivity : Activity() {
             12f, secondaryText
         ))
         actionButton(termuxCard, "VERIFICAR APKTOOL / AAPT / GIT / PYTHON / CLANG", true) {
+        actionButton(termuxCard, "ALTERNAR ACESSO REMOTO AO SHELL DO TERMUX", false) {
+            val enabled = !BridgePreferences.isTermuxRemoteShellEnabled(this)
+            if (enabled) {
+                AlertDialog.Builder(this)
+                    .setTitle("Ativar shell remoto completo?")
+                    .setMessage("Isso permite que qualquer cliente autenticado pelo endpoint MCP execute comandos no ambiente Termux com os privilégios do próprio Termux. O endpoint/ngrok deve ser tratado como uma credencial. Isso NÃO concede root nem acesso ao sandbox privado de outros apps.")
+                    .setNegativeButton("Cancelar", null)
+                    .setPositiveButton("Ativar") { _, _ ->
+                        BridgePreferences.setTermuxRemoteShellEnabled(this, true)
+                        Toast.makeText(this, "Shell remoto ativado.", Toast.LENGTH_LONG).show()
+                    }
+                    .show()
+            } else {
+                BridgePreferences.setTermuxRemoteShellEnabled(this, false)
+                Toast.makeText(this, "Shell remoto desativado.", Toast.LENGTH_LONG).show()
+            }
+        }
+        termuxCard.addView(label(
+            "Shell remoto: ${if (BridgePreferences.isTermuxRemoteShellEnabled(this)) "ATIVADO" else "desativado"}. O controle é local e vem desativado por padrão.",
+            12f, secondaryText
+        ).apply { setPadding(0, dp(6), 0, dp(2)) })
             runTermuxToolchainCheck()
         }
         actionButton(termuxCard, "INSTALAR APKTOOL NO TERMUX", false) { confirmInstallApktool() }
