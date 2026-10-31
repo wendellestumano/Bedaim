@@ -4,6 +4,8 @@ import android.app.*
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.content.pm.ServiceInfo
 import androidx.core.app.NotificationCompat
 import dev.bedaim.bridge.R
@@ -21,6 +23,26 @@ import java.security.MessageDigest
 
 class BridgeService : Service() {
     private var server: EmbeddedServer<*, *>? = null
+    private val tunnelMonitorHandler = Handler(Looper.getMainLooper())
+    private val tunnelMonitor = object : Runnable {
+        override fun run() {
+            if (server == null) return
+            Thread {
+                val publicUrl = TunnelController.readPublicUrl()
+                if (publicUrl == null) {
+                    TunnelController.start(this@BridgeService)
+                } else {
+                    BridgePreferences.saveTunnelUrl(this@BridgeService, publicUrl)
+                }
+            }.start()
+            tunnelMonitorHandler.postDelayed(this, TUNNEL_MONITOR_INTERVAL_MS)
+        }
+    }
+
+    private fun scheduleTunnelMonitor() {
+        tunnelMonitorHandler.removeCallbacks(tunnelMonitor)
+        tunnelMonitorHandler.postDelayed(tunnelMonitor, TUNNEL_MONITOR_INITIAL_DELAY_MS)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -35,6 +57,9 @@ class BridgeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                tunnelMonitorHandler.removeCallbacks(tunnelMonitor)
+                TunnelController.stop(this)
+                BridgePreferences.saveTunnelUrl(this, null)
                 BridgeStatus.update(BridgeState.STOPPING, "Stopping")
                 server?.stop(250, 750)
                 server = null
@@ -64,7 +89,11 @@ class BridgeService : Service() {
     }
 
     private fun startServer() {
-        if (server != null) return
+        if (server != null) {
+            TunnelController.start(this)
+            scheduleTunnelMonitor()
+            return
+        }
         BridgeStatus.update(BridgeState.STARTING, "Starting local MCP server")
         val token = BridgePreferences.getOrCreateToken(this)
         try {
@@ -86,6 +115,8 @@ class BridgeService : Service() {
             BridgeStatus.update(BridgeState.RUNNING, "Listening on 127.0.0.1:$PORT")
             getSystemService(NotificationManager::class.java)
                 .notify(NOTIFICATION_ID, notification("MCP server running on port $PORT"))
+            TunnelController.start(this)
+            scheduleTunnelMonitor()
         } catch (t: Throwable) {
             server = null
             BridgeStatus.update(BridgeState.ERROR, "MCP startup failed: ${t.javaClass.simpleName}")
@@ -95,6 +126,7 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        tunnelMonitorHandler.removeCallbacks(tunnelMonitor)
         server?.stop(250, 750)
         server = null
         BridgeStatus.update(BridgeState.STOPPED, "Stopped")
@@ -125,5 +157,7 @@ class BridgeService : Service() {
         const val ACTION_ROTATE_TOKEN = "dev.bedaim.bridge.action.ROTATE_TOKEN"
         private const val CHANNEL = "bridge_service"
         private const val NOTIFICATION_ID = 8765
+        private const val TUNNEL_MONITOR_INITIAL_DELAY_MS = 20_000L
+        private const val TUNNEL_MONITOR_INTERVAL_MS = 60_000L
     }
 }
