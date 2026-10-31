@@ -4,7 +4,7 @@ Native Android app that hosts an authenticated MCP Streamable HTTP endpoint at `
 
 ## Alpha05: automatic connection
 
-When the app opens, it starts the local MCP foreground service. The service then asks Termux to start or reuse an ngrok tunnel targeting port `8765`. It supports ngrok installed directly in Termux or inside the `debian` proot-distro environment. The app reads ngrok's local agent API at `127.0.0.1:4040` to discover the HTTPS URL and displays the remote MCP endpoint.
+When the app opens, it starts the local MCP foreground service. The service then asks Termux to start or reuse an ngrok tunnel targeting port `8765`. It supports ngrok installed directly in Termux or inside the `debian` proot-distro environment. The app launches ngrok with the configured account-assigned static dev domain (`--url`) and reads ngrok's local agent API at `127.0.0.1:4040` to verify that the expected HTTPS URL is active. The dashboard includes a one-time domain editor; the initial value is the ngrok dev URL used in earlier Bridge testing.
 
 While the MCP service is running, a lightweight watchdog checks the tunnel every 60 seconds and requests a restart if the ngrok agent is no longer reachable. The service uses Android `START_STICKY` so Android may recreate it after process reclamation. A boot receiver also requests startup after device reboot and after app updates; this is enabled by default and can be disabled in the dashboard. Explicitly stopping the service disables reboot autostart until the app is opened again. The dashboard includes a one-tap **Connect everything / repair connection** action, remote endpoint copy, and a combined endpoint + Bearer configuration copy action.
 
@@ -12,14 +12,14 @@ The watchdog only stops a tunnel whose PID file was created by this Bridge. It d
 
 ## One-time requirements
 
-1. Install Termux and ngrok, and authenticate ngrok in either the normal Termux environment or the `debian` proot-distro environment.
+1. Install Termux and ngrok, and authenticate ngrok in either the normal Termux environment or the `debian` proot-distro environment. The configured static dev domain must belong to that same ngrok account.
 2. In Termux, enable external app commands by setting `allow-external-apps=true` in `~/.termux/termux.properties`, then restart Termux.
 3. Grant **RUN_COMMAND** permission to Termux MCP Bridge in Android app permissions.
 4. Open Termux MCP Bridge. It will start the local server and tunnel automatically.
 
 No ngrok authtoken is requested by the Bridge or sent to ChatGPT. The app reuses ngrok's existing local configuration. If ngrok is not installed or authenticated, the local MCP server can still run; the dashboard logs explain why the public tunnel did not start.
 
-The ngrok Free plan assigns an account development domain that is retained when the agent restarts. The app discovers the active URL rather than hardcoding a previous tunnel address. See [ngrok Free Plan Limits](https://ngrok.com/docs/pricing-limits/free-plan-limits/).
+The ngrok Free plan assigns an account development domain that remains assigned to the account. The Bridge explicitly passes that domain to ngrok so the URL remains stable across agent restarts. If the default domain shown in the dashboard is not owned by the configured ngrok account, replace it once in **Configure fixed ngrok domain**. See [ngrok's static dev domain explanation](https://ngrok.com/blog/free-static-domains-ngrok-users).
 
 ## One-time ChatGPT/client registration
 
@@ -33,7 +33,7 @@ The public endpoint remains protected by the per-install 256-bit Bearer token. T
 - Foreground MCP server bound to loopback only.
 - Per-install 256-bit Bearer token with copy and rotation controls.
 - Automatic MCP startup when the app opens.
-- ngrok startup/reuse through fixed Termux RUN_COMMAND scripts; no arbitrary shell command tool is exposed.
+- ngrok startup/reuse through fixed Termux RUN_COMMAND scripts with an explicit stable account dev domain; stale Bridge-owned tunnels are replaced when the configured domain changes. No arbitrary shell command tool is exposed.
 - ngrok URL discovery through the local agent API and persistent display in the dashboard.
 - 60-second tunnel watchdog while the MCP foreground service is active.
 - Automatic ngrok lookup in Termux first, then Debian proot-distro.
