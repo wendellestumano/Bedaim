@@ -157,7 +157,7 @@ class MainActivity : Activity() {
             if (base.isNullOrBlank()) {
                 Toast.makeText(this, "Túnel ainda não detectado.", Toast.LENGTH_LONG).show()
             } else {
-                val value = "Endpoint: $base/mcp\\nAuthorization: Bearer ${BridgePreferences.getOrCreateToken(this)}"
+                val value = "Endpoint: $base/mcp\nAuthorization: Bearer ${BridgePreferences.getOrCreateToken(this)}"
                 copyText("Remote MCP configuration", value)
                 Toast.makeText(this, "Endpoint e bearer token copiados. Trate esse texto como senha.", Toast.LENGTH_LONG).show()
             }
@@ -636,22 +636,22 @@ class MainActivity : Activity() {
     private fun refreshTunnelStatusAsync() {
         Thread {
             var found: String? = null
-            repeat(18) {
+            for (attempt in 0 until 18) {
                 found = TunnelController.readPublicUrl()
-                if (found != null) return@repeat
+                if (found != null) break
                 Thread.sleep(900)
             }
             if (found != null) BridgePreferences.saveTunnelUrl(this, found)
             runOnUiThread {
                 if (!::tunnelValue.isInitialized) return@runOnUiThread
                 tunnelValue.text = if (found != null) {
-                    "Conectado • túnel HTTPS ativo\\n$found/mcp"
+                    "Conectado • túnel HTTPS ativo\n$found/mcp"
                 } else {
                     val saved = BridgePreferences.getTunnelUrl(this)
                     if (saved.isNullOrBlank()) {
                         "Servidor local solicitado. Ngrok ainda não respondeu. Confira Termux + RUN_COMMAND, a configuração de autenticação do ngrok e os logs."
                     } else {
-                        "Último endpoint salvo: $saved/mcp\\nVerificando se o agente está online…"
+                        "Último endpoint salvo: $saved/mcp\nVerificando se o agente está online…"
                     }
                 }
                 refreshLogs()
@@ -667,7 +667,7 @@ class MainActivity : Activity() {
             tunnelValue.text = if (savedUrl.isNullOrBlank()) {
                 "Túnel ngrok: aguardando conexão. O Bridge tentará iniciá-lo automaticamente."
             } else {
-                "Túnel ngrok conectado\\n$savedUrl/mcp"
+                "Túnel ngrok conectado\n$savedUrl/mcp"
             }
         }
         statusDot.background = circle(if (running) accent else Color.rgb(220, 170, 75))
