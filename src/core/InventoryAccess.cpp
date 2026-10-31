@@ -30,22 +30,43 @@ T read(const void* object, std::size_t offset) {
 
 bool isReadableMemory(const void* pointer, std::size_t size);
 
+template<class T>
+bool safeRead(const void* object, std::size_t offset, T& value) {
+    if (!object) return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(object);
+    if (offset > std::numeric_limits<std::uintptr_t>::max() - base) return false;
+    const auto* field = reinterpret_cast<const void*>(base + offset);
+    if (!isReadableMemory(field, sizeof(T))) return false;
+    std::memcpy(&value, field, sizeof(T));
+    return true;
+}
+
 bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size) {
     begin = 0;
     size = 0;
     if (!player) return false;
-    const void* proxy = read<const void*>(player, PlayerInventory);
-    if (!proxy) return false;
-    const void* inventory = read<const void*>(proxy, PlayerInventoryContainer);
-    if (!inventory) return false;
-    begin = read<std::uintptr_t>(inventory, FillingContainerItems);
-    const auto end = read<std::uintptr_t>(inventory, FillingContainerItems + sizeof(void*));
+
+    const void* proxy = nullptr;
+    if (!safeRead(player, PlayerInventory, proxy) || !proxy ||
+        !isReadableMemory(proxy, sizeof(void*))) return false;
+
+    const void* inventory = nullptr;
+    if (!safeRead(proxy, PlayerInventoryContainer, inventory) || !inventory ||
+        !isReadableMemory(inventory, sizeof(void*))) return false;
+
+    std::uintptr_t end = 0;
+    if (!safeRead(inventory, FillingContainerItems, begin) ||
+        !safeRead(inventory, FillingContainerItems + sizeof(void*), end)) return false;
     if (!begin && !end) return true;
     if (!begin || end < begin || begin % alignof(void*) != 0) return false;
+
     const auto bytes = end - begin;
     if (bytes % ItemStackSize != 0) return false;
-    size = bytes / ItemStackSize;
-    return size <= 64;
+    size = static_cast<std::size_t>(bytes / ItemStackSize);
+    if (size > 64) return false;
+    if (size != 0 && !isReadableMemory(reinterpret_cast<const void*>(begin),
+                                       size * ItemStackSize)) return false;
+    return true;
 }
 
 constexpr std::size_t PlayerTransactionManagerOffset = 0xA28;
@@ -232,23 +253,40 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
 }
 
 std::string InventoryAccess::stackIdentifier(const void* stack) const {
-    // Match the known-working Bedrock 26.52 implementation. The newer strict
-    // library-origin check rejected valid Item::getDescriptionId virtual entries
-    // exposed through the active BedrockTools/LeviLamina runtime. That made every
-    // consumer see an empty item identifier: weapon filters, swappers, AutoTotem,
-    // and the ULTRAKILL HUD all depend on this shared lookup.
-    if (!stack || !read<std::uint8_t>(stack, ItemStackValid)) return {};
-    if (read<std::uint8_t>(stack, ItemStackCount) == 0) return {};
-    const void* counter = read<const void*>(stack, ItemStackItemCounter);
-    const void* item = counter ? read<const void*>(counter, 0) : nullptr;
-    if (!item) return {};
-    const auto* vtable = read<const std::uintptr_t*>(item, 0);
-    if (!vtable || !vtable[ItemGetDescriptionIdVtableIndex]) return {};
+    // The 26.60 PlayerInventory offset is maintained in sdk/offsets/Inventory.hpp.
+    // Keep every nested ItemStack/Item/vtable read inside a readable mapped region;
+    // an unreadable identifier is not evidence that the slot is empty.
+    if (!stack || !isReadableMemory(stack, ItemStackSize)) return {};
+
+    std::uint8_t valid = 0;
+    std::uint8_t count = 0;
+    if (!safeRead(stack, ItemStackValid, valid) || !safeRead(stack, ItemStackCount, count) ||
+        valid == 0 || count == 0) return {};
+
+    const void* counter = nullptr;
+    if (!safeRead(stack, ItemStackItemCounter, counter) || !counter ||
+        !isReadableMemory(counter, sizeof(void*))) return {};
+
+    const void* item = nullptr;
+    if (!safeRead(counter, 0, item) || !item || !isReadableMemory(item, sizeof(void*))) return {};
+
+    const std::uintptr_t* vtable = nullptr;
+    if (!safeRead(item, 0, vtable) || !vtable ||
+        !isReadableMemory(vtable, (ItemGetDescriptionIdVtableIndex + 1) * sizeof(std::uintptr_t)))
+        return {};
+
+    std::uintptr_t methodAddress = 0;
+    if (!safeRead(vtable, ItemGetDescriptionIdVtableIndex * sizeof(std::uintptr_t), methodAddress) ||
+        methodAddress == 0) return {};
+
     using GetDescriptionIdFn = const std::string& (*)(const void*);
-    const auto& identifier =
-        reinterpret_cast<GetDescriptionIdFn>(vtable[ItemGetDescriptionIdVtableIndex])(item);
-    if (identifier.empty() || identifier.size() > 128) return {};
-    return identifier;
+    try {
+        const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(methodAddress)(item);
+        if (identifier.empty() || identifier.size() > 128) return {};
+        return identifier;
+    } catch (...) {
+        return {};
+    }
 }
 
 int InventoryAccess::countStack(const void* stack, std::string_view identifierPart) const {
@@ -297,42 +335,30 @@ int InventoryAccess::findInventorySlot(const sdk::Player* player, std::string_vi
     return -1;
 }
 
-bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
-                                                  std::string& identifier,
-                                                  std::string* error) const {
+bool InventoryAccess::readOffhandState(const sdk::Player* player,
+                                        std::string& identifier,
+                                        bool& empty,
+                                        std::string* error) const {
     identifier.clear();
+    empty = false;
     auto fail = [&](std::string message) {
         if (error) *error = std::move(message);
         return false;
     };
     if (!player)
         return fail("LocalPlayerTickEvent supplied a null Player pointer");
-    if (!isReadableMemory(player, sizeof(void*)))
-        return fail("LocalPlayerTickEvent Player pointer is not in a readable memory region");
 
-    // Validate the actual pointer-sized fields, not the entire byte span from
-    // the start of Player to the inventory offset. Player objects may cross
-    // mapping/page boundaries, so validating that whole span falsely rejects
-    // valid objects even when the target field itself is readable.
-    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
-    if (PlayerInventory > std::numeric_limits<std::uintptr_t>::max() - playerAddress)
-        return fail("Player inventory field address overflowed");
-    const auto* inventoryField = reinterpret_cast<const void*>(playerAddress + PlayerInventory);
-    if (!isReadableMemory(inventoryField, sizeof(void*)))
-        return fail("Player inventory pointer field is unreadable");
-    const void* inventoryProxy = read<const void*>(player, PlayerInventory);
-    if (!inventoryProxy || !isReadableMemory(inventoryProxy, sizeof(void*)))
-        return fail("Player inventory proxy pointer is null or unreadable");
+    // Confirm the 26.60 PlayerInventory/container fields before calling the
+    // native offhand getter. Read each field separately to avoid crossing pages.
+    const void* inventoryProxy = nullptr;
+    if (!safeRead(player, PlayerInventory, inventoryProxy) || !inventoryProxy ||
+        !isReadableMemory(inventoryProxy, sizeof(void*)))
+        return fail("26.60 PlayerInventory pointer is null or unreadable");
 
-    const auto proxyAddress = reinterpret_cast<std::uintptr_t>(inventoryProxy);
-    if (PlayerInventoryContainer > std::numeric_limits<std::uintptr_t>::max() - proxyAddress)
-        return fail("inventory container field address overflowed");
-    const auto* containerField = reinterpret_cast<const void*>(proxyAddress + PlayerInventoryContainer);
-    if (!isReadableMemory(containerField, sizeof(void*)))
-        return fail("inventory container pointer field is unreadable");
-    const void* container = read<const void*>(inventoryProxy, PlayerInventoryContainer);
-    if (!container || !isReadableMemory(container, sizeof(void*)))
-        return fail("inventory container pointer is null or unreadable");
+    const void* container = nullptr;
+    if (!safeRead(inventoryProxy, PlayerInventoryContainer, container) || !container ||
+        !isReadableMemory(container, sizeof(void*)))
+        return fail("26.60 inventory container pointer is null or unreadable");
 
     if (!m_getOffhandSlot)
         return fail("no validated Actor/Player::getOffhandSlot entry point is available");
@@ -349,9 +375,31 @@ bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
         return fail(detail);
     }
 
+    std::uint8_t valid = 0;
+    std::uint8_t count = 0;
+    if (!safeRead(offhand, ItemStackValid, valid) || !safeRead(offhand, ItemStackCount, count))
+        return fail("offhand ItemStack validity/count fields are unreadable");
+
+    if (valid == 0 || count == 0) {
+        empty = true;
+        if (error) error->clear();
+        return true;
+    }
+
     identifier = stackIdentifier(offhand);
+    if (identifier.empty())
+        return fail("offhand ItemStack is non-empty but its item identifier could not be resolved; refusing to treat it as empty");
+
+    empty = false;
     if (error) error->clear();
     return true;
+}
+
+bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
+                                            std::string& identifier,
+                                            std::string* error) const {
+    bool empty = false;
+    return readOffhandState(player, identifier, empty, error);
 }
 
 std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const {
