@@ -38,6 +38,7 @@ import dev.bedaim.bridge.apklab.ApkLab
 import dev.bedaim.bridge.core.RootAdapter
 import dev.bedaim.bridge.security.BridgePreferences
 import dev.bedaim.bridge.service.BridgeService
+import dev.bedaim.bridge.service.TunnelController
 import rikka.shizuku.Shizuku
 import java.io.File
 import java.io.FileOutputStream
@@ -52,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var apkReportValue: TextView
     private lateinit var logsValue: TextView
     private lateinit var workspaceValue: TextView
+    private lateinit var tunnelValue: TextView
     private var selectedApk: File? = null
 
     private val bgColor = Color.rgb(7, 8, 11)
@@ -72,6 +74,7 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 9)
         }
         render()
+        window.decorView.post { connectAll(silent = true) }
     }
 
     override fun onResume() {
@@ -117,7 +120,7 @@ class MainActivity : Activity() {
             setPadding(0, dp(10), 0, dp(4))
         }
         statusCard.addView(statusValue)
-        statusCard.addView(label("127.0.0.1:8765  •  somente neste dispositivo", 12f, secondaryText))
+        statusCard.addView(label("MCP local em 127.0.0.1:8765 • túnel remoto gerenciado pelo Bridge", 12f, secondaryText))
         actionButton(statusCard, "INICIAR SERVIDOR", true) {
             ContextCompat.startForegroundService(
                 this,
@@ -128,6 +131,36 @@ class MainActivity : Activity() {
         actionButton(statusCard, "PARAR SERVIDOR", false) {
             startService(Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_STOP))
             statusValue.postDelayed({ refresh() }, 350)
+        }
+
+        val tunnelCard = card(root)
+        sectionTitle(tunnelCard, "CONEXÃO REMOTA • NGROK")
+        tunnelValue = label("Preparando conexão automática…", 13f, primaryText)
+        tunnelValue.setLineSpacing(dp(4).toFloat(), 1f)
+        tunnelCard.addView(tunnelValue)
+        tunnelCard.addView(label(
+            "Ao abrir este app, o servidor MCP e o túnel são iniciados automaticamente. O ngrok usa a configuração já existente no Termux ou no Debian do proot-distro.",
+            12f, secondaryText
+        ).apply { setPadding(0, dp(8), 0, dp(2)) })
+        actionButton(tunnelCard, "CONECTAR TUDO / REPARAR CONEXÃO", true) { connectAll() }
+        actionButton(tunnelCard, "COPIAR ENDPOINT MCP REMOTO", false) {
+            val base = BridgePreferences.getTunnelUrl(this)
+            if (base.isNullOrBlank()) {
+                Toast.makeText(this, "Túnel ainda não detectado. Aguarde ou toque em Conectar tudo.", Toast.LENGTH_LONG).show()
+                refreshTunnelStatusAsync()
+            } else {
+                copyText("Remote MCP endpoint", "$base/mcp")
+            }
+        }
+        actionButton(tunnelCard, "COPIAR CONFIGURAÇÃO DO CLIENTE MCP", false) {
+            val base = BridgePreferences.getTunnelUrl(this)
+            if (base.isNullOrBlank()) {
+                Toast.makeText(this, "Túnel ainda não detectado.", Toast.LENGTH_LONG).show()
+            } else {
+                val value = "Endpoint: $base/mcp\\nAuthorization: Bearer ${BridgePreferences.getOrCreateToken(this)}"
+                copyText("Remote MCP configuration", value)
+                Toast.makeText(this, "Endpoint e bearer token copiados. Trate esse texto como senha.", Toast.LENGTH_LONG).show()
+            }
         }
 
         val deviceCard = card(root)
@@ -248,7 +281,7 @@ class MainActivity : Activity() {
             statusValue.postDelayed({ refresh() }, 700)
         }
 
-        root.addView(label("Acesso remoto e execução de comandos ainda estão desativados nesta versão.", 11f, secondaryText).apply {
+        root.addView(label("O endpoint remoto exige cadastro único no cliente MCP e autenticação Bearer. Não compartilhe o token.", 11f, secondaryText).apply {
             setPadding(dp(2), dp(10), dp(2), dp(12))
         })
         refresh()
@@ -583,9 +616,60 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    private fun connectAll(silent: Boolean = false) {
+        try {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_START)
+            )
+            BridgeStatus.recordEvent("Conexão automática: servidor MCP e túnel solicitados.")
+            if (::tunnelValue.isInitialized) tunnelValue.text = "Iniciando servidor MCP e verificando ngrok…"
+            refreshTunnelStatusAsync()
+            if (!silent) Toast.makeText(this, "Conexão solicitada. O Bridge está verificando o túnel.", Toast.LENGTH_LONG).show()
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Conexão automática falhou: ${error.javaClass.simpleName}")
+            if (::tunnelValue.isInitialized) tunnelValue.text = "Falha ao iniciar: ${error.message}"
+            if (!silent) Toast.makeText(this, "Não foi possível iniciar o serviço Bridge.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun refreshTunnelStatusAsync() {
+        Thread {
+            var found: String? = null
+            repeat(18) {
+                found = TunnelController.readPublicUrl()
+                if (found != null) return@repeat
+                Thread.sleep(900)
+            }
+            if (found != null) BridgePreferences.saveTunnelUrl(this, found)
+            runOnUiThread {
+                if (!::tunnelValue.isInitialized) return@runOnUiThread
+                tunnelValue.text = if (found != null) {
+                    "Conectado • túnel HTTPS ativo\\n$found/mcp"
+                } else {
+                    val saved = BridgePreferences.getTunnelUrl(this)
+                    if (saved.isNullOrBlank()) {
+                        "Servidor local solicitado. Ngrok ainda não respondeu. Confira Termux + RUN_COMMAND, a configuração de autenticação do ngrok e os logs."
+                    } else {
+                        "Último endpoint salvo: $saved/mcp\\nVerificando se o agente está online…"
+                    }
+                }
+                refreshLogs()
+            }
+        }.start()
+    }
+
     private fun refresh() {
         if (!::statusValue.isInitialized) return
         val running = BridgeStatus.state.name == "RUNNING"
+        if (::tunnelValue.isInitialized) {
+            val savedUrl = BridgePreferences.getTunnelUrl(this)
+            tunnelValue.text = if (savedUrl.isNullOrBlank()) {
+                "Túnel ngrok: aguardando conexão. O Bridge tentará iniciá-lo automaticamente."
+            } else {
+                "Túnel ngrok conectado\\n$savedUrl/mcp"
+            }
+        }
         statusDot.background = circle(if (running) accent else Color.rgb(220, 170, 75))
         statusValue.text = "Estado: ${BridgeStatus.state}\n${BridgeStatus.detail}"
         deviceValue.text = deviceDiagnostics()
