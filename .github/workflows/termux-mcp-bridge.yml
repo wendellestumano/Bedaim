@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - tools/termux-mcp-bridge-alpha
+      - tools/termux-mcp-bridge-shizuku-storage
     paths:
       - 'TermuxMCPBridge/**'
       - '.github/workflows/termux-mcp-bridge.yml'

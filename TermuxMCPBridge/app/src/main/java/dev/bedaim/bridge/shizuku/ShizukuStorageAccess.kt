@@ -5,6 +5,7 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.IBinder
 import dev.bedaim.bridge.IBridgeUserService
+import dev.bedaim.bridge.BuildConfig
 import rikka.shizuku.Shizuku
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -51,7 +52,7 @@ object ShizukuStorageAccess {
                 binding = true
                 connected = CountDownLatch(1)
                 args = Shizuku.UserServiceArgs(
-                    ComponentName("dev.bedaim.bridge", BridgeUserService::class.java.name)
+                    ComponentName(BuildConfig.APPLICATION_ID, BridgeUserService::class.java.name)
                 ).daemon(false).processNameSuffix("storage").debuggable(false).version(1)
                 try {
                     Shizuku.bindUserService(args!!, connection)
