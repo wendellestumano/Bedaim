@@ -28,7 +28,7 @@ class BridgeService : Service() {
         override fun run() {
             if (server == null) return
             Thread {
-                val publicUrl = TunnelController.readPublicUrl()
+                val publicUrl = TunnelController.readPublicUrl(this@BridgeService)
                 if (publicUrl == null) {
                     TunnelController.start(this@BridgeService)
                 } else {
