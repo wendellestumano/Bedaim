@@ -28,6 +28,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -55,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var workspaceValue: TextView
     private lateinit var tunnelValue: TextView
     private lateinit var autoStartValue: TextView
+    private lateinit var ngrokDomainValue: TextView
     private var selectedApk: File? = null
 
     private val bgColor = Color.rgb(7, 8, 11)
@@ -142,11 +144,18 @@ class MainActivity : Activity() {
         autoStartValue = label("", 12f, secondaryText)
         autoStartValue.setPadding(0, dp(8), 0, dp(2))
         tunnelCard.addView(autoStartValue)
+        ngrokDomainValue = label("", 12f, secondaryText)
+        ngrokDomainValue.setPadding(0, dp(4), 0, dp(2))
+        tunnelCard.addView(ngrokDomainValue)
+        updateNgrokDomainLabel()
         tunnelCard.addView(label(
             "Ao abrir este app, o servidor MCP e o túnel são iniciados automaticamente. O ngrok usa a configuração já existente no Termux ou no Debian do proot-distro.",
             12f, secondaryText
         ).apply { setPadding(0, dp(8), 0, dp(2)) })
         actionButton(tunnelCard, "CONECTAR TUDO / REPARAR CONEXÃO", true) { connectAll() }
+        actionButton(tunnelCard, "CONFIGURAR DOMÍNIO FIXO DO NGROK", false) {
+            showNgrokDomainDialog()
+        }
         actionButton(tunnelCard, "ALTERNAR INICIALIZAÇÃO APÓS REINICIAR", false) {
             val enabled = !BridgePreferences.isAutoStartEnabled(this)
             BridgePreferences.setAutoStartEnabled(this, enabled)
@@ -630,6 +639,36 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    private fun updateNgrokDomainLabel() {
+        if (!::ngrokDomainValue.isInitialized) return
+        ngrokDomainValue.text = "Domínio ngrok fixo: ${BridgePreferences.getConfiguredNgrokDomain(this)}"
+    }
+
+    private fun showNgrokDomainDialog() {
+        val editor = EditText(this).apply {
+            setSingleLine(true)
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_URI
+            setText(BridgePreferences.getConfiguredNgrokDomain(this@MainActivity))
+            hint = "https://seu-dominio.ngrok-free.dev"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Domínio fixo do ngrok")
+            .setMessage("Use o domínio gratuito atribuído à sua conta ngrok. Ele é guardado localmente e usado ao iniciar o túnel. Não cole seu authtoken aqui.")
+            .setView(editor)
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Salvar") { _, _ ->
+                val accepted = BridgePreferences.setConfiguredNgrokDomain(this, editor.text.toString())
+                if (!accepted) {
+                    Toast.makeText(this, "Domínio inválido. Use https://nome.ngrok-free.dev", Toast.LENGTH_LONG).show()
+                } else {
+                    BridgePreferences.saveTunnelUrl(this, null)
+                    updateNgrokDomainLabel()
+                    Toast.makeText(this, "Domínio salvo. Use Conectar tudo para aplicar.", Toast.LENGTH_LONG).show()
+                }
+            }
+            .show()
+    }
+
     private fun connectAll(silent: Boolean = false) {
         try {
             BridgePreferences.setAutoStartEnabled(this, true)
@@ -687,6 +726,7 @@ class MainActivity : Activity() {
     private fun refresh() {
         if (!::statusValue.isInitialized) return
         updateAutoStartLabel()
+        updateNgrokDomainLabel()
         val running = BridgeStatus.state.name == "RUNNING"
         if (::tunnelValue.isInitialized) {
             val savedUrl = BridgePreferences.getTunnelUrl(this)
