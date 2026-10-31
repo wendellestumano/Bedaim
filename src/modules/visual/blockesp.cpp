@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "core/memory/MinecraftBuildIdentity.hpp"
 #include "blockesp.hpp"
 #include "BlockEventQueue.hpp"
 #include "hitbox.hpp"
@@ -254,6 +258,7 @@ const void* blockSourceTessellationGetBlockHook(
 }
 
 bool installBlockSourceTessellationGetBlockHook() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     if (g_blockSourceTessellationGetBlockHook) return true;
     const auto address = bedrocktools::memory::resolve(
         bedrocktools::memory::SignatureId::BlockSourceGetBlockForTessellation);
@@ -343,6 +348,7 @@ bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
 }
 
 bool installApollonBlockEventHooks() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return false;
 
@@ -449,6 +455,7 @@ bool installApollonBlockEventHooks() {
 }
 
 bool installBlockUpdateHook() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     if (g_blockUpdateHook) return true;
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return false;
@@ -487,11 +494,13 @@ constexpr std::size_t kMaxBlockEspCache = 32768;
 constexpr std::size_t kMaxBlockEspRendered = 1024;
 
 void resolveBlockGetBlock() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return;
     if (g_blockEspGetBlock.load(std::memory_order_acquire)) return;
     const auto address = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceGetBlock);
     if (address) g_blockEspGetBlock.store(reinterpret_cast<BlockSourceGetBlockFn>(address), std::memory_order_release);
 }
 bool installBlockSourceGetBlockHook() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     if (g_blockSourceGetBlockHook) return true;
     const auto target = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!target) return false;
@@ -782,6 +791,11 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
+    const bool exact260 = bedrocktools::core::memory::isExactMinecraft260Build();
+    bedrocktools::diagnostics::probe(
+        exact260 ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+        "BlockESP", "native_baseline", exact260 ? "verified" : "unsupported",
+        "native offsets and Apollon RVAs require libminecraftpe.so Build ID eb291b883dfdfaff70c4992c9eabd61885ae3e15");
     // EXPERIMENTAL: restore the native capture installation used by Apollon v6.7
     // in PR #123. The original RVAs/prologue guards are intentionally retained
     // for this first compatibility test; a 26.60 mismatch must fail closed.

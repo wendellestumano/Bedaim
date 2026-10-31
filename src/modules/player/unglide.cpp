@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "core/memory/MinecraftBuildIdentity.hpp"
 #include "unglide.hpp"
 #include "aimassist.hpp"
 #include "MaceFallPolicy.hpp"
@@ -361,7 +365,7 @@ ActorGetStatusFlagFn resolveActorGetStatusFlag() {
 }
 
 std::optional<bool> playerIsGlidingForUnglide(void* player) {
-    if (!player) return std::nullopt;
+    if (!player || !bedrocktools::core::memory::isExactMinecraft260Build()) return std::nullopt;
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
@@ -481,6 +485,13 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // a hard gate; the fresh player target, crosshair, distance and height checks
     // below still gate every Key Mapper dispatch.
     const auto glidingState = playerIsGlidingForUnglide(player);
+    if (!glidingState.has_value()) {
+        report("gliding_state_unavailable",
+               "Exact 26.60 build identity is required; the local gliding-state reader returned no validated value.");
+    } else {
+        report(*glidingState ? "gliding_detected" : "not_gliding",
+               *glidingState ? "The local player's gliding flag is set." : "The local player's gliding flag is clear.");
+    }
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.
