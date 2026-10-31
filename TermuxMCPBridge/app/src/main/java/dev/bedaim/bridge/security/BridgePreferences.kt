@@ -9,6 +9,7 @@ object BridgePreferences {
     private const val TOKEN = "mcp_bearer_token"
     private const val TUNNEL_URL = "ngrok_public_url"
     private const val AUTO_START = "bridge_auto_start"
+    private const val TERMUX_AUTO_RECONNECT = "termux_auto_reconnect"
     private const val NGROK_DOMAIN = "ngrok_domain"
     private const val DEFAULT_NGROK_DOMAIN = "https://volatile-basil-quail.ngrok-free.dev"
 
@@ -23,6 +24,17 @@ object BridgePreferences {
     fun rotateToken(context: Context): String {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return generateAndStore(prefs)
+    }
+
+    /** Whether the Bridge should periodically ask Termux to restore a missing ngrok tunnel. */
+    fun isTermuxAutoReconnectEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(TERMUX_AUTO_RECONNECT, true)
+
+    fun setTermuxAutoReconnectEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(TERMUX_AUTO_RECONNECT, enabled)
+            .apply()
     }
 
     fun isAutoStartEnabled(context: Context): Boolean =
