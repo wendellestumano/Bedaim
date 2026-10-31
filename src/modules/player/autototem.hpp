@@ -33,9 +33,11 @@ private:
     bool m_waitingForKeymap = false;
     bool m_dispatchInProgress = false;
     bool m_retryBlocked = false;
+    bool m_confirmationPending = false;
     int m_dispatchAttempts = 0;
     std::chrono::steady_clock::time_point m_refillAfter{};
     std::chrono::steady_clock::time_point m_nextAttempt{};
+    std::chrono::steady_clock::time_point m_confirmationDeadline{};
     float m_delayMs = 100.0f;
     bool m_combatOnly = false;
     bool m_keepTotemEquipped = true;
