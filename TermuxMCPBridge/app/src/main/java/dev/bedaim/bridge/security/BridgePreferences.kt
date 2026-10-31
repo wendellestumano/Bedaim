@@ -10,6 +10,7 @@ object BridgePreferences {
     private const val TUNNEL_URL = "ngrok_public_url"
     private const val AUTO_START = "bridge_auto_start"
     private const val TERMUX_AUTO_RECONNECT = "termux_auto_reconnect"
+    private const val TERMUX_REMOTE_SHELL = "termux_remote_shell"
     private const val NGROK_DOMAIN = "ngrok_domain"
     private const val DEFAULT_NGROK_DOMAIN = "https://volatile-basil-quail.ngrok-free.dev"
 
@@ -35,6 +36,17 @@ object BridgePreferences {
             .edit()
             .putBoolean(TERMUX_AUTO_RECONNECT, enabled)
             .apply()
+    }
+
+    /** Remote Termux shell is opt-in and disabled by default. */
+    fun isTermuxRemoteShellEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(TERMUX_REMOTE_SHELL, false)
+
+    fun setTermuxRemoteShellEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(TERMUX_REMOTE_SHELL, enabled)
+            .commit()
     }
 
     fun isAutoStartEnabled(context: Context): Boolean =
