@@ -9,6 +9,8 @@ object BridgePreferences {
     private const val TOKEN = "mcp_bearer_token"
     private const val TUNNEL_URL = "ngrok_public_url"
     private const val AUTO_START = "bridge_auto_start"
+    private const val NGROK_DOMAIN = "ngrok_domain"
+    private const val DEFAULT_NGROK_DOMAIN = "https://volatile-basil-quail.ngrok-free.dev"
 
     @Synchronized
     fun getOrCreateToken(context: Context): String {
@@ -32,6 +34,25 @@ object BridgePreferences {
             .putBoolean(AUTO_START, enabled)
             .apply()
     }
+
+    fun getConfiguredNgrokDomain(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(NGROK_DOMAIN, null)
+            ?.takeIf(::isValidNgrokDomain)
+            ?: DEFAULT_NGROK_DOMAIN
+
+    fun setConfiguredNgrokDomain(context: Context, value: String): Boolean {
+        val normalized = value.trim().trimEnd('/')
+        if (!isValidNgrokDomain(normalized)) return false
+        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(NGROK_DOMAIN, normalized)
+            .commit()
+    }
+
+    private fun isValidNgrokDomain(value: String): Boolean =
+        Regex("^https://[a-z0-9-]+(?:\\\\.[a-z0-9-]+)*\\\\.ngrok-free\\\\.dev$", RegexOption.IGNORE_CASE)
+            .matches(value)
 
     fun saveTunnelUrl(context: Context, url: String?) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
