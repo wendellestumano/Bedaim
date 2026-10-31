@@ -87,17 +87,18 @@ bool getMinecraftImageBase(const void* address, std::uintptr_t& imageBase) noexc
     if (!address) return false;
     Dl_info info{};
     if (!dladdr(address, &info) || !info.dli_fbase || !info.dli_fname) return false;
-    if (std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos)
-        return false;
+    const std::string_view path(info.dli_fname);
+    const auto slash = path.find_last_of('/');
+    const auto basename = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    if (basename != "libminecraftpe.so") return false;
     imageBase = reinterpret_cast<std::uintptr_t>(info.dli_fbase);
     return imageBase != 0;
 }
 
 bool isAddressInMinecraftImage(const void* address, std::uintptr_t expectedBase) noexcept {
     if (!address || !expectedBase) return false;
-    Dl_info info{};
-    return dladdr(address, &info) && info.dli_fbase &&
-        reinterpret_cast<std::uintptr_t>(info.dli_fbase) == expectedBase;
+    std::uintptr_t actualBase = 0;
+    return getMinecraftImageBase(address, actualBase) && actualBase == expectedBase;
 }
 
 struct ExecutableRangeQuery {
