@@ -57,6 +57,7 @@ class BridgeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                BridgePreferences.setAutoStartEnabled(this, false)
                 tunnelMonitorHandler.removeCallbacks(tunnelMonitor)
                 TunnelController.stop(this)
                 BridgePreferences.saveTunnelUrl(this, null)
