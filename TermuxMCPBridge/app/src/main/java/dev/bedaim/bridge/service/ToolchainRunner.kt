@@ -83,7 +83,10 @@ object ToolchainRunner {
             directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
             "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
         }
-        require(directory.isDirectory) { "Diretório não encontrado: $cwd" }
+        // The Bridge runs under its own Android UID and cannot stat Termux's
+        // private HOME. Do not call File.isDirectory here: that check always
+        // fails across app sandboxes even when Termux itself can access cwd.
+        // RUN_COMMAND executes as Termux and will report a genuine bad cwd.
         return execute(context, "bash", listOf("-lc", command), directory.path, timeoutMs)
     }
 
