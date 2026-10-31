@@ -9,7 +9,10 @@ class TermuxCommandResultService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val result = intent?.getBundleExtra(TERMUX_RESULT_BUNDLE)
         if (result == null) {
-            BridgeStatus.recordEvent("Termux: resposta vazia ou incompatível; confirme a versão do Termux.")
+            val requestId = intent?.getStringExtra("bridge_request_id")
+            val message = "Termux: resposta vazia ou incompatível; confirme a versão do Termux."
+            if (requestId != null) ToolchainRunner.complete(requestId, message)
+            else BridgeStatus.recordEvent(message)
         } else {
             val stdout = result.getString(TERMUX_STDOUT).orEmpty().take(MAX_OUTPUT)
             val stderr = result.getString(TERMUX_STDERR).orEmpty().take(MAX_OUTPUT)
