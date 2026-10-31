@@ -300,9 +300,11 @@ void AutoTotemModule::onEnable() {
     m_waitingForKeymap = false;
     m_dispatchInProgress = false;
     m_retryBlocked = false;
+    m_confirmationPending = false;
     m_dispatchAttempts = 0;
     m_refillAfter = {};
     m_nextAttempt = {};
+    m_confirmationDeadline = {};
 }
 
 void AutoTotemModule::onDisable() {
@@ -312,9 +314,11 @@ void AutoTotemModule::onDisable() {
     m_waitingForKeymap = false;
     m_dispatchInProgress = false;
     m_retryBlocked = false;
+    m_confirmationPending = false;
     m_dispatchAttempts = 0;
     m_refillAfter = {};
     m_nextAttempt = {};
+    m_confirmationDeadline = {};
 }
 
 void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
@@ -362,8 +366,10 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_waitingForKeymap = false;
         m_dispatchAttempts = 0;
         m_retryBlocked = false;
+        m_confirmationPending = false;
         m_refillAfter = {};
         m_nextAttempt = {};
+        m_confirmationDeadline = {};
         return;
     }
 
@@ -374,8 +380,10 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_waitingForKeymap = false;
         m_dispatchAttempts = 0;
         m_retryBlocked = false;
+        m_confirmationPending = false;
         m_refillAfter = {};
         m_nextAttempt = {};
+        m_confirmationDeadline = {};
         return;
     }
 
@@ -393,7 +401,22 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_refillAfter = now;
     }
 
-    if (!m_pendingRefill || m_retryBlocked || m_dispatchInProgress) return;
+    const bool confirmationExpired = bedaim::autototem::confirmationTimedOut(
+        m_confirmationPending, offhandHasTotem,
+        m_confirmationDeadline.time_since_epoch().count() != 0 && now >= m_confirmationDeadline);
+    if (confirmationExpired) {
+        m_confirmationPending = false;
+        m_confirmationDeadline = {};
+    }
+    if (!m_pendingRefill || m_retryBlocked || m_dispatchInProgress) {
+        lock.unlock();
+        if (confirmationExpired) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Warning, "AutoTotem", "keymapper_confirmation",
+                "timeout", "Android accepted the Key Mapper broadcast, but no totem appeared in the offhand within 1500 ms; automatic resend is suppressed to avoid duplicate swap actions. Toggle AutoTotem or change its UID to retry manually.");
+        }
+        return;
+    }
 
     const bool delayElapsed = m_refillAfter.time_since_epoch().count() == 0 || now >= m_refillAfter;
     const bool containerOpen = m_containerOpen.load(std::memory_order_acquire);
@@ -438,6 +461,8 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         result == KeyMapperDispatchResult::Sent, attemptNumber);
     m_waitingForKeymap = retry;
     if (retry) {
+        m_confirmationPending = false;
+        m_confirmationDeadline = {};
         m_nextAttempt = completedAt + std::chrono::milliseconds(500);
     } else {
         // A successful broadcast may still be executing asynchronously. Wait
@@ -447,6 +472,10 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_retryBlocked = true;
         m_waitingForKeymap = false;
         m_nextAttempt = {};
+        m_confirmationPending = result == KeyMapperDispatchResult::Sent;
+        m_confirmationDeadline = m_confirmationPending
+            ? completedAt + std::chrono::milliseconds(1500)
+            : std::chrono::steady_clock::time_point{};
     }
     lock.unlock();
 
@@ -491,9 +520,11 @@ bool AutoTotemModule::onMenuConfigChanged(std::string_view key, std::string_view
         std::lock_guard lock(m_stateMutex);
         m_keymapUid = uid;
         m_retryBlocked = false;
+        m_confirmationPending = false;
         m_dispatchAttempts = 0;
         m_waitingForKeymap = false;
         m_nextAttempt = {};
+        m_confirmationDeadline = {};
         g_loggedMissingKeymapUid.store(false, std::memory_order_release);
         g_loggedRetryExhausted.store(false, std::memory_order_release);
         return true;
