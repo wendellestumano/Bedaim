@@ -5,6 +5,10 @@
 
 namespace bedaim::autototem {
 
+bool shouldRetryDispatch(bool broadcastAccepted, int attempts) noexcept {
+    return !broadcastAccepted && attempts > 0 && attempts < kMaxDispatchAttempts;
+}
+
 Decision decide(const Inputs& input) noexcept {
     if (!input.enabled || !input.pending || input.offhandHasTotem) {
         return Decision::Idle;
