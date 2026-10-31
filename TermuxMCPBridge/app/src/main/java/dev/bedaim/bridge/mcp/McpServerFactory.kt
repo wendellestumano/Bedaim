@@ -3,6 +3,7 @@ import android.content.Context
 import android.os.Build
 import dev.bedaim.bridge.core.SafePathPolicy
 import dev.bedaim.bridge.shizuku.ShizukuStorageAccess
+import dev.bedaim.bridge.service.ToolchainRunner
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.types.*
@@ -64,6 +65,20 @@ object McpServerFactory {
         server.addTool("device_storage_delete","Deletes a shared-storage file or directory. recursive=true permanently deletes directory contents.",ToolSchema(properties=buildJsonObject{putJsonObject("path"){put("type","string")};putJsonObject("recursive"){put("type","boolean")}},required=listOf("path","recursive"))){req->val p=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull?:error("path required");val recursive=req.arguments?.get("recursive")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.deletePath(p,recursive))))}
         server.addTool("device_storage_copy","Copies files or directories within shared storage.",ToolSchema(properties=buildJsonObject{putJsonObject("source"){put("type","string")};putJsonObject("destination"){put("type","string")};putJsonObject("overwrite"){put("type","boolean")}},required=listOf("source","destination","overwrite"))){req->val s=req.arguments?.get("source")?.jsonPrimitive?.contentOrNull?:error("source required");val d=req.arguments?.get("destination")?.jsonPrimitive?.contentOrNull?:error("destination required");val o=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.copyPath(s,d,o))))}
         server.addTool("device_storage_move","Moves or renames files or directories within shared storage.",ToolSchema(properties=buildJsonObject{putJsonObject("source"){put("type","string")};putJsonObject("destination"){put("type","string")};putJsonObject("overwrite"){put("type","boolean")}},required=listOf("source","destination","overwrite"))){req->val s=req.arguments?.get("source")?.jsonPrimitive?.contentOrNull?:error("source required");val d=req.arguments?.get("destination")?.jsonPrimitive?.contentOrNull?:error("destination required");val o=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.movePath(s,d,o))))}
+
+        server.addTool("toolchain_check","Checks installed Termux analysis tools using a fixed diagnostic. No arbitrary shell input.",ToolSchema(properties=buildJsonObject {})) {
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.check(app))))
+        }
+        server.addTool("toolchain_run","Runs one read-only allowlisted binary in /sdcard/Download/Testing2 or a subdirectory. Allowed: readelf, llvm-objdump, strings, sha256sum, file, unzip (-l only). No shell, Python, Git, package installation, network tools, or write operations.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("tool") { put("type","string"); put("enum", buildJsonArray { listOf("readelf","llvm-objdump","strings","sha256sum","file","unzip").forEach { add(it) } }) }
+            putJsonObject("args") { put("type","array"); putJsonObject("items") { put("type","string") }; put("maxItems",48) }
+            putJsonObject("cwd") { put("type","string") }
+        },required=listOf("tool","args","cwd"))) { req ->
+            val tool=req.arguments?.get("tool")?.jsonPrimitive?.contentOrNull ?: error("tool required")
+            val args=req.arguments?.get("args")?.jsonArray?.map { it.jsonPrimitive.content } ?: error("args array required")
+            val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.run(app,tool,args,cwd))))
+        }
         return server
     }
 }
