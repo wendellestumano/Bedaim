@@ -357,6 +357,8 @@ const char* automationBroadcastResultName(AutomationBroadcastResult result) {
     return "keymapper_unglide_broadcast_unknown";
 }
 
+constexpr int kActorFlagGliding = 32; // ActorFlags::Gliding in the 26.60 Bedrock SDK.
+
 ActorGetStatusFlagFn resolveActorGetStatusFlag() {
     static ActorGetStatusFlagFn function = nullptr;
     if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
@@ -369,9 +371,9 @@ std::optional<bool> playerIsGlidingForUnglide(void* player) {
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // Treat the native status flag as a positive signal only; some builds
-            // differ in flag layout, so a negative result still tries safe entity data.
-            if (getStatusFlag(player, 32)) return true;
+            // Actor::isGliding() delegates to getStatusFlag(ActorFlags::Gliding).
+            // The exact 26.60 Build ID is checked above, so both true and false are meaningful.
+            return getStatusFlag(player, kActorFlagGliding);
         } catch (...) {
             // Fall through to the bounded synchronized-data reader.
         }
@@ -479,19 +481,20 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    // The native Elytra/gliding flag is not reliable on all supported Bedrock
-    // builds: both the status-flag API and synchronized-data fallback can report
-    // false while the player is visibly gliding. Treat it as telemetry only, not
-    // a hard gate; the fresh player target, crosshair, distance and height checks
-    // below still gate every Key Mapper dispatch.
+    // Only dispatch while the local player is actually gliding. The reader is
+    // guarded by the exact 26.60 ELF Build ID and uses ActorFlags::Gliding (32).
     const auto glidingState = playerIsGlidingForUnglide(player);
     if (!glidingState.has_value()) {
-        report("gliding_state_unavailable",
-               "Exact 26.60 build identity is required; the local gliding-state reader returned no validated value.");
-    } else {
-        report(*glidingState ? "gliding_detected" : "not_gliding",
-               *glidingState ? "The local player's gliding flag is set." : "The local player's gliding flag is clear.");
+        reject("gliding_state_unavailable",
+               "Could not read the 26.60 ActorFlags::Gliding state; no Unglide keymap request sent.", 250);
+        return;
     }
+    if (!*glidingState) {
+        reject("player_not_gliding",
+               "ActorFlags::Gliding is clear; no Unglide keymap request sent.", 120);
+        return;
+    }
+    report("gliding_detected", "ActorFlags::Gliding (32) is set for the local player.");
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.

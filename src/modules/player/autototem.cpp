@@ -570,5 +570,3 @@ void AutoTotemModule::onMenuRegistered() {
     schema.node(makeNode("keybind", "Keybind", "behavior", ConfigControlTypeV2::Keybind));
     setConfigSchemaJson(moduleId, schema.toJson());
 }
-
-} // namespace
