@@ -51,7 +51,7 @@ object BridgePreferences {
     }
 
     private fun isValidNgrokDomain(value: String): Boolean =
-        Regex("^https://[a-z0-9-]+(?:\\\\.[a-z0-9-]+)*\\\\.ngrok-free\\\\.dev$", RegexOption.IGNORE_CASE)
+        Regex("""^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.ngrok-free\.dev$""", RegexOption.IGNORE_CASE)
             .matches(value)
 
     fun saveTunnelUrl(context: Context, url: String?) {
