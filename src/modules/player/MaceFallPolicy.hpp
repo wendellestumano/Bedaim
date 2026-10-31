@@ -1,3 +1,5 @@
+[Reading 55 lines from start (total: 55 lines, 0 remaining)]
+
 #pragma once
 
 #include <algorithm>
@@ -13,23 +15,6 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
         return false;
     return verticalDelta < -0.025f &&
            fallDistance >= normalizeMinimumFallDistance(minimumFallDistance);
-}
-
-// The Unglide automation may run only after a positive gliding-state read.
-// False and unknown are both rejected; ordinary creative flight is not Elytra gliding.
-inline bool shouldDispatchUnglideOnlyWhenGliding(bool stateKnown, bool isGliding) noexcept {
-    return stateKnown && isGliding;
-}
-
-inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
-                                    float targetDistance, float maximumTargetDistance) noexcept {
-    if (!enabled || !isGliding ||
-        !std::isfinite(targetDistance) || !std::isfinite(maximumTargetDistance) ||
-        targetDistance < 0.0f) {
-        return false;
-    }
-    const float safeTargetDistance = std::clamp(maximumTargetDistance, 1.0f, 32.0f);
-    return targetDistance <= safeTargetDistance;
 }
 
 // A bounded burst continues only while presses remain; an exhausted burst stays latched.
@@ -70,3 +55,5 @@ inline bool shouldRearmUnglide(float targetDistance, float triggerDistance,
     return targetDistance > std::clamp(triggerDistance, 1.0f, 32.0f) + hysteresis;
 }
 } // namespace bedaim::macefall
+
+[executed on device: localhost (af746c64-8377-46c3-ba81-f7d94cf8ef4b)]

@@ -1,3 +1,5 @@
+[Reading 648 lines from start (total: 648 lines, 0 remaining)]
+
 #include "unglide.hpp"
 #include "aimassist.hpp"
 #include "MaceFallPolicy.hpp"
@@ -475,21 +477,12 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    // A positive state is mandatory. On stripped 26.60 builds this currently
-    // falls back to synchronized Actor data; the native ECS component path is
-    // being resolved independently before replacing this legacy reader.
+    // Keep gliding state as telemetry only until a 26.60 ECS component reader
+    // is validated. The legacy synchronized Actor-data reader can report false
+    // or unavailable while the player is visibly Elytra-gliding; using it as a
+    // hard gate suppresses every Key Mapper request. Target identity, geometry,
+    // range, height, and crosshair confirmation remain the dispatch gates below.
     const auto glidingState = playerIsGlidingForUnglide(player);
-    const bool glidingKnown = glidingState.has_value();
-    const bool isGliding = glidingKnown && *glidingState;
-    if (!bedaim::macefall::shouldDispatchUnglideOnlyWhenGliding(glidingKnown, isGliding)) {
-        resetTargetState();
-        reject(glidingKnown ? "player_not_gliding" : "gliding_state_unavailable",
-               glidingKnown
-                   ? "Player is not confirmed to be Elytra-gliding; no Space keymap request sent."
-                   : "Elytra-gliding state is unknown; no Space keymap request sent.",
-               glidingKnown ? 100 : 150);
-        return;
-    }
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.
@@ -655,3 +648,5 @@ bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
  if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
  try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
 }
+
+[executed on device: localhost (af746c64-8377-46c3-ba81-f7d94cf8ef4b)]
