@@ -102,8 +102,16 @@ class BridgeService : Service() {
                 intercept(ApplicationCallPipeline.Call) {
                     if (call.request.path().startsWith("/mcp")) {
                         val header = call.request.headers[HttpHeaders.Authorization].orEmpty()
-                        val supplied = header.removePrefix("Bearer ")
-                        val ok = header.startsWith("Bearer ") &&
+                        val bearerSupplied = header.takeIf { it.startsWith("Bearer ", ignoreCase = true) }
+                            ?.substringAfter(' ')
+                        // ChatGPT's custom MCP connector currently offers OAuth or no-auth,
+                        // but no static Bearer header field. Support a high-entropy capability
+                        // URL for clients that cannot attach Authorization headers. HTTPS is
+                        // mandatory for the public ngrok endpoint; rotating the Bridge token
+                        // revokes both Bearer and capability-URL access.
+                        val urlSupplied = call.request.queryParameters["access_token"]
+                        val supplied = bearerSupplied ?: urlSupplied.orEmpty()
+                        val ok = (bearerSupplied != null || !urlSupplied.isNullOrBlank()) &&
                             MessageDigest.isEqual(token.toByteArray(), supplied.toByteArray())
                         if (!ok) {
                             call.respond(HttpStatusCode.Unauthorized)
