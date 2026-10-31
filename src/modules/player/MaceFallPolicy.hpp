@@ -1,5 +1,3 @@
-[Reading 55 lines from start (total: 55 lines, 0 remaining)]
-
 #pragma once
 
 #include <algorithm>
@@ -55,5 +53,3 @@ inline bool shouldRearmUnglide(float targetDistance, float triggerDistance,
     return targetDistance > std::clamp(triggerDistance, 1.0f, 32.0f) + hysteresis;
 }
 } // namespace bedaim::macefall
-
-[executed on device: localhost (af746c64-8377-46c3-ba81-f7d94cf8ef4b)]
