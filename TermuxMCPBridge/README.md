@@ -6,7 +6,7 @@ Native Android app that hosts an authenticated MCP Streamable HTTP endpoint at `
 
 When the app opens, it starts the local MCP foreground service. The service then asks Termux to start or reuse an ngrok tunnel targeting port `8765`. It supports ngrok installed directly in Termux or inside the `debian` proot-distro environment. The app reads ngrok's local agent API at `127.0.0.1:4040` to discover the HTTPS URL and displays the remote MCP endpoint.
 
-While the MCP service is running, a lightweight watchdog checks the tunnel every 60 seconds and requests a restart if the ngrok agent is no longer reachable. The service uses Android `START_STICKY` so Android may recreate it after process reclamation. The dashboard includes a one-tap **Connect everything / repair connection** action, remote endpoint copy, and a combined endpoint + Bearer configuration copy action.
+While the MCP service is running, a lightweight watchdog checks the tunnel every 60 seconds and requests a restart if the ngrok agent is no longer reachable. The service uses Android `START_STICKY` so Android may recreate it after process reclamation. A boot receiver also requests startup after device reboot and after app updates; this is enabled by default and can be disabled in the dashboard. Explicitly stopping the service disables reboot autostart until the app is opened again. The dashboard includes a one-tap **Connect everything / repair connection** action, remote endpoint copy, and a combined endpoint + Bearer configuration copy action.
 
 The watchdog only stops a tunnel whose PID file was created by this Bridge. It does not kill an unrelated ngrok process. Stopping the MCP service also stops the Bridge-owned tunnel.
 
@@ -45,7 +45,7 @@ The public endpoint remains protected by the per-install 256-bit Bearer token. T
 
 - The Android app does not install ngrok or configure its authtoken. ngrok must already be installed and authenticated in Termux or Debian proot-distro.
 - ChatGPT's MCP server registration and Bearer credential must be configured once by the user; the Android app cannot modify the ChatGPT account configuration.
-- Android battery management, force-stop, reboot, and OEM background restrictions can still stop services. After reboot, open the Bridge once if Android did not restart it.
+- Android battery management, force-stop, reboot policy, and OEM background restrictions can still stop services. Boot recovery is best-effort; if Android or the device manufacturer blocks it, open the Bridge once. Shizuku may separately need to be started/authorized again after reboot.
 - Shizuku must be running and authorized for shared-storage file operations. Shizuku is not root; private data belonging to other apps and restricted Android/data or obb paths may remain inaccessible.
 - Remote access is available only while the local MCP service, ngrok agent, and network connection are online.
 - No arbitrary shell execution, root command execution, process manager, or build orchestration is exposed.
