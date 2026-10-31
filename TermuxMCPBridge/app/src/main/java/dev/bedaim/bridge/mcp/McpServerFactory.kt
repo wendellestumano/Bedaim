@@ -48,32 +48,22 @@ object McpServerFactory {
             safe.writeText(content,Charsets.UTF_8)
             CallToolResult(content=listOf(TextContent("Wrote ${content.length} characters to ${safe.name}")))
         }
-        server.addTool("device_storage_list","Lists files only inside Download/Testing2 using an authorized Shizuku UserService.",
-            ToolSchema(properties=buildJsonObject { putJsonObject("path"){put("type","string")} })) { req ->
-            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull.orEmpty()
-            val entries=ShizukuStorageAccess.listFiles(path)
-            CallToolResult(content=listOf(TextContent(if(entries.isEmpty()) "(empty)" else entries.joinToString("\n"))))
+        server.addTool("device_storage_list","Lists entries in any accessible directory of shared storage. Accepts /sdcard paths or relative paths; defaults to storage root.",ToolSchema(properties=buildJsonObject{putJsonObject("path"){put("type","string")}})){req->
+            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull.orEmpty();val entries=ShizukuStorageAccess.listFiles(path)
+            CallToolResult(content=listOf(TextContent(if(entries.isEmpty())"(empty)" else entries.joinToString("\\n"))))
         }
-        server.addTool("device_storage_read","Reads a UTF-8 file inside Download/Testing2 (maximum 1 MiB).",
-            ToolSchema(properties=buildJsonObject { putJsonObject("path"){put("type","string")} },required=listOf("path"))) { req ->
-            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull ?: error("path required")
-            val bytes=ShizukuStorageAccess.readFile(path,MAX_READ.toInt())
-            CallToolResult(content=listOf(TextContent(bytes.toString(Charsets.UTF_8))))
+        server.addTool("device_storage_read","Reads a shared-storage file in chunks up to 256 KiB. Use offset for subsequent chunks.",ToolSchema(properties=buildJsonObject{putJsonObject("path"){put("type","string")};putJsonObject("offset"){put("type","integer")};putJsonObject("length"){put("type","integer")}},required=listOf("path","offset","length"))){req->
+            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull?:error("path required");val offset=req.arguments?.get("offset")?.jsonPrimitive?.longOrNull?:0L;val length=req.arguments?.get("length")?.jsonPrimitive?.intOrNull?:262144
+            val bytes=ShizukuStorageAccess.readFile(path,offset,length);CallToolResult(content=listOf(TextContent("Read ${bytes.size} bytes at offset $offset from $path; base64: "+android.util.Base64.encodeToString(bytes,android.util.Base64.NO_WRAP))))
         }
-        server.addTool("device_storage_write","Creates or replaces a UTF-8 file inside Download/Testing2 (maximum 256 KiB); overwrite must be explicitly true to replace an existing file.",
-            ToolSchema(properties=buildJsonObject {
-                putJsonObject("path"){put("type","string")}
-                putJsonObject("content"){put("type","string")}
-                putJsonObject("overwrite"){put("type","boolean")}
-            },required=listOf("path","content","overwrite"))) { req ->
-            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull ?: error("path required")
-            val content=req.arguments?.get("content")?.jsonPrimitive?.contentOrNull ?: error("content required")
-            val overwrite=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull ?: error("overwrite required")
-            val bytes=content.toByteArray(Charsets.UTF_8)
-            require(bytes.size<=MAX_WRITE) { "Content exceeds 256 KiB" }
-            val result=ShizukuStorageAccess.writeFile(path,bytes,overwrite)
-            CallToolResult(content=listOf(TextContent(result)))
+        server.addTool("device_storage_write","Writes a base64 chunk to shared storage. Set truncate=true only on the first chunk when replacing a file.",ToolSchema(properties=buildJsonObject{putJsonObject("path"){put("type","string")};putJsonObject("base64"){put("type","string")};putJsonObject("offset"){put("type","integer")};putJsonObject("truncate"){put("type","boolean")}},required=listOf("path","base64","offset","truncate"))){req->
+            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull?:error("path required");val data=android.util.Base64.decode(req.arguments?.get("base64")?.jsonPrimitive?.contentOrNull?:error("base64 required"),android.util.Base64.DEFAULT);val offset=req.arguments?.get("offset")?.jsonPrimitive?.longOrNull?:0L;val truncate=req.arguments?.get("truncate")?.jsonPrimitive?.booleanOrNull?:false
+            CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.writeFile(path,data,offset,truncate))))
         }
+        server.addTool("device_storage_mkdir","Creates a directory in shared storage.",ToolSchema(properties=buildJsonObject{putJsonObject("path"){put("type","string")}},required=listOf("path"))){req->val p=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull?:error("path required");CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.makeDirectory(p))))}
+        server.addTool("device_storage_delete","Deletes a shared-storage file or directory. recursive=true permanently deletes directory contents.",ToolSchema(properties=buildJsonObject{putJsonObject("path"){put("type","string")};putJsonObject("recursive"){put("type","boolean")}},required=listOf("path","recursive"))){req->val p=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull?:error("path required");val recursive=req.arguments?.get("recursive")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.deletePath(p,recursive))))}
+        server.addTool("device_storage_copy","Copies files or directories within shared storage.",ToolSchema(properties=buildJsonObject{putJsonObject("source"){put("type","string")};putJsonObject("destination"){put("type","string")};putJsonObject("overwrite"){put("type","boolean")}},required=listOf("source","destination","overwrite"))){req->val s=req.arguments?.get("source")?.jsonPrimitive?.contentOrNull?:error("source required");val d=req.arguments?.get("destination")?.jsonPrimitive?.contentOrNull?:error("destination required");val o=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.copyPath(s,d,o))))}
+        server.addTool("device_storage_move","Moves or renames files or directories within shared storage.",ToolSchema(properties=buildJsonObject{putJsonObject("source"){put("type","string")};putJsonObject("destination"){put("type","string")};putJsonObject("overwrite"){put("type","boolean")}},required=listOf("source","destination","overwrite"))){req->val s=req.arguments?.get("source")?.jsonPrimitive?.contentOrNull?:error("source required");val d=req.arguments?.get("destination")?.jsonPrimitive?.contentOrNull?:error("destination required");val o=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.movePath(s,d,o))))}
         return server
     }
 }

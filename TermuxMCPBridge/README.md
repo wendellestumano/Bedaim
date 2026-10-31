@@ -10,7 +10,7 @@ Native Android app hosting an authenticated MCP Streamable HTTP endpoint on `127
 - Local MCP foreground service and authenticated loopback endpoint.
 - Per-install 256-bit bearer token, masked by default, with copy and rotation controls.
 - MCP workspace tools: `bridge_status`, `workspace_list`, `workspace_read`, `workspace_write`.
-- Shizuku UserService-backed MCP tools: `device_storage_list`, `device_storage_read`, `device_storage_write`, restricted to `Download/Testing2` with traversal protection and 1 MiB read / 256 KiB write limits.
+- Shizuku UserService-backed MCP file tools: `device_storage_list`, `device_storage_read`, `device_storage_write`, `device_storage_mkdir`, `device_storage_delete`, `device_storage_copy`, and `device_storage_move`, covering shared user storage rooted at `/sdcard` with chunked transfers.
 - APK Lab: import a user-selected APK, parse package/version/SDK metadata, list requested permissions and sensitive permissions, inventory app components, enumerate ZIP contents, count DEX/native libraries/resources/assets and calculate signer certificate SHA-256 fingerprints. It can safely extract the raw ZIP archive with path traversal and decompression-size limits, and invoke Apktool through Termux to decode a selected APK into Downloads/BedAimBridge.
 - APK file backup/duplication inside the app-private workspace, raw archive extraction and export through Android document picker. Duplication preserves the original bytes and does not modify package identity or signature.
 - File access restricted to app-private workspace with path traversal checks and size limits.

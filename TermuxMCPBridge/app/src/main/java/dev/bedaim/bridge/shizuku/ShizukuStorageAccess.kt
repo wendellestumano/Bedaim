@@ -36,9 +36,12 @@ object ShizukuStorageAccess {
     }
 
     fun listFiles(path: String): Array<String> = service().listFiles(path)
-    fun readFile(path: String, maxBytes: Int): ByteArray = service().readFile(path, maxBytes)
-    fun writeFile(path: String, content: ByteArray, overwrite: Boolean): String =
-        service().writeFile(path, content, overwrite)
+    fun readFile(path: String, offset: Long, length: Int): ByteArray = service().readFile(path, offset, length)
+    fun writeFile(path: String, content: ByteArray, offset: Long, truncate: Boolean): String = service().writeFile(path, content, offset, truncate)
+    fun makeDirectory(path: String): String = service().makeDirectory(path)
+    fun deletePath(path: String, recursive: Boolean): String = service().deletePath(path, recursive)
+    fun copyPath(source: String, destination: String, overwrite: Boolean): String = service().copyPath(source, destination, overwrite)
+    fun movePath(source: String, destination: String, overwrite: Boolean): String = service().movePath(source, destination, overwrite)
 
     private fun service(): IBridgeUserService {
         check(Shizuku.pingBinder()) { "Shizuku is not running" }
