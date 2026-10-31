@@ -66,6 +66,17 @@ object McpServerFactory {
         server.addTool("device_storage_copy","Copies files or directories within shared storage.",ToolSchema(properties=buildJsonObject{putJsonObject("source"){put("type","string")};putJsonObject("destination"){put("type","string")};putJsonObject("overwrite"){put("type","boolean")}},required=listOf("source","destination","overwrite"))){req->val s=req.arguments?.get("source")?.jsonPrimitive?.contentOrNull?:error("source required");val d=req.arguments?.get("destination")?.jsonPrimitive?.contentOrNull?:error("destination required");val o=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.copyPath(s,d,o))))}
         server.addTool("device_storage_move","Moves or renames files or directories within shared storage.",ToolSchema(properties=buildJsonObject{putJsonObject("source"){put("type","string")};putJsonObject("destination"){put("type","string")};putJsonObject("overwrite"){put("type","boolean")}},required=listOf("source","destination","overwrite"))){req->val s=req.arguments?.get("source")?.jsonPrimitive?.contentOrNull?:error("source required");val d=req.arguments?.get("destination")?.jsonPrimitive?.contentOrNull?:error("destination required");val o=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull?:false;CallToolResult(content=listOf(TextContent(ShizukuStorageAccess.movePath(s,d,o))))}
 
+        server.addTool("termux_exec","Executes a command in the Termux shell. Requires explicit local opt-in in the Android Bridge app. Runs as the Termux app user (no root).",ToolSchema(properties=buildJsonObject {
+            putJsonObject("command") { put("type","string"); put("maxLength",12000) }
+            putJsonObject("cwd") { put("type","string") }
+            putJsonObject("timeout_seconds") { put("type","integer"); put("minimum",1); put("maximum",300) }
+        },required=listOf("command","cwd"))) { req ->
+            val command=req.arguments?.get("command")?.jsonPrimitive?.contentOrNull ?: error("command required")
+            val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
+            val seconds=req.arguments?.get("timeout_seconds")?.jsonPrimitive?.intOrNull ?: 60
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.shell(app,command,cwd,seconds*1000L))))
+        }
+
         server.addTool("toolchain_check","Checks installed Termux analysis tools using a fixed diagnostic. No arbitrary shell input.",ToolSchema(properties=buildJsonObject {})) {
             CallToolResult(content=listOf(TextContent(ToolchainRunner.check(app))))
         }
