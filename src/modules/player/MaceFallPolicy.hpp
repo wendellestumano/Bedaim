@@ -15,17 +15,6 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
            fallDistance >= normalizeMinimumFallDistance(minimumFallDistance);
 }
 
-inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
-                                    float targetDistance, float maximumTargetDistance) noexcept {
-    if (!enabled || !isGliding ||
-        !std::isfinite(targetDistance) || !std::isfinite(maximumTargetDistance) ||
-        targetDistance < 0.0f) {
-        return false;
-    }
-    const float safeTargetDistance = std::clamp(maximumTargetDistance, 1.0f, 32.0f);
-    return targetDistance <= safeTargetDistance;
-}
-
 // A bounded burst continues only while presses remain; an exhausted burst stays latched.
 inline bool shouldDispatchUnglideBurst(bool alreadyTriggered, int burstRemaining) noexcept {
     return !alreadyTriggered || burstRemaining > 0;
