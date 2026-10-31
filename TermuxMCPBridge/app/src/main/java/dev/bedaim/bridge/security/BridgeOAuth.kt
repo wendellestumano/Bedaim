@@ -1,5 +1,6 @@
 package dev.bedaim.bridge.security
 
+import android.content.Context
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -16,6 +17,37 @@ object BridgeOAuth {
     private const val ACCESS_TTL = 3600L
     private const val CODE_TTL = 300L
     private val random = SecureRandom()
+    @Volatile private var appContext: Context? = null
+
+    /** Restore encrypted OAuth state after process/service restarts. */
+    @Synchronized fun initialize(context: Context) {
+        appContext = context.applicationContext
+        val root = OAuthVault.load(context) ?: return
+        runCatching {
+            val obj = Json.parseToJsonElement(root).jsonObject
+            clients.clear(); codes.clear(); access.clear(); refresh.clear()
+            obj["clients"]?.jsonArray?.forEach { e -> val o=e.jsonObject; clients[o.getValue("id").jsonPrimitive.content]=Client(o.getValue("redirects").jsonArray.map { it.jsonPrimitive.content }.toSet()) }
+            obj["codes"]?.jsonArray?.forEach { e -> val o=e.jsonObject; codes[o.getValue("id").jsonPrimitive.content]=Code(o.getValue("clientId").jsonPrimitive.content,o.getValue("redirect").jsonPrimitive.content,o.getValue("challenge").jsonPrimitive.content,o["state"]?.jsonPrimitive?.contentOrNull,o.getValue("resource").jsonPrimitive.content,o.getValue("expires").jsonPrimitive.long) }
+            obj["access"]?.jsonArray?.forEach { e -> val o=e.jsonObject; access[o.getValue("id").jsonPrimitive.content]=Access(o.getValue("clientId").jsonPrimitive.content,o.getValue("resource").jsonPrimitive.content,o.getValue("scope").jsonPrimitive.content,o.getValue("expires").jsonPrimitive.long) }
+            obj["refresh"]?.jsonArray?.forEach { e -> val o=e.jsonObject; refresh[o.getValue("id").jsonPrimitive.content]=Refresh(o.getValue("clientId").jsonPrimitive.content,o.getValue("resource").jsonPrimitive.content,o.getValue("scope").jsonPrimitive.content,o.getValue("expires").jsonPrimitive.long) }
+            pruneExpired(); persist()
+        }.onFailure { clients.clear(); codes.clear(); access.clear(); refresh.clear(); OAuthVault.clear(context) }
+    }
+
+    @Synchronized private fun persist() {
+        val context = appContext ?: return
+        val root = buildJsonObject {
+            putJsonArray("clients") { clients.forEach { (id,v) -> add(buildJsonObject { put("id",id); putJsonArray("redirects") { v.redirects.forEach { add(it) } } }) } }
+            putJsonArray("codes") { codes.forEach { (id,v) -> add(buildJsonObject { put("id",id); put("clientId",v.clientId); put("redirect",v.redirect); put("challenge",v.challenge); v.state?.let { put("state",it) }; put("resource",v.resource); put("expires",v.expires) }) } }
+            putJsonArray("access") { access.forEach { (id,v) -> add(buildJsonObject { put("id",id); put("clientId",v.clientId); put("resource",v.resource); put("scope",v.scope); put("expires",v.expires) }) } }
+            putJsonArray("refresh") { refresh.forEach { (id,v) -> add(buildJsonObject { put("id",id); put("clientId",v.clientId); put("resource",v.resource); put("scope",v.scope); put("expires",v.expires) }) } }
+        }
+        OAuthVault.save(context, root.toString())
+    }
+
+    private fun pruneExpired() {
+        val t=now(); codes.entries.removeIf { it.value.expires < t }; access.entries.removeIf { it.value.expires < t }; refresh.entries.removeIf { it.value.expires < t }
+    }
     private data class Client(val redirects: Set<String>)
     private data class Code(val clientId: String, val redirect: String, val challenge: String,
         val state: String?, val resource: String, val expires: Long)
@@ -74,7 +106,7 @@ object BridgeOAuth {
                     call.respondText("""{"error":"invalid_redirect_uri"}""", ContentType.Application.Json, HttpStatusCode.BadRequest); return true
                 }
                 val id = token(24)
-                clients[id] = Client(redirects)
+                clients[id] = Client(redirects); persist()
                 call.respondText(buildJsonObject {
                     put("client_id", id); put("client_id_issued_at", now())
                     putJsonArray("redirect_uris") { redirects.forEach { add(it) } }
@@ -138,7 +170,7 @@ object BridgeOAuth {
                         }
                         val at = token(); val rt = token()
                         access[at] = Access(c.clientId, resource, "mcp", now() + ACCESS_TTL)
-                        refresh[rt] = Refresh(c.clientId, resource, "mcp", now() + 30L * 86400)
+                        refresh[rt] = Refresh(c.clientId, resource, "mcp", now() + 30L * 86400); persist()
                         call.respondText(buildJsonObject {
                             put("access_token", at); put("token_type", "Bearer"); put("expires_in", ACCESS_TTL)
                             put("refresh_token", rt); put("scope", "mcp")
@@ -152,7 +184,7 @@ object BridgeOAuth {
                         }
                         val at = token(); val rt = token()
                         access[at] = Access(prior.clientId, resource, prior.scope, now() + ACCESS_TTL)
-                        refresh[rt] = prior.copy(expires = now() + 30L * 86400)
+                        refresh[rt] = prior.copy(expires = now() + 30L * 86400); persist()
                         call.respondText(buildJsonObject {
                             put("access_token", at); put("token_type", "Bearer"); put("expires_in", ACCESS_TTL)
                             put("refresh_token", rt); put("scope", prior.scope)
@@ -165,7 +197,7 @@ object BridgeOAuth {
             }
             path == "/revoke" && call.request.httpMethod == HttpMethod.Post -> {
                 val p = call.receiveParameters()
-                access.remove(p["token"].orEmpty()); refresh.remove(p["token"].orEmpty())
+                access.remove(p["token"].orEmpty()); refresh.remove(p["token"].orEmpty()); persist()
                 call.respond(HttpStatusCode.OK); return true
             }
         }
@@ -176,7 +208,7 @@ object BridgeOAuth {
         val item = access[value] ?: return false
         if (item.expires < now() || item.resource != "${issuerInput.trimEnd('/')}/mcp" ||
             "mcp" !in item.scope.split(" ")) {
-            access.remove(value); return false
+            access.remove(value); persist(); return false
         }
         return true
     }
