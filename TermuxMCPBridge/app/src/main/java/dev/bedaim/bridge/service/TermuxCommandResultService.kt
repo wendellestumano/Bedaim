@@ -39,7 +39,7 @@ class TermuxCommandResultService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val MAX_OUTPUT = 6_000
+        private const val MAX_OUTPUT = 48_000
         private const val TERMUX_RESULT_BUNDLE = "result"
         private const val TERMUX_STDOUT = "stdout"
         private const val TERMUX_STDERR = "stderr"
