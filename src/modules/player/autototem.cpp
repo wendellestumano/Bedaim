@@ -412,7 +412,7 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     if (m_waitingForKeymap && now < m_nextAttempt) return;
-    if (m_dispatchAttempts >= 3) {
+    if (m_dispatchAttempts >= bedaim::autototem::kMaxDispatchAttempts) {
         m_retryBlocked = true;
         m_waitingForKeymap = false;
         if (!g_loggedRetryExhausted.exchange(true, std::memory_order_acq_rel))
@@ -434,21 +434,35 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!enabled) return;
     ++m_dispatchAttempts;
     const int attemptNumber = m_dispatchAttempts;
-    m_waitingForKeymap = true;
-    m_nextAttempt = completedAt + std::chrono::milliseconds(
-        result == KeyMapperDispatchResult::Sent ? 1500 : 500);
-    if (m_dispatchAttempts >= 3) {
+    const bool retry = bedaim::autototem::shouldRetryDispatch(
+        result == KeyMapperDispatchResult::Sent, attemptNumber);
+    m_waitingForKeymap = retry;
+    if (retry) {
+        m_nextAttempt = completedAt + std::chrono::milliseconds(500);
+    } else {
+        // A successful broadcast may still be executing asynchronously. Wait
+        // for the offhand state to confirm completion; never resend an accepted
+        // keymap action automatically because a second inventory sequence could
+        // undo the first. Failed broadcasts get at most two bounded retries.
         m_retryBlocked = true;
         m_waitingForKeymap = false;
+        m_nextAttempt = {};
     }
     lock.unlock();
 
+    std::string dispatchDetail = "attempt=" + std::to_string(attemptNumber) +
+        "; no native inventory setter was called";
+    if (result == KeyMapperDispatchResult::Sent) {
+        dispatchDetail += "; broadcast accepted; waiting for offhand confirmation; automatic resend suppressed to prevent duplicate actions";
+    } else if (retry) {
+        dispatchDetail += "; broadcast failed; bounded retry scheduled";
+    } else {
+        dispatchDetail += "; broadcast failed; retry budget exhausted";
+    }
     bedrocktools::diagnostics::probe(
         result == KeyMapperDispatchResult::Sent ? bedrocktools::diagnostics::Level::Info
                                                 : bedrocktools::diagnostics::Level::Warning,
-        "AutoTotem", "keymapper_dispatch", dispatchResultName(result),
-        std::string("attempt=") + std::to_string(attemptNumber) +
-            "; no native inventory setter was called");
+        "AutoTotem", "keymapper_dispatch", dispatchResultName(result), dispatchDetail);
 }
 
 void AutoTotemModule::loadConfig(const nlohmann::json& json) {
