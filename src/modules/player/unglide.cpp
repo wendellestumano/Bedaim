@@ -8,7 +8,6 @@
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
-#include "../../core/memory/SafeRead.hpp"
 #include "../../config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
@@ -97,81 +96,8 @@ TargetGeometry targetGeometryFor(
     return result;
 }
 
+using ActorIsGlidingFn = bool (*)(const void*);
 using ActorGetStatusFlagFn = bool (*)(const void*, int);
-std::optional<bool> actorIsGliding(void* actor) {
-    using namespace bedrocktools::sdk;
-    if (!actor) return std::nullopt;
-
-    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-    if (actorAddress <= 0x1000 ||
-        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
-            offsets::Actor::mEntityData - sizeof(void*)) {
-        return std::nullopt;
-    }
-
-    void* component = nullptr;
-    if (!bedrocktools::core::memory::readSelfMemory(
-            actorAddress + offsets::Actor::mEntityData, &component, sizeof(component))) {
-        return std::nullopt;
-    }
-    const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
-    if (componentAddress <= 0x1000) return std::nullopt;
-
-    struct ComponentVectorView {
-        void** begin;
-        void** end;
-    } view{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            componentAddress, &view, sizeof(view))) {
-        return std::nullopt;
-    }
-    if (!view.begin || !view.end) return std::nullopt;
-
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(view.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(view.end);
-    if (endAddress < beginAddress) return std::nullopt;
-    const auto span = endAddress - beginAddress;
-    if (span % sizeof(void*) != 0 || span / sizeof(void*) > 192) {
-        return std::nullopt;
-    }
-
-    const auto count = static_cast<std::size_t>(span / sizeof(void*));
-    if (count == 0) return std::nullopt;
-    std::array<void*, 192> items{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            beginAddress, items.data(), count * sizeof(void*))) {
-        return std::nullopt;
-    }
-
-    constexpr std::size_t dataStart = offsets::DataItem::mType;
-    constexpr std::size_t dataEnd = offsets::DataItem::mValue + sizeof(std::uint64_t);
-    constexpr std::size_t dataLength = dataEnd - dataStart;
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(items[index]);
-        if (itemAddress <= 0x1000 ||
-            itemAddress > std::numeric_limits<std::uintptr_t>::max() - dataEnd) {
-            continue;
-        }
-
-        std::array<std::uint8_t, dataLength> snapshot{};
-        if (!bedrocktools::core::memory::readSelfMemory(
-                itemAddress + dataStart, snapshot.data(), snapshot.size())) {
-            continue;
-        }
-
-        std::uint8_t type = 0;
-        std::uint16_t id = 0;
-        std::uint64_t flags = 0;
-        std::memcpy(&type, snapshot.data(), sizeof(type));
-        std::memcpy(&id, snapshot.data() + (offsets::DataItem::mId - dataStart), sizeof(id));
-        std::memcpy(&flags, snapshot.data() + (offsets::DataItem::mValue - dataStart), sizeof(flags));
-        if (type != 7 || id != 0) continue;
-
-        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-        return (flags & kGlidingFlag) != 0;
-    }
-    return std::nullopt;
-}
 
 bool isTrustedGameProvider(void* address) {
     if (!address) return false;
@@ -347,6 +273,13 @@ const char* automationBroadcastResultName(AutomationBroadcastResult result) {
 
 constexpr int kActorFlagGliding = 32; // ActorFlags::Gliding in the 26.60 Bedrock SDK.
 
+ActorIsGlidingFn resolveActorIsGliding() {
+    static ActorIsGlidingFn function = nullptr;
+    if (!function) function = reinterpret_cast<ActorIsGlidingFn>(
+        resolveTrustedGameSymbol("_ZNK5Actor9isGlidingEv"));
+    return function;
+}
+
 ActorGetStatusFlagFn resolveActorGetStatusFlag() {
     static ActorGetStatusFlagFn function = nullptr;
     if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
@@ -356,17 +289,26 @@ ActorGetStatusFlagFn resolveActorGetStatusFlag() {
 
 std::optional<bool> playerIsGlidingForUnglide(void* player) {
     if (!player || !bedrocktools::core::memory::isExactMinecraft260Build()) return std::nullopt;
+
+    // Prefer the engine's semantic Actor::isGliding accessor. It avoids
+    // depending on unverified Actor::mEntityData/DataItem layouts.
+    if (const auto isGliding = resolveActorIsGliding()) {
+        try {
+            return isGliding(player);
+        } catch (...) {
+            // Try the exact-build ActorFlags accessor below.
+        }
+    }
+
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // Actor::isGliding() delegates to getStatusFlag(ActorFlags::Gliding).
-            // The exact 26.60 Build ID is checked above, so both true and false are meaningful.
             return getStatusFlag(player, kActorFlagGliding);
         } catch (...) {
-            // Fall through to the bounded synchronized-data reader.
+            return std::nullopt;
         }
     }
-    return actorIsGliding(player);
+    return std::nullopt;
 }
 
 }
@@ -474,7 +416,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     const auto glidingState = playerIsGlidingForUnglide(player);
     if (!glidingState.has_value()) {
         reject("gliding_state_unavailable",
-               "Could not read the 26.60 ActorFlags::Gliding state; no Unglide keymap request sent.", 250);
+               "Could not resolve Actor::isGliding or Actor::getStatusFlag from the exact 26.60 library; no Unglide keymap request sent.", 250);
         return;
     }
     if (!*glidingState) {
