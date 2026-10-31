@@ -1,5 +1,6 @@
 #include "InventoryAccess.hpp"
 #include "Diagnostics.hpp"
+#include "core/memory/MinecraftBuildIdentity.hpp"
 
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
@@ -45,7 +46,7 @@ bool safeRead(const void* object, std::size_t offset, T& value) {
 bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size) {
     begin = 0;
     size = 0;
-    if (!player) return false;
+    if (!player || !memory::isExactMinecraft260Build()) return false;
 
     const void* proxy = nullptr;
     if (!safeRead(player, PlayerInventory, proxy) || !proxy ||
@@ -186,7 +187,7 @@ int inspectMinecraftExecutableAddress(struct dl_phdr_info* info, std::size_t, vo
 }
 
 bool isMinecraftFunction(const void* address) {
-    if (!address) return false;
+    if (!address || !memory::isExactMinecraft260Build()) return false;
     const auto addressValue = reinterpret_cast<std::uintptr_t>(address);
     struct CacheEntry { std::uintptr_t address{}; bool executable{}; };
     thread_local std::array<CacheEntry, 64> cache{};
@@ -222,7 +223,7 @@ bool isMinecraftFunction(const void* address) {
 }
 
 void* resolveMinecraftSymbol(const char* symbol) {
-    if (!symbol || !*symbol) return nullptr;
+    if (!symbol || !*symbol || !memory::isExactMinecraft260Build()) return nullptr;
     void* address = dlsym(RTLD_DEFAULT, symbol);
     if (isMinecraftFunction(address)) return address;
 
@@ -255,6 +256,14 @@ InventoryAccess& InventoryAccess::get() {
 }
 
 void InventoryAccess::initialize() {
+    if (!memory::isExactMinecraft260Build()) {
+        m_getOffhandSlot = nullptr;
+        m_getOffhandSlotSource = "unsupported-build";
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Error, "InventoryAccess", "native_baseline", "unsupported",
+            "refusing to resolve or call inventory accessors without the exact Minecraft 26.60 ELF Build ID");
+        return;
+    }
     m_offhandGetterQuarantined.store(false, std::memory_order_release);
     // Prefer exact exported accessors over the generic signature pattern. The
     // old pattern could resolve on newer builds but return an unreadable pointer,
@@ -278,9 +287,13 @@ void InventoryAccess::initialize() {
         }
     }
     if (!m_getOffhandSlot) {
-        m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(
-            memory::resolve(memory::SignatureId::ActorGetOffhandSlot));
-        if (m_getOffhandSlot) m_getOffhandSlotSource = "signature-pattern fallback (runtime pointer validation required)";
+        void* candidate = memory::resolve(memory::SignatureId::ActorGetOffhandSlot);
+        if (candidate && isMinecraftFunction(candidate)) {
+            m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(candidate);
+            m_getOffhandSlotSource = "26.60 signature-pattern fallback (executable image validated)";
+        } else if (candidate) {
+            m_getOffhandSlotSource = "signature-rejected-outside-26.60-executable-image";
+        }
     }
     bedrocktools::diagnostics::probe(
         m_getOffhandSlot ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
@@ -320,7 +333,7 @@ std::string InventoryAccess::stackIdentifier(const void* stack) const {
     // The 26.60 PlayerInventory offset is maintained in sdk/offsets/Inventory.hpp.
     // Keep every nested ItemStack/Item/vtable read inside a readable mapped region;
     // an unreadable identifier is not evidence that the slot is empty.
-    if (!stack || !isReadableMemory(stack, ItemStackSize)) return {};
+    if (!memory::isExactMinecraft260Build() || !stack || !isReadableMemory(stack, ItemStackSize)) return {};
 
     std::uint8_t valid = 0;
     std::uint8_t count = 0;
@@ -358,8 +371,10 @@ int InventoryAccess::countStack(const void* stack, std::string_view identifierPa
     if (identifierPart.empty()) return 0;
     const auto identifier = stackIdentifier(stack);
     if (identifier.empty()) return 0;
+    std::uint8_t count = 0;
+    if (!safeRead(stack, ItemStackCount, count)) return 0;
     return identifier.find(identifierPart) != std::string::npos
-        ? static_cast<int>(read<std::uint8_t>(stack, ItemStackCount)) : 0;
+        ? static_cast<int>(count) : 0;
 }
 
 int InventoryAccess::findHotbarSlot(const sdk::Player* player, std::string_view identifierPart) const {
@@ -412,6 +427,8 @@ bool InventoryAccess::readOffhandState(const sdk::Player* player,
     };
     if (!player)
         return fail("LocalPlayerTickEvent supplied a null Player pointer");
+    if (!memory::isExactMinecraft260Build())
+        return fail("loaded libminecraftpe.so does not match the required Minecraft 26.60 Build ID");
 
     // Confirm the 26.60 PlayerInventory/container fields before calling the
     // native offhand getter. Read each field separately to avoid crossing pages.
@@ -427,6 +444,8 @@ bool InventoryAccess::readOffhandState(const sdk::Player* player,
 
     if (!m_getOffhandSlot)
         return fail("no validated Actor/Player::getOffhandSlot entry point is available");
+    if (!isMinecraftFunction(reinterpret_cast<const void*>(m_getOffhandSlot)))
+        return fail("offhand getter is not inside an executable segment of the exact 26.60 libminecraftpe.so");
     if (m_offhandGetterQuarantined.load(std::memory_order_acquire))
         return fail("offhand getter quarantined after an unreadable pointer; restart Bedaim to retry safely");
 
