@@ -23,8 +23,8 @@ android {
         applicationId = "dev.bedaim.bridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.2.0-alpha07"
+        versionCode = 8
+        versionName = "0.2.0-alpha08"
     }
     signingConfigs {
         if (hasPersistentSigning) {
