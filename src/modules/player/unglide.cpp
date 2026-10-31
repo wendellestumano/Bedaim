@@ -475,12 +475,21 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    // The native Elytra/gliding flag is not reliable on all supported Bedrock
-    // builds: both the status-flag API and synchronized-data fallback can report
-    // false while the player is visibly gliding. Treat it as telemetry only, not
-    // a hard gate; the fresh player target, crosshair, distance and height checks
-    // below still gate every Key Mapper dispatch.
+    // A positive state is mandatory. On stripped 26.60 builds this currently
+    // falls back to synchronized Actor data; the native ECS component path is
+    // being resolved independently before replacing this legacy reader.
     const auto glidingState = playerIsGlidingForUnglide(player);
+    const bool glidingKnown = glidingState.has_value();
+    const bool isGliding = glidingKnown && *glidingState;
+    if (!bedaim::macefall::shouldDispatchUnglideOnlyWhenGliding(glidingKnown, isGliding)) {
+        resetTargetState();
+        reject(glidingKnown ? "player_not_gliding" : "gliding_state_unavailable",
+               glidingKnown
+                   ? "Player is not confirmed to be Elytra-gliding; no Space keymap request sent."
+                   : "Elytra-gliding state is unknown; no Space keymap request sent.",
+               glidingKnown ? 100 : 150);
+        return;
+    }
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.

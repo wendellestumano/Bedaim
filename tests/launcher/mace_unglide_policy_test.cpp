@@ -19,6 +19,13 @@ void check(bool condition, std::string_view name) {
 }
 
 int main() {
+    using bedaim::macefall::shouldDispatchUnglideOnlyWhenGliding;
+    check(shouldDispatchUnglideOnlyWhenGliding(true, true),
+          "Unglide dispatch requires positive Elytra gliding confirmation");
+    check(!shouldDispatchUnglideOnlyWhenGliding(true, false),
+          "ordinary flight or grounded state blocks Unglide");
+    check(!shouldDispatchUnglideOnlyWhenGliding(false, false),
+          "unknown gliding state fails closed");
     using bedaim::macefall::shouldPulseUnglideJump;
     using bedaim::macefall::shouldTriggerUnglideKeymap;
     check(shouldPulseUnglideJump(true, true, 5.0f, 8.0f),

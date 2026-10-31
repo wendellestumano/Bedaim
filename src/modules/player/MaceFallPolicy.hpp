@@ -15,6 +15,12 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
            fallDistance >= normalizeMinimumFallDistance(minimumFallDistance);
 }
 
+// The Unglide automation may run only after a positive gliding-state read.
+// False and unknown are both rejected; ordinary creative flight is not Elytra gliding.
+inline bool shouldDispatchUnglideOnlyWhenGliding(bool stateKnown, bool isGliding) noexcept {
+    return stateKnown && isGliding;
+}
+
 inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
                                     float targetDistance, float maximumTargetDistance) noexcept {
     if (!enabled || !isGliding ||
