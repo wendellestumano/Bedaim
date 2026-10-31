@@ -178,35 +178,23 @@ bool isTrustedGameProvider(void* address) {
     Dl_info info{};
     if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
     const std::string_view path(info.dli_fname);
-    return path.find("libminecraftpe.so") != std::string_view::npos ||
-        path.find("liblevilamina.so") != std::string_view::npos ||
-        path.find("libLeviLamina.so") != std::string_view::npos;
+    const auto slash = path.find_last_of('/');
+    const auto basename = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    // Actor::getStatusFlag is a Minecraft ABI call. Do not accept a similarly
+    // named shim from LeviLamina or another provider for the 26.60 native path.
+    return basename == "libminecraftpe.so";
 }
 
 void* resolveTrustedGameSymbol(const char* symbol) {
     if (!symbol) return nullptr;
     static void* minecraftHandle = nullptr;
-    static void* leviLaminaHandle = nullptr;
-    static void* leviLaminaAltHandle = nullptr;
     if (!minecraftHandle)
         minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaHandle)
-        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaAltHandle)
-        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
 
     void* address = dlsym(RTLD_DEFAULT, symbol);
     if (isTrustedGameProvider(address)) return address;
     if (minecraftHandle) {
         address = dlsym(minecraftHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaHandle) {
-        address = dlsym(leviLaminaHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaAltHandle) {
-        address = dlsym(leviLaminaAltHandle, symbol);
         if (isTrustedGameProvider(address)) return address;
     }
     return nullptr;
