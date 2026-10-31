@@ -17,12 +17,17 @@ class TermuxCommandResultService : Service() {
             val internalError = result.getInt(TERMUX_ERROR, 0)
             val errorMessage = result.getString(TERMUX_ERROR_MESSAGE).orEmpty().take(2_000)
             val report = buildString {
-                append("Termux toolchain check • exit=$exitCode • internalError=$internalError")
+                append("Termux command • exit=$exitCode • internalError=$internalError")
                 if (stdout.isNotBlank()) append("\nOUT:\n$stdout")
                 if (stderr.isNotBlank()) append("\nERR:\n$stderr")
                 if (errorMessage.isNotBlank()) append("\nTermux: $errorMessage")
             }
-            BridgeStatus.recordEvent(report)
+            val requestId = intent?.getStringExtra("bridge_request_id")
+            if (requestId != null) {
+                ToolchainRunner.complete(requestId, report)
+            } else {
+                BridgeStatus.recordEvent(report)
+            }
         }
         stopSelf(startId)
         return START_NOT_STICKY
