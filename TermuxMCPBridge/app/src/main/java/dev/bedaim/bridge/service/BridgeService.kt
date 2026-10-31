@@ -103,6 +103,13 @@ class BridgeService : Service() {
         val token = BridgePreferences.getOrCreateToken(this)
         BridgeOAuth.initialize(applicationContext)
         try {
+            // ngrok preserves the public Host header when proxying to the loopback server.
+            // Allow only the configured HTTPS ngrok hostname plus the local development hosts.
+            // Keep the SDK's DNS-rebinding protection enabled; do not use enableDnsRebindingProtection=false.
+            val allowedMcpHosts = McpHostPolicy.allowedHosts(
+                BridgePreferences.getConfiguredNgrokDomain(this)
+            )
+
             server = embeddedServer(CIO, host = "127.0.0.1", port = PORT) {
                 intercept(ApplicationCallPipeline.Call) {
                     val issuer = BridgePreferences.getConfiguredNgrokDomain(this@BridgeService).trimEnd('/')
@@ -128,7 +135,9 @@ class BridgeService : Service() {
                         }
                     }
                 }
-                mcpStreamableHttp { McpServerFactory.create(this@BridgeService) }
+                mcpStreamableHttp(allowedHosts = allowedMcpHosts) {
+                    McpServerFactory.create(this@BridgeService)
+                }
             }.start(wait = false)
             BridgeStatus.update(BridgeState.RUNNING, "Listening on 127.0.0.1:$PORT")
             getSystemService(NotificationManager::class.java)
