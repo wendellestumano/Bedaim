@@ -22,31 +22,31 @@ object TunnelController {
 
     private val startScript = """
         set -u
-        mkdir -p "$HOME/.bedaim-bridge"
+        mkdir -p "${'HOME/.bedaim-bridge"
 
         if command -v ngrok >/dev/null 2>&1; then
           if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
             echo "BRIDGE_TUNNEL_ALREADY_RUNNING=TERMUX"
             exit 0
           fi
-          nohup ngrok http 8765 --log=stdout --log-format=logfmt > "$HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
-          echo "$!" > "$HOME/.bedaim-bridge/ngrok.pid"
+          nohup ngrok http 8765 --log=stdout --log-format=logfmt > "§HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+          echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
           echo "BRIDGE_TUNNEL_STARTING=TERMUX"
           exit 0
         fi
 
         if command -v proot-distro >/dev/null 2>&1 && proot-distro login debian -- bash -lc 'command -v ngrok >/dev/null 2>&1'; then
           proot-distro login debian -- bash -lc '
-            mkdir -p "$HOME/.bedaim-bridge"
+            mkdir -p "§HOME/.bedaim-bridge"
             if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
               echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"
               exit 0
             fi
-            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "$HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
-            echo "$!" > "$HOME/.bedaim-bridge/ngrok.pid"
+            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "§HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
             echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
           '
-          exit $?
+          exit §?
         fi
 
         echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
@@ -56,28 +56,28 @@ object TunnelController {
     private val stopScript = """
         set +e
         stop_local() {
-          PID_FILE="$HOME/.bedaim-bridge/ngrok.pid"
-          if [ -s "$PID_FILE" ]; then
-            PID="$(cat "$PID_FILE" 2>/dev/null)"
-            case "$PID" in
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
               ''|*[!0-9]*) ;;
-              *) kill "$PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
             esac
-            rm -f "$PID_FILE"
+            rm -f "§PID_FILE"
           fi
         }
         stop_local
         if command -v proot-distro >/dev/null 2>&1 &&
-          proot-distro login debian -- bash -lc 'test -s "$HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
           proot-distro login debian -- bash -lc '
-            PID_FILE="$HOME/.bedaim-bridge/ngrok.pid"
-            if [ -s "$PID_FILE" ]; then
-              PID="$(cat "$PID_FILE" 2>/dev/null)"
-              case "$PID" in
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
                 ""|*[!0-9]*) ;;
-                *) kill "$PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
               esac
-              rm -f "$PID_FILE"
+              rm -f "§PID_FILE"
             fi
           '
         fi
@@ -138,7 +138,2882 @@ object TunnelController {
             BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
             true
         } catch (error: Throwable) {
-            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — ${error.javaClass.simpleName}")
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge"
+
+        if command -v ngrok >/dev/null 2>&1; then
+          if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+            echo "BRIDGE_TUNNEL_ALREADY_RUNNING=TERMUX"
+            exit 0
+          fi
+          nohup ngrok http 8765 --log=stdout --log-format=logfmt > "${'HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+          echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
+          echo "BRIDGE_TUNNEL_STARTING=TERMUX"
+          exit 0
+        fi
+
+        if command -v proot-distro >/dev/null 2>&1 && proot-distro login debian -- bash -lc 'command -v ngrok >/dev/null 2>&1'; then
+          proot-distro login debian -- bash -lc '
+            mkdir -p "§HOME/.bedaim-bridge"
+            if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+              echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"
+              exit 0
+            fi
+            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "§HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit §?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+          echo "${'!" > "§HOME/.bedaim-bridge/ngrok.pid"
+          echo "BRIDGE_TUNNEL_STARTING=TERMUX"
+          exit 0
+        fi
+
+        if command -v proot-distro >/dev/null 2>&1 && proot-distro login debian -- bash -lc 'command -v ngrok >/dev/null 2>&1'; then
+          proot-distro login debian -- bash -lc '
+            mkdir -p "§HOME/.bedaim-bridge"
+            if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+              echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"
+              exit 0
+            fi
+            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "§HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit §?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}!" > "${'HOME/.bedaim-bridge/ngrok.pid"
+          echo "BRIDGE_TUNNEL_STARTING=TERMUX"
+          exit 0
+        fi
+
+        if command -v proot-distro >/dev/null 2>&1 && proot-distro login debian -- bash -lc 'command -v ngrok >/dev/null 2>&1'; then
+          proot-distro login debian -- bash -lc '
+            mkdir -p "§HOME/.bedaim-bridge"
+            if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+              echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"
+              exit 0
+            fi
+            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "§HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit §?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge/ngrok.pid"
+          echo "BRIDGE_TUNNEL_STARTING=TERMUX"
+          exit 0
+        fi
+
+        if command -v proot-distro >/dev/null 2>&1 && proot-distro login debian -- bash -lc 'command -v ngrok >/dev/null 2>&1'; then
+          proot-distro login debian -- bash -lc '
+            mkdir -p "${'HOME/.bedaim-bridge"
+            if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+              echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"
+              exit 0
+            fi
+            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "§HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit §?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge"
+            if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+              echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"
+              exit 0
+            fi
+            nohup ngrok http 8765 --log=stdout --log-format=logfmt > "${'HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            echo "§!" > "§HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit §?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+            echo "${'!" > "§HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit §?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}!" > "${'HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit §?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge/ngrok.pid"
+            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
+          '
+          exit ${'?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}?
+        fi
+
+        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+        exit 127
+    """.trimIndent()
+
+    private val stopScript = """
+        set +e
+        stop_local() {
+          PID_FILE="${'HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "§PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge/ngrok.pid"
+          if [ -s "${'PID_FILE" ]; then
+            PID="§(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID_FILE" ]; then
+            PID="${'(cat "§PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}(cat "${'PID_FILE" 2>/dev/null)"
+            case "§PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID_FILE" 2>/dev/null)"
+            case "${'PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID" in
+              ''|*[!0-9]*) ;;
+              *) kill "${'PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "§PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true ;;
+            esac
+            rm -f "${'PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "§HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID_FILE"
+          fi
+        }
+        stop_local
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- bash -lc 'test -s "${'HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="§HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
+          proot-distro login debian -- bash -lc '
+            PID_FILE="${'HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "§PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}HOME/.bedaim-bridge/ngrok.pid"
+            if [ -s "${'PID_FILE" ]; then
+              PID="§(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID_FILE" ]; then
+              PID="${'(cat "§PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}(cat "${'PID_FILE" 2>/dev/null)"
+              case "§PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID_FILE" 2>/dev/null)"
+              case "${'PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "§PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID" in
+                ""|*[!0-9]*) ;;
+                *) kill "${'PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "§PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
+              esac
+              rm -f "${'PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — §{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}PID_FILE"
+            fi
+          '
+        fi
+        exit 0
+    """.trimIndent()
+
+    fun start(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        startScript,
+        "BedAim Bridge • ensure ngrok tunnel",
+        "Starts or reuses the configured ngrok tunnel for the local MCP server."
+    )
+
+    fun stop(context: Context): Boolean = runFixedTermuxCommand(
+        context,
+        stopScript,
+        "BedAim Bridge • stop owned ngrok tunnel",
+        "Stops only an ngrok process previously launched by this Bridge."
+    )
+
+    private fun runFixedTermuxCommand(
+        context: Context,
+        script: String,
+        label: String,
+        description: String
+    ): Boolean {
+        if (context.packageManager.getLaunchIntentForPackage(TERMUX_PACKAGE) == null) {
+            BridgeStatus.recordEvent("Tunnel: Termux não está instalado.")
+            return false
+        }
+        if (context.checkSelfPermission(TERMUX_RUN_PERMISSION) != PackageManager.PERMISSION_GRANTED) {
+            BridgeStatus.recordEvent("Tunnel: permissão Termux RUN_COMMAND ainda não concedida.")
+            return false
+        }
+
+        val callback = Intent(context, TermuxCommandResultService::class.java)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val pending = PendingIntent.getService(
+            context,
+            (System.currentTimeMillis() and 0x7fffffff).toInt(),
+            callback,
+            flags
+        )
+        val command = Intent().apply {
+            setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", BASH)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", arrayOf("-lc", script))
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", label)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", description)
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", pending)
+        }
+        return try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Tunnel: solicitação enviada ao Termux.")
+            true
+        } catch (error: Throwable) {
+            BridgeStatus.recordEvent("Tunnel: falha no RUN_COMMAND — ${'{error.javaClass.simpleName}")
+            false
+        }
+    }
+
+    /** Returns the HTTPS public URL only when ngrok forwards to the Bridge port. */
+    fun readPublicUrl(): String? {
+        val connection = try {
+            (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 1_500
+                readTimeout = 1_500
+                instanceFollowRedirects = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val tunnels = JSONObject(body).optJSONArray("tunnels") ?: return null
+            for (index in 0 until tunnels.length()) {
+                val tunnel = tunnels.optJSONObject(index) ?: continue
+                val publicUrl = tunnel.optString("public_url")
+                val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
+                if (publicUrl.startsWith("https://") && address.contains("8765")) return publicUrl.trimEnd('/')
+            }
+            null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+}
+}{error.javaClass.simpleName}")
             false
         }
     }
