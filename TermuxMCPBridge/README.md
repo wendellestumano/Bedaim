@@ -57,6 +57,7 @@ Do not select **No authentication** and do not paste the legacy capability URL w
 - Shizuku UserService-backed shared-storage MCP tools rooted at `/sdcard`: list, read, write, mkdir, delete, copy, and move. Transfers are chunked.
 - MCP workspace tools: `bridge_status`, `workspace_list`, `workspace_read`, and `workspace_write`.
 - APK Lab for APK metadata/signature inspection, protected raw ZIP extraction, backup, export, and selected Apktool decode through Termux.
+- MCP toolchain_check for a fixed diagnostic and toolchain_run for read-only allowlisted binaries (readelf, llvm-objdump, strings, sha256sum, file, and unzip listing) inside /sdcard/Download/Testing2. Arguments are passed as separate argv entries; the tool does not expose a general shell, Python, Git writes, package installation, or network commands.
 
 ## Limitations
 
