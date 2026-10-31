@@ -101,6 +101,7 @@ class BridgeService : Service() {
         }
         BridgeStatus.update(BridgeState.STARTING, "Starting local MCP server")
         val token = BridgePreferences.getOrCreateToken(this)
+        BridgeOAuth.initialize(applicationContext)
         try {
             server = embeddedServer(CIO, host = "127.0.0.1", port = PORT) {
                 intercept(ApplicationCallPipeline.Call) {
