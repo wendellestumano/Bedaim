@@ -40,14 +40,14 @@ object ToolchainRunner {
     suspend fun check(context: Context): String = execute(
         context,
         "sh",
-        listOf("-c", "for t in readelf llvm-objdump strings sha256sum file unzip git python jadx radare2; do if command -v \\$t >/dev/null 2>&1; then printf '%s: %s\\n' \\$t \"$(command -v \\$t)\"; else printf '%s: MISSING\\n' \\$t; fi; done"),
+        listOf("-c", "command -v readelf || echo readelf:MISSING; command -v llvm-objdump || echo llvm-objdump:MISSING; command -v strings || echo strings:MISSING; command -v sha256sum || echo sha256sum:MISSING; command -v file || echo file:MISSING; command -v unzip || echo unzip:MISSING; command -v git || echo git:MISSING; command -v python || echo python:MISSING; command -v jadx || echo jadx:MISSING; command -v radare2 || echo radare2:MISSING"),
         SHARED_ROOT
     )
 
     suspend fun run(context: Context, tool: String, args: List<String>, cwd: String): String {
         require(tool in allowed) { "Ferramenta não permitida. Permitidas: ${allowed.sorted().joinToString()}" }
         require(args.size <= MAX_ARGS) { "Máximo de $MAX_ARGS argumentos." }
-        require(args.all { it.length <= MAX_ARG_LENGTH && '\\u0000' !in it && '\\n' !in it && '\\r' !in it }) {
+        require(args.all { it.length <= MAX_ARG_LENGTH && '\u0000' !in it && '\n' !in it && '\r' !in it }) {
             "Argumento inválido ou muito longo."
         }
         require(args.none { it == "--output" || it == "-o" || it.startsWith("--output=") }) {
