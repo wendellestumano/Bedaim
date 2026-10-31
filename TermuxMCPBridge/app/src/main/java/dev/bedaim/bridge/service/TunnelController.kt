@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import dev.bedaim.bridge.core.BridgeStatus
+import dev.bedaim.bridge.security.BridgePreferences
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -20,7 +21,7 @@ object TunnelController {
     private const val TERMUX_HOME = "/data/data/com.termux/files/home"
     private const val BASH = "/data/data/com.termux/files/usr/bin/bash"
 
-    private val startScript = """
+    private fun startScript(domain: String) = """
         set -u
         mkdir -p "${'$'}HOME/.bedaim-bridge"
 
@@ -37,7 +38,7 @@ object TunnelController {
             echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
             exit 0
           fi
-          nohup ngrok http 8765 --log=stdout --log-format=logfmt > "${'$'}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
+          nohup ngrok http 8765 --url $domain --log=stdout --log-format=logfmt > "${'$'}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
           echo "${'$'}!" > "${'$'}PID_FILE"
           echo "BRIDGE_TUNNEL_STARTING=TERMUX"
           exit 0
@@ -100,7 +101,7 @@ object TunnelController {
 
     fun start(context: Context): Boolean = runFixedTermuxCommand(
         context,
-        startScript,
+        startScript(BridgePreferences.getConfiguredNgrokDomain(context)),
         "BedAim Bridge • ensure ngrok tunnel",
         "Starts or reuses the configured ngrok tunnel for the local MCP server."
     )
