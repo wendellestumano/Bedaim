@@ -7,6 +7,7 @@
 #include <cstring>
 #include <elf.h>
 #include <link.h>
+#include <limits>
 #include <string_view>
 
 namespace bedrocktools::core::memory {
@@ -28,14 +29,27 @@ struct MinecraftBuildSearch {
     bool matched = false;
 };
 
-inline std::size_t alignNoteSize(std::uint32_t value) noexcept {
-    return (static_cast<std::size_t>(value) + 3u) & ~std::size_t(3u);
+inline constexpr bool checkedAdd(std::uintptr_t left, std::uintptr_t right,
+                                 std::uintptr_t& result) noexcept {
+    if (right > std::numeric_limits<std::uintptr_t>::max() - left) return false;
+    result = left + right;
+    return true;
+}
+
+inline bool alignNoteSize(std::uint32_t value, std::size_t& aligned) noexcept {
+    const auto raw = static_cast<std::size_t>(value);
+    if (raw > std::numeric_limits<std::size_t>::max() - 3u) return false;
+    aligned = (raw + 3u) & ~std::size_t(3u);
+    return true;
 }
 
 inline int inspectMinecraftImage(struct dl_phdr_info* info, std::size_t, void* opaque) {
     if (!info || !info->dlpi_name) return 0;
     const std::string_view imageName(info->dlpi_name);
-    if (imageName.find("libminecraftpe.so") == std::string_view::npos) return 0;
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos
+        ? imageName : imageName.substr(slash + 1);
+    if (basename != "libminecraftpe.so") return 0;
 
     auto& state = *static_cast<MinecraftBuildSearch*>(opaque);
     state.librarySeen = true;
@@ -45,15 +59,20 @@ inline int inspectMinecraftImage(struct dl_phdr_info* info, std::size_t, void* o
         if (noteSegment.p_type != PT_NOTE || noteSegment.p_memsz < sizeof(ElfW(Nhdr)))
             continue;
 
-        // Read PT_NOTE only when its bytes are also covered by a mapped PT_LOAD segment.
         const auto noteBegin = static_cast<std::uintptr_t>(noteSegment.p_vaddr);
-        const auto noteEnd = noteBegin + static_cast<std::uintptr_t>(noteSegment.p_memsz);
+        const auto noteSize = static_cast<std::uintptr_t>(noteSegment.p_memsz);
+        std::uintptr_t noteEnd = 0;
+        if (!checkedAdd(noteBegin, noteSize, noteEnd)) continue;
+
+        // PT_NOTE is read only when its complete range is covered by a readable PT_LOAD.
         bool mapped = false;
         for (ElfW(Half) j = 0; j < info->dlpi_phnum; ++j) {
             const auto& loadSegment = info->dlpi_phdr[j];
-            if (loadSegment.p_type != PT_LOAD) continue;
+            if (loadSegment.p_type != PT_LOAD || (loadSegment.p_flags & PF_R) == 0) continue;
             const auto loadBegin = static_cast<std::uintptr_t>(loadSegment.p_vaddr);
-            const auto loadEnd = loadBegin + static_cast<std::uintptr_t>(loadSegment.p_memsz);
+            const auto loadSize = static_cast<std::uintptr_t>(loadSegment.p_memsz);
+            std::uintptr_t loadEnd = 0;
+            if (!checkedAdd(loadBegin, loadSize, loadEnd)) continue;
             if (noteBegin >= loadBegin && noteEnd <= loadEnd) {
                 mapped = true;
                 break;
@@ -61,9 +80,11 @@ inline int inspectMinecraftImage(struct dl_phdr_info* info, std::size_t, void* o
         }
         if (!mapped) continue;
 
-        const auto address = static_cast<std::uintptr_t>(info->dlpi_addr) + noteBegin;
+        std::uintptr_t address = 0;
+        if (!checkedAdd(static_cast<std::uintptr_t>(info->dlpi_addr), noteBegin, address))
+            continue;
         const auto* cursor = reinterpret_cast<const std::uint8_t*>(address);
-        std::size_t remaining = static_cast<std::size_t>(noteSegment.p_memsz);
+        std::size_t remaining = static_cast<std::size_t>(noteSize);
 
         while (remaining >= sizeof(ElfW(Nhdr))) {
             ElfW(Nhdr) note{};
@@ -71,8 +92,10 @@ inline int inspectMinecraftImage(struct dl_phdr_info* info, std::size_t, void* o
             cursor += sizeof(note);
             remaining -= sizeof(note);
 
-            const std::size_t nameBytes = alignNoteSize(note.n_namesz);
-            const std::size_t descBytes = alignNoteSize(note.n_descsz);
+            std::size_t nameBytes = 0;
+            std::size_t descBytes = 0;
+            if (!alignNoteSize(note.n_namesz, nameBytes) ||
+                !alignNoteSize(note.n_descsz, descBytes)) break;
             if (nameBytes > remaining) break;
             const auto* name = cursor;
             cursor += nameBytes;
@@ -84,7 +107,7 @@ inline int inspectMinecraftImage(struct dl_phdr_info* info, std::size_t, void* o
             remaining -= descBytes;
 
             if (note.n_type != NT_GNU_BUILD_ID || note.n_namesz != 4u ||
-                std::memcmp(name, "GNU\0", 4u) != 0) {
+                std::memcmp(name, "GNU\\0", 4u) != 0) {
                 continue;
             }
 
