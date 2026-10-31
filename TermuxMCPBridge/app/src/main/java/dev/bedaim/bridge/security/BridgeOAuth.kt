@@ -160,6 +160,7 @@ object BridgeOAuth {
                 when (p["grant_type"]) {
                     "authorization_code" -> {
                         val c = codes.remove(p["code"].orEmpty())
+                        persist() // Authorization codes remain strictly single-use across crashes.
                         val verifier = p["code_verifier"].orEmpty()
                         val digest = Base64.getUrlEncoder().withoutPadding().encodeToString(
                             MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(Charsets.US_ASCII)))
@@ -179,6 +180,7 @@ object BridgeOAuth {
                     "refresh_token" -> {
                         val old = p["refresh_token"].orEmpty()
                         val prior = refresh.remove(old)
+                        persist() // Persist rotation before issuing replacement credentials.
                         if (prior == null || prior.expires < now() || prior.clientId != p["client_id"]) {
                             call.respondText("""{"error":"invalid_grant"}""", ContentType.Application.Json, HttpStatusCode.BadRequest); return true
                         }
