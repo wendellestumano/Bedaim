@@ -21,6 +21,23 @@ No ngrok authtoken is requested by the Bridge or sent to ChatGPT. The app reuses
 
 The ngrok Free plan assigns an account development domain that remains assigned to the account. The Bridge explicitly passes that domain to ngrok so the URL remains stable across agent restarts. If the default domain shown in the dashboard is not owned by the configured ngrok account, replace it once in **Configure fixed ngrok domain**. See [ngrok's static dev domain explanation](https://ngrok.com/blog/free-static-domains-ngrok-users).
 
+## OAuth 2.1 for ChatGPT MCP
+
+The Bridge now exposes OAuth discovery and authorization endpoints on the configured HTTPS ngrok domain:
+
+- `/.well-known/oauth-protected-resource` and `/.well-known/oauth-protected-resource/mcp`
+- `/.well-known/oauth-authorization-server`
+- `/register` (Dynamic Client Registration)
+- `/authorize` (user consent page)
+- `/token` (authorization-code + PKCE S256 and refresh-token grants)
+- `/revoke`
+
+The MCP endpoint returns a Bearer challenge with the protected-resource metadata URL when no valid token is supplied. OAuth access tokens are scoped to the Bridge MCP resource, expire after one hour, and refresh tokens rotate when used. Authorization codes are single-use, expire after five minutes, and are bound to the registered redirect URI and PKCE S256 challenge. Only HTTPS redirect URIs and loopback HTTP redirect URIs are accepted.
+
+In ChatGPT, add the custom MCP server using the public HTTPS URL ending in `/mcp` and select OAuth authentication when prompted. Do not paste the legacy capability URL as an OAuth endpoint.
+
+**Alpha limitation:** the current OAuth client/code/token registry is held in process memory. Restarting the Bridge invalidates existing OAuth sessions and may require reconnecting/authorizing again. The legacy per-install token remains accepted temporarily for backwards compatibility. Do not treat this alpha implementation as a hardened multi-user authorization service.
+
 ## One-time ChatGPT/client registration
 
 The app cannot silently register a remote MCP server inside ChatGPT. Copy **COPIAR ENDPOINT MCP REMOTO** from the dashboard. In ChatGPT's custom MCP connector choose **Sem autenticação** and paste this complete URL. The URL includes a random 256-bit `access_token` capability, which the Bridge validates in constant time; it is not an open unauthenticated endpoint. Keep the URL private. Clients that support custom Authorization headers can continue using the plain `/mcp` endpoint with `Authorization: Bearer <token>` from **COPIAR CONFIGURAÇÃO DO CLIENTE MCP**. After registration, reopening the Bridge should bring the same ngrok development domain online again.
@@ -31,7 +48,7 @@ The public endpoint remains protected by the per-install 256-bit secret, accepte
 
 - Dark Android dashboard with device diagnostics and event log.
 - Foreground MCP server bound to loopback only.
-- Per-install 256-bit access secret with copy and rotation controls; supports Bearer headers and a protected `access_token` URL parameter for no-auth MCP client profiles.
+- OAuth 2.1 authorization-code flow with PKCE S256, DCR, consent UI, refresh-token rotation, resource metadata discovery, and Bearer validation; legacy per-install token remains temporarily available for compatibility.
 - Automatic MCP startup when the app opens.
 - ngrok startup/reuse through fixed Termux RUN_COMMAND scripts with an explicit stable account dev domain; stale Bridge-owned tunnels are replaced when the configured domain changes. No arbitrary shell command tool is exposed.
 - ngrok URL discovery through the local agent API and persistent display in the dashboard.
@@ -71,4 +88,4 @@ Keep an offline backup of the keystore and credentials. Never commit them to the
 
 ## Security
 
-The MCP listener remains bound to `127.0.0.1`; ngrok is the only public ingress. Every MCP request requires the per-install secret, supplied either as a Bearer token or as the `access_token` query parameter. The tunnel manager invokes a fixed, app-authored script and never accepts arbitrary shell input from MCP callers.
+The MCP listener remains bound to `127.0.0.1`; ngrok is the only public ingress. Every MCP request requires either a valid OAuth Bearer access token or the legacy per-install secret (Bearer or `access_token` query parameter) during the compatibility period. The tunnel manager invokes a fixed, app-authored script and never accepts arbitrary shell input from MCP callers.
