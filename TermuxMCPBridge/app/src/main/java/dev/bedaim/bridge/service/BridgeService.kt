@@ -27,14 +27,17 @@ class BridgeService : Service() {
     private val tunnelMonitor = object : Runnable {
         override fun run() {
             if (server == null) return
-            Thread {
-                val publicUrl = TunnelController.readPublicUrl(this@BridgeService)
-                if (publicUrl == null) {
-                    TunnelController.start(this@BridgeService)
-                } else {
-                    BridgePreferences.saveTunnelUrl(this@BridgeService, publicUrl)
-                }
-            }.start()
+            if (BridgePreferences.isTermuxAutoReconnectEnabled(this@BridgeService)) {
+                Thread {
+                    val publicUrl = TunnelController.readPublicUrl(this@BridgeService)
+                    if (publicUrl == null) {
+                        BridgeStatus.recordEvent("Reconexão automática: túnel ausente; solicitando restauração pelo Termux.")
+                        TunnelController.start(this@BridgeService)
+                    } else {
+                        BridgePreferences.saveTunnelUrl(this@BridgeService, publicUrl)
+                    }
+                }.start()
+            }
             tunnelMonitorHandler.postDelayed(this, TUNNEL_MONITOR_INTERVAL_MS)
         }
     }
