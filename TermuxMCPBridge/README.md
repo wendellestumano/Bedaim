@@ -90,3 +90,8 @@ Keep an offline backup of the keystore and credentials. Never commit them to the
 ## Security
 
 The MCP listener remains bound to `127.0.0.1`; ngrok is the only public ingress. Every MCP request requires either a valid OAuth Bearer access token or the legacy per-install secret (Bearer or `access_token` query parameter) during the compatibility period. The tunnel manager invokes a fixed, app-authored script and never accepts arbitrary shell input from MCP callers.
+
+
+### Full Termux shell (opt-in)
+
+The MCP tool `termux_exec` can run shell commands in the Termux environment after the user explicitly enables **ALTERNAR ACESSO REMOTO AO SHELL DO TERMUX** in the Android app. It is disabled by default. Commands run as the Termux app user, not root, with stdout/stderr returned to MCP, a maximum command length of 12,000 characters, a 1–300 second timeout, and a working directory under Termux HOME or shared storage. This is remote code execution in the Termux account: protect the MCP endpoint and OAuth/Bearer credentials as secrets, and disable the toggle when not actively using it. It does not grant root or access to other apps' private sandboxes.
