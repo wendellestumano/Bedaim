@@ -2,6 +2,7 @@ package dev.bedaim.bridge.mcp
 import android.content.Context
 import android.os.Build
 import dev.bedaim.bridge.core.SafePathPolicy
+import dev.bedaim.bridge.shizuku.ShizukuStorageAccess
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
 import io.modelcontextprotocol.kotlin.sdk.types.*
@@ -46,6 +47,32 @@ object McpServerFactory {
             val safe=File(SafePathPolicy.resolve(workspace.path,rel))
             safe.writeText(content,Charsets.UTF_8)
             CallToolResult(content=listOf(TextContent("Wrote ${content.length} characters to ${safe.name}")))
+        }
+        server.addTool("device_storage_list","Lists files only inside Download/Testing2 using an authorized Shizuku UserService.",
+            ToolSchema(properties=buildJsonObject { putJsonObject("path"){put("type","string")} })) { req ->
+            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull.orEmpty()
+            val entries=ShizukuStorageAccess.listFiles(path)
+            CallToolResult(content=listOf(TextContent(if(entries.isEmpty()) "(empty)" else entries.joinToString("\n"))))
+        }
+        server.addTool("device_storage_read","Reads a UTF-8 file inside Download/Testing2 (maximum 1 MiB).",
+            ToolSchema(properties=buildJsonObject { putJsonObject("path"){put("type","string")} },required=listOf("path"))) { req ->
+            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull ?: error("path required")
+            val bytes=ShizukuStorageAccess.readFile(path,MAX_READ.toInt())
+            CallToolResult(content=listOf(TextContent(bytes.toString(Charsets.UTF_8))))
+        }
+        server.addTool("device_storage_write","Creates or replaces a UTF-8 file inside Download/Testing2 (maximum 256 KiB); overwrite must be explicitly true to replace an existing file.",
+            ToolSchema(properties=buildJsonObject {
+                putJsonObject("path"){put("type","string")}
+                putJsonObject("content"){put("type","string")}
+                putJsonObject("overwrite"){put("type","boolean")}
+            },required=listOf("path","content","overwrite"))) { req ->
+            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull ?: error("path required")
+            val content=req.arguments?.get("content")?.jsonPrimitive?.contentOrNull ?: error("content required")
+            val overwrite=req.arguments?.get("overwrite")?.jsonPrimitive?.booleanOrNull ?: error("overwrite required")
+            val bytes=content.toByteArray(Charsets.UTF_8)
+            require(bytes.size<=MAX_WRITE) { "Content exceeds 256 KiB" }
+            val result=ShizukuStorageAccess.writeFile(path,bytes,overwrite)
+            CallToolResult(content=listOf(TextContent(result)))
         }
         return server
     }

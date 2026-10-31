@@ -13,6 +13,7 @@ val hasPersistentSigning = !persistentStoreFile.isNullOrBlank() &&
     !persistentKeyPassword.isNullOrBlank()
 
 android {
+    buildFeatures { aidl = true }
     namespace = "dev.bedaim.bridge"
     compileSdk = 36
     defaultConfig {
