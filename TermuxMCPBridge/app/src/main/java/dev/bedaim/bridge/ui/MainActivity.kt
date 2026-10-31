@@ -56,6 +56,7 @@ class MainActivity : Activity() {
     private lateinit var workspaceValue: TextView
     private lateinit var tunnelValue: TextView
     private lateinit var autoStartValue: TextView
+    private lateinit var termuxReconnectValue: TextView
     private lateinit var ngrokDomainValue: TextView
     private var selectedApk: File? = null
 
@@ -144,6 +145,9 @@ class MainActivity : Activity() {
         autoStartValue = label("", 12f, secondaryText)
         autoStartValue.setPadding(0, dp(8), 0, dp(2))
         tunnelCard.addView(autoStartValue)
+        termuxReconnectValue = label("", 12f, secondaryText)
+        termuxReconnectValue.setPadding(0, dp(4), 0, dp(2))
+        tunnelCard.addView(termuxReconnectValue)
         ngrokDomainValue = label("", 12f, secondaryText)
         ngrokDomainValue.setPadding(0, dp(4), 0, dp(2))
         tunnelCard.addView(ngrokDomainValue)
@@ -153,6 +157,16 @@ class MainActivity : Activity() {
             12f, secondaryText
         ).apply { setPadding(0, dp(8), 0, dp(2)) })
         actionButton(tunnelCard, "CONECTAR TUDO / REPARAR CONEXÃO", true) { connectAll() }
+        actionButton(tunnelCard, "ALTERNAR RECONEXÃO AUTOMÁTICA PELO TERMUX", false) {
+            val enabled = !BridgePreferences.isTermuxAutoReconnectEnabled(this)
+            BridgePreferences.setTermuxAutoReconnectEnabled(this, enabled)
+            updateTermuxReconnectLabel()
+            Toast.makeText(
+                this,
+                if (enabled) "Reconexão automática pelo Termux ativada (verificação a cada 60 s)." else "Reconexão automática desativada. A conexão manual continua disponível.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
         actionButton(tunnelCard, "CONFIGURAR DOMÍNIO FIXO DO NGROK", false) {
             showNgrokDomainDialog()
         }
@@ -717,6 +731,15 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    private fun updateTermuxReconnectLabel() {
+        if (!::termuxReconnectValue.isInitialized) return
+        termuxReconnectValue.text = if (BridgePreferences.isTermuxAutoReconnectEnabled(this)) {
+            "Reconexão automática Termux/ngrok: ATIVADA • tenta restaurar o túnel a cada 60 s se cair."
+        } else {
+            "Reconexão automática Termux/ngrok: DESATIVADA • use Conectar tudo para reconectar manualmente."
+        }
+    }
+
     private fun updateAutoStartLabel() {
         if (!::autoStartValue.isInitialized) return
         autoStartValue.text = if (BridgePreferences.isAutoStartEnabled(this)) {
@@ -729,6 +752,7 @@ class MainActivity : Activity() {
     private fun refresh() {
         if (!::statusValue.isInitialized) return
         updateAutoStartLabel()
+        updateTermuxReconnectLabel()
         updateNgrokDomainLabel()
         val running = BridgeStatus.state.name == "RUNNING"
         if (::tunnelValue.isInitialized) {
