@@ -33,7 +33,7 @@ object TunnelController {
               *) if kill -0 "${'$'}PID" 2>/dev/null; then echo "BRIDGE_TUNNEL_ALREADY_RUNNING=TERMUX"; exit 0; fi ;;
             esac
           fi
-          if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+          if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels 2>/dev/null | grep -q '8765'; then
             echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
             exit 0
           fi
@@ -54,7 +54,7 @@ object TunnelController {
                 *) if kill -0 "${'$'}PID" 2>/dev/null; then echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"; exit 0; fi ;;
               esac
             fi
-            if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels >/dev/null 2>&1; then
+            if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels 2>/dev/null | grep -q '8765'; then
               echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
               exit 0
             fi
@@ -162,8 +162,8 @@ object TunnelController {
         val connection = try {
             (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 1_500
-                readTimeout = 1_500
+                connectTimeout = 600
+                readTimeout = 600
                 instanceFollowRedirects = false
             }
         } catch (_: Throwable) {
