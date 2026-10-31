@@ -38,11 +38,11 @@ In ChatGPT, add the custom MCP server using the public HTTPS URL ending in `/mcp
 
 **Alpha limitation:** the current OAuth client/code/token registry is held in process memory. Restarting the Bridge invalidates existing OAuth sessions and may require reconnecting/authorizing again. The legacy per-install token remains accepted temporarily for backwards compatibility. Do not treat this alpha implementation as a hardened multi-user authorization service.
 
-## One-time ChatGPT/client registration
+## Connect ChatGPT
 
-The app cannot silently register a remote MCP server inside ChatGPT. Copy **COPIAR ENDPOINT MCP REMOTO** from the dashboard. In ChatGPT's custom MCP connector choose **Sem autenticação** and paste this complete URL. The URL includes a random 256-bit `access_token` capability, which the Bridge validates in constant time; it is not an open unauthenticated endpoint. Keep the URL private. Clients that support custom Authorization headers can continue using the plain `/mcp` endpoint with `Authorization: Bearer <token>` from **COPIAR CONFIGURAÇÃO DO CLIENTE MCP**. After registration, reopening the Bridge should bring the same ngrok development domain online again.
+The app cannot silently register a remote MCP server inside ChatGPT. Add a custom MCP server using the public HTTPS URL ending in `/mcp`, then choose **OAuth** when ChatGPT requests authentication. ChatGPT discovers the authorization endpoints from the MCP protected-resource metadata, registers its public client through DCR, opens the Bridge consent page, and receives an access token through the PKCE S256 authorization-code flow.
 
-The public endpoint remains protected by the per-install 256-bit secret, accepted either as a Bearer token or as the `access_token` query parameter for clients without header-auth configuration. Treat the complete capability URL as a password: anyone possessing it can access the MCP tools. Query credentials can appear in URL history or infrastructure logs, so use only over HTTPS and do not share it. Rotating the Bridge token invalidates both Bearer and capability-URL credentials.
+Do not select **No authentication** and do not paste the legacy capability URL when setting up OAuth. The legacy secret URL and Bearer token remain temporarily accepted only for backward compatibility with existing clients. The configured ngrok domain must be reachable over HTTPS for discovery, consent, and token exchange.
 
 ## Implemented
 
