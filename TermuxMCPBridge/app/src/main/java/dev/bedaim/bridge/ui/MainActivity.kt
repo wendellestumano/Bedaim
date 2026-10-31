@@ -692,7 +692,7 @@ class MainActivity : Activity() {
         Thread {
             var found: String? = null
             for (attempt in 0 until 18) {
-                found = TunnelController.readPublicUrl()
+                found = TunnelController.readPublicUrl(this@MainActivity)
                 if (found != null) break
                 Thread.sleep(900)
             }
