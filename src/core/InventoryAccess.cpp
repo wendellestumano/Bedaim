@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <link.h>
 #include <iterator>
 #include <limits>
 #include <string>
@@ -150,11 +151,61 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
     return begin >= region.begin && end <= region.end;
 }
 
+struct MinecraftExecutableAddressQuery {
+    std::uintptr_t imageBase{};
+    std::uintptr_t address{};
+    bool found{};
+};
+
+int inspectMinecraftExecutableAddress(struct dl_phdr_info* info, std::size_t, void* opaque) {
+    if (!info || !info->dlpi_name) return 0;
+    const std::string_view imageName(info->dlpi_name);
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos
+        ? imageName : imageName.substr(slash + 1);
+    auto& query = *static_cast<MinecraftExecutableAddressQuery*>(opaque);
+    if (basename != "libminecraftpe.so" ||
+        static_cast<std::uintptr_t>(info->dlpi_addr) != query.imageBase) return 0;
+
+    const auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i) {
+        const auto& segment = info->dlpi_phdr[i];
+        if (segment.p_type != PT_LOAD || (segment.p_flags & PF_X) == 0) continue;
+        const auto offset = static_cast<std::uintptr_t>(segment.p_vaddr);
+        const auto size = static_cast<std::uintptr_t>(segment.p_memsz);
+        if (offset > maximum - query.imageBase) continue;
+        const auto begin = query.imageBase + offset;
+        if (size > maximum - begin) continue;
+        const auto end = begin + size;
+        if (query.address >= begin && query.address < end) {
+            query.found = true;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 bool isMinecraftFunction(const void* address) {
     if (!address) return false;
     Dl_info info{};
-    return dladdr(address, &info) != 0 && info.dli_fname &&
-        std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
+    if (dladdr(address, &info) == 0 || !info.dli_fname || !info.dli_fbase) return false;
+    const std::string_view imageName(info.dli_fname);
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos
+        ? imageName : imageName.substr(slash + 1);
+    if (basename != "libminecraftpe.so") return false;
+
+    // dladdr alone also accepts data addresses inside the shared object.
+    // A vtable entry must resolve into an executable PT_LOAD segment before
+    // InventoryAccess is allowed to call it as a native function.
+    MinecraftExecutableAddressQuery query{
+        reinterpret_cast<std::uintptr_t>(info.dli_fbase),
+        reinterpret_cast<std::uintptr_t>(address),
+        false
+    };
+    if (!query.imageBase || !query.address) return false;
+    dl_iterate_phdr(&inspectMinecraftExecutableAddress, &query);
+    return query.found;
 }
 
 void* resolveMinecraftSymbol(const char* symbol) {
