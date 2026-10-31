@@ -8,11 +8,12 @@ import android.os.Build
 import dev.bedaim.bridge.core.BridgeStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import dev.bedaim.bridge.security.BridgePreferences
 
 /**
  * Narrow, read-only Termux tool runner. No shell, interpreter, package manager,
@@ -27,7 +28,7 @@ object ToolchainRunner {
     private const val MAX_ARGS = 48
     private const val MAX_ARG_LENGTH = 2048
     private const val MAX_OUTPUT = 48_000
-    private const val TIMEOUT_MS = 45_000L
+    private const val TIMEOUT_MS = 300_000L
     private val pending = ConcurrentHashMap<String, CompletableFuture<String>>()
 
     private val allowed = setOf("readelf", "llvm-objdump", "strings", "sha256sum", "file", "unzip")
@@ -69,7 +70,24 @@ object ToolchainRunner {
         return execute(context, tool, args, directory.path)
     }
 
-    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String): String {
+    suspend fun shell(context: Context, command: String, cwd: String, timeoutMs: Long): String {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+        require(command.isNotBlank() && command.length <= 12_000) { "Comando vazio ou acima de 12.000 caracteres." }
+        require(timeoutMs in 1_000L..300_000L) { "Timeout deve ficar entre 1 e 300 segundos." }
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        require(directory.isDirectory) { "Diretório não encontrado: $cwd" }
+        return execute(context, "bash", listOf("-lc", command), directory.path, timeoutMs)
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
         require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
         require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
             "Permissão Termux RUN_COMMAND não concedida."
@@ -89,7 +107,7 @@ object ToolchainRunner {
             putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
             putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
             putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
-            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Read-only allowlisted analysis command.")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
             putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
         }
         try {
@@ -97,7 +115,7 @@ object ToolchainRunner {
             BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
             return withContext(Dispatchers.IO) {
                 try {
-                    withTimeout(TIMEOUT_MS) { future.get() }
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
                 } finally {
                     pending.remove(id)
                 }
