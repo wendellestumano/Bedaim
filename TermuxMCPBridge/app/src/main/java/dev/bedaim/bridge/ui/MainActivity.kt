@@ -54,6 +54,7 @@ class MainActivity : Activity() {
     private lateinit var logsValue: TextView
     private lateinit var workspaceValue: TextView
     private lateinit var tunnelValue: TextView
+    private lateinit var autoStartValue: TextView
     private var selectedApk: File? = null
 
     private val bgColor = Color.rgb(7, 8, 11)
@@ -138,11 +139,24 @@ class MainActivity : Activity() {
         tunnelValue = label("Preparando conexão automática…", 13f, primaryText)
         tunnelValue.setLineSpacing(dp(4).toFloat(), 1f)
         tunnelCard.addView(tunnelValue)
+        autoStartValue = label("", 12f, secondaryText)
+        autoStartValue.setPadding(0, dp(8), 0, dp(2))
+        tunnelCard.addView(autoStartValue)
         tunnelCard.addView(label(
             "Ao abrir este app, o servidor MCP e o túnel são iniciados automaticamente. O ngrok usa a configuração já existente no Termux ou no Debian do proot-distro.",
             12f, secondaryText
         ).apply { setPadding(0, dp(8), 0, dp(2)) })
         actionButton(tunnelCard, "CONECTAR TUDO / REPARAR CONEXÃO", true) { connectAll() }
+        actionButton(tunnelCard, "ALTERNAR INICIALIZAÇÃO APÓS REINICIAR", false) {
+            val enabled = !BridgePreferences.isAutoStartEnabled(this)
+            BridgePreferences.setAutoStartEnabled(this, enabled)
+            updateAutoStartLabel()
+            Toast.makeText(
+                this,
+                if (enabled) "Inicialização automática após reiniciar ativada." else "Inicialização automática desativada.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
         actionButton(tunnelCard, "COPIAR ENDPOINT MCP REMOTO", false) {
             val base = BridgePreferences.getTunnelUrl(this)
             if (base.isNullOrBlank()) {
@@ -618,6 +632,8 @@ class MainActivity : Activity() {
 
     private fun connectAll(silent: Boolean = false) {
         try {
+            BridgePreferences.setAutoStartEnabled(this, true)
+            updateAutoStartLabel()
             ContextCompat.startForegroundService(
                 this,
                 Intent(this, BridgeService::class.java).setAction(BridgeService.ACTION_START)
@@ -659,8 +675,18 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    private fun updateAutoStartLabel() {
+        if (!::autoStartValue.isInitialized) return
+        autoStartValue.text = if (BridgePreferences.isAutoStartEnabled(this)) {
+            "Autostart após reiniciar: ATIVADO"
+        } else {
+            "Autostart após reiniciar: DESATIVADO (o serviço não voltará sozinho)"
+        }
+    }
+
     private fun refresh() {
         if (!::statusValue.isInitialized) return
+        updateAutoStartLabel()
         val running = BridgeStatus.state.name == "RUNNING"
         if (::tunnelValue.isInitialized) {
             val savedUrl = BridgePreferences.getTunnelUrl(this)
