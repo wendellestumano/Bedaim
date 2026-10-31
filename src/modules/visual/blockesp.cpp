@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "core/memory/MinecraftBuildIdentity.hpp"
 #include "blockesp.hpp"
 #include "BlockEventQueue.hpp"
 #include "hitbox.hpp"
@@ -20,6 +24,7 @@
 #include <cstdint>
 #include <cstring>
 #include <dlfcn.h>
+#include <link.h>
 #include <limits>
 #include "core/memory/Hooks.hpp"
 #include <string>
@@ -82,17 +87,66 @@ bool getMinecraftImageBase(const void* address, std::uintptr_t& imageBase) noexc
     if (!address) return false;
     Dl_info info{};
     if (!dladdr(address, &info) || !info.dli_fbase || !info.dli_fname) return false;
-    if (std::string_view(info.dli_fname).find("libminecraftpe.so") == std::string_view::npos)
-        return false;
+    const std::string_view path(info.dli_fname);
+    const auto slash = path.find_last_of('/');
+    const auto basename = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    if (basename != "libminecraftpe.so") return false;
     imageBase = reinterpret_cast<std::uintptr_t>(info.dli_fbase);
     return imageBase != 0;
 }
 
 bool isAddressInMinecraftImage(const void* address, std::uintptr_t expectedBase) noexcept {
     if (!address || !expectedBase) return false;
-    Dl_info info{};
-    return dladdr(address, &info) && info.dli_fbase &&
-        reinterpret_cast<std::uintptr_t>(info.dli_fbase) == expectedBase;
+    std::uintptr_t actualBase = 0;
+    return getMinecraftImageBase(address, actualBase) && actualBase == expectedBase;
+}
+
+struct ExecutableRangeQuery {
+    std::uintptr_t expectedBase{};
+    std::uintptr_t address{};
+    std::size_t length{};
+    bool found{};
+};
+
+int inspectMinecraftExecutableRange(struct dl_phdr_info* info, std::size_t, void* opaque) {
+    if (!info || !info->dlpi_name) return 0;
+    const std::string_view imageName(info->dlpi_name);
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos ? imageName : imageName.substr(slash + 1);
+    if (basename != "libminecraftpe.so" ||
+        static_cast<std::uintptr_t>(info->dlpi_addr) !=
+            static_cast<ExecutableRangeQuery*>(opaque)->expectedBase) return 0;
+
+    auto& query = *static_cast<ExecutableRangeQuery*>(opaque);
+    const auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    if (query.length == 0 || query.length > maximum - query.address) return 0;
+    for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i) {
+        const auto& segment = info->dlpi_phdr[i];
+        if (segment.p_type != PT_LOAD || (segment.p_flags & PF_X) == 0) continue;
+        const auto offset = static_cast<std::uintptr_t>(segment.p_vaddr);
+        const auto size = static_cast<std::uintptr_t>(segment.p_memsz);
+        if (offset > maximum - query.expectedBase) continue;
+        const auto begin = query.expectedBase + offset;
+        if (size > maximum - begin) continue;
+        const auto end = begin + size;
+        if (query.address >= begin && query.address <= end &&
+            query.length <= end - query.address) {
+            query.found = true;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+bool isExecutableAddressInMinecraftImage(const void* address, std::uintptr_t expectedBase,
+                                         std::size_t length) noexcept {
+    if (!address || !expectedBase || length == 0 ||
+        !isAddressInMinecraftImage(address, expectedBase)) return false;
+    ExecutableRangeQuery query{
+        expectedBase, reinterpret_cast<std::uintptr_t>(address), length, false
+    };
+    dl_iterate_phdr(&inspectMinecraftExecutableRange, &query);
+    return query.found;
 }
 constexpr std::size_t kMaxEventCandidates = 4096u;
 
@@ -254,10 +308,16 @@ const void* blockSourceTessellationGetBlockHook(
 }
 
 bool installBlockSourceTessellationGetBlockHook() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     if (g_blockSourceTessellationGetBlockHook) return true;
     const auto address = bedrocktools::memory::resolve(
         bedrocktools::memory::SignatureId::BlockSourceGetBlockForTessellation);
     if (!address) return false;
+    std::uintptr_t engineBase = 0;
+    const auto* target = reinterpret_cast<const void*>(address);
+    if (!getMinecraftImageBase(target, engineBase) ||
+        !isExecutableAddressInMinecraftImage(target, engineBase, 4u * sizeof(std::uint32_t)))
+        return false;
 
     g_blockSourceTessellationGetBlockOriginal = nullptr;
     auto hook = bedrocktools::hooks::install(
@@ -324,10 +384,11 @@ bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
     if (index >= kApollonEventHookCount) return false;
     if (g_apollonEventHooks[index]) return true;
 
+    if (rva > std::numeric_limits<std::uintptr_t>::max() - engineBase) return false;
     auto* target = reinterpret_cast<std::uint8_t*>(engineBase + rva);
-    // Treat legacy RVAs as candidates only. Verify the address belongs to the
-    // same mapped Minecraft image before reading memory or installing a hook.
-    if (!isAddressInMinecraftImage(target, engineBase)) return false;
+    // Treat legacy RVAs as candidates only. Require the entire expected prologue
+    // to be inside an executable PT_LOAD segment of the exact Minecraft image.
+    if (!isExecutableAddressInMinecraftImage(target, engineBase, sizeof(expected))) return false;
     if (std::memcmp(target, expected, sizeof(expected)) != 0) return false;
 
     g_apollonEventOriginals[index] = nullptr;
@@ -343,6 +404,7 @@ bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
 }
 
 bool installApollonBlockEventHooks() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return false;
 
@@ -449,6 +511,7 @@ bool installApollonBlockEventHooks() {
 }
 
 bool installBlockUpdateHook() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     if (g_blockUpdateHook) return true;
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return false;
@@ -456,8 +519,9 @@ bool installBlockUpdateHook() {
     std::uintptr_t engineBase = 0;
     if (!getMinecraftImageBase(reinterpret_cast<const void*>(getBlock), engineBase))
         return false;
+    if (kApollonBlockUpdateRva > std::numeric_limits<std::uintptr_t>::max() - engineBase)
+        return false;
     auto* target = reinterpret_cast<std::uint8_t*>(engineBase + kApollonBlockUpdateRva);
-    if (!isAddressInMinecraftImage(target, engineBase)) return false;
 
     // Version guard for Minecraft 1.26.60. The target RVA was remapped by
     // matching the listener-vector dispatch flow against Apollon's original
@@ -469,7 +533,8 @@ bool installBlockUpdateHook() {
         0xF9003BFBu, // str x27, [sp, #0x70]
         0xA90867FAu  // stp x26, x25, [sp, #0x80]
     };
-    if (std::memcmp(target, expectedPrologue, sizeof(expectedPrologue)) != 0) return false;
+    if (!isExecutableAddressInMinecraftImage(target, engineBase, sizeof(expectedPrologue)) ||
+        std::memcmp(target, expectedPrologue, sizeof(expectedPrologue)) != 0) return false;
 
     g_blockUpdateOriginal = nullptr;
     auto hook = bedrocktools::hooks::install(
@@ -487,14 +552,26 @@ constexpr std::size_t kMaxBlockEspCache = 32768;
 constexpr std::size_t kMaxBlockEspRendered = 1024;
 
 void resolveBlockGetBlock() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return;
     if (g_blockEspGetBlock.load(std::memory_order_acquire)) return;
     const auto address = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceGetBlock);
-    if (address) g_blockEspGetBlock.store(reinterpret_cast<BlockSourceGetBlockFn>(address), std::memory_order_release);
+    if (!address) return;
+    const auto* target = reinterpret_cast<const void*>(address);
+    std::uintptr_t engineBase = 0;
+    if (!getMinecraftImageBase(target, engineBase) ||
+        !isExecutableAddressInMinecraftImage(target, engineBase, 4u * sizeof(std::uint32_t))) return;
+    g_blockEspGetBlock.store(reinterpret_cast<BlockSourceGetBlockFn>(address), std::memory_order_release);
 }
 bool installBlockSourceGetBlockHook() {
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
     if (g_blockSourceGetBlockHook) return true;
     const auto target = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!target) return false;
+    std::uintptr_t engineBase = 0;
+    const auto* targetAddress = reinterpret_cast<const void*>(target);
+    if (!getMinecraftImageBase(targetAddress, engineBase) ||
+        !isExecutableAddressInMinecraftImage(targetAddress, engineBase, 4u * sizeof(std::uint32_t)))
+        return false;
 
     g_blockSourceGetBlockOriginal = nullptr;
     auto hook = bedrocktools::hooks::install(
@@ -782,6 +859,11 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
+    const bool exact260 = bedrocktools::core::memory::isExactMinecraft260Build();
+    bedrocktools::diagnostics::probe(
+        exact260 ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
+        "BlockESP", "native_baseline", exact260 ? "verified" : "unsupported",
+        "native offsets and Apollon RVAs require libminecraftpe.so Build ID eb291b883dfdfaff70c4992c9eabd61885ae3e15");
     // EXPERIMENTAL: restore the native capture installation used by Apollon v6.7
     // in PR #123. The original RVAs/prologue guards are intentionally retained
     // for this first compatibility test; a 26.60 mismatch must fail closed.

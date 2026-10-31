@@ -24,6 +24,16 @@ struct Inputs {
     bool offhandEmpty;
 };
 
+// A successful sendBroadcast only confirms that Android accepted the broadcast,
+// not that the keymap completed. Never automatically resend an accepted action.
+inline constexpr int kMaxDispatchAttempts = 3;
+bool shouldRetryDispatch(bool broadcastAccepted, int attempts) noexcept;
+
+// Report an accepted broadcast that did not produce an observable offhand change.
+// This is diagnostic only; it must never trigger an automatic resend.
+bool confirmationTimedOut(bool awaitingConfirmation, bool offhandHasTotem,
+                          bool deadlineElapsed) noexcept;
+
 // Pure decision policy only. The caller must perform and validate the native
 // inventory transfer separately; this function never touches Minecraft memory.
 Decision decide(const Inputs& input) noexcept;

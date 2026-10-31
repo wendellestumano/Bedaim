@@ -1,5 +1,6 @@
 #include "InventoryAccess.hpp"
 #include "Diagnostics.hpp"
+#include "core/memory/MinecraftBuildIdentity.hpp"
 
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/offsets/Inventory.hpp>
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
+#include <link.h>
 #include <iterator>
 #include <limits>
 #include <string>
@@ -30,22 +32,43 @@ T read(const void* object, std::size_t offset) {
 
 bool isReadableMemory(const void* pointer, std::size_t size);
 
+template<class T>
+bool safeRead(const void* object, std::size_t offset, T& value) {
+    if (!object) return false;
+    const auto base = reinterpret_cast<std::uintptr_t>(object);
+    if (offset > std::numeric_limits<std::uintptr_t>::max() - base) return false;
+    const auto* field = reinterpret_cast<const void*>(base + offset);
+    if (!isReadableMemory(field, sizeof(T))) return false;
+    std::memcpy(&value, field, sizeof(T));
+    return true;
+}
+
 bool inventorySlots(const void* player, std::uintptr_t& begin, std::size_t& size) {
     begin = 0;
     size = 0;
-    if (!player) return false;
-    const void* proxy = read<const void*>(player, PlayerInventory);
-    if (!proxy) return false;
-    const void* inventory = read<const void*>(proxy, PlayerInventoryContainer);
-    if (!inventory) return false;
-    begin = read<std::uintptr_t>(inventory, FillingContainerItems);
-    const auto end = read<std::uintptr_t>(inventory, FillingContainerItems + sizeof(void*));
+    if (!player || !memory::isExactMinecraft260Build()) return false;
+
+    const void* proxy = nullptr;
+    if (!safeRead(player, PlayerInventory, proxy) || !proxy ||
+        !isReadableMemory(proxy, sizeof(void*))) return false;
+
+    const void* inventory = nullptr;
+    if (!safeRead(proxy, PlayerInventoryContainer, inventory) || !inventory ||
+        !isReadableMemory(inventory, sizeof(void*))) return false;
+
+    std::uintptr_t end = 0;
+    if (!safeRead(inventory, FillingContainerItems, begin) ||
+        !safeRead(inventory, FillingContainerItems + sizeof(void*), end)) return false;
     if (!begin && !end) return true;
     if (!begin || end < begin || begin % alignof(void*) != 0) return false;
+
     const auto bytes = end - begin;
     if (bytes % ItemStackSize != 0) return false;
-    size = bytes / ItemStackSize;
-    return size <= 64;
+    size = static_cast<std::size_t>(bytes / ItemStackSize);
+    if (size > 64) return false;
+    if (size != 0 && !isReadableMemory(reinterpret_cast<const void*>(begin),
+                                       size * ItemStackSize)) return false;
+    return true;
 }
 
 constexpr std::size_t PlayerTransactionManagerOffset = 0xA28;
@@ -129,15 +152,78 @@ bool isReadableMemory(const void* pointer, std::size_t size) {
     return begin >= region.begin && end <= region.end;
 }
 
+struct MinecraftExecutableAddressQuery {
+    std::uintptr_t imageBase{};
+    std::uintptr_t address{};
+    bool found{};
+};
+
+int inspectMinecraftExecutableAddress(struct dl_phdr_info* info, std::size_t, void* opaque) {
+    if (!info || !info->dlpi_name) return 0;
+    const std::string_view imageName(info->dlpi_name);
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos
+        ? imageName : imageName.substr(slash + 1);
+    auto& query = *static_cast<MinecraftExecutableAddressQuery*>(opaque);
+    if (basename != "libminecraftpe.so" ||
+        static_cast<std::uintptr_t>(info->dlpi_addr) != query.imageBase) return 0;
+
+    const auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    for (ElfW(Half) i = 0; i < info->dlpi_phnum; ++i) {
+        const auto& segment = info->dlpi_phdr[i];
+        if (segment.p_type != PT_LOAD || (segment.p_flags & PF_X) == 0) continue;
+        const auto offset = static_cast<std::uintptr_t>(segment.p_vaddr);
+        const auto size = static_cast<std::uintptr_t>(segment.p_memsz);
+        if (offset > maximum - query.imageBase) continue;
+        const auto begin = query.imageBase + offset;
+        if (size > maximum - begin) continue;
+        const auto end = begin + size;
+        if (query.address >= begin && query.address < end) {
+            query.found = true;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 bool isMinecraftFunction(const void* address) {
-    if (!address) return false;
+    if (!address || !memory::isExactMinecraft260Build()) return false;
+    const auto addressValue = reinterpret_cast<std::uintptr_t>(address);
+    struct CacheEntry { std::uintptr_t address{}; bool executable{}; };
+    thread_local std::array<CacheEntry, 64> cache{};
+    thread_local std::size_t nextCacheEntry = 0;
+    for (const auto& entry : cache) {
+        if (entry.address == addressValue) return entry.executable;
+    }
+    auto remember = [&](bool executable) {
+        cache[nextCacheEntry++ % cache.size()] = {addressValue, executable};
+        return executable;
+    };
+
     Dl_info info{};
-    return dladdr(address, &info) != 0 && info.dli_fname &&
-        std::string_view(info.dli_fname).find("libminecraftpe.so") != std::string_view::npos;
+    if (dladdr(address, &info) == 0 || !info.dli_fname || !info.dli_fbase)
+        return remember(false);
+    const std::string_view imageName(info.dli_fname);
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos
+        ? imageName : imageName.substr(slash + 1);
+    if (basename != "libminecraftpe.so") return remember(false);
+
+    // dladdr alone also accepts data addresses inside the shared object.
+    // A vtable entry must resolve into an executable PT_LOAD segment before
+    // InventoryAccess is allowed to call it as a native function.
+    MinecraftExecutableAddressQuery query{
+        reinterpret_cast<std::uintptr_t>(info.dli_fbase),
+        addressValue,
+        false
+    };
+    if (!query.imageBase || !query.address) return remember(false);
+    dl_iterate_phdr(&inspectMinecraftExecutableAddress, &query);
+    return remember(query.found);
 }
 
 void* resolveMinecraftSymbol(const char* symbol) {
-    if (!symbol || !*symbol) return nullptr;
+    if (!symbol || !*symbol || !memory::isExactMinecraft260Build()) return nullptr;
     void* address = dlsym(RTLD_DEFAULT, symbol);
     if (isMinecraftFunction(address)) return address;
 
@@ -170,6 +256,14 @@ InventoryAccess& InventoryAccess::get() {
 }
 
 void InventoryAccess::initialize() {
+    if (!memory::isExactMinecraft260Build()) {
+        m_getOffhandSlot = nullptr;
+        m_getOffhandSlotSource = "unsupported-build";
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Error, "InventoryAccess", "native_baseline", "unsupported",
+            "refusing to resolve or call inventory accessors without the exact Minecraft 26.60 ELF Build ID");
+        return;
+    }
     m_offhandGetterQuarantined.store(false, std::memory_order_release);
     // Prefer exact exported accessors over the generic signature pattern. The
     // old pattern could resolve on newer builds but return an unreadable pointer,
@@ -193,9 +287,13 @@ void InventoryAccess::initialize() {
         }
     }
     if (!m_getOffhandSlot) {
-        m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(
-            memory::resolve(memory::SignatureId::ActorGetOffhandSlot));
-        if (m_getOffhandSlot) m_getOffhandSlotSource = "signature-pattern fallback (runtime pointer validation required)";
+        void* candidate = memory::resolve(memory::SignatureId::ActorGetOffhandSlot);
+        if (candidate && isMinecraftFunction(candidate)) {
+            m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(candidate);
+            m_getOffhandSlotSource = "26.60 signature-pattern fallback (executable image validated)";
+        } else if (candidate) {
+            m_getOffhandSlotSource = "signature-rejected-outside-26.60-executable-image";
+        }
     }
     bedrocktools::diagnostics::probe(
         m_getOffhandSlot ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
@@ -232,31 +330,51 @@ int InventoryAccess::countItems(const sdk::Player* player, std::string_view iden
 }
 
 std::string InventoryAccess::stackIdentifier(const void* stack) const {
-    // Match the known-working Bedrock 26.52 implementation. The newer strict
-    // library-origin check rejected valid Item::getDescriptionId virtual entries
-    // exposed through the active BedrockTools/LeviLamina runtime. That made every
-    // consumer see an empty item identifier: weapon filters, swappers, AutoTotem,
-    // and the ULTRAKILL HUD all depend on this shared lookup.
-    if (!stack || !read<std::uint8_t>(stack, ItemStackValid)) return {};
-    if (read<std::uint8_t>(stack, ItemStackCount) == 0) return {};
-    const void* counter = read<const void*>(stack, ItemStackItemCounter);
-    const void* item = counter ? read<const void*>(counter, 0) : nullptr;
-    if (!item) return {};
-    const auto* vtable = read<const std::uintptr_t*>(item, 0);
-    if (!vtable || !vtable[ItemGetDescriptionIdVtableIndex]) return {};
+    // The 26.60 PlayerInventory offset is maintained in sdk/offsets/Inventory.hpp.
+    // Keep every nested ItemStack/Item/vtable read inside a readable mapped region;
+    // an unreadable identifier is not evidence that the slot is empty.
+    if (!memory::isExactMinecraft260Build() || !stack || !isReadableMemory(stack, ItemStackSize)) return {};
+
+    std::uint8_t valid = 0;
+    std::uint8_t count = 0;
+    if (!safeRead(stack, ItemStackValid, valid) || !safeRead(stack, ItemStackCount, count) ||
+        valid == 0 || count == 0) return {};
+
+    const void* counter = nullptr;
+    if (!safeRead(stack, ItemStackItemCounter, counter) || !counter ||
+        !isReadableMemory(counter, sizeof(void*))) return {};
+
+    const void* item = nullptr;
+    if (!safeRead(counter, 0, item) || !item || !isReadableMemory(item, sizeof(void*))) return {};
+
+    const std::uintptr_t* vtable = nullptr;
+    if (!safeRead(item, 0, vtable) || !vtable ||
+        !isReadableMemory(vtable, (ItemGetDescriptionIdVtableIndex + 1) * sizeof(std::uintptr_t)))
+        return {};
+
+    std::uintptr_t methodAddress = 0;
+    if (!safeRead(vtable, ItemGetDescriptionIdVtableIndex * sizeof(std::uintptr_t), methodAddress) ||
+        methodAddress == 0 ||
+        !isMinecraftFunction(reinterpret_cast<const void*>(methodAddress))) return {};
+
     using GetDescriptionIdFn = const std::string& (*)(const void*);
-    const auto& identifier =
-        reinterpret_cast<GetDescriptionIdFn>(vtable[ItemGetDescriptionIdVtableIndex])(item);
-    if (identifier.empty() || identifier.size() > 128) return {};
-    return identifier;
+    try {
+        const auto& identifier = reinterpret_cast<GetDescriptionIdFn>(methodAddress)(item);
+        if (identifier.empty() || identifier.size() > 128) return {};
+        return identifier;
+    } catch (...) {
+        return {};
+    }
 }
 
 int InventoryAccess::countStack(const void* stack, std::string_view identifierPart) const {
     if (identifierPart.empty()) return 0;
     const auto identifier = stackIdentifier(stack);
     if (identifier.empty()) return 0;
+    std::uint8_t count = 0;
+    if (!safeRead(stack, ItemStackCount, count)) return 0;
     return identifier.find(identifierPart) != std::string::npos
-        ? static_cast<int>(read<std::uint8_t>(stack, ItemStackCount)) : 0;
+        ? static_cast<int>(count) : 0;
 }
 
 int InventoryAccess::findHotbarSlot(const sdk::Player* player, std::string_view identifierPart) const {
@@ -297,45 +415,37 @@ int InventoryAccess::findInventorySlot(const sdk::Player* player, std::string_vi
     return -1;
 }
 
-bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
-                                                  std::string& identifier,
-                                                  std::string* error) const {
+bool InventoryAccess::readOffhandState(const sdk::Player* player,
+                                        std::string& identifier,
+                                        bool& empty,
+                                        std::string* error) const {
     identifier.clear();
+    empty = false;
     auto fail = [&](std::string message) {
         if (error) *error = std::move(message);
         return false;
     };
     if (!player)
         return fail("LocalPlayerTickEvent supplied a null Player pointer");
-    if (!isReadableMemory(player, sizeof(void*)))
-        return fail("LocalPlayerTickEvent Player pointer is not in a readable memory region");
+    if (!memory::isExactMinecraft260Build())
+        return fail("loaded libminecraftpe.so does not match the required Minecraft 26.60 Build ID");
 
-    // Validate the actual pointer-sized fields, not the entire byte span from
-    // the start of Player to the inventory offset. Player objects may cross
-    // mapping/page boundaries, so validating that whole span falsely rejects
-    // valid objects even when the target field itself is readable.
-    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
-    if (PlayerInventory > std::numeric_limits<std::uintptr_t>::max() - playerAddress)
-        return fail("Player inventory field address overflowed");
-    const auto* inventoryField = reinterpret_cast<const void*>(playerAddress + PlayerInventory);
-    if (!isReadableMemory(inventoryField, sizeof(void*)))
-        return fail("Player inventory pointer field is unreadable");
-    const void* inventoryProxy = read<const void*>(player, PlayerInventory);
-    if (!inventoryProxy || !isReadableMemory(inventoryProxy, sizeof(void*)))
-        return fail("Player inventory proxy pointer is null or unreadable");
+    // Confirm the 26.60 PlayerInventory/container fields before calling the
+    // native offhand getter. Read each field separately to avoid crossing pages.
+    const void* inventoryProxy = nullptr;
+    if (!safeRead(player, PlayerInventory, inventoryProxy) || !inventoryProxy ||
+        !isReadableMemory(inventoryProxy, sizeof(void*)))
+        return fail("26.60 PlayerInventory pointer is null or unreadable");
 
-    const auto proxyAddress = reinterpret_cast<std::uintptr_t>(inventoryProxy);
-    if (PlayerInventoryContainer > std::numeric_limits<std::uintptr_t>::max() - proxyAddress)
-        return fail("inventory container field address overflowed");
-    const auto* containerField = reinterpret_cast<const void*>(proxyAddress + PlayerInventoryContainer);
-    if (!isReadableMemory(containerField, sizeof(void*)))
-        return fail("inventory container pointer field is unreadable");
-    const void* container = read<const void*>(inventoryProxy, PlayerInventoryContainer);
-    if (!container || !isReadableMemory(container, sizeof(void*)))
-        return fail("inventory container pointer is null or unreadable");
+    const void* container = nullptr;
+    if (!safeRead(inventoryProxy, PlayerInventoryContainer, container) || !container ||
+        !isReadableMemory(container, sizeof(void*)))
+        return fail("26.60 inventory container pointer is null or unreadable");
 
     if (!m_getOffhandSlot)
         return fail("no validated Actor/Player::getOffhandSlot entry point is available");
+    if (!isMinecraftFunction(reinterpret_cast<const void*>(m_getOffhandSlot)))
+        return fail("offhand getter is not inside an executable segment of the exact 26.60 libminecraftpe.so");
     if (m_offhandGetterQuarantined.load(std::memory_order_acquire))
         return fail("offhand getter quarantined after an unreadable pointer; restart Bedaim to retry safely");
 
@@ -349,9 +459,31 @@ bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
         return fail(detail);
     }
 
+    std::uint8_t valid = 0;
+    std::uint8_t count = 0;
+    if (!safeRead(offhand, ItemStackValid, valid) || !safeRead(offhand, ItemStackCount, count))
+        return fail("offhand ItemStack validity/count fields are unreadable");
+
+    if (valid == 0 || count == 0) {
+        empty = true;
+        if (error) error->clear();
+        return true;
+    }
+
     identifier = stackIdentifier(offhand);
+    if (identifier.empty())
+        return fail("offhand ItemStack is non-empty but its item identifier could not be resolved; refusing to treat it as empty");
+
+    empty = false;
     if (error) error->clear();
     return true;
+}
+
+bool InventoryAccess::readOffhandIdentifier(const sdk::Player* player,
+                                            std::string& identifier,
+                                            std::string* error) const {
+    bool empty = false;
+    return readOffhandState(player, identifier, empty, error);
 }
 
 std::string InventoryAccess::offhandIdentifier(const sdk::Player* player) const {

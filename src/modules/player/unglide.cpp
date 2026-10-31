@@ -1,10 +1,13 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "core/memory/MinecraftBuildIdentity.hpp"
 #include "unglide.hpp"
 #include "aimassist.hpp"
 #include "MaceFallPolicy.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
-#include "../../core/memory/SafeRead.hpp"
 #include "../../config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
@@ -93,116 +96,31 @@ TargetGeometry targetGeometryFor(
     return result;
 }
 
+using ActorIsGlidingFn = bool (*)(const void*);
 using ActorGetStatusFlagFn = bool (*)(const void*, int);
-std::optional<bool> actorIsGliding(void* actor) {
-    using namespace bedrocktools::sdk;
-    if (!actor) return std::nullopt;
-
-    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-    if (actorAddress <= 0x1000 ||
-        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
-            offsets::Actor::mEntityData - sizeof(void*)) {
-        return std::nullopt;
-    }
-
-    void* component = nullptr;
-    if (!bedrocktools::core::memory::readSelfMemory(
-            actorAddress + offsets::Actor::mEntityData, &component, sizeof(component))) {
-        return std::nullopt;
-    }
-    const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
-    if (componentAddress <= 0x1000) return std::nullopt;
-
-    struct ComponentVectorView {
-        void** begin;
-        void** end;
-    } view{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            componentAddress, &view, sizeof(view))) {
-        return std::nullopt;
-    }
-    if (!view.begin || !view.end) return std::nullopt;
-
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(view.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(view.end);
-    if (endAddress < beginAddress) return std::nullopt;
-    const auto span = endAddress - beginAddress;
-    if (span % sizeof(void*) != 0 || span / sizeof(void*) > 192) {
-        return std::nullopt;
-    }
-
-    const auto count = static_cast<std::size_t>(span / sizeof(void*));
-    if (count == 0) return std::nullopt;
-    std::array<void*, 192> items{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            beginAddress, items.data(), count * sizeof(void*))) {
-        return std::nullopt;
-    }
-
-    constexpr std::size_t dataStart = offsets::DataItem::mType;
-    constexpr std::size_t dataEnd = offsets::DataItem::mValue + sizeof(std::uint64_t);
-    constexpr std::size_t dataLength = dataEnd - dataStart;
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(items[index]);
-        if (itemAddress <= 0x1000 ||
-            itemAddress > std::numeric_limits<std::uintptr_t>::max() - dataEnd) {
-            continue;
-        }
-
-        std::array<std::uint8_t, dataLength> snapshot{};
-        if (!bedrocktools::core::memory::readSelfMemory(
-                itemAddress + dataStart, snapshot.data(), snapshot.size())) {
-            continue;
-        }
-
-        std::uint8_t type = 0;
-        std::uint16_t id = 0;
-        std::uint64_t flags = 0;
-        std::memcpy(&type, snapshot.data(), sizeof(type));
-        std::memcpy(&id, snapshot.data() + (offsets::DataItem::mId - dataStart), sizeof(id));
-        std::memcpy(&flags, snapshot.data() + (offsets::DataItem::mValue - dataStart), sizeof(flags));
-        if (type != 7 || id != 0) continue;
-
-        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-        return (flags & kGlidingFlag) != 0;
-    }
-    return std::nullopt;
-}
 
 bool isTrustedGameProvider(void* address) {
     if (!address) return false;
     Dl_info info{};
     if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
     const std::string_view path(info.dli_fname);
-    return path.find("libminecraftpe.so") != std::string_view::npos ||
-        path.find("liblevilamina.so") != std::string_view::npos ||
-        path.find("libLeviLamina.so") != std::string_view::npos;
+    const auto slash = path.find_last_of('/');
+    const auto basename = slash == std::string_view::npos ? path : path.substr(slash + 1);
+    // Actor::getStatusFlag is a Minecraft ABI call. Do not accept a similarly
+    // named shim from LeviLamina or another provider for the 26.60 native path.
+    return basename == "libminecraftpe.so";
 }
 
 void* resolveTrustedGameSymbol(const char* symbol) {
     if (!symbol) return nullptr;
     static void* minecraftHandle = nullptr;
-    static void* leviLaminaHandle = nullptr;
-    static void* leviLaminaAltHandle = nullptr;
     if (!minecraftHandle)
         minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaHandle)
-        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaAltHandle)
-        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
 
     void* address = dlsym(RTLD_DEFAULT, symbol);
     if (isTrustedGameProvider(address)) return address;
     if (minecraftHandle) {
         address = dlsym(minecraftHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaHandle) {
-        address = dlsym(leviLaminaHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaAltHandle) {
-        address = dlsym(leviLaminaAltHandle, symbol);
         if (isTrustedGameProvider(address)) return address;
     }
     return nullptr;
@@ -353,6 +271,15 @@ const char* automationBroadcastResultName(AutomationBroadcastResult result) {
     return "keymapper_unglide_broadcast_unknown";
 }
 
+constexpr int kActorFlagGliding = 32; // ActorFlags::Gliding in the 26.60 Bedrock SDK.
+
+ActorIsGlidingFn resolveActorIsGliding() {
+    static ActorIsGlidingFn function = nullptr;
+    if (!function) function = reinterpret_cast<ActorIsGlidingFn>(
+        resolveTrustedGameSymbol("_ZNK5Actor9isGlidingEv"));
+    return function;
+}
+
 ActorGetStatusFlagFn resolveActorGetStatusFlag() {
     static ActorGetStatusFlagFn function = nullptr;
     if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
@@ -361,18 +288,27 @@ ActorGetStatusFlagFn resolveActorGetStatusFlag() {
 }
 
 std::optional<bool> playerIsGlidingForUnglide(void* player) {
-    if (!player) return std::nullopt;
+    if (!player || !bedrocktools::core::memory::isExactMinecraft260Build()) return std::nullopt;
+
+    // Prefer the engine's semantic Actor::isGliding accessor. It avoids
+    // depending on unverified Actor::mEntityData/DataItem layouts.
+    if (const auto isGliding = resolveActorIsGliding()) {
+        try {
+            return isGliding(player);
+        } catch (...) {
+            // Try the exact-build ActorFlags accessor below.
+        }
+    }
+
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // Treat the native status flag as a positive signal only; some builds
-            // differ in flag layout, so a negative result still tries safe entity data.
-            if (getStatusFlag(player, 32)) return true;
+            return getStatusFlag(player, kActorFlagGliding);
         } catch (...) {
-            // Fall through to the bounded synchronized-data reader.
+            return std::nullopt;
         }
     }
-    return actorIsGliding(player);
+    return std::nullopt;
 }
 
 }
@@ -475,12 +411,20 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    // The native Elytra/gliding flag is not reliable on all supported Bedrock
-    // builds: both the status-flag API and synchronized-data fallback can report
-    // false while the player is visibly gliding. Treat it as telemetry only, not
-    // a hard gate; the fresh player target, crosshair, distance and height checks
-    // below still gate every Key Mapper dispatch.
+    // Only dispatch while the local player is actually gliding. The reader is
+    // guarded by the exact 26.60 ELF Build ID and uses ActorFlags::Gliding (32).
     const auto glidingState = playerIsGlidingForUnglide(player);
+    if (!glidingState.has_value()) {
+        reject("gliding_state_unavailable",
+               "Could not resolve Actor::isGliding or Actor::getStatusFlag from the exact 26.60 library; no Unglide keymap request sent.", 250);
+        return;
+    }
+    if (!*glidingState) {
+        reject("player_not_gliding",
+               "ActorFlags::Gliding is clear; no Unglide keymap request sent.", 120);
+        return;
+    }
+    report("gliding_detected", "ActorFlags::Gliding (32) is set for the local player.");
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.
