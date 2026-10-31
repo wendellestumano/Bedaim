@@ -106,10 +106,9 @@ class BridgeService : Service() {
             // ngrok preserves the public Host header when proxying to the loopback server.
             // Allow only the configured HTTPS ngrok hostname plus the local development hosts.
             // Keep the SDK's DNS-rebinding protection enabled; do not use enableDnsRebindingProtection=false.
-            val publicHost = java.net.URI(
+            val allowedMcpHosts = McpHostPolicy.allowedHosts(
                 BridgePreferences.getConfiguredNgrokDomain(this)
-            ).host ?: error("Configured ngrok domain has no valid hostname")
-            val allowedMcpHosts = listOf(publicHost, "localhost", "127.0.0.1", "[::1]").distinct()
+            )
 
             server = embeddedServer(CIO, host = "127.0.0.1", port = PORT) {
                 intercept(ApplicationCallPipeline.Call) {
