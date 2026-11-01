@@ -287,7 +287,7 @@ void persistUnglideSettings() {
     auto& manager = bedrocktools::config::ConfigManager::get();
     manager.save();
 
-    auto* base = bedrocktools::modules::ModuleRegistry::get().find("bedrocktools.Configurations");
+    auto* base = ModuleRegistry::get().find("bedrocktools.Configurations");
     if (!base) return;
     auto* configurations = static_cast<ConfigurationsModule*>(base);
     const std::filesystem::path primary(manager.getConfigPath());
