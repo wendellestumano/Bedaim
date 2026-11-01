@@ -107,87 +107,6 @@ bool finiteVec3(const bedrocktools::sdk::Vec3& v) {
     return bedaim::aimmath::isFiniteVector({v.x, v.y, v.z});
 }
 
-using ActorGetStatusFlagFn = bool (*)(const void*, int);
-
-bool trustedGameAddress(void* address) {
-    if (!address) return false;
-    Dl_info info{};
-    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
-    const std::string_view path(info.dli_fname);
-    return path.find("libminecraftpe.so") != std::string_view::npos ||
-        path.find("liblevilamina.so") != std::string_view::npos ||
-        path.find("libLeviLamina.so") != std::string_view::npos;
-}
-
-ActorGetStatusFlagFn resolveActorGetStatusFlag() {
-    static ActorGetStatusFlagFn function = []() -> ActorGetStatusFlagFn {
-        constexpr const char* symbol = "_ZNK5Actor13getStatusFlagE10ActorFlags";
-        void* address = dlsym(RTLD_DEFAULT, symbol);
-        if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
-        static void* minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-        static void* leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
-        static void* leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
-        if (minecraftHandle) {
-            address = dlsym(minecraftHandle, symbol);
-            if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
-        }
-        if (leviLaminaHandle) {
-            address = dlsym(leviLaminaHandle, symbol);
-            if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
-        }
-        if (leviLaminaAltHandle) {
-            address = dlsym(leviLaminaAltHandle, symbol);
-            if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
-        }
-        return nullptr;
-    }();
-    return function;
-}
-
-bool actorIsGliding(void* actor) {
-    using namespace bedrocktools::sdk;
-    if (!actor) return false;
-
-    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-    void* dataWrapper = reinterpret_cast<void*>(actorAddress + offsets::Actor::mEntityData);
-    if (!dataWrapper) return false;
-
-    void* component = *reinterpret_cast<void**>(dataWrapper);
-    if (!component) return false;
-
-    auto** begin = *reinterpret_cast<void***>(component);
-    auto** end = *reinterpret_cast<void***>(reinterpret_cast<std::uintptr_t>(component) + sizeof(void*));
-    if (!begin || !end) return false;
-
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
-    if (endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(void*) != 0 ||
-        (endAddress - beginAddress) / sizeof(void*) > 192) return false;
-
-    // Synchronized data items are not guaranteed to keep the flags item at index 0.
-    // Search the bounded vector for the Flags item (type 7, id 0) instead of treating
-    // an unrelated first item as proof that the player is not gliding.
-    const auto itemCount = (endAddress - beginAddress) / sizeof(void*);
-    for (std::size_t index = 0; index < itemCount; ++index) {
-        void* item = begin[index];
-        if (!item) continue;
-
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
-        if (itemAddress <= 0x1000) continue;
-        const auto type = *reinterpret_cast<const std::uint8_t*>(itemAddress + offsets::DataItem::mType);
-        const auto id = *reinterpret_cast<const std::uint16_t*>(itemAddress + offsets::DataItem::mId);
-        if (type != 7 || id != 0) continue;
-
-        std::uint64_t flags = 0;
-        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue),
-                    sizeof(flags));
-        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-        return (flags & kGlidingFlag) != 0;
-    }
-    return false;
-}
-
 bool validBounds(const bedrocktools::sdk::AABB& bounds) {
     return bedaim::aimmath::isValidBounds({
         {bounds.min.x, bounds.min.y, bounds.min.z},
@@ -1320,29 +1239,12 @@ bool AimAssistModule::localPlayerIsGliding() {
 bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     if (!player) return false;
 
-    // The 26.60 travel-type sensing system adds GlidingTravelFlagComponent
-    // while the entity is actively in the gliding travel mode. Its positive
-    // membership confirms gliding, but an absent tag does not suppress the
-    // native Actor flag or synchronized Actor-data fallbacks below.
-    const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
-
-    constexpr int kGlidingActorFlag = 32;
-    const auto nativeGetter = resolveActorGetStatusFlag();
-    bool nativeGliding = false;
-    if (nativeGetter) {
-        try {
-            nativeGliding = nativeGetter(player, kGlidingActorFlag);
-        } catch (...) {
-            nativeGliding = false;
-        }
-    }
-    const bool synchronizedGliding = actorIsGliding(player);
-
-    // The global ECS pool can exist while the local player's entity lacks the
-    // tag. A negative ECS membership check must not suppress positive Actor
-    // flag or synchronized Actor-data signals.
-    const bool gliding =
-        (ecsGliding.has_value() && *ecsGliding) || nativeGliding || synchronizedGliding;
+    // Match the engine's query.is_gliding implementation exactly:
+    // ActorDataFlagComponent::mValue.test(ActorFlags::GLIDING == 32).
+    // Missing component means unknown/false; do not OR stale travel tags,
+    // synchronized data, or dynamically resolved status-flag fallbacks.
+    const auto actorFlag = bedrocktools::sdk::actorDataGlidingFlag(player);
+    const bool gliding = actorFlag.has_value() && *actorFlag;
 
     static std::atomic<std::int64_t> nextDiagnosticMs{0};
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1350,66 +1252,16 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     auto expected = nextDiagnosticMs.load(std::memory_order_relaxed);
     if (nowMs >= expected && nextDiagnosticMs.compare_exchange_strong(
             expected, nowMs + 1000, std::memory_order_relaxed)) {
-        // Probe the broad ECS component set only for telemetry, once per second.
-        // The per-tick flight decision remains the positive ECS tag / native flag /
-        // synchronized Actor-data combination above.
         const auto entityProbe = bedrocktools::sdk::probeEntityContext(player);
-        // This is a time-based telemetry sample. probe() deduplicates identical
-        // states and would hide registry changes while the boolean remains false.
         bedrocktools::diagnostics::log(
             bedrocktools::diagnostics::Level::Debug, "BedrockAim",
             std::string("gliding_state=") + (gliding ? "gliding_true" : "gliding_false") +
-                ": ecs_pool=" + (ecsGliding.has_value() ? "available" : "missing") +
-                ", ecs_component=" + (ecsGliding.has_value() ? (*ecsGliding ? "present" : "absent") : "unknown") +
-                ", native_getStatusFlag=" + (nativeGetter ? "available" : "unavailable") +
-                ", native_result=" + (nativeGliding ? "true" : "false") +
-                ", synchronized_actor_flags=" + (synchronizedGliding ? "true" : "false") +
-                ", flag_index=32" +
+                ": actor_data_flags_pool=" + (entityProbe.actor_data_flags_pool_present ? "present" : "missing") +
+                ", actor_data_flags_entity=" + (entityProbe.actor_data_flags_entity_present ? "present" : "absent") +
+                ", actor_flag_component=" + (actorFlag.has_value() ? "available" : "missing") +
+                ", actor_flag_32=" + (actorFlag.has_value() ? (*actorFlag ? "true" : "false") : "unknown") +
                 ", entity_context=" + (entityProbe.context_address_valid ? "valid" : "invalid") +
-                ", entity_id=" + std::to_string(entityProbe.entity_value) +
-                ", move_input_pool=" + (entityProbe.move_input_pool_present ? "present" : "missing") +
-                ", move_input_entity=" + (entityProbe.move_input_entity_present ? "present" : "absent") +
-                ", move_input_try_get=" + (entityProbe.move_input_try_get_present ? "present" : "absent") +
-                ", gliding_pool_check=" + (entityProbe.gliding_pool_present ? "present" : "missing") +
-                ", gliding_entity_check=" + (entityProbe.gliding_entity_present ? "present" : "absent") +
-                ", air_travel=" + (entityProbe.air_travel_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.air_travel_entity_present ? "entity" : "absent") +
-                ", ground_travel=" + (entityProbe.ground_travel_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.ground_travel_entity_present ? "entity" : "absent") +
-                ", water_travel=" + (entityProbe.water_travel_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.water_travel_entity_present ? "entity" : "absent") +
-                ", lava_travel=" + (entityProbe.lava_travel_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.lava_travel_entity_present ? "entity" : "absent") +
-                ", liquid_travel=" + (entityProbe.liquid_travel_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.liquid_travel_entity_present ? "entity" : "absent") +
-                ", mob_travel=" + std::string(entityProbe.mob_travel_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.mob_travel_entity_present ? "entity" : "absent") +
-                ", player_flying=" + (entityProbe.player_flying_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.player_flying_entity_present ? "entity" : "absent") +
-                ", fall_fly_ticks=" + (entityProbe.fall_fly_ticks_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.fall_fly_ticks_entity_present ? "entity" : "absent") +
-                ", elytra_flight_ticks=" + (entityProbe.elytra_flight_ticks_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.elytra_flight_ticks_entity_present ? "entity" : "absent") +
-                ", actor_data_flags=" + (entityProbe.actor_data_flags_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.actor_data_flags_entity_present ? "entity" : "absent") +
-                ", player_action=" + (entityProbe.player_action_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.player_action_entity_present ? "entity" : "absent") +
-                ", movement_abilities=" + (entityProbe.movement_abilities_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.movement_abilities_entity_present ? "entity" : "absent") +
-                ", armor_fly=" + (entityProbe.armor_fly_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.armor_fly_entity_present ? "entity" : "absent") +
-                ", movement_tick=" + (entityProbe.movement_tick_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.movement_tick_entity_present ? "entity" : "absent") +
-                ", input_request=" + (entityProbe.input_request_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.input_request_entity_present ? "entity" : "absent") +
-                ", on_ground=" + (entityProbe.on_ground_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.on_ground_entity_present ? "entity" : "absent") +
-                ", was_in_water=" + (entityProbe.was_in_water_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.was_in_water_entity_present ? "entity" : "absent") +
-                ", player_component=" + (entityProbe.player_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.player_entity_present ? "entity" : "absent") +
-                ", local_player=" + (entityProbe.local_player_pool_present ? "pool" : "missing") +
-                    "/" + (entityProbe.local_player_entity_present ? "entity" : "absent"));
+                ", entity_id=" + std::to_string(entityProbe.entity_value));
     }
     return gliding;
 }
