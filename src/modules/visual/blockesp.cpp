@@ -819,7 +819,7 @@ void BlockEspModule::onInit() {
         });
 }
 void BlockEspModule::onEnable() {
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
     resolveBlockGetBlock();
     if (kEnableExperimentalNativeEventHooks) {
@@ -837,7 +837,7 @@ void BlockEspModule::onEnable() {
 }
 void BlockEspModule::onDisable() {
     g_blockEspCaptureEvents.store(false, std::memory_order_release);
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
     removeBlockSourceGetBlockHook();
     clearBlockEventCandidates();
@@ -847,7 +847,7 @@ void BlockEspModule::onDisable() {
     clearCache();
 }
 void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     ++m_tickCount;
     if (!g_blockEspCaptureEvents.load(std::memory_order_acquire) || !player) return;
 
@@ -1384,9 +1384,10 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
 }
 void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosition,
                                        std::vector<Outline>& output) const {
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
     output.clear();
-    if (!g_blockEspCaptureEvents.load(std::memory_order_acquire) || !masterEnabled || !keybindActive) return;
+    // The atomic capture gate reflects the combined enabled state and avoids
+    // reading Module's non-atomic lifecycle flags from the render thread.
+    if (!g_blockEspCaptureEvents.load(std::memory_order_acquire)) return;
     // Rendering is independent from the active discovery radius: once a block is
     // discovered, keep drawing it from cache while it remains in the bounded cache.
     output.reserve(kMaxBlockEspRendered);
@@ -1432,7 +1433,7 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
     }
 }
 void BlockEspModule::onMenuRegistered() {
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema; nlohmann::json config; saveConfig(config);
     schema.defaultCategory("types")
@@ -1492,7 +1493,7 @@ void BlockEspModule::onMenuRegistered() {
     setConfigSchemaJson(moduleId,schema.toJson());
 }
 bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     bool b=false;
     constexpr std::string_view utilityPrefix = "showBlock_";
     if (key.size() > utilityPrefix.size() && key.substr(0, utilityPrefix.size()) == utilityPrefix) {
@@ -1546,7 +1547,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
 }
 void BlockEspModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     showTracer=j.value("showTracer",showTracer); showShulkers=j.value("showShulkers",showShulkers);
     showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
@@ -1573,7 +1574,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     loadColor(j,"utilityColor",utilityColor);
 }
 void BlockEspModule::saveConfig(nlohmann::json& j) {
-    std::lock_guard<std::recursive_mutex> stateLock(m_stateMutex);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     Module::saveConfig(j);
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
     j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
