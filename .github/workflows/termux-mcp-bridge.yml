@@ -5,6 +5,7 @@ on:
     branches:
       - tools/termux-mcp-bridge-alpha
       - tools/termux-mcp-bridge-shizuku-storage
+      - feature/bridge-power-tools-alpha10
     paths:
       - 'TermuxMCPBridge/**'
       - '.github/workflows/termux-mcp-bridge.yml'
