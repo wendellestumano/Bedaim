@@ -114,7 +114,7 @@ private:
     std::uint64_t m_lastResolveAttemptTick = 0;
     // Serialize game-tick scanner state with menu lifecycle/config callbacks.
     // Frame/menu callbacks and LocalPlayerTickEvent can run on different threads.
-    mutable std::recursive_mutex m_stateMutex;
+    mutable std::recursive_mutex m_scanMutex;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<PositionKey, Outline, PositionHash> m_cache;
     std::vector<PositionKey> m_cacheRefreshPositions;
