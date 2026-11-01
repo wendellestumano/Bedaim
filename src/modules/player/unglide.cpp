@@ -602,7 +602,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         bedrocktools::diagnostics::Level::Info, "Unglide", "dispatch",
         automationBroadcastResultName(result),
         std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
-            (glidingState ? (*glidingState ? "true" : "false") : "unavailable") +
+            (glidingState ? "true" : "false") +
             "; target_distance=" + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
