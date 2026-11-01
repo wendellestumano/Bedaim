@@ -119,6 +119,11 @@ struct entt_traits<EntityId> : basic_entt_traits<EntityIdTraits> {
 }
 
 struct GlidingTravelFlagComponent final {};
+struct AirTravelFlagComponent final {};
+struct GroundTravelFlagComponent final {};
+struct WaterTravelFlagComponent final {};
+struct LavaTravelFlagComponent final {};
+struct LiquidTravelFlagComponent final {};
 struct MobTravelComponent final {};
 struct PlayerFlyingTravelComponent final {};
 struct FallFlyTicksComponent final {};
@@ -171,6 +176,16 @@ struct EntityContextProbe {
     bool move_input_try_get_present = false;
     bool gliding_pool_present = false;
     bool gliding_entity_present = false;
+    bool air_travel_pool_present = false;
+    bool air_travel_entity_present = false;
+    bool ground_travel_pool_present = false;
+    bool ground_travel_entity_present = false;
+    bool water_travel_pool_present = false;
+    bool water_travel_entity_present = false;
+    bool lava_travel_pool_present = false;
+    bool lava_travel_entity_present = false;
+    bool liquid_travel_pool_present = false;
+    bool liquid_travel_entity_present = false;
     bool mob_travel_pool_present = false;
     bool mob_travel_entity_present = false;
     bool player_flying_pool_present = false;
@@ -237,6 +252,11 @@ inline EntityContextProbe probeEntityContext(void* actor) {
         result.prefix##_entity_present = pool && pool->contains(context->mEntity); \
     } while (false)
 
+    BEDROCK_PROBE_ENTITY_COMPONENT(AirTravelFlagComponent, air_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(GroundTravelFlagComponent, ground_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(WaterTravelFlagComponent, water_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(LavaTravelFlagComponent, lava_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(LiquidTravelFlagComponent, liquid_travel);
     BEDROCK_PROBE_ENTITY_COMPONENT(MobTravelComponent, mob_travel);
     BEDROCK_PROBE_ENTITY_COMPONENT(PlayerFlyingTravelComponent, player_flying);
     BEDROCK_PROBE_ENTITY_COMPONENT(FallFlyTicksComponent, fall_fly_ticks);
