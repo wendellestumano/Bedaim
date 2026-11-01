@@ -15,17 +15,6 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
            fallDistance >= normalizeMinimumFallDistance(minimumFallDistance);
 }
 
-inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
-                                    float targetDistance, float maximumTargetDistance) noexcept {
-    if (!enabled || !isGliding ||
-        !std::isfinite(targetDistance) || !std::isfinite(maximumTargetDistance) ||
-        targetDistance < 0.0f) {
-        return false;
-    }
-    const float safeTargetDistance = std::clamp(maximumTargetDistance, 1.0f, 32.0f);
-    return targetDistance <= safeTargetDistance;
-}
-
 // A bounded burst continues only while presses remain; an exhausted burst stays latched.
 inline bool shouldDispatchUnglideBurst(bool alreadyTriggered, int burstRemaining) noexcept {
     return !alreadyTriggered || burstRemaining > 0;
@@ -35,6 +24,11 @@ inline bool shouldBeginUnglideDispatch(bool enabled, bool dispatchInProgress,
                                        bool alreadyTriggered, int burstRemaining) noexcept {
     return enabled && !dispatchInProgress && burstRemaining >= 0 &&
            shouldDispatchUnglideBurst(alreadyTriggered, burstRemaining);
+}
+
+// Unknown or negative ECS state must never emit a Space keymap request.
+inline bool shouldDispatchUnglideWhenGliding(bool stateKnown, bool isGliding) noexcept {
+    return stateKnown && isGliding;
 }
 
 // A completed trigger stays latched through transient gate failures. Only a
