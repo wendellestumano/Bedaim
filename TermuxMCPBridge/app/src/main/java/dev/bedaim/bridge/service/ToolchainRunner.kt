@@ -157,6 +157,130 @@ object ToolchainRunner {
             File("/data/data/com.termux/files/home").path, 10_000L).ifBlank { "(no active tmux sessions)" }
     }
 
+
+    // Process manager: every operation is scoped to the Termux app UID.
+    suspend fun processList(context: Context): String {
+        requireRemoteShell(context)
+        val uid = execute(context, "id", listOf("-u"), HOME).trim()
+        return execute(context, "ps", listOf("-u", uid, "-o", "pid,ppid,stat,etime,args"), HOME, 15_000L)
+            .ifBlank { "(no visible Termux processes)" }
+    }
+
+    suspend fun processInspect(context: Context, pidValue: String): String {
+        requireRemoteShell(context)
+        val pid = validatePid(pidValue)
+        val owner = execute(context, "ps", listOf("-o", "uid=", "-p", pid), HOME, 10_000L).trim()
+        val uid = execute(context, "id", listOf("-u"), HOME, 10_000L).trim()
+        require(owner == uid) { "PID não pertence ao usuário do Termux ou não está visível." }
+        return execute(context, "ps", listOf("-o", "pid,ppid,stat,etime,args", "-p", pid), HOME, 10_000L)
+    }
+
+    suspend fun processStop(context: Context, pidValue: String): String {
+        requireRemoteShell(context)
+        val pid = validatePid(pidValue)
+        val owner = execute(context, "ps", listOf("-o", "uid=", "-p", pid), HOME, 10_000L).trim()
+        val uid = execute(context, "id", listOf("-u"), HOME, 10_000L).trim()
+        require(owner == uid) { "Recusado: PID não pertence ao usuário do Termux." }
+        execute(context, "kill", listOf("-TERM", pid), HOME, 10_000L)
+        BridgeStatus.recordEvent("Termux: SIGTERM enviado ao PID $pid.")
+        return "SIGTERM enviado ao PID $pid (UID Termux $uid)."
+    }
+
+    private fun validatePid(value: String): String {
+        require(Regex("^[0-9]{1,10}$").matches(value)) { "PID inválido." }
+        require(value.toLongOrNull() != null && value.toLong() > 1L) { "PID protegido ou inválido." }
+        return value
+    }
+
+    // Structured build jobs use fixed commands; arbitrary shell remains separately opt-in.
+    suspend fun jobStart(context: Context, task: String, cwd: String): String {
+        requireRemoteShell(context)
+        val command = when (task) {
+            "gradle_tests" -> "if [ -x ./gradlew ]; then ./gradlew --no-daemon :app:testDebugUnitTest; else gradle --no-daemon :app:testDebugUnitTest; fi"
+            "gradle_debug_apk" -> "if [ -x ./gradlew ]; then ./gradlew --no-daemon :app:assembleDebug; else gradle --no-daemon :app:assembleDebug; fi"
+            "gradle_clean_debug" -> "if [ -x ./gradlew ]; then ./gradlew --no-daemon clean :app:testDebugUnitTest :app:assembleDebug; else gradle --no-daemon clean :app:testDebugUnitTest :app:assembleDebug; fi"
+            "cmake_configure" -> "cmake -S . -B build"
+            "cmake_build" -> "cmake --build build --parallel 2"
+            "ninja_build" -> "ninja -C build"
+            else -> error("Tarefa não permitida. Use gradle_tests, gradle_debug_apk, gradle_clean_debug, cmake_configure, cmake_build ou ninja_build.")
+        }
+        val directory = validateShellDirectory(cwd)
+        return "JOB_TASK=$task\n" + sessionStart(context, command, directory.path)
+    }
+
+    suspend fun jobStatus(context: Context, jobId: String): String =
+        sessionOutput(context, jobId, -200)
+
+    suspend fun jobList(context: Context): String = sessionList(context)
+
+    suspend fun jobStop(context: Context, jobId: String): String = sessionStop(context, jobId)
+
+    // Read-only Git project inspection; mutations remain available only through the opted-in shell.
+    suspend fun gitInspect(context: Context, operation: String, cwd: String): String {
+        requireRemoteShell(context)
+        val directory = validateShellDirectory(cwd)
+        val args = when (operation) {
+            "status" -> listOf("--no-pager", "status", "--short", "--branch")
+            "diff" -> listOf("--no-pager", "diff", "--no-ext-diff", "--unified=3")
+            "log" -> listOf("--no-pager", "log", "-12", "--oneline", "--decorate")
+            "branches" -> listOf("--no-pager", "branch", "--list", "--no-color")
+            else -> error("Operação Git não permitida.")
+        }
+        return execute(context, "git", args, directory.path, 30_000L)
+            .ifBlank { "(sem saída; verifique se o diretório é um repositório Git)" }
+    }
+
+    suspend fun diagnoseAndroidProject(context: Context, cwd: String): String {
+        requireRemoteShell(context)
+        val directory = validateShellDirectory(cwd)
+        val script = """
+            echo '== PROJECT FILES =='
+            for f in settings.gradle settings.gradle.kts build.gradle build.gradle.kts gradlew gradle.properties local.properties CMakeLists.txt Android.mk; do
+              [ ! -e "$f" ] || ls -ld "$f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
     private fun validateShellDirectory(cwd: String): File {
         val home = File("/data/data/com.termux/files/home").canonicalFile
         val shared = File("/storage/emulated/0").canonicalFile
