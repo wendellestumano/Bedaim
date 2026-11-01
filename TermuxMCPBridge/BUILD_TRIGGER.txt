@@ -1,1 +1,3 @@
 APK Lab, workspace browser, event history and persistent-signing workflow validation.
+
+Alpha11 final validation commit a25daaf46471d3d2aca550812f83f6a40a5d24f0
