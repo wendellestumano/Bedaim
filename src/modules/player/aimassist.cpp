@@ -1352,10 +1352,12 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     auto expected = nextDiagnosticMs.load(std::memory_order_relaxed);
     if (nowMs >= expected && nextDiagnosticMs.compare_exchange_strong(
             expected, nowMs + 1000, std::memory_order_relaxed)) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Debug, "BedrockAim", "gliding_state",
-            gliding ? "gliding_true" : "gliding_false",
-            std::string("ecs_pool=") + (ecsGliding.has_value() ? "available" : "missing") +
+        // This is a time-based telemetry sample. probe() deduplicates identical
+        // states and would hide registry changes while the boolean remains false.
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Debug, "BedrockAim",
+            std::string("gliding_state=") + (gliding ? "gliding_true" : "gliding_false") +
+                ": ecs_pool=" + (ecsGliding.has_value() ? "available" : "missing") +
                 ", ecs_component=" + (ecsGliding.has_value() ? (*ecsGliding ? "present" : "absent") : "unknown") +
                 ", native_getStatusFlag=" +
                     (ecsGliding.has_value() ? "skipped_ecs_authoritative" :
