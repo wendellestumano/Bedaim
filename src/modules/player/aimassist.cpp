@@ -1393,9 +1393,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     if (!enabled || !player) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
-    // Preserve actual gliding state for target selection; Elytra mode and Sticky
-    // are separate gates for the special aim-point dislocation below.
-    m_localPlayerGliding = isPlayerGliding(player);
+    // The ECS glide component is sampled on LocalPlayerTickEvent. Keep the
+    // render/frame path on that cached value: querying EnTT here could race the
+    // game's ECS mutation phase while the client frame is being rendered.
     const auto now = std::chrono::steady_clock::now();
 
     auto* rotationComponent = player->rotationComponent();
