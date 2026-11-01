@@ -25,6 +25,8 @@ class TunnelControllerScriptTest {
         assertTrue(script.contains("BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"))
         assertTrue(script.contains("NGROK_DOMAIN_ACTIVE_WITH_WRONG_UPSTREAM"))
         assertTrue(script.contains("BRIDGE_TUNNEL_PROCESS_ALIVE"))
+        assertTrue(script.contains("LOCK_PID=\"$(cat"))
+        assertTrue(script.contains("AGENT_TUNNELS=\"$(curl"))
     }
 
     @Test
@@ -33,5 +35,15 @@ class TunnelControllerScriptTest {
 
         assertTrue(script.contains("PID_OWNERSHIP_MISMATCH"))
         assertTrue(script.contains("case \"\$CMD\" in"))
+    }
+
+    @Test
+    fun endpointConflictUsesABoundedRetryCooldown() {
+        val script = TunnelController.buildStartScript("https://example.ngrok-free.dev")
+
+        assertTrue(script.contains("ERR_NGROK_334"))
+        assertTrue(script.contains("ngrok-retry-after"))
+        assertTrue(script.contains("BRIDGE_TUNNEL_RETRY_COOLDOWN"))
+        assertTrue(script.contains("NGROK_ENDPOINT_ALREADY_ONLINE"))
     }
 }
