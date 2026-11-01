@@ -236,7 +236,3629 @@ object ToolchainRunner {
         val script = """
             echo '== PROJECT FILES =='
             for f in settings.gradle settings.gradle.kts build.gradle build.gradle.kts gradlew gradle.properties local.properties CMakeLists.txt Android.mk; do
-              [ ! -e "$f" ] || ls -ld "$f"
+              [ ! -e "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "\${'
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "\${'
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x" 2>/dev/null || echo "\${'
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}ANDROID_HOME" "\${'
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x" 2>/dev/null || echo "\${'
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}ANDROID_SDK_ROOT" "\${'
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x" 2>/dev/null || echo "\${'
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x" 2>/dev/null || echo "\${'
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f" ] || ls -ld "\${'
+            done
+            echo '== TOOLCHAIN =='
+            for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
+              command -v "$x" 2>/dev/null || echo "$x: MISSING"
+            done
+            echo '== ANDROID ENV =='
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "$ANDROID_HOME" "$ANDROID_SDK_ROOT" "$ANDROID_NDK_HOME"
+            echo '== GIT =='
+            git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
+        """.trimIndent()
+        return execute(context, "bash", listOf("-lc", script), directory.path, 30_000L)
+    }
+
+    suspend fun inspectNative(context: Context, pathValue: String, mode: String): String {
+        requireRemoteShell(context)
+        require(pathValue.isNotBlank() && pathValue.length <= 2048 && '\u0000' !in pathValue) { "Caminho inválido." }
+        val home = File(HOME).canonicalFile.path
+        val shared = File("/storage/emulated/0").canonicalFile.path
+        val candidate = File(pathValue).canonicalFile
+        require(candidate.path == home || candidate.path.startsWith(home + File.separator) ||
+            candidate.path == shared || candidate.path.startsWith(shared + File.separator)) {
+            "Arquivo deve estar no HOME do Termux ou armazenamento compartilhado."
+        }
+        val args = when (mode) {
+            "summary" -> listOf(candidate.path)
+            "elf_headers" -> listOf("-h", "-l", candidate.path)
+            "sections" -> listOf("-S", candidate.path)
+            "symbols" -> listOf("-Ws", candidate.path)
+            "disassembly" -> listOf("-d", "--no-show-raw-insn", candidate.path)
+            "strings" -> listOf("-n", "8", candidate.path)
+            "apk_inventory" -> listOf("-l", candidate.path)
+            else -> error("Modo inválido: summary, elf_headers, sections, symbols, disassembly, strings ou apk_inventory.")
+        }
+        val tool = when (mode) {
+            "summary" -> "file"
+            "elf_headers", "sections", "symbols" -> "readelf"
+            "disassembly" -> "llvm-objdump"
+            "strings" -> "strings"
+            "apk_inventory" -> "unzip"
+            else -> error("Modo inválido.")
+        }
+        return execute(context, tool, args, candidate.parentFile?.path ?: HOME, 60_000L)
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
+    }
+
+    private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
+        require(context.packageManager.getLaunchIntentForPackage(TERMUX) != null) { "Termux não está instalado." }
+        require(context.checkSelfPermission(RUN_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            "Permissão Termux RUN_COMMAND não concedida."
+        }
+        val id = UUID.randomUUID().toString()
+        val future = CompletableFuture<String>()
+        pending[id] = future
+        val callback = Intent(context, TermuxCommandResultService::class.java).putExtra("bridge_request_id", id)
+        val flags = PendingIntent.FLAG_ONE_SHOT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0)
+        val resultPending = PendingIntent.getService(context, id.hashCode(), callback, flags)
+        val command = Intent().apply {
+            setClassName(TERMUX, "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", PREFIX + tool)
+            putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args.toTypedArray())
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", cwd)
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "Bridge tool: $tool")
+            putExtra("com.termux.RUN_COMMAND_COMMAND_DESCRIPTION", "Bridge-managed Termux command.")
+            putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", resultPending)
+        }
+        try {
+            context.startService(command)
+            BridgeStatus.recordEvent("Toolchain: iniciado $tool (id=$id).")
+            return withContext(Dispatchers.IO) {
+                try {
+                    future.get(timeoutMs, TimeUnit.MILLISECONDS)
+                } finally {
+                    pending.remove(id)
+                }
+            }
+        } catch (error: Throwable) {
+            pending.remove(id)
+            throw error
+        }
+    }
+}}f"
             done
             echo '== TOOLCHAIN =='
             for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
