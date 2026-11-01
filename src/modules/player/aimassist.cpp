@@ -1321,8 +1321,9 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     if (!player) return false;
 
     // The 26.60 travel-type sensing system adds GlidingTravelFlagComponent
-    // while the entity is actively in the gliding travel mode. If its pool
-    // exists, it is authoritative and the legacy actor-data path is not read.
+    // while the entity is actively in the gliding travel mode. Its positive
+    // membership confirms gliding, but an absent tag does not suppress the
+    // native Actor flag or synchronized Actor-data fallbacks below.
     const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
     const auto entityProbe = bedrocktools::sdk::probeEntityContext(player);
 
