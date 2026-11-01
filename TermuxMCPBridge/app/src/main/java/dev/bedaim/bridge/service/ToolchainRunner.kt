@@ -236,14 +236,14 @@ object ToolchainRunner {
         val script = """
             echo '== PROJECT FILES =='
             for f in settings.gradle settings.gradle.kts build.gradle build.gradle.kts gradlew gradle.properties local.properties CMakeLists.txt Android.mk; do
-              [ ! -e "\${'$'}f" ] || ls -ld "\${'$'}f"
+              [ ! -e "${'$'}f" ] || ls -ld "${'$'}f"
             done
             echo '== TOOLCHAIN =='
             for x in java javac gradle adb sdkmanager cmake ninja clang ndk-build aapt apkanalyzer jadx apktool radare2; do
-              command -v "\${'$'}x" 2>/dev/null || echo "\${'$'}x: MISSING"
+              command -v "${'$'}x" 2>/dev/null || echo "${'$'}x: MISSING"
             done
             echo '== ANDROID ENV =='
-            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "\${'$'}ANDROID_HOME" "\${'$'}ANDROID_SDK_ROOT" "\${'$'}ANDROID_NDK_HOME"
+            printf 'ANDROID_HOME=%s\\nANDROID_SDK_ROOT=%s\\nANDROID_NDK_HOME=%s\\n' "${'$'}ANDROID_HOME" "${'$'}ANDROID_SDK_ROOT" "${'$'}ANDROID_NDK_HOME"
             echo '== GIT =='
             git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
         """.trimIndent()
