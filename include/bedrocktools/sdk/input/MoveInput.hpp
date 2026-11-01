@@ -119,6 +119,23 @@ struct entt_traits<EntityId> : basic_entt_traits<EntityIdTraits> {
 }
 
 struct GlidingTravelFlagComponent final {};
+struct MobTravelComponent final {};
+struct PlayerFlyingTravelComponent final {};
+struct FallFlyTicksComponent final {};
+struct ElytraFlightTimeTicksComponent final {};
+struct ActorDataFlagComponent final {};
+struct PlayerActionComponent final {};
+struct MovementAbilitiesComponent final {};
+struct ArmorFlyEnabledFlagComponent final {};
+struct ActorMovementTickNeededComponent final {};
+struct PlayerInputRequestComponent final {};
+struct OnGroundFlagComponent final {};
+struct WasInWaterFlagComponent final {};
+struct PlayerComponent final {};
+struct LocalPlayerComponent final {};
+
+static_assert(entt::type_hash<GlidingTravelFlagComponent>::value() == 0x27a011eeu,
+              "GlidingTravelFlagComponent EnTT hash must match Minecraft 26.60");
 
 class EntityRegistry;
 
@@ -154,6 +171,34 @@ struct EntityContextProbe {
     bool move_input_try_get_present = false;
     bool gliding_pool_present = false;
     bool gliding_entity_present = false;
+    bool mob_travel_pool_present = false;
+    bool mob_travel_entity_present = false;
+    bool player_flying_pool_present = false;
+    bool player_flying_entity_present = false;
+    bool fall_fly_ticks_pool_present = false;
+    bool fall_fly_ticks_entity_present = false;
+    bool elytra_flight_ticks_pool_present = false;
+    bool elytra_flight_ticks_entity_present = false;
+    bool actor_data_flags_pool_present = false;
+    bool actor_data_flags_entity_present = false;
+    bool player_action_pool_present = false;
+    bool player_action_entity_present = false;
+    bool movement_abilities_pool_present = false;
+    bool movement_abilities_entity_present = false;
+    bool armor_fly_pool_present = false;
+    bool armor_fly_entity_present = false;
+    bool movement_tick_pool_present = false;
+    bool movement_tick_entity_present = false;
+    bool input_request_pool_present = false;
+    bool input_request_entity_present = false;
+    bool on_ground_pool_present = false;
+    bool on_ground_entity_present = false;
+    bool was_in_water_pool_present = false;
+    bool was_in_water_entity_present = false;
+    bool player_pool_present = false;
+    bool player_entity_present = false;
+    bool local_player_pool_present = false;
+    bool local_player_entity_present = false;
     std::uint32_t entity_value = 0;
 };
 
@@ -183,6 +228,31 @@ inline EntityContextProbe probeEntityContext(void* actor) {
     const auto* glidingPool = registry.storage(glidingTypeId);
     result.gliding_pool_present = glidingPool != nullptr;
     result.gliding_entity_present = glidingPool && glidingPool->contains(context->mEntity);
+
+#define BEDROCK_PROBE_ENTITY_COMPONENT(Type, prefix) \
+    do { \
+        constexpr auto typeId = entt::type_hash<Type>::value(); \
+        const auto* pool = registry.storage(typeId); \
+        result.prefix##_pool_present = pool != nullptr; \
+        result.prefix##_entity_present = pool && pool->contains(context->mEntity); \
+    } while (false)
+
+    BEDROCK_PROBE_ENTITY_COMPONENT(MobTravelComponent, mob_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerFlyingTravelComponent, player_flying);
+    BEDROCK_PROBE_ENTITY_COMPONENT(FallFlyTicksComponent, fall_fly_ticks);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ElytraFlightTimeTicksComponent, elytra_flight_ticks);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ActorDataFlagComponent, actor_data_flags);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerActionComponent, player_action);
+    BEDROCK_PROBE_ENTITY_COMPONENT(MovementAbilitiesComponent, movement_abilities);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ArmorFlyEnabledFlagComponent, armor_fly);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ActorMovementTickNeededComponent, movement_tick);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerInputRequestComponent, input_request);
+    BEDROCK_PROBE_ENTITY_COMPONENT(OnGroundFlagComponent, on_ground);
+    BEDROCK_PROBE_ENTITY_COMPONENT(WasInWaterFlagComponent, was_in_water);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerComponent, player);
+    BEDROCK_PROBE_ENTITY_COMPONENT(LocalPlayerComponent, local_player);
+#undef BEDROCK_PROBE_ENTITY_COMPONENT
+
     return result;
 }
 
