@@ -421,10 +421,11 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     auto expectedHeartbeat = nextHeartbeatMs.load(std::memory_order_relaxed);
     if (nowMs >= expectedHeartbeat && nextHeartbeatMs.compare_exchange_strong(
             expectedHeartbeat, nowMs + 1000, std::memory_order_relaxed)) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Info, "Unglide", "tick_heartbeat",
-            "callback_received",
-            std::string("tick_count=") + std::to_string(tickCount) +
+        // This is a periodic sample, not a state transition. `probe()` suppresses
+        // identical states, so use `log()` to retain one heartbeat per interval.
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Info, "Unglide",
+            std::string("tick_heartbeat=callback_received: tick_count=") + std::to_string(tickCount) +
                 ", module_enabled=" + (moduleEnabled ? "true" : "false") +
                 ", feature_enabled=" + (featureEnabled ? "true" : "false") +
                 ", player_non_null=" + (player ? "true" : "false") +
@@ -443,8 +444,11 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             if (eventTime < m_nextDiagnostic) return;
             m_nextDiagnostic = eventTime + std::chrono::seconds(1);
         }
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Debug, "Unglide", "gate", state, detail);
+        // Gate detail can change while the symbolic gate stays the same; do not
+        // let probe() discard the periodic sample merely because `state` repeats.
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Debug, "Unglide",
+            std::string("gate=") + state + ": " + detail);
     };
     auto reject = [&](const char* state, const std::string& detail, int retryMs) {
         {
@@ -636,10 +640,10 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     // Always retain the final transport outcome. The ordinary gate reporter is
     // throttled to one event/second and could otherwise hide this result directly
     // after a transient crosshair rejection.
-    bedrocktools::diagnostics::probe(
-        bedrocktools::diagnostics::Level::Info, "Unglide", "dispatch",
-        automationBroadcastResultName(result),
-        std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
+    bedrocktools::diagnostics::log(
+        bedrocktools::diagnostics::Level::Info, "Unglide",
+        std::string("dispatch=") + automationBroadcastResultName(result) +
+            ": state=triggered; crosshair_confirmed=true; gliding_state=" +
             (glidingState ? "true" : "false") +
             "; target_distance=" + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
