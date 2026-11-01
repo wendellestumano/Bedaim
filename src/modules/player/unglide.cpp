@@ -97,9 +97,10 @@ TargetGeometry targetGeometryFor(
     return result;
 }
 
-// Local ECS component type used by the SDK registry lookup. The engine descriptor
-// hash (0x27a011ee) is not an EnTT C++ type hash and must not be compared to it.
-struct GlidingTravelFlagComponent {};
+// Exact Minecraft 26.60 EnTT pool identifier recovered from its registered
+// component descriptor. Query the registry by this ID rather than by a C++ type
+// name: the descriptor ID and EnTT's compiler-derived type hash are different.
+constexpr entt::id_type kGlidingTravelFlagComponentId = 0x27a011eeu;
 
 std::optional<bool> playerIsGlidingForUnglide(void* player) {
     using namespace bedrocktools::sdk;
@@ -113,9 +114,13 @@ std::optional<bool> playerIsGlidingForUnglide(void* player) {
         playerAddress + offsets::Actor::mEntityContext);
     if (!context) return std::nullopt;
 
-    // This follows the same EntityContext/EnTT registry path already used by
-    // BedrockTools' MoveInputComponent reader; it does not inspect legacy DataItem offsets.
-    return context->tryGetComponent<GlidingTravelFlagComponent>() != nullptr;
+    // GlidingTravelFlagComponent is an empty/tag component. In EnTT 3.16,
+    // try_get<T>() is invalid for empty components because their storage value
+    // type is void. Resolve the engine's pool by its exact 26.60 descriptor ID
+    // and test entity membership directly.
+    auto* componentPool = context->getRegistry().storage(kGlidingTravelFlagComponentId);
+    if (!componentPool) return std::nullopt;
+    return componentPool->contains(context->mEntity);
 }
 
 // Trigger the user's dedicated Key Mapper keymap for Unglide.
