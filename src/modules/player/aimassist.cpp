@@ -105,6 +105,43 @@ bool finiteVec3(const bedrocktools::sdk::Vec3& v) {
     return bedaim::aimmath::isFiniteVector({v.x, v.y, v.z});
 }
 
+using ActorGetStatusFlagFn = bool (*)(const void*, int);
+
+bool trustedGameAddress(void* address) {
+    if (!address) return false;
+    Dl_info info{};
+    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
+    const std::string_view path(info.dli_fname);
+    return path.find("libminecraftpe.so") != std::string_view::npos ||
+        path.find("liblevilamina.so") != std::string_view::npos ||
+        path.find("libLeviLamina.so") != std::string_view::npos;
+}
+
+ActorGetStatusFlagFn resolveActorGetStatusFlag() {
+    static ActorGetStatusFlagFn function = []() -> ActorGetStatusFlagFn {
+        constexpr const char* symbol = "_ZNK5Actor13getStatusFlagE10ActorFlags";
+        void* address = dlsym(RTLD_DEFAULT, symbol);
+        if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
+        static void* minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+        static void* leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
+        static void* leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
+        if (minecraftHandle) {
+            address = dlsym(minecraftHandle, symbol);
+            if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
+        }
+        if (leviLaminaHandle) {
+            address = dlsym(leviLaminaHandle, symbol);
+            if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
+        }
+        if (leviLaminaAltHandle) {
+            address = dlsym(leviLaminaAltHandle, symbol);
+            if (trustedGameAddress(address)) return reinterpret_cast<ActorGetStatusFlagFn>(address);
+        }
+        return nullptr;
+    }();
+    return function;
+}
+
 bool actorIsGliding(void* actor) {
     using namespace bedrocktools::sdk;
     if (!actor) return false;
@@ -1279,10 +1316,39 @@ bool AimAssistModule::localPlayerIsGliding() {
 }
 
 bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
-    // Share the exact synchronized ActorFlags reader already used by Aim Assist
-    // and ElytraMacing; do not duplicate the fragile entity-data traversal in
-    // the Unglide module.
-    return player && actorIsGliding(player);
+    if (!player) return false;
+
+    // Prefer the engine's own Actor::getStatusFlag accessor when it is exported
+    // by the active 26.60 runtime. The synchronized ActorFlags snapshot remains
+    // a fallback because some Bedrock builds hide or omit this symbol.
+    constexpr int kGlidingActorFlag = 32;
+    const auto nativeGetter = resolveActorGetStatusFlag();
+    bool nativeGliding = false;
+    if (nativeGetter) {
+        try {
+            nativeGliding = nativeGetter(player, kGlidingActorFlag);
+        } catch (...) {
+            nativeGliding = false;
+        }
+    }
+    const bool synchronizedGliding = actorIsGliding(player);
+    const bool gliding = nativeGliding || synchronizedGliding;
+
+    static std::atomic<std::int64_t> nextDiagnosticMs{0};
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto expected = nextDiagnosticMs.load(std::memory_order_relaxed);
+    if (nowMs >= expected && nextDiagnosticMs.compare_exchange_strong(
+            expected, nowMs + 1000, std::memory_order_relaxed)) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Debug, "BedrockAim", "gliding_state",
+            gliding ? "gliding_true" : "gliding_false",
+            std::string("native_getStatusFlag=") + (nativeGetter ? "available" : "unavailable") +
+                ", native_result=" + (nativeGliding ? "true" : "false") +
+                ", synchronized_actor_flags=" + (synchronizedGliding ? "true" : "false") +
+                ", flag_index=" + std::to_string(kGlidingActorFlag));
+    }
+    return gliding;
 }
 
 void AimAssistModule::processPlayerFrame() {
