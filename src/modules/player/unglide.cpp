@@ -5,6 +5,7 @@
 #include "unglide.hpp"
 #include "aimassist.hpp"
 #include "MaceFallPolicy.hpp"
+#include "UnglideActorFlagReader.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <jni.h>
+#include <link.h>
 #include <limits>
 #include <optional>
 #include <string>
@@ -103,7 +105,7 @@ TargetGeometry targetGeometryFor(
 // name: the descriptor ID and EnTT's compiler-derived type hash are different.
 constexpr entt::id_type kGlidingTravelFlagComponentId = 0x27a011eeu;
 
-std::optional<bool> playerIsGlidingForUnglide(void* player) {
+std::optional<bool> playerHasGlidingTravelTag(void* player) {
     using namespace bedrocktools::sdk;
     if (!player || !bedrocktools::core::memory::isExactMinecraft260Build())
         return std::nullopt;
@@ -115,13 +117,140 @@ std::optional<bool> playerIsGlidingForUnglide(void* player) {
         playerAddress + offsets::Actor::mEntityContext);
     if (!context) return std::nullopt;
 
-    // GlidingTravelFlagComponent is an empty/tag component. In EnTT 3.16,
-    // try_get<T>() is invalid for empty components because their storage value
-    // type is void. Resolve the engine's pool by its exact 26.60 descriptor ID
-    // and test entity membership directly.
+    // Separate movement/travel-state telemetry; not the source of truth for
+    // Bedrock's Molang query.is_gliding predicate.
     auto* componentPool = context->getRegistry().storage(kGlidingTravelFlagComponentId);
     if (!componentPool) return std::nullopt;
     return componentPool->contains(context->mEntity);
+}
+
+using ActorDataFlagTestFn = bool (*)(void*, int);
+
+struct MinecraftImageBaseQuery {
+    std::uintptr_t base{};
+};
+
+int findExactMinecraftImageBase(struct dl_phdr_info* info, std::size_t, void* opaque) {
+    if (!info || !info->dlpi_name) return 0;
+    const std::string_view imageName(info->dlpi_name);
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos
+        ? imageName : imageName.substr(slash + 1);
+    if (basename != "libminecraftpe.so") return 0;
+
+    bedrocktools::core::memory::detail::MinecraftBuildSearch build{};
+    if (!bedrocktools::core::memory::detail::inspectMinecraftImage(info, 0, &build) ||
+        !build.matched) return 0;
+
+    auto& query = *static_cast<MinecraftImageBaseQuery*>(opaque);
+    query.base = static_cast<std::uintptr_t>(info->dlpi_addr);
+    return query.base ? 1 : 0;
+}
+
+struct MinecraftExecutableRangeQuery {
+    std::uintptr_t base{};
+    std::uintptr_t address{};
+    std::size_t length{};
+    bool found{};
+};
+
+int inspectExactMinecraftExecutableRange(struct dl_phdr_info* info, std::size_t, void* opaque) {
+    if (!info || !info->dlpi_name) return 0;
+    const std::string_view imageName(info->dlpi_name);
+    const auto slash = imageName.find_last_of('/');
+    const auto basename = slash == std::string_view::npos
+        ? imageName : imageName.substr(slash + 1);
+    auto& query = *static_cast<MinecraftExecutableRangeQuery*>(opaque);
+    if (basename != "libminecraftpe.so" ||
+        static_cast<std::uintptr_t>(info->dlpi_addr) != query.base) return 0;
+
+    const auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    if (query.length == 0 || query.length > maximum - query.address) return 0;
+    for (ElfW(Half) index = 0; index < info->dlpi_phnum; ++index) {
+        const auto& segment = info->dlpi_phdr[index];
+        if (segment.p_type != PT_LOAD ||
+            (segment.p_flags & (PF_R | PF_X)) != (PF_R | PF_X)) continue;
+        const auto offset = static_cast<std::uintptr_t>(segment.p_vaddr);
+        const auto size = static_cast<std::uintptr_t>(segment.p_memsz);
+        if (offset > maximum - query.base) continue;
+        const auto begin = query.base + offset;
+        if (size > maximum - begin) continue;
+        const auto end = begin + size;
+        if (query.address >= begin && query.address < end &&
+            query.length <= end - query.address) {
+            query.found = true;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+bool isExactMinecraftExecutableRange(std::uintptr_t base, std::uintptr_t address,
+                                     std::size_t length) {
+    if (!base || !address || length == 0 ||
+        length > std::numeric_limits<std::uintptr_t>::max() - address) return false;
+    MinecraftExecutableRangeQuery query{base, address, length, false};
+    dl_iterate_phdr(&inspectExactMinecraftExecutableRange, &query);
+    return query.found;
+}
+
+ActorDataFlagTestFn resolveActorDataFlagTest() {
+    static std::atomic<ActorDataFlagTestFn> cached{nullptr};
+    if (const auto existing = cached.load(std::memory_order_acquire)) return existing;
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) return nullptr;
+
+    MinecraftImageBaseQuery image{};
+    dl_iterate_phdr(&findExactMinecraftImageBase, &image);
+    if (!image.base) return nullptr;
+
+    constexpr auto maximum = std::numeric_limits<std::uintptr_t>::max();
+    if (bedaim::macefall::actor_flag::kReaderRva > maximum - image.base ||
+        bedaim::macefall::actor_flag::kHelperRva > maximum - image.base) return nullptr;
+    const auto readerAddress = image.base + bedaim::macefall::actor_flag::kReaderRva;
+    const auto helperAddress = image.base + bedaim::macefall::actor_flag::kHelperRva;
+
+    if (!isExactMinecraftExecutableRange(image.base, readerAddress,
+                                          sizeof(bedaim::macefall::actor_flag::kReaderInstructions)) ||
+        !isExactMinecraftExecutableRange(image.base, helperAddress,
+                                          sizeof(bedaim::macefall::actor_flag::kHelperInstructions)))
+        return nullptr;
+
+    std::array<std::uint32_t, 2> readerInstructions{};
+    std::array<std::uint32_t, 4> helperInstructions{};
+    std::memcpy(readerInstructions.data(), reinterpret_cast<const void*>(readerAddress),
+                sizeof(readerInstructions));
+    std::memcpy(helperInstructions.data(), reinterpret_cast<const void*>(helperAddress),
+                sizeof(helperInstructions));
+
+    if (!bedaim::macefall::actor_flag::matchesReaderStub(readerInstructions) ||
+        !bedaim::macefall::actor_flag::readerBranchesToHelper(readerInstructions) ||
+        !bedaim::macefall::actor_flag::matchesHelperPrefix(helperInstructions)) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning, "Unglide", "actor_flag_reader",
+            "26.60_signature_mismatch",
+            "query.is_gliding helper prologue or ActorDataFlagComponent hash did not match the verified 26.60 instructions");
+        return nullptr;
+    }
+
+    const auto function = reinterpret_cast<ActorDataFlagTestFn>(readerAddress);
+    cached.store(function, std::memory_order_release);
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "Unglide", "actor_flag_reader",
+        "resolved",
+        "26.60 query.is_gliding helper verified: ActorDataFlagComponent hash 0xC67426F3, flag bit 32");
+    return function;
+}
+
+std::optional<bool> playerIsGlidingFromActorDataFlags(void* player) {
+    if (!player || !bedrocktools::core::memory::isExactMinecraft260Build())
+        return std::nullopt;
+    const auto reader = resolveActorDataFlagTest();
+    if (!reader) return std::nullopt;
+
+    // This is the exact lower-level predicate called by the 26.60 Molang
+    // query.is_gliding lambda: Actor* + bit index 32. Do not call the Molang
+    // lambda itself; it requires a live RenderParams/vector context.
+    return reader(player, bedaim::macefall::actor_flag::kGlidingFlagBit);
 }
 
 // Trigger the user's dedicated Key Mapper keymap for Unglide.
@@ -447,20 +576,26 @@ void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = targetDistance;
-    // Use the exact 26.60 GlidingTravelFlagComponent tag. Unknown and negative
-    // states fail closed so Unglide cannot inject Space while the player is grounded.
-    const auto glidingState = playerIsGlidingForUnglide(player);
+    // Match Bedrock's own Molang query.is_gliding implementation. On the exact
+    // 26.60 binary, its lambda passes Actor* and bit 32 to the helper that looks
+    // up ActorDataFlagComponent (hash 0xC67426F3). The separate
+    // GlidingTravelFlagComponent is retained only as timing/consistency telemetry.
+    const auto actorDataGliding = playerIsGlidingFromActorDataFlags(player);
+    const auto glidingTravelTag = playerHasGlidingTravelTag(player);
     if (!bedaim::macefall::shouldDispatchUnglideWhenGliding(
-            glidingState.has_value(), glidingState.value_or(false))) {
-        reject(glidingState ? "player_not_gliding" : "gliding_state_unavailable",
-               glidingState
-                   ? "GlidingTravelFlagComponent is absent; no Space keymap request sent."
-                   : "26.60 GlidingTravelFlagComponent could not be read; no Space keymap request sent.",
-               glidingState ? 120 : 250);
+            actorDataGliding.has_value(), actorDataGliding.value_or(false))) {
+        reject(actorDataGliding ? "player_not_gliding" : "gliding_state_unavailable",
+               actorDataGliding
+                   ? "26.60 query.is_gliding returned false (ActorDataFlagComponent bit 32 is clear); no Space keymap request sent."
+                   : "26.60 query.is_gliding helper could not be resolved and verified; no Space keymap request sent.",
+               actorDataGliding ? 120 : 250);
         return;
     }
+    const char* travelTagState = !glidingTravelTag ? "unavailable"
+        : (*glidingTravelTag ? "present" : "absent");
     report("gliding_detected",
-           "26.60 GlidingTravelFlagComponent is present; target_source=fresh_crosshair_player_query");
+           std::string("26.60 query.is_gliding=true via ActorDataFlagComponent hash=0xC67426F3 bit=32; GlidingTravelFlagComponent=") +
+               travelTagState + "; target_source=fresh_crosshair_player_query");
     const bool crosshairConfirmed = true; // The query returns only ray-intersecting players.
 
     // A new target starts Tracking. Range/height gates keep tracking active
@@ -573,8 +708,9 @@ void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
     }
 
     report(automationBroadcastResultName(result),
-        std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
-            (glidingState ? (*glidingState ? "true" : "false") : "unavailable") +
+        std::string("state=triggered; crosshair_confirmed=true; query_is_gliding=") +
+            (actorDataGliding ? (*actorDataGliding ? "true" : "false") : "unavailable") +
+            "; gliding_travel_tag=" + travelTagState +
             "; target_distance=" + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
@@ -593,37 +729,4 @@ void UnglideModule::onMenuRegistered(){
    saveConfig(persistentConfig);
    auto persistentValue = [&](const char* key, const char* fallback) {
      const auto it = persistentConfig.find(key);
-     if (it == persistentConfig.end() || it->is_null()) return std::string(fallback);
-     if (it->is_string()) return it->get<std::string>();
-     if (it->is_boolean()) return it->get<bool>() ? std::string("true") : std::string("false");
-     return it->dump();
-   };
-   ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
-   settings.modId("Bedaim")
-     .description("Persistent Unglide controls; values apply immediately.")
-     .defaultEnabled(true)
-     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, persistentValue("m_unglideEnabled", "false"))
-     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, persistentValue("m_unglideTargetDistance", "8.0"))
-     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, persistentValue("m_unglideMaxVerticalDifference", "4.0"))
-     .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
-     .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
-     .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-       if (onMenuConfigChanged(key, value)) {
-         // This custom ModuleBuilder callback bypasses ModuleMenu.cpp's normal
-         // persistence callback, so explicitly enqueue the updated module config.
-         bedrocktools::config::ConfigManager::get().save();
-       }
-     });
-   if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
- }
- using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
- s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
- ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
- auto sl=[&](const char*k,const char*title,const char*mn,const char*mx,const char*step,const char*unit,const char*def){ConfigNodeV2 n;n.id=k;n.key=k;n.title=title;n.category="special";n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=def;n.currentValue=vs(k,def);n.hasCurrentValue=true;n.minValue=mn;n.maxValue=mx;n.step=step;n.unit=unit;s.node(std::move(n));};
- sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
- ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
-}
-bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
- if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
- try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
-}
+   
