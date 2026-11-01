@@ -9,6 +9,7 @@
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
@@ -381,16 +382,37 @@ std::optional<bool> playerIsGlidingForUnglide(void* player) {
 
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
-void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
+void UnglideModule::onInit(){
+    auto& events = bedrocktools::events::bus();
+    events.subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+        [this](auto& event) { cacheLocalPlayer(event.player); });
+    // ClientInstanceUpdateEvent is published after the game's native update has
+    // returned. Evaluate travel-state membership here rather than inside Actor's
+    // normalTick detour, which can run before the ECS travel systems finish.
+    events.subscribe<bedrocktools::events::ClientInstanceUpdateEvent>(
+        [this](auto&) { processClientUpdate(); });
+}
 void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
-void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;m_lastPlayer=nullptr;}
+void UnglideModule::cacheLocalPlayer(bedrocktools::sdk::Player* player) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_lastPlayer = player;
+}
+void UnglideModule::processClientUpdate() {
+    bedrocktools::sdk::Player* player = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        player = m_lastPlayer;
+    }
+    processPlayerUpdate(player);
+}
+void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
 
     // This heartbeat deliberately runs before every early return. It tells us
-    // whether LocalPlayerTickEvent is reaching Unglide even when a gate/retry
-    // prevents target processing.
+    // whether the post-ClientInstance-update callback is reaching Unglide even
+    // when a gate/retry prevents target processing.
     static std::atomic<std::uint64_t> heartbeatTicks{0};
     static std::atomic<std::int64_t> nextHeartbeatMs{0};
     const auto tickCount = heartbeatTicks.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -425,7 +447,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         // identical states, so use `log()` to retain one heartbeat per interval.
         bedrocktools::diagnostics::log(
             bedrocktools::diagnostics::Level::Info, "Unglide",
-            std::string("tick_heartbeat=callback_received: tick_count=") + std::to_string(tickCount) +
+            std::string("client_update_heartbeat=callback_received: update_count=") + std::to_string(tickCount) +
                 ", module_enabled=" + (moduleEnabled ? "true" : "false") +
                 ", feature_enabled=" + (featureEnabled ? "true" : "false") +
                 ", player_non_null=" + (player ? "true" : "false") +
@@ -490,7 +512,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!glidingState) {
         resetTargetState();
         reject("not_gliding",
-               "Shared ECS/native flight-state probe reports gliding=false; no Space keymap request sent.", 100);
+               "Post-ClientInstance-update ECS/native flight-state probe reports gliding=false; no Space keymap request sent.", 100);
         return;
     }
 
