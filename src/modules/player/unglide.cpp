@@ -4,17 +4,18 @@
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
-#include "../../core/memory/SafeRead.hpp"
 #include "../../config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/events/ClientInstanceUpdateEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <cstring>
@@ -91,82 +92,6 @@ TargetGeometry targetGeometryFor(
     result.verticalDifference = std::abs(
         ((bounds.min.y + bounds.max.y) * 0.5f) - eye.y);
     return result;
-}
-
-using ActorGetStatusFlagFn = bool (*)(const void*, int);
-std::optional<bool> actorIsGliding(void* actor) {
-    using namespace bedrocktools::sdk;
-    if (!actor) return std::nullopt;
-
-    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-    if (actorAddress <= 0x1000 ||
-        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
-            offsets::Actor::mEntityData - sizeof(void*)) {
-        return std::nullopt;
-    }
-
-    void* component = nullptr;
-    if (!bedrocktools::core::memory::readSelfMemory(
-            actorAddress + offsets::Actor::mEntityData, &component, sizeof(component))) {
-        return std::nullopt;
-    }
-    const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
-    if (componentAddress <= 0x1000) return std::nullopt;
-
-    struct ComponentVectorView {
-        void** begin;
-        void** end;
-    } view{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            componentAddress, &view, sizeof(view))) {
-        return std::nullopt;
-    }
-    if (!view.begin || !view.end) return std::nullopt;
-
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(view.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(view.end);
-    if (endAddress < beginAddress) return std::nullopt;
-    const auto span = endAddress - beginAddress;
-    if (span % sizeof(void*) != 0 || span / sizeof(void*) > 192) {
-        return std::nullopt;
-    }
-
-    const auto count = static_cast<std::size_t>(span / sizeof(void*));
-    if (count == 0) return std::nullopt;
-    std::array<void*, 192> items{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            beginAddress, items.data(), count * sizeof(void*))) {
-        return std::nullopt;
-    }
-
-    constexpr std::size_t dataStart = offsets::DataItem::mType;
-    constexpr std::size_t dataEnd = offsets::DataItem::mValue + sizeof(std::uint64_t);
-    constexpr std::size_t dataLength = dataEnd - dataStart;
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(items[index]);
-        if (itemAddress <= 0x1000 ||
-            itemAddress > std::numeric_limits<std::uintptr_t>::max() - dataEnd) {
-            continue;
-        }
-
-        std::array<std::uint8_t, dataLength> snapshot{};
-        if (!bedrocktools::core::memory::readSelfMemory(
-                itemAddress + dataStart, snapshot.data(), snapshot.size())) {
-            continue;
-        }
-
-        std::uint8_t type = 0;
-        std::uint16_t id = 0;
-        std::uint64_t flags = 0;
-        std::memcpy(&type, snapshot.data(), sizeof(type));
-        std::memcpy(&id, snapshot.data() + (offsets::DataItem::mId - dataStart), sizeof(id));
-        std::memcpy(&flags, snapshot.data() + (offsets::DataItem::mValue - dataStart), sizeof(flags));
-        if (type != 7 || id != 0) continue;
-
-        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-        return (flags & kGlidingFlag) != 0;
-    }
-    return std::nullopt;
 }
 
 bool isTrustedGameProvider(void* address) {
@@ -353,48 +278,88 @@ const char* automationBroadcastResultName(AutomationBroadcastResult result) {
     return "keymapper_unglide_broadcast_unknown";
 }
 
-ActorGetStatusFlagFn resolveActorGetStatusFlag() {
-    static ActorGetStatusFlagFn function = nullptr;
-    if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
-        resolveTrustedGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
-    return function;
-}
-
-std::optional<bool> playerIsGlidingForUnglide(void* player) {
-    if (!player) return std::nullopt;
-    const auto getStatusFlag = resolveActorGetStatusFlag();
-    if (getStatusFlag) {
-        try {
-            // Treat the native status flag as a positive signal only; some builds
-            // differ in flag layout, so a negative result still tries safe entity data.
-            if (getStatusFlag(player, 32)) return true;
-        } catch (...) {
-            // Fall through to the bounded synchronized-data reader.
-        }
-    }
-    return actorIsGliding(player);
-}
 
 }
 
 
 
 UnglideModule::UnglideModule():Module("Unglide","Triggers the dedicated Key Mapper Space keymap near a target.","Unglide"){keybind=0;}
-void UnglideModule::onInit(){bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>([this](auto& e){processPlayerTick(e.player);});}
+void UnglideModule::onInit(){
+    auto& events = bedrocktools::events::bus();
+    events.subscribe<bedrocktools::events::LocalPlayerTickEvent>(
+        [this](auto& event) { cacheLocalPlayer(event.player); });
+    // ClientInstanceUpdateEvent is published after the game's native update has
+    // returned. Evaluate travel-state membership here rather than inside Actor's
+    // normalTick detour, which can run before the ECS travel systems finish.
+    events.subscribe<bedrocktools::events::ClientInstanceUpdateEvent>(
+        [this](auto&) { processClientUpdate(); });
+}
 void UnglideModule::onEnable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_nextDiagnostic={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
-void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
-void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
+void UnglideModule::onDisable(){std::lock_guard<std::mutex> l(m_stateMutex);m_nextAttempt={};m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;m_lastPlayer=nullptr;}
+void UnglideModule::cacheLocalPlayer(bedrocktools::sdk::Player* player) {
+    std::lock_guard<std::mutex> lock(m_stateMutex);
+    m_lastPlayer = player;
+}
+void UnglideModule::processClientUpdate() {
+    bedrocktools::sdk::Player* player = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        player = m_lastPlayer;
+    }
+    processPlayerUpdate(player);
+}
+void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
 
+    // This heartbeat deliberately runs before every early return. It tells us
+    // whether the post-ClientInstance-update callback is reaching Unglide even
+    // when a gate/retry prevents target processing.
+    static std::atomic<std::uint64_t> heartbeatTicks{0};
+    static std::atomic<std::int64_t> nextHeartbeatMs{0};
+    const auto tickCount = heartbeatTicks.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        tickStarted.time_since_epoch()).count();
+
     float targetDistance = 8.0f;
     float maximumHeightDifference = 4.0f;
+    bool moduleEnabled = false;
+    bool featureEnabled = false;
+    bool dispatchInProgress = false;
+    bool retryPending = false;
+    std::int64_t retryRemainingMs = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (!enabled || !m_unglideEnabled || !player || m_dispatchInProgress || tickStarted < m_nextAttempt) return;
+        moduleEnabled = enabled;
+        featureEnabled = m_unglideEnabled;
+        dispatchInProgress = m_dispatchInProgress;
+        retryPending = m_nextAttempt.time_since_epoch().count() != 0 && tickStarted < m_nextAttempt;
+        if (retryPending) {
+            retryRemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                m_nextAttempt - tickStarted).count();
+        }
         targetDistance = m_targetDistance;
         maximumHeightDifference = m_maxVerticalDifference;
     }
+
+    auto expectedHeartbeat = nextHeartbeatMs.load(std::memory_order_relaxed);
+    if (nowMs >= expectedHeartbeat && nextHeartbeatMs.compare_exchange_strong(
+            expectedHeartbeat, nowMs + 1000, std::memory_order_relaxed)) {
+        // This is a periodic sample, not a state transition. `probe()` suppresses
+        // identical states, so use `log()` to retain one heartbeat per interval.
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Info, "Unglide",
+            std::string("client_update_heartbeat=callback_received: update_count=") + std::to_string(tickCount) +
+                ", module_enabled=" + (moduleEnabled ? "true" : "false") +
+                ", feature_enabled=" + (featureEnabled ? "true" : "false") +
+                ", player_non_null=" + (player ? "true" : "false") +
+                ", dispatch_in_progress=" + (dispatchInProgress ? "true" : "false") +
+                ", retry_pending=" + (retryPending ? "true" : "false") +
+                ", retry_remaining_ms=" + std::to_string(retryRemainingMs) +
+                ", player_address=" + std::to_string(reinterpret_cast<std::uintptr_t>(player)));
+    }
+
+    if (!moduleEnabled || !featureEnabled || !player || dispatchInProgress || retryPending) return;
 
     auto report = [&](const char* state, const std::string& detail) {
         const auto eventTime = std::chrono::steady_clock::now();
@@ -403,8 +368,11 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             if (eventTime < m_nextDiagnostic) return;
             m_nextDiagnostic = eventTime + std::chrono::seconds(1);
         }
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Debug, "Unglide", "gate", state, detail);
+        // Gate detail can change while the symbolic gate stays the same; do not
+        // let probe() discard the periodic sample merely because `state` repeats.
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Debug, "Unglide",
+            std::string("gate=") + state + ": " + detail);
     };
     auto reject = [&](const char* state, const std::string& detail, int retryMs) {
         {
@@ -432,55 +400,55 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
-    // Match AutoHit's targeting contract: use the fresh Aim Assist target,
-    // require that it is a player, and verify the camera ray intersects that
-    // same target. A nearby player elsewhere on screen is not sufficient.
+    // Use the canonical 26.60 ActorDataFlagComponent bit 32 query parity.
+    // Missing component is fail-closed; travel tags and synchronized fallbacks do not authorize a trigger.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase || !aimBase->enabled) {
+    if (!aimBase) {
         resetTargetState();
-        reject("aim_assist_unavailable",
-               "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
+        reject("flight_state_provider_unavailable",
+               "Aim Assist native flight-state provider is not initialized; no Space keymap request sent.", 250);
+        return;
+    }
+    auto* aim = static_cast<AimAssistModule*>(aimBase);
+    const bool glidingState = aim->isPlayerGliding(player);
+    if (!glidingState) {
+        resetTargetState();
+        reject("not_gliding",
+               "ActorDataFlagComponent bit 32 is false or unavailable after ClientInstance update; no Space keymap request sent.", 100);
         return;
     }
 
-    auto* aim = static_cast<AimAssistModule*>(aimBase);
+    // Use the engine's authoritative crosshair HitResult rather than the Aim
+    // Assist module's cached target. Unglide therefore works with Aim Assist
+    // disabled and cannot trigger on a nearby player who is not selected.
     void* target = nullptr;
     AABB targetBounds{};
-    float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+    std::string_view crosshairFailure;
+    int observedEntityResult = -1;
+    if (!aim->crosshairPlayerSnapshot(
+            player, targetDistance, target, targetBounds, crosshairFailure,
+            observedEntityResult) || !target) {
         resetTargetState();
-        reject("target_missing_or_stale",
-               "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
-        return;
-    }
-    if (!aim->currentTargetIsPlayerSnapshot(target)) {
-        resetTargetState();
-        reject("target_not_player",
-               "Unglide only triggers for a player target, not a mob target.", 120);
+        reject("crosshair_player_not_found",
+               std::string(crosshairFailure.empty() ? "No valid player selected by the engine crosshair" : crosshairFailure) +
+                   "; hit_result_entity_result=" + std::to_string(observedEntityResult) +
+                   "; no Space keymap request sent.", 80);
         return;
     }
     if (!validBounds(targetBounds)) {
         resetTargetState();
         reject("target_bounds_invalid",
-               "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
+               "Engine-selected player bounds are invalid; no Space keymap request sent.", 120);
         return;
     }
-    const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
     const auto geometry = targetGeometryFor(player, targetBounds);
-    if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
+    if (!geometry.valid) {
         resetTargetState();
         reject("target_geometry_invalid",
-               "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
+               "Engine-selected player geometry is invalid; no Space keymap request sent.", 120);
         return;
     }
-
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    // The native Elytra/gliding flag is not reliable on all supported Bedrock
-    // builds: both the status-flag API and synchronized-data fallback can report
-    // false while the player is visibly gliding. Treat it as telemetry only, not
-    // a hard gate; the fresh player target, crosshair, distance and height checks
-    // below still gate every Key Mapper dispatch.
-    const auto glidingState = playerIsGlidingForUnglide(player);
+    const float effectiveMaximumDistance = targetDistance;
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.
@@ -535,12 +503,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 ", activation_height=" + std::to_string(maximumHeightDifference));
         return;
     }
-    if (!crosshairConfirmed) {
-        reject("crosshair_not_on_target",
-               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
-        return;
-    }
-
     const auto dispatchStarted = std::chrono::steady_clock::now();
     AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
     int remaining = 0;
@@ -581,8 +543,16 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (m_latchedTarget == target &&
             m_triggerState == TriggerState::Triggered) {
             const bool sent = result == AutomationBroadcastResult::Sent;
-            if (sent) --m_burstRemaining;
-            else m_burstRemaining = 0;
+            if (bedaim::macefall::shouldRetainUnglideLatchAfterDispatch(sent)) {
+                --m_burstRemaining;
+            } else {
+                // A failed JNI/broadcast attempt must not consume the approach.
+                // Re-arm the same target after a bounded retry delay instead of
+                // leaving Triggered + burstRemaining=0 forever.
+                m_burstRemaining = 0;
+                m_targetLatched = false;
+                m_triggerState = TriggerState::Tracking;
+            }
             remaining = m_burstRemaining;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(
                 sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 160) : 500);
@@ -591,9 +561,14 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
     }
 
-    report(automationBroadcastResultName(result),
-        std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
-            (glidingState ? (*glidingState ? "true" : "false") : "unavailable") +
+    // Always retain the final transport outcome. The ordinary gate reporter is
+    // throttled to one event/second and could otherwise hide this result directly
+    // after a transient crosshair rejection.
+    bedrocktools::diagnostics::log(
+        bedrocktools::diagnostics::Level::Info, "Unglide",
+        std::string("dispatch=") + automationBroadcastResultName(result) +
+            ": state=triggered; crosshair_confirmed=true; gliding_state=" +
+            (glidingState ? "true" : "false") +
             "; target_distance=" + std::to_string(geometry.distance) +
             ", vertical_difference=" + std::to_string(geometry.verticalDifference) +
             ", burst_remaining=" + std::to_string(remaining) +
@@ -642,7 +617,40 @@ void UnglideModule::onMenuRegistered(){
  sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
  ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
 }
-bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
- if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
- try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
+bool UnglideModule::onMenuConfigChanged(std::string_view key,std::string_view value){
+ // Some launcher menu paths qualify keys with a module/config prefix. Resolve
+ // the final key component so both the module page and persistent settings map
+ // to the same live fields.
+ const auto separator = key.find_last_of("./:");
+ const std::string_view k = separator == std::string_view::npos ? key : key.substr(separator + 1);
+ if(k=="m_unglideEnabled"){
+   const bool b = value=="true" || value=="1" || value=="on";
+   std::lock_guard<std::mutex> l(m_stateMutex);
+   m_unglideEnabled=b;
+   if(!b){m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+   m_nextAttempt={};
+   return true;
+ }
+ try{
+   // Slider/text controls may append their display unit to the value. Parse the
+   // numeric prefix instead of rejecting a valid value such as "12.5 blocks".
+   std::string x(value);
+   std::size_t p=0;
+   const float n=std::stof(x,&p);
+   if(p==0 || !std::isfinite(n)) return false;
+   std::lock_guard<std::mutex> l(m_stateMutex);
+   if(k=="m_unglideTargetDistance") m_targetDistance=std::clamp(n,1.0f,32.0f);
+   else if(k=="m_unglideMaxVerticalDifference") m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);
+   else if(k=="m_unglideBurstCount") m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);
+   else if(k=="m_unglidePressIntervalMs") m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);
+   else return false;
+   // Apply the new range/threshold immediately; do not retain a latch or retry
+   // deadline computed with the previous configuration.
+   m_burstRemaining=0;
+   m_latchedTarget=nullptr;
+   m_targetLatched=false;
+   m_triggerState=TriggerState::Idle;
+   m_nextAttempt={};
+   return true;
+ }catch(...){return false;}
 }

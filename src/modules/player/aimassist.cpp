@@ -16,6 +16,7 @@
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/client/ClientInstance.hpp>
+#include <bedrocktools/sdk/input/MoveInput.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +29,7 @@
 #include <optional>
 #include <limits>
 #include <atomic>
+#include <chrono>
 #include <string_view>
 #include <unordered_set>
 #include <pl/Logger.hpp>
@@ -54,6 +56,8 @@ struct ActorVector {
 };
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
+using LevelGetHitResultFn = bedrocktools::sdk::HitResult* (*)(void*);
+using HitResultGetEntityFn = void* (*)(void*);
 
 AimAssistModule* g_aimAssist = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
@@ -61,6 +65,8 @@ ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
+LevelGetHitResultFn g_levelGetHitResult = nullptr;
+HitResultGetEntityFn g_hitResultGetEntity = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 HitboxExpanderModule* g_hitboxExpander = nullptr;
 std::once_flag g_hitboxExpanderEventOnce;
@@ -99,50 +105,6 @@ float wrapDegrees(float angle) {
 
 bool finiteVec3(const bedrocktools::sdk::Vec3& v) {
     return bedaim::aimmath::isFiniteVector({v.x, v.y, v.z});
-}
-
-bool actorIsGliding(void* actor) {
-    using namespace bedrocktools::sdk;
-    if (!actor) return false;
-
-    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-    void* dataWrapper = reinterpret_cast<void*>(actorAddress + offsets::Actor::mEntityData);
-    if (!dataWrapper) return false;
-
-    void* component = *reinterpret_cast<void**>(dataWrapper);
-    if (!component) return false;
-
-    auto** begin = *reinterpret_cast<void***>(component);
-    auto** end = *reinterpret_cast<void***>(reinterpret_cast<std::uintptr_t>(component) + sizeof(void*));
-    if (!begin || !end) return false;
-
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(end);
-    if (endAddress < beginAddress ||
-        (endAddress - beginAddress) % sizeof(void*) != 0 ||
-        (endAddress - beginAddress) / sizeof(void*) > 192) return false;
-
-    // Synchronized data items are not guaranteed to keep the flags item at index 0.
-    // Search the bounded vector for the Flags item (type 7, id 0) instead of treating
-    // an unrelated first item as proof that the player is not gliding.
-    const auto itemCount = (endAddress - beginAddress) / sizeof(void*);
-    for (std::size_t index = 0; index < itemCount; ++index) {
-        void* item = begin[index];
-        if (!item) continue;
-
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(item);
-        if (itemAddress <= 0x1000) continue;
-        const auto type = *reinterpret_cast<const std::uint8_t*>(itemAddress + offsets::DataItem::mType);
-        const auto id = *reinterpret_cast<const std::uint16_t*>(itemAddress + offsets::DataItem::mId);
-        if (type != 7 || id != 0) continue;
-
-        std::uint64_t flags = 0;
-        std::memcpy(&flags, reinterpret_cast<const void*>(itemAddress + offsets::DataItem::mValue),
-                    sizeof(flags));
-        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-        return (flags & kGlidingFlag) != 0;
-    }
-    return false;
 }
 
 bool validBounds(const bedrocktools::sdk::AABB& bounds) {
@@ -383,6 +345,10 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    g_levelGetHitResult = reinterpret_cast<LevelGetHitResultFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LevelGetHitResult));
+    g_hitResultGetEntity = reinterpret_cast<HitResultGetEntityFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::HitResultGetEntity));
     g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
     g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
@@ -399,6 +365,8 @@ void AimAssistModule::onInit() {
         "BedrockAim", "native_dependencies", requiredReady ? "ready" : "partial",
         std::string("nearby_query=") + (targetQueryReady ? "ok" : "missing") +
         ", actor_classification=" + (targetClassificationReady ? "ok" : "missing") +
+        ", level_hit_result=" + (g_levelGetHitResult ? "ok" : "unavailable") +
+        ", hit_result_entity=" + (g_hitResultGetEntity ? "ok" : "unavailable") +
         ", camera_control=" + (cameraControlReady ? "ok" : "missing") +
         ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
         ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
@@ -587,6 +555,130 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     return true;
 }
 
+bool AimAssistModule::crosshairPlayerSnapshot(
+    bedrocktools::sdk::Player* player,
+    float maximumDistance,
+    void*& target,
+    bedrocktools::sdk::AABB& bounds,
+    std::string_view& failureReason,
+    int& observedEntityResult) {
+    using namespace bedrocktools::sdk;
+    target = nullptr;
+    bounds = {};
+    failureReason = "unknown";
+    observedEntityResult = -1;
+    if (!player) { failureReason = "local_player_missing"; return false; }
+    if (!std::isfinite(maximumDistance) || maximumDistance <= 0.0f) {
+        failureReason = "invalid_distance"; return false;
+    }
+    if (!g_levelGetHitResult) {
+        failureReason = "level_hit_result_resolver_unavailable";
+        return false;
+    }
+    if (!g_hitResultGetEntity) {
+        failureReason = "hit_result_entity_resolver_unavailable"; return false;
+    }
+    if (!g_actorIsPlayer) {
+        failureReason = "actor_player_classifier_unavailable"; return false;
+    }
+    if (!g_fetchNearbyActors) {
+        failureReason = "nearby_actor_query_unavailable"; return false;
+    }
+
+    auto* level = reinterpret_cast<Actor*>(player)->level();
+    if (!level) { failureReason = "player_level_unavailable"; return false; }
+
+    // 26.60's native Level::getHitResult accessor reads the HitResult pointer
+    // from Level + 0x1D8. The older SDK storedHitResult() helper assumes an
+    // inline object at +0x1D0; using it reads the wrong object and reports a
+    // non-entity even while the crosshair is over a player.
+    auto* hitResult = g_levelGetHitResult(level);
+    const auto hitResultAddress = reinterpret_cast<std::uintptr_t>(hitResult);
+    if (!hitResult || hitResultAddress <= 0x1000) {
+        failureReason = "level_hit_result_pointer_unavailable";
+        return false;
+    }
+    // Ask the engine for the entity directly. Reading HitResult::mType through
+    // /proc/self/mem is unreliable on some Android builds (the procfs read can
+    // fail even for a live engine-owned object). The native getter already
+    // interprets the HitResult variant; its result is still treated as untrusted
+    // until it matches the engine-owned nearby-actor snapshot below.
+    void* selectedEntity = g_hitResultGetEntity(hitResult);
+    observedEntityResult = selectedEntity ? 1 : 0; // 1=entity result, 0=no entity
+    if (!selectedEntity) {
+        failureReason = "crosshair_hit_result_has_no_entity";
+        return false;
+    }
+    if (reinterpret_cast<std::uintptr_t>(selectedEntity) <= 0x1000 ||
+        selectedEntity == player) {
+        failureReason = "crosshair_entity_pointer_invalid"; return false;
+    }
+
+    const float safeDistance = std::clamp(maximumDistance, 1.0f, 32.0f);
+    Vec3 extent{safeDistance, safeDistance, safeDistance};
+    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (beginAddress == 0 && endAddress == 0) {
+        failureReason = "nearby_actor_snapshot_empty"; return false;
+    }
+    if (!beginAddress || !endAddress || endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
+        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
+        failureReason = "nearby_actor_snapshot_malformed"; return false;
+    }
+
+    bool selectedEntityIsNearby = false;
+    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        if (entry->actor == selectedEntity) { selectedEntityIsNearby = true; break; }
+    }
+    // Do not dereference the HitResult pointer until it is confirmed in the
+    // engine-owned nearby-actor snapshot for this local player and distance.
+    if (!selectedEntityIsNearby) {
+        failureReason = "crosshair_entity_not_in_nearby_snapshot"; return false;
+    }
+    if (!g_actorIsPlayer(selectedEntity)) {
+        failureReason = "crosshair_entity_is_not_player"; return false;
+    }
+
+    auto* selectedActor = reinterpret_cast<Actor*>(selectedEntity);
+    const Vec3 selectedPosition = selectedActor->position();
+    const AABB selectedBounds = selectedActor->bounds();
+    if (!finiteVec3(selectedPosition) || !validBounds(selectedBounds)) {
+        failureReason = "crosshair_player_bounds_invalid"; return false;
+    }
+    const Vec3 playerPosition = player->position();
+    if (!finiteVec3(playerPosition)) {
+        failureReason = "local_player_position_invalid"; return false;
+    }
+    const AABB playerBounds = player->bounds();
+    Vec3 eyePosition = playerPosition;
+    if (validBounds(playerBounds)) {
+        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
+        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+    const Vec3 nearestPoint{
+        std::clamp(eyePosition.x, selectedBounds.min.x, selectedBounds.max.x),
+        std::clamp(eyePosition.y, selectedBounds.min.y, selectedBounds.max.y),
+        std::clamp(eyePosition.z, selectedBounds.min.z, selectedBounds.max.z)
+    };
+    const float dx = eyePosition.x - nearestPoint.x;
+    const float dy = eyePosition.y - nearestPoint.y;
+    const float dz = eyePosition.z - nearestPoint.z;
+    const float distanceSq = dx * dx + dy * dy + dz * dz;
+    if (!std::isfinite(distanceSq) || distanceSq < 0.0f ||
+        distanceSq > safeDistance * safeDistance) {
+        failureReason = "crosshair_player_outside_configured_distance"; return false;
+    }
+    target = selectedEntity;
+    bounds = selectedBounds;
+    failureReason = {};
+    return true;
+}
+
 bool AimAssistModule::currentTargetIsPlayerSnapshot(void* desiredTarget) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     const auto now = std::chrono::steady_clock::now();
@@ -722,7 +814,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         "BedrockAim", "tracking_gate", "ready");
 
     m_lastPlayer = player;
-    m_localPlayerGliding = actorIsGliding(player);
+    m_localPlayerGliding = isPlayerGliding(player);
 
     // Native ItemStack description lookup is relatively expensive. Reclassify
     // immediately on hotbar changes and otherwise at 10 Hz; weapon toggles still
@@ -1141,7 +1233,37 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
 bool AimAssistModule::localPlayerIsGliding() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
-    return m_lastPlayer && actorIsGliding(m_lastPlayer);
+    return m_lastPlayer && isPlayerGliding(m_lastPlayer);
+}
+
+bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
+    if (!player) return false;
+
+    // Match the engine's query.is_gliding implementation exactly:
+    // ActorDataFlagComponent::mValue.test(ActorFlags::GLIDING == 32).
+    // Missing component means unknown/false; do not OR stale travel tags,
+    // synchronized data, or dynamically resolved status-flag fallbacks.
+    const auto actorFlag = bedrocktools::sdk::actorDataGlidingFlag(player);
+    const bool gliding = actorFlag.has_value() && *actorFlag;
+
+    static std::atomic<std::int64_t> nextDiagnosticMs{0};
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto expected = nextDiagnosticMs.load(std::memory_order_relaxed);
+    if (nowMs >= expected && nextDiagnosticMs.compare_exchange_strong(
+            expected, nowMs + 1000, std::memory_order_relaxed)) {
+        const auto entityProbe = bedrocktools::sdk::probeEntityContext(player);
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Debug, "BedrockAim",
+            std::string("gliding_state=") + (gliding ? "gliding_true" : "gliding_false") +
+                ": actor_data_flags_pool=" + (entityProbe.actor_data_flags_pool_present ? "present" : "missing") +
+                ", actor_data_flags_entity=" + (entityProbe.actor_data_flags_entity_present ? "present" : "absent") +
+                ", actor_flag_component=" + (actorFlag.has_value() ? "available" : "missing") +
+                ", actor_flag_32=" + (actorFlag.has_value() ? (*actorFlag ? "true" : "false") : "unknown") +
+                ", entity_context=" + (entityProbe.context_address_valid ? "valid" : "invalid") +
+                ", entity_id=" + std::to_string(entityProbe.entity_value));
+    }
+    return gliding;
 }
 
 void AimAssistModule::processPlayerFrame() {
@@ -1169,9 +1291,9 @@ void AimAssistModule::applyAimStepLocked(bedrocktools::sdk::Player* player) {
 
     if (!enabled || !player) return;
     if (!m_lastTarget || !g_applyLocalPlayerTurnDelta) return;
-    // Preserve actual gliding state for target selection; Elytra mode and Sticky
-    // are separate gates for the special aim-point dislocation below.
-    m_localPlayerGliding = actorIsGliding(player);
+    // The ECS glide component is sampled on LocalPlayerTickEvent. Keep the
+    // render/frame path on that cached value: querying EnTT here could race the
+    // game's ECS mutation phase while the client frame is being rendered.
     const auto now = std::chrono::steady_clock::now();
 
     auto* rotationComponent = player->rotationComponent();

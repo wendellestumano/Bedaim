@@ -101,7 +101,22 @@ void ConfigManager::load() {
 }
 
 void ConfigManager::save() {
-    saveTo(getConfigPath());
+    // The selected configuration snapshot is loaded after the primary config.
+    // Keep both files synchronized so a later startup cannot restore stale
+    // module settings over values that were just changed in the live menu.
+    const std::string primaryPath = getConfigPath();
+    saveTo(primaryPath);
+
+    auto* configurations = static_cast<ConfigurationsModule*>(
+        ModuleRegistry::get().find("bedrocktools.Configurations"));
+    if (!configurations) return;
+
+    const auto customName = configurations->configuredFileName();
+    if (customName.empty()) return;
+
+    const auto snapshotPath =
+        (std::filesystem::path(primaryPath).parent_path() / customName).string();
+    if (snapshotPath != primaryPath) saveTo(snapshotPath);
 }
 
 void ConfigManager::saveTo(const std::string& targetPath) {

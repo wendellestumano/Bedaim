@@ -6,6 +6,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 template <std::size_t N, class T>
 struct BedrockBitset {
@@ -116,6 +118,46 @@ struct entt_traits<EntityId> : basic_entt_traits<EntityIdTraits> {
 };
 }
 
+struct GlidingTravelFlagComponent final {};
+struct AirTravelFlagComponent final {};
+struct GroundTravelFlagComponent final {};
+struct WaterTravelFlagComponent final {};
+struct LavaTravelFlagComponent final {};
+struct LiquidTravelFlagComponent final {};
+struct MobTravelComponent final {};
+struct PlayerFlyingTravelComponent final {};
+struct FallFlyTicksComponent final {};
+struct ElytraFlightTimeTicksComponent final {};
+struct ActorDataFlagBitset131 {
+    std::array<std::uint64_t, 3> words{};
+
+    bool test(std::size_t index) const noexcept {
+        return index < 131 &&
+            ((words[index / 64] >> (index % 64)) & std::uint64_t{1}) != 0;
+    }
+};
+
+struct ActorDataFlagComponent {
+    ActorDataFlagBitset131 mValue;
+};
+
+static_assert(sizeof(ActorDataFlagComponent) == 0x18,
+              "Minecraft 26.60 ActorDataFlagComponent must occupy 24 bytes");
+static_assert(entt::type_hash<ActorDataFlagComponent>::value() == 0xC67426F3u,
+              "ActorDataFlagComponent EnTT hash must match Minecraft 26.60");
+struct PlayerActionComponent final {};
+struct MovementAbilitiesComponent final {};
+struct ArmorFlyEnabledFlagComponent final {};
+struct ActorMovementTickNeededComponent final {};
+struct PlayerInputRequestComponent final {};
+struct OnGroundFlagComponent final {};
+struct WasInWaterFlagComponent final {};
+struct PlayerComponent final {};
+struct LocalPlayerComponent final {};
+
+static_assert(entt::type_hash<GlidingTravelFlagComponent>::value() == 0x27a011eeu,
+              "GlidingTravelFlagComponent EnTT hash must match Minecraft 26.60");
+
 class EntityRegistry;
 
 class EntityContext {
@@ -143,12 +185,163 @@ static_assert(sizeof(MoveInputComponent) == 0x64);
 
 namespace bedrocktools::sdk {
 
+struct EntityContextProbe {
+    bool context_address_valid = false;
+    bool move_input_pool_present = false;
+    bool move_input_entity_present = false;
+    bool move_input_try_get_present = false;
+    bool gliding_pool_present = false;
+    bool gliding_entity_present = false;
+    bool air_travel_pool_present = false;
+    bool air_travel_entity_present = false;
+    bool ground_travel_pool_present = false;
+    bool ground_travel_entity_present = false;
+    bool water_travel_pool_present = false;
+    bool water_travel_entity_present = false;
+    bool lava_travel_pool_present = false;
+    bool lava_travel_entity_present = false;
+    bool liquid_travel_pool_present = false;
+    bool liquid_travel_entity_present = false;
+    bool mob_travel_pool_present = false;
+    bool mob_travel_entity_present = false;
+    bool player_flying_pool_present = false;
+    bool player_flying_entity_present = false;
+    bool fall_fly_ticks_pool_present = false;
+    bool fall_fly_ticks_entity_present = false;
+    bool elytra_flight_ticks_pool_present = false;
+    bool elytra_flight_ticks_entity_present = false;
+    bool actor_data_flags_pool_present = false;
+    bool actor_data_flags_entity_present = false;
+    bool player_action_pool_present = false;
+    bool player_action_entity_present = false;
+    bool movement_abilities_pool_present = false;
+    bool movement_abilities_entity_present = false;
+    bool armor_fly_pool_present = false;
+    bool armor_fly_entity_present = false;
+    bool movement_tick_pool_present = false;
+    bool movement_tick_entity_present = false;
+    bool input_request_pool_present = false;
+    bool input_request_entity_present = false;
+    bool on_ground_pool_present = false;
+    bool on_ground_entity_present = false;
+    bool was_in_water_pool_present = false;
+    bool was_in_water_entity_present = false;
+    bool player_pool_present = false;
+    bool player_entity_present = false;
+    bool local_player_pool_present = false;
+    bool local_player_entity_present = false;
+    std::uint32_t entity_value = 0;
+};
+
+inline EntityContextProbe probeEntityContext(void* actor) {
+    EntityContextProbe result{};
+    if (!actor) return result;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto contextOffset = offsets::Actor::mEntityContext;
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() - contextOffset - sizeof(EntityContext)) {
+        return result;
+    }
+
+    auto* context = reinterpret_cast<EntityContext*>(actorAddress + contextOffset);
+    result.context_address_valid = true;
+    result.entity_value = static_cast<std::uint32_t>(context->mEntity);
+
+    auto& registry = context->getRegistry();
+    constexpr auto moveInputTypeId = entt::type_hash<MoveInputComponent>::value();
+    const auto* moveInputPool = registry.storage(moveInputTypeId);
+    result.move_input_pool_present = moveInputPool != nullptr;
+    result.move_input_entity_present = moveInputPool && moveInputPool->contains(context->mEntity);
+    result.move_input_try_get_present = context->tryGetComponent<MoveInputComponent>() != nullptr;
+
+    constexpr auto glidingTypeId = entt::type_hash<GlidingTravelFlagComponent>::value();
+    const auto* glidingPool = registry.storage(glidingTypeId);
+    result.gliding_pool_present = glidingPool != nullptr;
+    result.gliding_entity_present = glidingPool && glidingPool->contains(context->mEntity);
+
+#define BEDROCK_PROBE_ENTITY_COMPONENT(Type, prefix) \
+    do { \
+        constexpr auto typeId = entt::type_hash<Type>::value(); \
+        const auto* pool = registry.storage(typeId); \
+        result.prefix##_pool_present = pool != nullptr; \
+        result.prefix##_entity_present = pool && pool->contains(context->mEntity); \
+    } while (false)
+
+    BEDROCK_PROBE_ENTITY_COMPONENT(AirTravelFlagComponent, air_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(GroundTravelFlagComponent, ground_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(WaterTravelFlagComponent, water_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(LavaTravelFlagComponent, lava_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(LiquidTravelFlagComponent, liquid_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(MobTravelComponent, mob_travel);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerFlyingTravelComponent, player_flying);
+    BEDROCK_PROBE_ENTITY_COMPONENT(FallFlyTicksComponent, fall_fly_ticks);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ElytraFlightTimeTicksComponent, elytra_flight_ticks);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ActorDataFlagComponent, actor_data_flags);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerActionComponent, player_action);
+    BEDROCK_PROBE_ENTITY_COMPONENT(MovementAbilitiesComponent, movement_abilities);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ArmorFlyEnabledFlagComponent, armor_fly);
+    BEDROCK_PROBE_ENTITY_COMPONENT(ActorMovementTickNeededComponent, movement_tick);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerInputRequestComponent, input_request);
+    BEDROCK_PROBE_ENTITY_COMPONENT(OnGroundFlagComponent, on_ground);
+    BEDROCK_PROBE_ENTITY_COMPONENT(WasInWaterFlagComponent, was_in_water);
+    BEDROCK_PROBE_ENTITY_COMPONENT(PlayerComponent, player);
+    BEDROCK_PROBE_ENTITY_COMPONENT(LocalPlayerComponent, local_player);
+#undef BEDROCK_PROBE_ENTITY_COMPONENT
+
+    return result;
+}
+
 inline MoveInputComponent* moveInputComponent(void* actor) {
     if (!actor) return nullptr;
     auto* context = reinterpret_cast<EntityContext*>(
         reinterpret_cast<std::uintptr_t>(actor) + offsets::Actor::mEntityContext
     );
     return context->tryGetComponent<MoveInputComponent>();
+}
+
+// 26.60 stores the active travel mode as an ECS tag component. Query the
+// existing pool by EnTT's type hash instead of using storage<T>(), which can
+// create an empty pool when the runtime has not registered this component yet.
+// The global type name intentionally matches the one embedded in libminecraftpe.so.
+inline std::optional<bool> glidingTravelFlagComponent(void* actor) {
+    if (!actor) return std::nullopt;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto contextOffset = offsets::Actor::mEntityContext;
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() - contextOffset - sizeof(EntityContext)) {
+        return std::nullopt;
+    }
+
+    auto* context = reinterpret_cast<EntityContext*>(actorAddress + contextOffset);
+    auto& registry = context->getRegistry();
+    constexpr auto componentTypeId = entt::type_hash<GlidingTravelFlagComponent>::value();
+    const auto* componentPool = registry.storage(componentTypeId);
+    if (!componentPool) return std::nullopt;
+
+    return componentPool->contains(context->mEntity);
+}
+
+
+// Canonical query.is_gliding parity for Minecraft Bedrock 26.60:
+// ActorDataFlagComponent::mValue.test(ActorFlags::GLIDING), where GLIDING=32.
+// A missing pool/component is unknown (nullopt), never a positive signal.
+inline std::optional<bool> actorDataGlidingFlag(void* actor) {
+    if (!actor) return std::nullopt;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto contextOffset = offsets::Actor::mEntityContext;
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
+            contextOffset - sizeof(EntityContext)) {
+        return std::nullopt;
+    }
+
+    auto* context = reinterpret_cast<EntityContext*>(actorAddress + contextOffset);
+    const auto* component = context->tryGetComponent<ActorDataFlagComponent>();
+    if (!component) return std::nullopt;
+    return component->mValue.test(32);
 }
 
 }

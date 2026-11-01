@@ -72,6 +72,11 @@ std::atomic<std::uint64_t> g_genericBlockUpdateCalls{0};
 
 std::atomic<bool> g_blockEspCaptureEvents{false};
 
+// Disabled by default while the 26.60 crash is investigated. These detours use
+// Apollon-derived native addresses and event-object layouts; the bounded
+// BlockSource scan and GameModeActionEvent queue remain available without them.
+constexpr bool kEnableExperimentalNativeEventHooks = false;
+
 constexpr std::uintptr_t kApollonBlockUpdateRva = 0x10F7FDE0u;
 
 // Use the real ELF image base. BlockSourceGetBlock may move between Bedrock
@@ -782,14 +787,15 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
-    // EXPERIMENTAL: restore the native capture installation used by Apollon v6.7
-    // in PR #123. The original RVAs/prologue guards are intentionally retained
-    // for this first compatibility test; a 26.60 mismatch must fail closed.
-    // Keep the 26.60 tessellation hook and player-tick validation as fallbacks.
+    // Keep the version-resolved BlockSource lookup for the bounded tick scanner.
+    // Experimental Apollon-derived detours stay disabled until their 26.60 ABI
+    // and callback layouts are validated against the exact runtime binary.
     resolveBlockGetBlock();
-    installBlockUpdateHook();
-    installApollonBlockEventHooks();
-    installBlockSourceTessellationGetBlockHook();
+    if (kEnableExperimentalNativeEventHooks) {
+        installBlockUpdateHook();
+        installApollonBlockEventHooks();
+        installBlockSourceTessellationGetBlockHook();
+    }
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
     // Player-driven block changes are observable before the next chunk
@@ -813,10 +819,12 @@ void BlockEspModule::onInit() {
         });
 }
 void BlockEspModule::onEnable() {
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
-    g_blockEspCaptureEvents.store(true, std::memory_order_release);
     resolveBlockGetBlock();
-    installBlockSourceGetBlockHook();
+    if (kEnableExperimentalNativeEventHooks) {
+        installBlockSourceGetBlockHook();
+    }
     clearBlockEventCandidates();
     if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
         static_cast<HitboxModule*>(hitbox)->ensureRenderHook();
@@ -825,9 +833,11 @@ void BlockEspModule::onEnable() {
     m_localScanActive = false; m_hasLocalScanOrigin = false; m_localScanCursor = 0;
     m_hasPreviousPlayerPosition = false; m_hasMovementDirection = false;
     clearCache();
+    g_blockEspCaptureEvents.store(true, std::memory_order_release);
 }
 void BlockEspModule::onDisable() {
     g_blockEspCaptureEvents.store(false, std::memory_order_release);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
     removeBlockSourceGetBlockHook();
     clearBlockEventCandidates();
@@ -837,8 +847,9 @@ void BlockEspModule::onDisable() {
     clearCache();
 }
 void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
     ++m_tickCount;
-    if (!enabled || !player) return;
+    if (!g_blockEspCaptureEvents.load(std::memory_order_acquire) || !player) return;
 
     auto* dimension = player->dimension();
     auto* source = dimension ? dimension->blockSource() : nullptr;
@@ -853,16 +864,17 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
-    const bool nativeHooksMissing = !g_blockUpdateHook || !g_blockSourceGetBlockHook;
-    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
-         !g_blockSourceTessellationGetBlockHook || nativeHooksMissing) &&
+    if (!g_blockEspGetBlock.load(std::memory_order_acquire) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
+    }
+    if (kEnableExperimentalNativeEventHooks &&
+        m_tickCount - m_lastResolveAttemptTick >= 40) {
+        m_lastResolveAttemptTick = m_tickCount;
+        // Retry only when the experimental 26.60 ABI-guarded path is explicitly
+        // re-enabled after runtime validation.
         installBlockSourceTessellationGetBlockHook();
-        // Signature resolution may finish after module initialization. Retry
-        // native hooks on the same bounded cadence instead of permanently
-        // missing the event path when the first onInit attempt runs too early.
         installBlockUpdateHook();
         installApollonBlockEventHooks();
         installBlockSourceGetBlockHook();
@@ -1372,8 +1384,11 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
 }
 void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosition,
                                        std::vector<Outline>& output) const {
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     output.clear();
-    if (!enabled || !masterEnabled || !keybindActive) return;
+    // The atomic capture gate reflects the combined enabled state and avoids
+    // reading Module's non-atomic lifecycle flags from the render thread.
+    if (!g_blockEspCaptureEvents.load(std::memory_order_acquire)) return;
     // Rendering is independent from the active discovery radius: once a block is
     // discovered, keep drawing it from cache while it remains in the bounded cache.
     output.reserve(kMaxBlockEspRendered);
@@ -1419,6 +1434,8 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
     }
 }
 void BlockEspModule::onMenuRegistered() {
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema; nlohmann::json config; saveConfig(config);
     schema.defaultCategory("types")
@@ -1478,6 +1495,8 @@ void BlockEspModule::onMenuRegistered() {
     setConfigSchemaJson(moduleId,schema.toJson());
 }
 bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     bool b=false;
     constexpr std::string_view utilityPrefix = "showBlock_";
     if (key.size() > utilityPrefix.size() && key.substr(0, utilityPrefix.size()) == utilityPrefix) {
@@ -1531,16 +1550,21 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
 }
 void BlockEspModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     showTracer=j.value("showTracer",showTracer); showShulkers=j.value("showShulkers",showShulkers);
     showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
     showDroppers=j.value("showDroppers",showDroppers); showBarrels=j.value("showBarrels",showBarrels);
     showFurnaces=j.value("showFurnaces",showFurnaces); showUtilityBlocks=j.value("showUtilityBlocks",showUtilityBlocks);
     maxScanRadius=j.value("maxScanRadius",maxScanRadius);
-    for (const auto& name : utilityBlockNames()) {
-        const std::string key = "showBlock_" + name;
-        auto it = m_utilityFilters.find(name);
-        if (it != m_utilityFilters.end()) it->second = j.value(key, showUtilityBlocks);
+    {
+        std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
+        for (const auto& name : utilityBlockNames()) {
+            const std::string key = "showBlock_" + name;
+            auto it = m_utilityFilters.find(name);
+            if (it != m_utilityFilters.end()) it->second = j.value(key, showUtilityBlocks);
+        }
     }
     horizontalRadius=std::clamp(j.value("horizontalRadius",horizontalRadius),20,320);
     verticalRadius=std::clamp(j.value("verticalRadius",verticalRadius),10,160);
@@ -1554,12 +1578,17 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
     loadColor(j,"utilityColor",utilityColor);
 }
 void BlockEspModule::saveConfig(nlohmann::json& j) {
+    std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     Module::saveConfig(j);
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
     j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
     j["showDroppers"]=showDroppers; j["showBarrels"]=showBarrels; j["showFurnaces"]=showFurnaces;
     j["showUtilityBlocks"]=showUtilityBlocks; j["maxScanRadius"]=maxScanRadius;
-    for (const auto& [name, enabled] : m_utilityFilters) j["showBlock_" + name] = enabled;
+    {
+        std::lock_guard<std::mutex> cacheLock(m_cacheMutex);
+        for (const auto& [name, enabled] : m_utilityFilters) j["showBlock_" + name] = enabled;
+    }
     j["horizontalRadius"]=horizontalRadius;
     j["verticalRadius"]=verticalRadius; j["scanBudgetPerTick"]=scanBudgetPerTick;
     j["outlineThickness"]=static_cast<int>(std::lround(outlineThickness*100.0f));
