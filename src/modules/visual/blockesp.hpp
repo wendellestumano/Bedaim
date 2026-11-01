@@ -112,6 +112,10 @@ private:
     float m_moveDirectionZ = 1.0f;
     std::uint64_t m_tickCount = 0;
     std::uint64_t m_lastResolveAttemptTick = 0;
+    // Serialize scanner state with menu/lifecycle callbacks on other threads.
+    mutable std::recursive_mutex m_scanMutex;
+    // Protect render filters/colors without making rendering wait for scanning.
+    mutable std::recursive_mutex m_visualConfigMutex;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<PositionKey, Outline, PositionHash> m_cache;
     std::vector<PositionKey> m_cacheRefreshPositions;
