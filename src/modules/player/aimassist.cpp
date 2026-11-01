@@ -636,8 +636,7 @@ bool AimAssistModule::crosshairPlayerSnapshot(
     // non-entity even while the crosshair is over a player.
     auto* hitResult = g_levelGetHitResult(level);
     const auto hitResultAddress = reinterpret_cast<std::uintptr_t>(hitResult);
-    if (!hitResult || hitResultAddress <= 0x1000 ||
-        hitResultAddress > std::numeric_limits<std::uintptr_t>::max() - sizeof(void*)) {
+    if (!hitResult || hitResultAddress <= 0x1000) {
         failureReason = "level_hit_result_pointer_unavailable";
         return false;
     }
