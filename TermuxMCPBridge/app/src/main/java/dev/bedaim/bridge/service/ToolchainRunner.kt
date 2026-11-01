@@ -181,7 +181,13 @@ object ToolchainRunner {
         val owner = execute(context, "ps", listOf("-o", "uid=", "-p", pid), HOME, 10_000L).trim()
         val uid = execute(context, "id", listOf("-u"), HOME, 10_000L).trim()
         require(owner == uid) { "Recusado: PID não pertence ao usuário do Termux." }
-        execute(context, "kill", listOf("-TERM", pid), HOME, 10_000L)
+        val details = execute(context, "ps", listOf("-o", "pid,ppid,stat,etime,args", "-p", pid), HOME, 10_000L)
+        val protected = listOf("ngrok", "proot", "com.termux", "tmux: server", "bash -l")
+        require(protected.none { details.lowercase().contains(it) }) {
+            "PID protegido por segurança operacional. Encerre túneis e sessões pelas ferramentas próprias do Bridge."
+        }
+        // kill is a Bash builtin on some Termux installations; invoke it through a fixed script.
+        execute(context, "bash", listOf("-lc", "kill -TERM -- \"\$1\"", "bridge-process-stop", pid), HOME, 10_000L)
         BridgeStatus.recordEvent("Termux: SIGTERM enviado ao PID $pid.")
         return "SIGTERM enviado ao PID $pid (UID Termux $uid)."
     }
