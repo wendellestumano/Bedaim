@@ -56,6 +56,11 @@ inline bool shouldTriggerUnglideKeymap(bool enabled, bool targetIsPlayer,
     return targetDistance <= safeTargetDistance;
 }
 
+// A failed Key Mapper transport did not consume the target approach; retry is allowed.
+inline bool shouldRetainUnglideLatchAfterDispatch(bool dispatchSucceeded) noexcept {
+    return dispatchSucceeded;
+}
+
 inline bool shouldRearmUnglide(float targetDistance, float triggerDistance,
                                float hysteresis = 1.5f) noexcept {
     if (!std::isfinite(targetDistance) || !std::isfinite(triggerDistance) ||
