@@ -147,6 +147,45 @@ static_assert(sizeof(MoveInputComponent) == 0x64);
 
 namespace bedrocktools::sdk {
 
+struct EntityContextProbe {
+    bool context_address_valid = false;
+    bool move_input_pool_present = false;
+    bool move_input_entity_present = false;
+    bool move_input_try_get_present = false;
+    bool gliding_pool_present = false;
+    bool gliding_entity_present = false;
+    std::uint32_t entity_value = 0;
+};
+
+inline EntityContextProbe probeEntityContext(void* actor) {
+    EntityContextProbe result{};
+    if (!actor) return result;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto contextOffset = offsets::Actor::mEntityContext;
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() - contextOffset - sizeof(EntityContext)) {
+        return result;
+    }
+
+    auto* context = reinterpret_cast<EntityContext*>(actorAddress + contextOffset);
+    result.context_address_valid = true;
+    result.entity_value = static_cast<std::uint32_t>(context->mEntity);
+
+    auto& registry = context->getRegistry();
+    constexpr auto moveInputTypeId = entt::type_hash<MoveInputComponent>::value();
+    const auto* moveInputPool = registry.storage(moveInputTypeId);
+    result.move_input_pool_present = moveInputPool != nullptr;
+    result.move_input_entity_present = moveInputPool && moveInputPool->contains(context->mEntity);
+    result.move_input_try_get_present = context->tryGetComponent<MoveInputComponent>() != nullptr;
+
+    constexpr auto glidingTypeId = entt::type_hash<GlidingTravelFlagComponent>::value();
+    const auto* glidingPool = registry.storage(glidingTypeId);
+    result.gliding_pool_present = glidingPool != nullptr;
+    result.gliding_entity_present = glidingPool && glidingPool->contains(context->mEntity);
+    return result;
+}
+
 inline MoveInputComponent* moveInputComponent(void* actor) {
     if (!actor) return nullptr;
     auto* context = reinterpret_cast<EntityContext*>(
