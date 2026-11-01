@@ -21,23 +21,37 @@ import io.ktor.server.response.*
 import io.ktor.http.*
 import io.modelcontextprotocol.kotlin.sdk.server.mcpStreamableHttp
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 
 class BridgeService : Service() {
     private var server: EmbeddedServer<*, *>? = null
+    private val tunnelCheckInFlight = AtomicBoolean(false)
     private val tunnelMonitorHandler = Handler(Looper.getMainLooper())
     private val tunnelMonitor = object : Runnable {
         override fun run() {
             if (server == null) return
             if (BridgePreferences.isTermuxAutoReconnectEnabled(this@BridgeService)) {
-                Thread {
-                    val publicUrl = TunnelController.readPublicUrl(this@BridgeService)
-                    if (publicUrl == null) {
-                        BridgeStatus.recordEvent("Reconexão automática: túnel ausente; solicitando restauração pelo Termux.")
-                        TunnelController.start(this@BridgeService)
-                    } else {
-                        BridgePreferences.saveTunnelUrl(this@BridgeService, publicUrl)
-                    }
-                }.start()
+                if (tunnelCheckInFlight.compareAndSet(false, true)) {
+                    Thread({
+                        try {
+                            val publicUrl = TunnelController.readPublicUrl(this@BridgeService)
+                            if (publicUrl == null) {
+                                BridgeStatus.recordEvent("Reconexão automática: túnel ausente; solicitando restauração pelo Termux.")
+                                if (!TunnelController.start(this@BridgeService)) {
+                                    BridgeStatus.recordEvent("Reconexão automática: Termux não aceitou RUN_COMMAND.")
+                                }
+                            } else {
+                                BridgePreferences.saveTunnelUrl(this@BridgeService, publicUrl)
+                            }
+                        } catch (error: Throwable) {
+                            BridgeStatus.recordEvent("Reconexão automática falhou: ${error.javaClass.simpleName}")
+                        } finally {
+                            tunnelCheckInFlight.set(false)
+                        }
+                    }, "BridgeTunnelMonitor").start()
+                } else {
+                    BridgeStatus.recordEvent("Reconexão automática: verificação anterior ainda está em andamento.")
+                }
             }
             tunnelMonitorHandler.postDelayed(this, TUNNEL_MONITOR_INTERVAL_MS)
         }
@@ -103,6 +117,13 @@ class BridgeService : Service() {
         val token = BridgePreferences.getOrCreateToken(this)
         BridgeOAuth.initialize(applicationContext)
         try {
+            // ngrok preserves the public Host header when proxying to the loopback server.
+            // Allow only the configured HTTPS ngrok hostname plus the local development hosts.
+            // Keep the SDK's DNS-rebinding protection enabled; do not use enableDnsRebindingProtection=false.
+            val allowedMcpHosts = McpHostPolicy.allowedHosts(
+                BridgePreferences.getConfiguredNgrokDomain(this)
+            )
+
             server = embeddedServer(CIO, host = "127.0.0.1", port = PORT) {
                 intercept(ApplicationCallPipeline.Call) {
                     val issuer = BridgePreferences.getConfiguredNgrokDomain(this@BridgeService).trimEnd('/')
@@ -128,7 +149,9 @@ class BridgeService : Service() {
                         }
                     }
                 }
-                mcpStreamableHttp { McpServerFactory.create(this@BridgeService) }
+                mcpStreamableHttp(allowedHosts = allowedMcpHosts) {
+                    McpServerFactory.create(this@BridgeService)
+                }
             }.start(wait = false)
             BridgeStatus.update(BridgeState.RUNNING, "Listening on 127.0.0.1:$PORT")
             getSystemService(NotificationManager::class.java)
