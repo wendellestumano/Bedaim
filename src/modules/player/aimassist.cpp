@@ -587,6 +587,132 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     return true;
 }
 
+bool AimAssistModule::findCrosshairPlayerSnapshot(
+    bedrocktools::sdk::Player* player,
+    float maximumDistance,
+    void*& target,
+    bedrocktools::sdk::AABB& bounds) {
+    using namespace bedrocktools::sdk;
+    target = nullptr;
+    bounds = {};
+    if (!player || !std::isfinite(maximumDistance) || maximumDistance <= 0.0f ||
+        !g_fetchNearbyActors || !g_actorIsPlayer) return false;
+
+    std::lock_guard<std::mutex> stateLock(m_stateMutex);
+    const float range = std::clamp(maximumDistance, 1.0f, 32.0f);
+    auto* rotationComponent = player->rotationComponent();
+    if (!rotationComponent) return false;
+    Vec2 rotation = field<Vec2>(rotationComponent, 0);
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y)) return false;
+    rotation.x = std::clamp(rotation.x, -89.0f, 89.0f);
+    rotation.y = wrapDegrees(rotation.y);
+
+    const Vec3 playerPosition = player->position();
+    const AABB playerBounds = player->bounds();
+    if (!finiteVec3(playerPosition)) return false;
+    Vec3 eyePosition = playerPosition;
+    if (validBounds(playerBounds)) {
+        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
+        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+
+    const float yaw = rotation.y / kRadToDeg;
+    const float pitch = rotation.x / kRadToDeg;
+    const float cosPitch = std::cos(pitch);
+    const Vec3 viewDirection{
+        -std::sin(yaw) * cosPitch,
+        -std::sin(pitch),
+        std::cos(yaw) * cosPitch
+    };
+
+    Vec3 extent{range, range, range};
+    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (beginAddress == 0 && endAddress == 0) return false;
+    if (!beginAddress || !endAddress || endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
+        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) return false;
+
+    auto* expanderBase = ModuleRegistry::get().find("bedrocktools.Hitbox Expander");
+    auto* expander = (expanderBase && expanderBase->enabled)
+        ? static_cast<HitboxExpanderModule*>(expanderBase) : nullptr;
+    auto* dimension = player->dimension();
+    void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
+
+    float bestDistanceSquared = std::numeric_limits<float>::infinity();
+    void* bestTarget = nullptr;
+    AABB bestBounds{};
+    const float maximumDistanceSquared = range * range;
+    constexpr float crosshairTolerance = 0.12f;
+
+    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        void* candidate = entry->actor;
+        if (!candidate || candidate == player || !g_actorIsPlayer(candidate)) continue;
+        if (g_actorIsInvisible && g_actorIsInvisible(candidate)) continue;
+        if (isWhitelistedActor(candidate, true, m_whitelistNames)) continue;
+
+        if (m_ignoreCreativeSpectator) {
+            std::int32_t gameType = -1;
+            const bool hasExactGameType =
+                bedrocktools::core::gamehooks::tryGetPlayerGameType(candidate, gameType);
+            if (hasExactGameType && (gameType == 1 || gameType == 3)) continue;
+            if (!hasExactGameType) {
+                bool isAttackable = true;
+                if (bedrocktools::core::gamehooks::tryIsActorAttackableGamemode(candidate, isAttackable) &&
+                    !isAttackable) continue;
+            }
+        }
+
+        auto* actor = reinterpret_cast<Actor*>(candidate);
+        const Vec3 candidatePosition = actor->position();
+        const AABB candidateBounds = actor->bounds();
+        if (!finiteVec3(candidatePosition) || !validBounds(candidateBounds)) continue;
+
+        const Vec3 nearest{
+            std::clamp(eyePosition.x, candidateBounds.min.x, candidateBounds.max.x),
+            std::clamp(eyePosition.y, candidateBounds.min.y, candidateBounds.max.y),
+            std::clamp(eyePosition.z, candidateBounds.min.z, candidateBounds.max.z)
+        };
+        const float candidateDistanceSquared = distanceSquared(eyePosition, nearest);
+        if (!std::isfinite(candidateDistanceSquared) || candidateDistanceSquared < 0.0f ||
+            candidateDistanceSquared > maximumDistanceSquared ||
+            candidateDistanceSquared >= bestDistanceSquared) continue;
+
+        AABB selectionBounds = expander
+            ? expander->expandedTargetBounds(true, candidateBounds) : candidateBounds;
+        selectionBounds.min.x -= crosshairTolerance;
+        selectionBounds.min.y -= crosshairTolerance;
+        selectionBounds.min.z -= crosshairTolerance;
+        selectionBounds.max.x += crosshairTolerance;
+        selectionBounds.max.y += crosshairTolerance;
+        selectionBounds.max.z += crosshairTolerance;
+        if (!rayIntersectsAABB(eyePosition, viewDirection, selectionBounds)) continue;
+
+        if ((m_cantSeeThroughBlocks || (expander && expander->requiresLineOfSight())) &&
+            blockSource && g_isSolidBlockingBlock) {
+            const Vec3 center{
+                (candidateBounds.min.x + candidateBounds.max.x) * 0.5f,
+                (candidateBounds.min.y + candidateBounds.max.y) * 0.5f,
+                (candidateBounds.min.z + candidateBounds.max.z) * 0.5f
+            };
+            if (!hasClearLineOfSight(blockSource, eyePosition, center)) continue;
+        }
+
+        bestDistanceSquared = candidateDistanceSquared;
+        bestTarget = candidate;
+        bestBounds = candidateBounds;
+    }
+
+    if (!bestTarget) return false;
+    target = bestTarget;
+    bounds = bestBounds;
+    return true;
+}
+
 bool AimAssistModule::currentTargetIsPlayerSnapshot(void* desiredTarget) {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     const auto now = std::chrono::steady_clock::now();
@@ -2237,3 +2363,5 @@ void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
     j["m_requireLineOfSight"] = m_requireLineOfSight;
     j["m_showHitbox"] = m_showHitbox;
 }
+
+[executed on device: localhost (df749b1e-c92e-41a8-a013-b79c2a3fe357)]
