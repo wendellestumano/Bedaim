@@ -127,6 +127,68 @@ object McpServerFactory {
             val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
             CallToolResult(content=listOf(TextContent(ToolchainRunner.run(app,tool,args,cwd))))
         }
+
+        server.addTool("termux_process_list","Lists processes owned by the Termux app UID. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {})) {
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.processList(app))))
+        }
+        server.addTool("termux_process_inspect","Inspects one process only when it belongs to the Termux app UID. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("pid") { put("type","string"); put("pattern","^[0-9]{1,10}$") }
+        },required=listOf("pid"))) { req ->
+            val pid=req.arguments?.get("pid")?.jsonPrimitive?.contentOrNull ?: error("pid required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.processInspect(app,pid))))
+        }
+        server.addTool("termux_process_stop","Sends SIGTERM only to a process owned by the Termux app UID. PID 1 and invalid PIDs are rejected. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("pid") { put("type","string"); put("pattern","^[0-9]{1,10}$") }
+        },required=listOf("pid"))) { req ->
+            val pid=req.arguments?.get("pid")?.jsonPrimitive?.contentOrNull ?: error("pid required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.processStop(app,pid))))
+        }
+        server.addTool("termux_job_start","Starts a predefined Gradle/CMake/Ninja task in a persistent tmux session. Returns a job/session UUID. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("task") { put("type","string"); put("enum",buildJsonArray { listOf("gradle_tests","gradle_debug_apk","gradle_clean_debug","cmake_configure","cmake_build","ninja_build").forEach { add(it) } }) }
+            putJsonObject("cwd") { put("type","string") }
+        },required=listOf("task","cwd"))) { req ->
+            val task=req.arguments?.get("task")?.jsonPrimitive?.contentOrNull ?: error("task required")
+            val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.jobStart(app,task,cwd))))
+        }
+        server.addTool("termux_job_status","Returns recent output for a persistent build job by UUID. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("job_id") { put("type","string") }
+        },required=listOf("job_id"))) { req ->
+            val id=req.arguments?.get("job_id")?.jsonPrimitive?.contentOrNull ?: error("job_id required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.jobStatus(app,id))))
+        }
+        server.addTool("termux_job_list","Lists active tmux sessions/jobs. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {})) {
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.jobList(app))))
+        }
+        server.addTool("termux_job_stop","Stops a persistent build job by its Bridge session UUID. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("job_id") { put("type","string") }
+        },required=listOf("job_id"))) { req ->
+            val id=req.arguments?.get("job_id")?.jsonPrimitive?.contentOrNull ?: error("job_id required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.jobStop(app,id))))
+        }
+        server.addTool("project_git_inspect","Read-only Git status, diff, log or branch inspection inside Termux HOME/shared storage. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("operation") { put("type","string"); put("enum",buildJsonArray { listOf("status","diff","log","branches").forEach { add(it) } }) }
+            putJsonObject("cwd") { put("type","string") }
+        },required=listOf("operation","cwd"))) { req ->
+            val operation=req.arguments?.get("operation")?.jsonPrimitive?.contentOrNull ?: error("operation required")
+            val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.gitInspect(app,operation,cwd))))
+        }
+        server.addTool("android_project_diagnose","Checks Android/NDK project files, installed build tools, SDK/NDK environment and Git state without modifying the project. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("cwd") { put("type","string") }
+        },required=listOf("cwd"))) { req ->
+            val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.diagnoseAndroidProject(app,cwd))))
+        }
+        server.addTool("native_inspect","Read-only APK/ELF inspection: summary, ELF headers, sections, symbols, disassembly, strings or APK ZIP inventory. File must be under Termux HOME or shared storage. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("path") { put("type","string") }
+            putJsonObject("mode") { put("type","string"); put("enum",buildJsonArray { listOf("summary","elf_headers","sections","symbols","disassembly","strings","apk_inventory").forEach { add(it) } }) }
+        },required=listOf("path","mode"))) { req ->
+            val path=req.arguments?.get("path")?.jsonPrimitive?.contentOrNull ?: error("path required")
+            val mode=req.arguments?.get("mode")?.jsonPrimitive?.contentOrNull ?: error("mode required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.inspectNative(app,path,mode))))
+        }
+
         return server
     }
 }
