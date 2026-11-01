@@ -20,7 +20,18 @@ void check(bool condition, std::string_view name) {
 
 int main() {
     using bedaim::macefall::shouldPulseUnglideJump;
+    using bedaim::macefall::isGlidingFromAnySignal;
     using bedaim::macefall::shouldTriggerUnglideKeymap;
+    check(!isGlidingFromAnySignal(false, false, false),
+          "flight-state resolution fails closed when all three sources are negative");
+    check(isGlidingFromAnySignal(true, false, false),
+          "an ECS gliding tag positively confirms gliding");
+    check(isGlidingFromAnySignal(false, true, false),
+          "a positive native Actor flag is not suppressed by a missing ECS tag");
+    check(isGlidingFromAnySignal(false, false, true),
+          "positive synchronized Actor data is not suppressed by an absent ECS tag");
+    check(isGlidingFromAnySignal(false, true, true),
+          "independent native and synchronized positive signals are combined");
     check(shouldPulseUnglideJump(true, true, 5.0f, 8.0f),
           "Unglide pulses jump when another player is within configured distance");
     check(!shouldPulseUnglideJump(false, true, 5.0f, 8.0f),
