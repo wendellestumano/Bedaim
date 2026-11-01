@@ -1,15 +1,19 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include "core/memory/MinecraftBuildIdentity.hpp"
 #include "unglide.hpp"
 #include "aimassist.hpp"
 #include "MaceFallPolicy.hpp"
 #include "modules/ModuleRegistry.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
-#include "../../core/memory/SafeRead.hpp"
 #include "../../config/ConfigManager.hpp"
 #include <pl/ModMenu.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <bedrocktools/sdk/input/MoveInput.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
 #include <array>
@@ -93,119 +97,28 @@ TargetGeometry targetGeometryFor(
     return result;
 }
 
-using ActorGetStatusFlagFn = bool (*)(const void*, int);
-std::optional<bool> actorIsGliding(void* actor) {
+// Exact 26.60 ECS tag. The FNV-1a type hash is independently matched to the
+// component descriptor registered by libminecraftpe.so. Presence is reported
+// as telemetry until the in-game true/false transitions are validated.
+struct GlidingTravelFlagComponent {};
+static_assert(entt::type_hash<GlidingTravelFlagComponent>::value() == 0x27a011eeu,
+              "GlidingTravelFlagComponent type hash must match Minecraft 26.60");
+
+std::optional<bool> playerIsGlidingForUnglide(void* player) {
     using namespace bedrocktools::sdk;
-    if (!actor) return std::nullopt;
-
-    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
-    if (actorAddress <= 0x1000 ||
-        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
-            offsets::Actor::mEntityData - sizeof(void*)) {
+    if (!player || !bedrocktools::core::memory::isExactMinecraft260Build())
         return std::nullopt;
-    }
 
-    void* component = nullptr;
-    if (!bedrocktools::core::memory::readSelfMemory(
-            actorAddress + offsets::Actor::mEntityData, &component, sizeof(component))) {
-        return std::nullopt;
-    }
-    const auto componentAddress = reinterpret_cast<std::uintptr_t>(component);
-    if (componentAddress <= 0x1000) return std::nullopt;
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    if (offsets::Actor::mEntityContext >
+        std::numeric_limits<std::uintptr_t>::max() - playerAddress) return std::nullopt;
+    auto* context = reinterpret_cast<::EntityContext*>(
+        playerAddress + offsets::Actor::mEntityContext);
+    if (!context) return std::nullopt;
 
-    struct ComponentVectorView {
-        void** begin;
-        void** end;
-    } view{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            componentAddress, &view, sizeof(view))) {
-        return std::nullopt;
-    }
-    if (!view.begin || !view.end) return std::nullopt;
-
-    const auto beginAddress = reinterpret_cast<std::uintptr_t>(view.begin);
-    const auto endAddress = reinterpret_cast<std::uintptr_t>(view.end);
-    if (endAddress < beginAddress) return std::nullopt;
-    const auto span = endAddress - beginAddress;
-    if (span % sizeof(void*) != 0 || span / sizeof(void*) > 192) {
-        return std::nullopt;
-    }
-
-    const auto count = static_cast<std::size_t>(span / sizeof(void*));
-    if (count == 0) return std::nullopt;
-    std::array<void*, 192> items{};
-    if (!bedrocktools::core::memory::readSelfMemory(
-            beginAddress, items.data(), count * sizeof(void*))) {
-        return std::nullopt;
-    }
-
-    constexpr std::size_t dataStart = offsets::DataItem::mType;
-    constexpr std::size_t dataEnd = offsets::DataItem::mValue + sizeof(std::uint64_t);
-    constexpr std::size_t dataLength = dataEnd - dataStart;
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto itemAddress = reinterpret_cast<std::uintptr_t>(items[index]);
-        if (itemAddress <= 0x1000 ||
-            itemAddress > std::numeric_limits<std::uintptr_t>::max() - dataEnd) {
-            continue;
-        }
-
-        std::array<std::uint8_t, dataLength> snapshot{};
-        if (!bedrocktools::core::memory::readSelfMemory(
-                itemAddress + dataStart, snapshot.data(), snapshot.size())) {
-            continue;
-        }
-
-        std::uint8_t type = 0;
-        std::uint16_t id = 0;
-        std::uint64_t flags = 0;
-        std::memcpy(&type, snapshot.data(), sizeof(type));
-        std::memcpy(&id, snapshot.data() + (offsets::DataItem::mId - dataStart), sizeof(id));
-        std::memcpy(&flags, snapshot.data() + (offsets::DataItem::mValue - dataStart), sizeof(flags));
-        if (type != 7 || id != 0) continue;
-
-        constexpr std::uint64_t kGlidingFlag = std::uint64_t{1} << 32;
-        return (flags & kGlidingFlag) != 0;
-    }
-    return std::nullopt;
-}
-
-bool isTrustedGameProvider(void* address) {
-    if (!address) return false;
-    Dl_info info{};
-    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
-    const std::string_view path(info.dli_fname);
-    return path.find("libminecraftpe.so") != std::string_view::npos ||
-        path.find("liblevilamina.so") != std::string_view::npos ||
-        path.find("libLeviLamina.so") != std::string_view::npos;
-}
-
-void* resolveTrustedGameSymbol(const char* symbol) {
-    if (!symbol) return nullptr;
-    static void* minecraftHandle = nullptr;
-    static void* leviLaminaHandle = nullptr;
-    static void* leviLaminaAltHandle = nullptr;
-    if (!minecraftHandle)
-        minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaHandle)
-        leviLaminaHandle = dlopen("liblevilamina.so", RTLD_NOW | RTLD_NOLOAD);
-    if (!leviLaminaAltHandle)
-        leviLaminaAltHandle = dlopen("libLeviLamina.so", RTLD_NOW | RTLD_NOLOAD);
-
-    void* address = dlsym(RTLD_DEFAULT, symbol);
-    if (isTrustedGameProvider(address)) return address;
-    if (minecraftHandle) {
-        address = dlsym(minecraftHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaHandle) {
-        address = dlsym(leviLaminaHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    if (leviLaminaAltHandle) {
-        address = dlsym(leviLaminaAltHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    return nullptr;
+    // This follows the same EntityContext/EnTT registry path already used by
+    // BedrockTools' MoveInputComponent reader; it does not inspect legacy DataItem offsets.
+    return context->tryGetComponent<GlidingTravelFlagComponent>() != nullptr;
 }
 
 // Trigger the user's dedicated Key Mapper keymap for Unglide.
@@ -353,6 +266,15 @@ const char* automationBroadcastResultName(AutomationBroadcastResult result) {
     return "keymapper_unglide_broadcast_unknown";
 }
 
+constexpr int kActorFlagGliding = 32; // ActorFlags::Gliding in the 26.60 Bedrock SDK.
+
+ActorIsGlidingFn resolveActorIsGliding() {
+    static ActorIsGlidingFn function = nullptr;
+    if (!function) function = reinterpret_cast<ActorIsGlidingFn>(
+        resolveTrustedGameSymbol("_ZNK5Actor9isGlidingEv"));
+    return function;
+}
+
 ActorGetStatusFlagFn resolveActorGetStatusFlag() {
     static ActorGetStatusFlagFn function = nullptr;
     if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
@@ -361,18 +283,27 @@ ActorGetStatusFlagFn resolveActorGetStatusFlag() {
 }
 
 std::optional<bool> playerIsGlidingForUnglide(void* player) {
-    if (!player) return std::nullopt;
+    if (!player || !bedrocktools::core::memory::isExactMinecraft260Build()) return std::nullopt;
+
+    // Prefer the engine's semantic Actor::isGliding accessor. It avoids
+    // depending on unverified Actor::mEntityData/DataItem layouts.
+    if (const auto isGliding = resolveActorIsGliding()) {
+        try {
+            return isGliding(player);
+        } catch (...) {
+            // Try the exact-build ActorFlags accessor below.
+        }
+    }
+
     const auto getStatusFlag = resolveActorGetStatusFlag();
     if (getStatusFlag) {
         try {
-            // Treat the native status flag as a positive signal only; some builds
-            // differ in flag layout, so a negative result still tries safe entity data.
-            if (getStatusFlag(player, 32)) return true;
+            return getStatusFlag(player, kActorFlagGliding);
         } catch (...) {
-            // Fall through to the bounded synchronized-data reader.
+            return std::nullopt;
         }
     }
-    return actorIsGliding(player);
+    return std::nullopt;
 }
 
 }
@@ -432,55 +363,49 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
-    // Match AutoHit's targeting contract: use the fresh Aim Assist target,
-    // require that it is a player, and verify the camera ray intersects that
-    // same target. A nearby player elsewhere on screen is not sufficient.
+    // Unglide performs its own fresh player/crosshair query. Aim Assist may be
+    // disabled or keybind-blocked; its native actor-query signatures are initialized
+    // independently and this read-only helper does not steer the camera.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase || !aimBase->enabled) {
+    if (!aimBase) {
         resetTargetState();
-        reject("aim_assist_unavailable",
-               "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
+        reject("targeting_service_unavailable",
+               "The shared player-query service is not registered; no Space keymap request sent.", 250);
         return;
     }
-
     auto* aim = static_cast<AimAssistModule*>(aimBase);
     void* target = nullptr;
     AABB targetBounds{};
-    float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+    if (!aim->findCrosshairPlayerSnapshot(player, targetDistance, target, targetBounds) || !target) {
         resetTargetState();
-        reject("target_missing_or_stale",
-               "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
+        reject("crosshair_player_not_found",
+               "No valid player hitbox intersects the camera ray inside Unglide's configured distance.", 120);
         return;
     }
-    if (!aim->currentTargetIsPlayerSnapshot(target)) {
-        resetTargetState();
-        reject("target_not_player",
-               "Unglide only triggers for a player target, not a mob target.", 120);
-        return;
-    }
-    if (!validBounds(targetBounds)) {
-        resetTargetState();
-        reject("target_bounds_invalid",
-               "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
-        return;
-    }
-    const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
     const auto geometry = targetGeometryFor(player, targetBounds);
-    if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
+    if (!geometry.valid) {
         resetTargetState();
         reject("target_geometry_invalid",
-               "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
+               "The fresh crosshair player's geometry is invalid; no Space keymap request sent.", 120);
         return;
     }
 
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    // The native Elytra/gliding flag is not reliable on all supported Bedrock
-    // builds: both the status-flag API and synchronized-data fallback can report
-    // false while the player is visibly gliding. Treat it as telemetry only, not
-    // a hard gate; the fresh player target, crosshair, distance and height checks
-    // below still gate every Key Mapper dispatch.
+    const float effectiveMaximumDistance = targetDistance;
+    // Use the exact 26.60 GlidingTravelFlagComponent tag. Unknown and negative
+    // states fail closed so Unglide cannot inject Space while the player is grounded.
     const auto glidingState = playerIsGlidingForUnglide(player);
+    if (!bedaim::macefall::shouldDispatchUnglideWhenGliding(
+            glidingState.has_value(), glidingState.value_or(false))) {
+        reject(glidingState ? "player_not_gliding" : "gliding_state_unavailable",
+               glidingState
+                   ? "GlidingTravelFlagComponent is absent; no Space keymap request sent."
+                   : "26.60 GlidingTravelFlagComponent could not be read; no Space keymap request sent.",
+               glidingState ? 120 : 250);
+        return;
+    }
+    report("gliding_detected",
+           "26.60 GlidingTravelFlagComponent is present; target_source=fresh_crosshair_player_query");
+    const bool crosshairConfirmed = true; // The query returns only ray-intersecting players.
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.

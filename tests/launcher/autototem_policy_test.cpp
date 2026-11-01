@@ -27,6 +27,7 @@ int main() {
     using bedaim::autototem::Decision;
     using bedaim::autototem::decide;
     using bedaim::autototem::normalizeDelayMs;
+    using bedaim::autototem::shouldRetryDispatch;
 
     auto state = ready();
     check(decide(state) == Decision::Equip, "valid pending refill is allowed");
@@ -61,6 +62,26 @@ int main() {
     check(normalizeDelayMs(-5.0f) == 0.0f, "negative delay is clamped to zero");
     check(normalizeDelayMs(std::numeric_limits<float>::quiet_NaN()) == 100.0f,
           "non-finite delay returns the safe default");
+
+    check(!shouldRetryDispatch(true, 1),
+          "accepted Key Mapper broadcast is never resent automatically");
+    check(shouldRetryDispatch(false, 1),
+          "first failed Key Mapper broadcast schedules a retry");
+    check(shouldRetryDispatch(false, 2),
+          "second failed Key Mapper broadcast schedules the final retry");
+    check(!shouldRetryDispatch(false, 3),
+          "third failed Key Mapper broadcast exhausts the retry budget");
+    check(!shouldRetryDispatch(false, 0),
+          "retry requires an actual failed dispatch attempt");
+
+    check(!bedaim::autototem::confirmationTimedOut(false, false, true),
+          "no confirmation timeout exists without an accepted pending broadcast");
+    check(!bedaim::autototem::confirmationTimedOut(true, true, true),
+          "observed offhand totem completes confirmation");
+    check(!bedaim::autototem::confirmationTimedOut(true, false, false),
+          "confirmation window remains open before its deadline");
+    check(bedaim::autototem::confirmationTimedOut(true, false, true),
+          "missing offhand change is reported after confirmation deadline");
 
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
