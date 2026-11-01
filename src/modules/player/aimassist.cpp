@@ -1321,21 +1321,26 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     if (!player) return false;
 
     // The 26.60 travel-type sensing system adds GlidingTravelFlagComponent
-    // while the entity is actively in the gliding travel mode. Prefer this ECS
-    // state over the legacy synchronized ActorFlags snapshot.
+    // while the entity is actively in the gliding travel mode. If its pool
+    // exists, it is authoritative and the legacy actor-data path is not read.
     const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
 
-    constexpr int kGlidingActorFlag = 32;
-    const auto nativeGetter = resolveActorGetStatusFlag();
+    bool nativeGetterAvailable = false;
     bool nativeGliding = false;
-    if (nativeGetter) {
-        try {
-            nativeGliding = nativeGetter(player, kGlidingActorFlag);
-        } catch (...) {
-            nativeGliding = false;
+    bool synchronizedGliding = false;
+    if (!ecsGliding.has_value()) {
+        constexpr int kGlidingActorFlag = 32;
+        const auto nativeGetter = resolveActorGetStatusFlag();
+        nativeGetterAvailable = nativeGetter != nullptr;
+        if (nativeGetter) {
+            try {
+                nativeGliding = nativeGetter(player, kGlidingActorFlag);
+            } catch (...) {
+                nativeGliding = false;
+            }
         }
+        synchronizedGliding = actorIsGliding(player);
     }
-    const bool synchronizedGliding = actorIsGliding(player);
     const bool gliding = ecsGliding.has_value()
         ? *ecsGliding
         : (nativeGliding || synchronizedGliding);
@@ -1351,10 +1356,14 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
             gliding ? "gliding_true" : "gliding_false",
             std::string("ecs_pool=") + (ecsGliding.has_value() ? "available" : "missing") +
                 ", ecs_component=" + (ecsGliding.has_value() ? (*ecsGliding ? "present" : "absent") : "unknown") +
-                ", native_getStatusFlag=" + (nativeGetter ? "available" : "unavailable") +
-                ", native_result=" + (nativeGliding ? "true" : "false") +
-                ", synchronized_actor_flags=" + (synchronizedGliding ? "true" : "false") +
-                ", flag_index=" + std::to_string(kGlidingActorFlag));
+                ", native_getStatusFlag=" +
+                    (ecsGliding.has_value() ? "skipped_ecs_authoritative" :
+                        (nativeGetterAvailable ? "available" : "unavailable")) +
+                ", native_result=" +
+                    (ecsGliding.has_value() ? "skipped_ecs_authoritative" : (nativeGliding ? "true" : "false")) +
+                ", synchronized_actor_flags=" +
+                    (ecsGliding.has_value() ? "skipped_ecs_authoritative" : (synchronizedGliding ? "true" : "false")) +
+                ", flag_index=32");
     }
     return gliding;
 }
