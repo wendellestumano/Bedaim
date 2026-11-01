@@ -2,6 +2,7 @@
 #include "aimassist.hpp"
 #include "MaceFallPolicy.hpp"
 #include "modules/ModuleRegistry.hpp"
+#include "modules/misc/configurations.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "../../core/JavaVm.hpp"
 #include "../../config/ConfigManager.hpp"
@@ -19,6 +20,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <dlfcn.h>
 #include <jni.h>
 #include <limits>
@@ -276,6 +278,23 @@ const char* automationBroadcastResultName(AutomationBroadcastResult result) {
         case AutomationBroadcastResult::BroadcastFailed: return "keymapper_unglide_broadcast_failed";
     }
     return "keymapper_unglide_broadcast_unknown";
+}
+
+// ConfigManager::load() applies the selected custom snapshot after the primary
+// config.json. Persist Unglide edits to both files, otherwise an older
+// Configs.json snapshot silently overwrites the newly selected distance.
+void persistUnglideSettings() {
+    auto& manager = bedrocktools::config::ConfigManager::get();
+    manager.save();
+
+    auto* base = ModuleRegistry::get().find("bedrocktools.Configurations");
+    if (!base) return;
+    auto* configurations = static_cast<ConfigurationsModule*>(base);
+    const std::filesystem::path primary(manager.getConfigPath());
+    const std::filesystem::path snapshot =
+        primary.parent_path() / configurations->configuredFileName();
+    if (snapshot != primary)
+        manager.saveTo(snapshot.string());
 }
 
 
@@ -602,11 +621,9 @@ void UnglideModule::onMenuRegistered(){
      .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
      .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
      .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-       if (onMenuConfigChanged(key, value)) {
-         // This custom ModuleBuilder callback bypasses ModuleMenu.cpp's normal
-         // persistence callback, so explicitly enqueue the updated module config.
-         bedrocktools::config::ConfigManager::get().save();
-       }
+       // onMenuConfigChanged persists both the primary config and the selected
+       // custom snapshot, which ConfigManager loads second on the next launch.
+       onMenuConfigChanged(key, value);
      });
    if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
  }
@@ -623,34 +640,46 @@ bool UnglideModule::onMenuConfigChanged(std::string_view key,std::string_view va
  // to the same live fields.
  const auto separator = key.find_last_of("./:");
  const std::string_view k = separator == std::string_view::npos ? key : key.substr(separator + 1);
+
  if(k=="m_unglideEnabled"){
-   const bool b = value=="true" || value=="1" || value=="on";
-   std::lock_guard<std::mutex> l(m_stateMutex);
-   m_unglideEnabled=b;
-   if(!b){m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
-   m_nextAttempt={};
+   bool enabledValue = false;
+   if(value=="true" || value=="1" || value=="on") enabledValue = true;
+   else if(value=="false" || value=="0" || value=="off") enabledValue = false;
+   else return false;
+   {
+     std::lock_guard<std::mutex> l(m_stateMutex);
+     m_unglideEnabled=enabledValue;
+     if(!enabledValue){m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+     m_nextAttempt={};
+   }
+   persistUnglideSettings();
    return true;
  }
+
  try{
    // Slider/text controls may append their display unit to the value. Parse the
-   // numeric prefix instead of rejecting a valid value such as "12.5 blocks".
+   // numeric prefix instead of rejecting a valid value such as "7 blocks".
    std::string x(value);
    std::size_t p=0;
    const float n=std::stof(x,&p);
    if(p==0 || !std::isfinite(n)) return false;
-   std::lock_guard<std::mutex> l(m_stateMutex);
-   if(k=="m_unglideTargetDistance") m_targetDistance=std::clamp(n,1.0f,32.0f);
-   else if(k=="m_unglideMaxVerticalDifference") m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);
-   else if(k=="m_unglideBurstCount") m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);
-   else if(k=="m_unglidePressIntervalMs") m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);
-   else return false;
-   // Apply the new range/threshold immediately; do not retain a latch or retry
-   // deadline computed with the previous configuration.
-   m_burstRemaining=0;
-   m_latchedTarget=nullptr;
-   m_targetLatched=false;
-   m_triggerState=TriggerState::Idle;
-   m_nextAttempt={};
+
+   {
+     std::lock_guard<std::mutex> l(m_stateMutex);
+     if(k=="m_unglideTargetDistance") m_targetDistance=std::clamp(n,1.0f,32.0f);
+     else if(k=="m_unglideMaxVerticalDifference") m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);
+     else if(k=="m_unglideBurstCount") m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);
+     else if(k=="m_unglidePressIntervalMs") m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);
+     else return false;
+     // Apply the new range/threshold immediately; do not retain a latch or retry
+     // deadline computed with the previous configuration.
+     m_burstRemaining=0;
+     m_latchedTarget=nullptr;
+     m_targetLatched=false;
+     m_triggerState=TriggerState::Idle;
+     m_nextAttempt={};
+   }
+   persistUnglideSettings();
    return true;
  }catch(...){return false;}
 }
