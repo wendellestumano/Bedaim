@@ -128,7 +128,23 @@ struct MobTravelComponent final {};
 struct PlayerFlyingTravelComponent final {};
 struct FallFlyTicksComponent final {};
 struct ElytraFlightTimeTicksComponent final {};
-struct ActorDataFlagComponent final {};
+struct ActorDataFlagBitset131 {
+    std::array<std::uint64_t, 3> words{};
+
+    bool test(std::size_t index) const noexcept {
+        return index < 131 &&
+            ((words[index / 64] >> (index % 64)) & std::uint64_t{1}) != 0;
+    }
+};
+
+struct ActorDataFlagComponent {
+    ActorDataFlagBitset131 mValue;
+};
+
+static_assert(sizeof(ActorDataFlagComponent) == 0x18,
+              "Minecraft 26.60 ActorDataFlagComponent must occupy 24 bytes");
+static_assert(entt::type_hash<ActorDataFlagComponent>::value() == 0xC67426F3u,
+              "ActorDataFlagComponent EnTT hash must match Minecraft 26.60");
 struct PlayerActionComponent final {};
 struct MovementAbilitiesComponent final {};
 struct ArmorFlyEnabledFlagComponent final {};
@@ -305,6 +321,27 @@ inline std::optional<bool> glidingTravelFlagComponent(void* actor) {
     if (!componentPool) return std::nullopt;
 
     return componentPool->contains(context->mEntity);
+}
+
+
+// Canonical query.is_gliding parity for Minecraft Bedrock 26.60:
+// ActorDataFlagComponent::mValue.test(ActorFlags::GLIDING), where GLIDING=32.
+// A missing pool/component is unknown (nullopt), never a positive signal.
+inline std::optional<bool> actorDataGlidingFlag(void* actor) {
+    if (!actor) return std::nullopt;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto contextOffset = offsets::Actor::mEntityContext;
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() -
+            contextOffset - sizeof(EntityContext)) {
+        return std::nullopt;
+    }
+
+    auto* context = reinterpret_cast<EntityContext*>(actorAddress + contextOffset);
+    const auto* component = context->tryGetComponent<ActorDataFlagComponent>();
+    if (!component) return std::nullopt;
+    return component->mValue.test(32);
 }
 
 }
