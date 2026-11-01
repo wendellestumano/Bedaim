@@ -388,14 +388,53 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     using namespace bedrocktools::sdk;
     const auto tickStarted = std::chrono::steady_clock::now();
 
+    // This heartbeat deliberately runs before every early return. It tells us
+    // whether LocalPlayerTickEvent is reaching Unglide even when a gate/retry
+    // prevents target processing.
+    static std::atomic<std::uint64_t> heartbeatTicks{0};
+    static std::atomic<std::int64_t> nextHeartbeatMs{0};
+    const auto tickCount = heartbeatTicks.fetch_add(1, std::memory_order_relaxed) + 1;
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        tickStarted.time_since_epoch()).count();
+
     float targetDistance = 8.0f;
     float maximumHeightDifference = 4.0f;
+    bool moduleEnabled = false;
+    bool featureEnabled = false;
+    bool dispatchInProgress = false;
+    bool retryPending = false;
+    std::int64_t retryRemainingMs = 0;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
-        if (!enabled || !m_unglideEnabled || !player || m_dispatchInProgress || tickStarted < m_nextAttempt) return;
+        moduleEnabled = enabled;
+        featureEnabled = m_unglideEnabled;
+        dispatchInProgress = m_dispatchInProgress;
+        retryPending = m_nextAttempt.time_since_epoch().count() != 0 && tickStarted < m_nextAttempt;
+        if (retryPending) {
+            retryRemainingMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                m_nextAttempt - tickStarted).count();
+        }
         targetDistance = m_targetDistance;
         maximumHeightDifference = m_maxVerticalDifference;
     }
+
+    auto expectedHeartbeat = nextHeartbeatMs.load(std::memory_order_relaxed);
+    if (nowMs >= expectedHeartbeat && nextHeartbeatMs.compare_exchange_strong(
+            expectedHeartbeat, nowMs + 1000, std::memory_order_relaxed)) {
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Info, "Unglide", "tick_heartbeat",
+            "callback_received",
+            std::string("tick_count=") + std::to_string(tickCount) +
+                ", module_enabled=" + (moduleEnabled ? "true" : "false") +
+                ", feature_enabled=" + (featureEnabled ? "true" : "false") +
+                ", player_non_null=" + (player ? "true" : "false") +
+                ", dispatch_in_progress=" + (dispatchInProgress ? "true" : "false") +
+                ", retry_pending=" + (retryPending ? "true" : "false") +
+                ", retry_remaining_ms=" + std::to_string(retryRemainingMs) +
+                ", player_address=" + std::to_string(reinterpret_cast<std::uintptr_t>(player)));
+    }
+
+    if (!moduleEnabled || !featureEnabled || !player || dispatchInProgress || retryPending) return;
 
     auto report = [&](const char* state, const std::string& detail) {
         const auto eventTime = std::chrono::steady_clock::now();
