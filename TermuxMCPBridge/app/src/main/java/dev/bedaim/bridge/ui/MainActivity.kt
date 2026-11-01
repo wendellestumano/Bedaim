@@ -230,7 +230,7 @@ class MainActivity : Activity() {
         val termuxCard = card(root)
         sectionTitle(termuxCard, "TERMUX TOOLCHAIN")
         termuxCard.addView(label(
-            "Verifica ferramentas instaladas sem aceitar comandos arbitrários. Para Apktool, conceda RUN_COMMAND, defina allow-external-apps=true e execute termux-setup-storage no Termux.",
+            "Verifica ferramentas instaladas (Git, Python, JADX, Radare2, tmux, compiladores e utilitários Android). O shell remoto e as sessões interativas tmux exigem ativação local; comandos executam com as permissões do Termux, sem root.",
             12f, secondaryText
         ))
         actionButton(termuxCard, "VERIFICAR APKTOOL / AAPT / GIT / PYTHON / CLANG", true) {
@@ -241,7 +241,7 @@ class MainActivity : Activity() {
             if (enabled) {
                 AlertDialog.Builder(this)
                     .setTitle("Ativar shell remoto completo?")
-                    .setMessage("Isso permite que qualquer cliente autenticado pelo endpoint MCP execute comandos no ambiente Termux com os privilégios do próprio Termux. O endpoint/ngrok deve ser tratado como uma credencial. Isso NÃO concede root nem acesso ao sandbox privado de outros apps.")
+                    .setMessage("Isso permite que clientes autenticados pelo endpoint MCP executem comandos e controlem sessões interativas tmux no ambiente Termux, com os privilégios do próprio Termux. O endpoint/ngrok deve ser tratado como uma credencial. Isso NÃO concede root nem acesso ao sandbox privado de outros apps.")
                     .setNegativeButton("Cancelar", null)
                     .setPositiveButton("Ativar") { _, _ ->
                         BridgePreferences.setTermuxRemoteShellEnabled(this, true)
@@ -998,67 +998,3 @@ class MainActivity : Activity() {
         }
         parent.addView(view, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(14) })
-        return view
-    }
-
-    private fun sectionTitle(parent: LinearLayout, title: String) {
-        parent.addView(label(title, 11f, accent, true).apply {
-            letterSpacing = 0.12f
-            setPadding(0, 0, 0, dp(12))
-        })
-    }
-
-    private fun actionButton(parent: LinearLayout, title: String, primary: Boolean, action: () -> Unit) {
-        val button = Button(this).apply {
-            text = title
-            textSize = 11f
-            typeface = Typeface.DEFAULT_BOLD
-            isAllCaps = false
-            setTextColor(if (primary) bgColor else primaryText)
-            background = rounded(if (primary) accent else surfaceAlt, 12)
-            stateListAnimator = null
-            setPadding(dp(12), dp(7), dp(12), dp(7))
-            minHeight = dp(46)
-            setOnClickListener { action() }
-        }
-        parent.addView(button, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(9) })
-    }
-
-    private fun label(text: String, size: Float, color: Int, bold: Boolean = false): TextView =
-        TextView(this).apply {
-            this.text = text
-            textSize = size
-            setTextColor(color)
-            if (bold) typeface = Typeface.DEFAULT_BOLD
-        }
-
-    private fun rounded(color: Int, radius: Int) = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = dp(radius).toFloat()
-    }
-
-    private fun circle(color: Int) = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        setColor(color)
-    }
-
-    private fun formatBytes(bytes: Long): String {
-        if (bytes < 1024) return "$bytes B"
-        val units = arrayOf("KB", "MB", "GB", "TB")
-        var value = bytes.toDouble()
-        var index = -1
-        do { value /= 1024.0; index++ } while (value >= 1024 && index < units.lastIndex)
-        return String.format(Locale.US, "%.1f %s", value, units[index])
-    }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-    companion object {
-        private const val REQUEST_APK = 4102
-        private const val REQUEST_WORKSPACE_IMPORT = 4103
-        private const val REQUEST_APK_EXPORT = 4104
-    }
-}
