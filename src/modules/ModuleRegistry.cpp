@@ -3,6 +3,7 @@
 
 #include "player/aimassist.hpp"
 #include "player/autohit.hpp"
+#include "player/autototem.hpp"
 #include "player/maceswapper.hpp"
 #include "player/unglide.hpp"
 #include "player/swordswapper.hpp"
@@ -66,6 +67,7 @@ void registerAllModules() {
 
     registry.emplace<AimAssistModule>();
     registry.emplace<AutoHitModule>();
+    registry.emplace<AutoTotemModule>();
     registry.emplace<MaceSwapperModule>();
     registry.emplace<UnglideModule>();
     registry.emplace<SwordSwapperModule>();
