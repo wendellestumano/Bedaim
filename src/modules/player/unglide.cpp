@@ -371,6 +371,8 @@ void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
             std::string("client_update_heartbeat=callback_received: update_count=") + std::to_string(tickCount) +
                 ", module_enabled=" + (moduleEnabled ? "true" : "false") +
                 ", feature_enabled=" + (featureEnabled ? "true" : "false") +
+                ", target_distance_limit=" + std::to_string(targetDistance) +
+                ", maximum_vertical_difference=" + std::to_string(maximumHeightDifference) +
                 ", player_non_null=" + (player ? "true" : "false") +
                 ", dispatch_in_progress=" + (dispatchInProgress ? "true" : "false") +
                 ", retry_pending=" + (retryPending ? "true" : "false") +
@@ -593,46 +595,92 @@ void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
             ", burst_remaining=" + std::to_string(remaining) +
             ", keymap_uid=" + kUnglideKeymapUid);
 }
-void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
+void UnglideModule::loadConfig(const nlohmann::json& j) {
+    Module::loadConfig(j);
+    float loadedDistance = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        m_unglideEnabled = j.value("m_unglideEnabled", m_unglideEnabled);
+        m_targetDistance = std::clamp(
+            j.value("m_unglideTargetDistance", m_targetDistance), 1.0f, 32.0f);
+        m_maxVerticalDifference = std::clamp(
+            j.value("m_unglideMaxVerticalDifference", m_maxVerticalDifference), 0.5f, 16.0f);
+        m_burstCount = std::clamp(j.value("m_unglideBurstCount", m_burstCount), 1, 10);
+        m_pressIntervalMs = std::clamp(
+            j.value("m_unglidePressIntervalMs", m_pressIntervalMs), 50, 1000);
+        loadedDistance = m_targetDistance;
+    }
+    bedrocktools::diagnostics::log(
+        bedrocktools::diagnostics::Level::Info, "Unglide",
+        "config_loaded_target_distance=" + std::to_string(loadedDistance));
+}
 void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
-void UnglideModule::onMenuRegistered(){
- using namespace pl::modmenu;
- // Launcher-owned fields provide a persistent edit path; the compact slider
- // schema below remains available in the Unglide module page.
- static std::atomic<bool> persistentSettingsRegistered{false};
- bool expected = false;
- if (persistentSettingsRegistered.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-   nlohmann::json persistentConfig;
-   saveConfig(persistentConfig);
-   auto persistentValue = [&](const char* key, const char* fallback) {
-     const auto it = persistentConfig.find(key);
-     if (it == persistentConfig.end() || it->is_null()) return std::string(fallback);
-     if (it->is_string()) return it->get<std::string>();
-     if (it->is_boolean()) return it->get<bool>() ? std::string("true") : std::string("false");
-     return it->dump();
-   };
-   ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
-   settings.modId("Bedaim")
-     .description("Persistent Unglide controls; values apply immediately.")
-     .defaultEnabled(true)
-     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, persistentValue("m_unglideEnabled", "false"))
-     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, persistentValue("m_unglideTargetDistance", "8.0"))
-     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, persistentValue("m_unglideMaxVerticalDifference", "4.0"))
-     .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
-     .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
-     .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
-       // onMenuConfigChanged persists both the primary config and the selected
-       // custom snapshot, which ConfigManager loads second on the next launch.
-       onMenuConfigChanged(key, value);
-     });
-   if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
- }
- using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
- s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
- ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
- auto sl=[&](const char*k,const char*title,const char*mn,const char*mx,const char*step,const char*unit,const char*def){ConfigNodeV2 n;n.id=k;n.key=k;n.title=title;n.category="special";n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=def;n.currentValue=vs(k,def);n.hasCurrentValue=true;n.minValue=mn;n.maxValue=mx;n.step=step;n.unit=unit;s.node(std::move(n));};
- sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
- ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
+void UnglideModule::onMenuRegistered() {
+    // Use the module's V2 schema as the only settings surface. The former
+    // auxiliary ModuleBuilder duplicated these keys under another module ID,
+    // creating a second launcher-owned state that could become stale.
+    using namespace pl::modmenu;
+    ConfigSchemaBuilder schema;
+    nlohmann::json config;
+    saveConfig(config);
+
+    auto value = [&](const char* key, const char* fallback) -> std::string {
+        const auto it = config.find(key);
+        if (it == config.end() || it->is_null()) return fallback;
+        if (it->is_string()) return it->get<std::string>();
+        if (it->is_boolean()) return it->get<bool>() ? "true" : "false";
+        return it->dump();
+    };
+
+    schema.defaultCategory("special")
+        .category("special", "Special", "Independent Unglide trigger");
+
+    ConfigNodeV2 enabledNode;
+    enabledNode.id = "m_unglideEnabled";
+    enabledNode.key = enabledNode.id;
+    enabledNode.title = "Enable Unglide";
+    enabledNode.category = "special";
+    enabledNode.type = ConfigControlTypeV2::Toggle;
+    enabledNode.defaultValue = "false";
+    enabledNode.currentValue = value("m_unglideEnabled", "false");
+    enabledNode.hasCurrentValue = true;
+    schema.node(std::move(enabledNode));
+
+    auto addSlider = [&](const char* key, const char* title, const char* minimum,
+                         const char* maximum, const char* step, const char* unit,
+                         const char* fallback) {
+        ConfigNodeV2 node;
+        node.id = key;
+        node.key = key;
+        node.title = title;
+        node.category = "special";
+        node.type = ConfigControlTypeV2::SliderFloat;
+        node.defaultValue = fallback;
+        node.currentValue = value(key, fallback);
+        node.hasCurrentValue = true;
+        node.minValue = minimum;
+        node.maxValue = maximum;
+        node.step = step;
+        node.unit = unit;
+        schema.node(std::move(node));
+    };
+
+    addSlider("m_unglideTargetDistance", "Target distance", "1", "32",
+              "0.5", " blocks", "8.0");
+    addSlider("m_unglideMaxVerticalDifference", "Maximum height difference", "0.5",
+              "16", "0.5", " blocks", "4.0");
+    addSlider("m_unglideBurstCount", "Burst presses", "1", "10", "1", "", "3");
+    addSlider("m_unglidePressIntervalMs", "Time between presses", "50", "1000",
+              "10", " ms", "120");
+
+    ConfigNodeV2 keybindNode;
+    keybindNode.id = "keybind";
+    keybindNode.key = "keybind";
+    keybindNode.title = "Keybind";
+    keybindNode.category = "special";
+    keybindNode.type = ConfigControlTypeV2::Keybind;
+    schema.node(std::move(keybindNode));
+    setConfigSchemaJson(moduleId, schema.toJson());
 }
 bool UnglideModule::onMenuConfigChanged(std::string_view key,std::string_view value){
  // Some launcher menu paths qualify keys with a module/config prefix. Resolve
@@ -664,6 +712,7 @@ bool UnglideModule::onMenuConfigChanged(std::string_view key,std::string_view va
    const float n=std::stof(x,&p);
    if(p==0 || !std::isfinite(n)) return false;
 
+   float appliedDistance = 0.0f;
    {
      std::lock_guard<std::mutex> l(m_stateMutex);
      if(k=="m_unglideTargetDistance") m_targetDistance=std::clamp(n,1.0f,32.0f);
@@ -671,6 +720,7 @@ bool UnglideModule::onMenuConfigChanged(std::string_view key,std::string_view va
      else if(k=="m_unglideBurstCount") m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);
      else if(k=="m_unglidePressIntervalMs") m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);
      else return false;
+     appliedDistance = m_targetDistance;
      // Apply the new range/threshold immediately; do not retain a latch or retry
      // deadline computed with the previous configuration.
      m_burstRemaining=0;
@@ -679,6 +729,11 @@ bool UnglideModule::onMenuConfigChanged(std::string_view key,std::string_view va
      m_triggerState=TriggerState::Idle;
      m_nextAttempt={};
    }
+   bedrocktools::diagnostics::log(
+       bedrocktools::diagnostics::Level::Info, "Unglide",
+       std::string("settings_applied: key=") + std::string(k) +
+           "; raw_value=" + std::string(value) +
+           "; target_distance=" + std::to_string(appliedDistance));
    persistUnglideSettings();
    return true;
  }catch(...){return false;}

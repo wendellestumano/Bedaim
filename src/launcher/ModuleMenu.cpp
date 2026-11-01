@@ -538,6 +538,7 @@ private:
                     registerHitboxExpanderConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Mace Swapper" ||
                            entry.first == "bedrocktools.Auto Hit" ||
+                           entry.first == "bedrocktools.Unglide" ||
                            entry.first == "bedrocktools.ESP") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();

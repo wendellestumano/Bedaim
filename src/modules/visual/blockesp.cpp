@@ -76,6 +76,9 @@ std::atomic<bool> g_blockEspCaptureEvents{false};
 // discovery path: it observes blocks as loaded chunks are meshed. Keep it enabled
 // independently from the legacy Apollon fixed-RVA event detours below.
 constexpr bool kEnableTessellationLookupCapture = true;
+// Signature-resolved BlockSource::getBlock lookup. It uses the same 26.60
+// signature resolver as the bounded scanner and avoids legacy Apollon RVAs.
+constexpr bool kEnableSignatureBlockSourceLookupCapture = true;
 // These Apollon-derived fixed-RVA event detours remain disabled until their
 // individual 26.60 ABI/layout compatibility can be validated without ambiguity.
 constexpr bool kEnableExperimentalNativeEventHooks = false;
@@ -828,7 +831,7 @@ void BlockEspModule::onEnable() {
     resolveBlockGetBlock();
     if (kEnableTessellationLookupCapture)
         installBlockSourceTessellationGetBlockHook();
-    if (kEnableExperimentalNativeEventHooks)
+    if (kEnableSignatureBlockSourceLookupCapture)
         installBlockSourceGetBlockHook();
     clearBlockEventCandidates();
     if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
@@ -868,16 +871,20 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     }
     const bool missingTessellationHook = kEnableTessellationLookupCapture &&
         !g_blockSourceTessellationGetBlockHook;
+    const bool missingSignatureBlockSourceHook = kEnableSignatureBlockSourceLookupCapture &&
+        !g_blockSourceGetBlockHook;
     const bool missingExperimentalHooks = kEnableExperimentalNativeEventHooks &&
         (!g_blockUpdateHook || !g_blockSourceGetBlockHook);
     if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
-         missingTessellationHook || missingExperimentalHooks) &&
+         missingTessellationHook || missingSignatureBlockSourceHook || missingExperimentalHooks) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
         // Retry signature resolution if BedrockTools was not ready at onInit.
         if (kEnableTessellationLookupCapture)
             installBlockSourceTessellationGetBlockHook();
+        if (kEnableSignatureBlockSourceLookupCapture)
+            installBlockSourceGetBlockHook();
         if (kEnableExperimentalNativeEventHooks) {
             installBlockUpdateHook();
             installApollonBlockEventHooks();
