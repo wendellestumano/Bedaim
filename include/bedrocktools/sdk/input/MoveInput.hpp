@@ -6,6 +6,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 
 template <std::size_t N, class T>
 struct BedrockBitset {
@@ -116,6 +118,8 @@ struct entt_traits<EntityId> : basic_entt_traits<EntityIdTraits> {
 };
 }
 
+struct GlidingTravelFlagComponent final {};
+
 class EntityRegistry;
 
 class EntityContext {
@@ -149,6 +153,29 @@ inline MoveInputComponent* moveInputComponent(void* actor) {
         reinterpret_cast<std::uintptr_t>(actor) + offsets::Actor::mEntityContext
     );
     return context->tryGetComponent<MoveInputComponent>();
+}
+
+// 26.60 stores the active travel mode as an ECS tag component. Query the
+// existing pool by EnTT's type hash instead of using storage<T>(), which can
+// create an empty pool when the runtime has not registered this component yet.
+// The global type name intentionally matches the one embedded in libminecraftpe.so.
+inline std::optional<bool> glidingTravelFlagComponent(void* actor) {
+    if (!actor) return std::nullopt;
+
+    const auto actorAddress = reinterpret_cast<std::uintptr_t>(actor);
+    constexpr auto contextOffset = offsets::Actor::mEntityContext;
+    if (actorAddress <= 0x1000 ||
+        actorAddress > std::numeric_limits<std::uintptr_t>::max() - contextOffset - sizeof(EntityContext)) {
+        return std::nullopt;
+    }
+
+    auto* context = reinterpret_cast<EntityContext*>(actorAddress + contextOffset);
+    auto& registry = context->getRegistry();
+    constexpr auto componentTypeId = entt::type_hash<GlidingTravelFlagComponent>::value();
+    const auto* componentPool = registry.storage(componentTypeId);
+    if (!componentPool) return std::nullopt;
+
+    return componentPool->contains(context->mEntity);
 }
 
 }
