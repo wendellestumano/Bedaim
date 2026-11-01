@@ -15,14 +15,14 @@ object McpServerFactory {
     fun create(context: Context): Server {
         val app = context.applicationContext
         val workspace = File(app.filesDir, "workspace").apply { mkdirs() }.canonicalFile
-        val server = Server(Implementation(name="termux-mcp-bridge",version="0.2.0-alpha07"),
+        val server = Server(Implementation(name="termux-mcp-bridge",version="0.2.0-alpha10"),
             ServerOptions(capabilities=ServerCapabilities(tools=ServerCapabilities.Tools(listChanged=true))))
         server.addTool("bridge_status","Reports Android and bridge capabilities without exposing device identifiers.",
             ToolSchema(properties=buildJsonObject {})) {
             val shizuku = runCatching { rikka.shizuku.Shizuku.pingBinder() }.getOrDefault(false)
             val granted = shizuku && runCatching { rikka.shizuku.Shizuku.checkSelfPermission() == android.content.pm.PackageManager.PERMISSION_GRANTED }.getOrDefault(false)
             val root = listOf("/system/bin/su","/system/xbin/su","/sbin/su").any { File(it).canExecute() }
-            CallToolResult(content=listOf(TextContent("Bridge online\nDevice: ${Build.MANUFACTURER} ${Build.MODEL}\nAndroid API: ${Build.VERSION.SDK_INT}\nShizuku: ${if(shizuku) "available" else "not detected"} / ${if(granted) "authorized" else "not authorized"}\nRoot binary: ${if(root) "detected (not validated)" else "not detected"}\nAPK Lab: metadata, signer SHA-256 and ZIP inventory available in the Android UI\nTermux toolchain: constrained MCP diagnostic + read-only allowlist available\nTermux shell: opt-in via local UI; toolchain_check + read-only toolchain_run available")))
+            CallToolResult(content=listOf(TextContent("Bridge online\nDevice: ${Build.MANUFACTURER} ${Build.MODEL}\nAndroid API: ${Build.VERSION.SDK_INT}\nShizuku: ${if(shizuku) "available" else "not detected"} / ${if(granted) "authorized" else "not authorized"}\nRoot binary: ${if(root) "detected (not validated)" else "not detected"}\nAPK Lab: metadata, signer SHA-256 and ZIP inventory available in the Android UI\nTermux toolchain: expanded diagnostic includes Git, Python, JADX, Radare2, tmux, compilers and build tools\nTermux shell: local opt-in; arbitrary commands and persistent interactive tmux sessions available")))
         }
         server.addTool("workspace_list","Lists files inside the private workspace. Optional relative path.",
             ToolSchema(properties=buildJsonObject { putJsonObject("path"){put("type","string")} })) { req ->
@@ -75,6 +75,43 @@ object McpServerFactory {
             val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
             val seconds=req.arguments?.get("timeout_seconds")?.jsonPrimitive?.intOrNull ?: 60
             CallToolResult(content=listOf(TextContent(ToolchainRunner.shell(app,command,cwd,seconds*1000L))))
+        }
+
+
+        server.addTool("termux_session_start","Starts a persistent interactive Bash session in Termux using tmux. Requires local remote-shell opt-in; runs as the Termux app user, not root.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("command") { put("type","string"); put("maxLength",12000) }
+            putJsonObject("cwd") { put("type","string") }
+        },required=listOf("command","cwd"))) { req ->
+            val command=req.arguments?.get("command")?.jsonPrimitive?.contentOrNull ?: error("command required")
+            val cwd=req.arguments?.get("cwd")?.jsonPrimitive?.contentOrNull ?: error("cwd required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.sessionStart(app,command,cwd))))
+        }
+        server.addTool("termux_session_send","Sends input to an active Termux tmux session. press_enter submits the line. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("session_id") { put("type","string") }
+            putJsonObject("input") { put("type","string"); put("maxLength",8000) }
+            putJsonObject("press_enter") { put("type","boolean") }
+        },required=listOf("session_id","input","press_enter"))) { req ->
+            val id=req.arguments?.get("session_id")?.jsonPrimitive?.contentOrNull ?: error("session_id required")
+            val input=req.arguments?.get("input")?.jsonPrimitive?.contentOrNull ?: error("input required")
+            val enter=req.arguments?.get("press_enter")?.jsonPrimitive?.booleanOrNull ?: true
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.sessionSend(app,id,input,enter))))
+        }
+        server.addTool("termux_session_output","Captures recent output from a persistent Termux tmux session. start_line ranges from -2000 to 0. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("session_id") { put("type","string") }
+            putJsonObject("start_line") { put("type","integer"); put("minimum",-2000); put("maximum",0) }
+        },required=listOf("session_id","start_line"))) { req ->
+            val id=req.arguments?.get("session_id")?.jsonPrimitive?.contentOrNull ?: error("session_id required")
+            val start=req.arguments?.get("start_line")?.jsonPrimitive?.intOrNull ?: -200
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.sessionOutput(app,id,start))))
+        }
+        server.addTool("termux_session_list","Lists active persistent Termux tmux sessions. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {})) {
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.sessionList(app))))
+        }
+        server.addTool("termux_session_stop","Stops a persistent Termux tmux session by its Bridge-generated session id. Requires local remote-shell opt-in.",ToolSchema(properties=buildJsonObject {
+            putJsonObject("session_id") { put("type","string") }
+        },required=listOf("session_id"))) { req ->
+            val id=req.arguments?.get("session_id")?.jsonPrimitive?.contentOrNull ?: error("session_id required")
+            CallToolResult(content=listOf(TextContent(ToolchainRunner.sessionStop(app,id))))
         }
 
         server.addTool("toolchain_check","Checks installed Termux analysis tools using a fixed diagnostic. No arbitrary shell input.",ToolSchema(properties=buildJsonObject {})) {
