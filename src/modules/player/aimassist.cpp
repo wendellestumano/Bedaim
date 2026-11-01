@@ -1278,6 +1278,13 @@ bool AimAssistModule::localPlayerIsGliding() {
     return m_lastPlayer && actorIsGliding(m_lastPlayer);
 }
 
+bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
+    // Share the exact synchronized ActorFlags reader already used by Aim Assist
+    // and ElytraMacing; do not duplicate the fragile entity-data traversal in
+    // the Unglide module.
+    return player && actorIsGliding(player);
+}
+
 void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     auto* player = m_lastPlayer;
