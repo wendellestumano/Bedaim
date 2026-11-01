@@ -1,4 +1,4 @@
-# Termux MCP Bridge — Alpha 0.2.0-alpha10
+# Termux MCP Bridge — Alpha 0.2.0-alpha11
 
 Native Android app that hosts an authenticated MCP Streamable HTTP endpoint at `127.0.0.1:8765/mcp` and can expose it through an existing ngrok installation.
 
@@ -104,3 +104,16 @@ The MCP tool `termux_exec` can run shell commands in the Termux environment afte
 Enable the local remote-shell toggle in the Android dashboard. Then use termux_session_start with a command and working directory. It returns a UUID session ID. Use termux_session_output to capture recent terminal output, termux_session_send to type into the shell (set press_enter=true to submit), termux_session_list to enumerate active sessions, and termux_session_stop to close one. This supports long-running Gradle/NDK builds, Python and Node REPLs, Git workflows, JADX/Radare2 analysis, and interactive debugging without keeping a single MCP request open for the whole job.
 
 The session tools are authenticated by the same MCP OAuth/Bearer layer and gated by the local opt-in toggle. They do not elevate privileges or bypass scoped storage.
+
+## Alpha11 — Android development power tools
+
+Alpha11 adds authenticated MCP tools for:
+- Termux process inventory, inspection and SIGTERM, restricted to processes owned by the Termux app UID. PID 1 and malformed PIDs are rejected.
+- Structured persistent build jobs backed by tmux: Gradle unit tests, debug APK assembly, clean + test + assemble, CMake configure/build and Ninja build. Each returns a session UUID; use job status/list/stop to manage it.
+- Read-only Git inspection: status, diff, recent log and branch list. Git mutations remain available only through the separately opted-in Termux shell.
+- Android project diagnostics: project build files, Java/Gradle/SDK/NDK/CMake/Ninja/Clang/Android utilities and Git state.
+- Read-only native/APK inspection: file summary, ELF headers/program headers, sections, symbols, disassembly, strings and APK ZIP inventory.
+
+All new execution tools require the existing local remote-shell opt-in and Termux RUN_COMMAND permission. Process termination is UID-scoped and sends SIGTERM only; no root escalation is implemented. Native inspection accepts only files under Termux HOME or shared storage. Output is bounded by the existing command-result cap. Build jobs use fixed task templates rather than accepting arbitrary build shell strings.
+
+Alpha11 does not auto-install packages, change Git branches, commit code, or modify source files through the read-only Git/native inspection tools. Use an explicitly opted-in session for those operations.
