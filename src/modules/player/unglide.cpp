@@ -463,10 +463,8 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
-    // Use Aim Assist's existing native ActorFlags reader for flight state.
-    // This is the same implementation already consumed by Aim Assist's Elytra
-    // mode and ElytraMacing, avoiding the separate Unglide SafeRead traversal
-    // that the latest device logs show returning "unavailable".
+    // Use Aim Assist's shared 26.60 ECS travel-state probe for flight state.
+    // Legacy native/synchronized ActorFlags are only fallbacks when the ECS pool is absent.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase) {
         resetTargetState();
@@ -479,7 +477,7 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     if (!glidingState) {
         resetTargetState();
         reject("not_gliding",
-               "Shared native ActorFlags reader reports gliding=false; no Space keymap request sent.", 100);
+               "Shared ECS/native flight-state probe reports gliding=false; no Space keymap request sent.", 100);
         return;
     }
 
