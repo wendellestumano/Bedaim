@@ -97,12 +97,9 @@ TargetGeometry targetGeometryFor(
     return result;
 }
 
-// Exact 26.60 ECS tag. The FNV-1a type hash is independently matched to the
-// component descriptor registered by libminecraftpe.so. Presence is reported
-// as telemetry until the in-game true/false transitions are validated.
+// Local ECS component type used by the SDK registry lookup. The engine descriptor
+// hash (0x27a011ee) is not an EnTT C++ type hash and must not be compared to it.
 struct GlidingTravelFlagComponent {};
-static_assert(entt::type_hash<GlidingTravelFlagComponent>::value() == 0x27a011eeu,
-              "GlidingTravelFlagComponent type hash must match Minecraft 26.60");
 
 std::optional<bool> playerIsGlidingForUnglide(void* player) {
     using namespace bedrocktools::sdk;
@@ -266,45 +263,6 @@ const char* automationBroadcastResultName(AutomationBroadcastResult result) {
     return "keymapper_unglide_broadcast_unknown";
 }
 
-constexpr int kActorFlagGliding = 32; // ActorFlags::Gliding in the 26.60 Bedrock SDK.
-
-ActorIsGlidingFn resolveActorIsGliding() {
-    static ActorIsGlidingFn function = nullptr;
-    if (!function) function = reinterpret_cast<ActorIsGlidingFn>(
-        resolveTrustedGameSymbol("_ZNK5Actor9isGlidingEv"));
-    return function;
-}
-
-ActorGetStatusFlagFn resolveActorGetStatusFlag() {
-    static ActorGetStatusFlagFn function = nullptr;
-    if (!function) function = reinterpret_cast<ActorGetStatusFlagFn>(
-        resolveTrustedGameSymbol("_ZNK5Actor13getStatusFlagE10ActorFlags"));
-    return function;
-}
-
-std::optional<bool> playerIsGlidingForUnglide(void* player) {
-    if (!player || !bedrocktools::core::memory::isExactMinecraft260Build()) return std::nullopt;
-
-    // Prefer the engine's semantic Actor::isGliding accessor. It avoids
-    // depending on unverified Actor::mEntityData/DataItem layouts.
-    if (const auto isGliding = resolveActorIsGliding()) {
-        try {
-            return isGliding(player);
-        } catch (...) {
-            // Try the exact-build ActorFlags accessor below.
-        }
-    }
-
-    const auto getStatusFlag = resolveActorGetStatusFlag();
-    if (getStatusFlag) {
-        try {
-            return getStatusFlag(player, kActorFlagGliding);
-        } catch (...) {
-            return std::nullopt;
-        }
-    }
-    return std::nullopt;
-}
 
 }
 
