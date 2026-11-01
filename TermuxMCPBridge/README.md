@@ -1,4 +1,4 @@
-# Termux MCP Bridge — Alpha 0.2.0-alpha05
+# Termux MCP Bridge — Alpha 0.2.0-alpha10
 
 Native Android app that hosts an authenticated MCP Streamable HTTP endpoint at `127.0.0.1:8765/mcp` and can expose it through an existing ngrok installation.
 
@@ -50,14 +50,16 @@ Do not select **No authentication** and do not paste the legacy capability URL w
 - Foreground MCP server bound to loopback only.
 - OAuth 2.1 authorization-code flow with PKCE S256, DCR, consent UI, refresh-token rotation, resource metadata discovery, and Bearer validation; legacy per-install token remains temporarily available for compatibility.
 - Automatic MCP startup when the app opens.
-- ngrok startup/reuse through fixed Termux RUN_COMMAND scripts with an explicit stable account dev domain; stale Bridge-owned tunnels are replaced when the configured domain changes. No arbitrary shell command tool is exposed.
+- ngrok startup/reuse through fixed Termux RUN_COMMAND scripts with an explicit stable account dev domain; stale Bridge-owned tunnels are replaced when the configured domain changes. The tunnel manager itself uses fixed, app-authored scripts; a separate general Termux shell is available only through explicit local opt-in.
 - ngrok URL discovery through the local agent API and persistent display in the dashboard.
 - 60-second tunnel watchdog while the MCP foreground service is active.
 - Automatic ngrok lookup in Termux first, then Debian proot-distro.
 - Shizuku UserService-backed shared-storage MCP tools rooted at `/sdcard`: list, read, write, mkdir, delete, copy, and move. Transfers are chunked.
 - MCP workspace tools: `bridge_status`, `workspace_list`, `workspace_read`, and `workspace_write`.
 - APK Lab for APK metadata/signature inspection, protected raw ZIP extraction, backup, export, and selected Apktool decode through Termux.
-- MCP toolchain_check for a fixed diagnostic and toolchain_run for read-only allowlisted binaries (readelf, llvm-objdump, strings, sha256sum, file, and unzip listing) inside /sdcard/Download/Testing2. Arguments are passed as separate argv entries; the tool does not expose a general shell, Python, Git writes, package installation, or network commands.
+- MCP toolchain_check reports the installed development environment, including Git, Python, JADX, Radare2, tmux, compilers, build tools and common Android utilities; toolchain_run remains a constrained read-only allowlist.
+- MCP termux_exec runs a bounded one-shot command with stdout/stderr capture after local opt-in.
+- Persistent interactive Termux sessions through termux_session_start, termux_session_send, termux_session_output, termux_session_list, and termux_session_stop. Sessions use tmux, support long-running builds and REPLs, preserve recent output, accept stdin, and can be managed independently. All session tools require the local remote-shell opt-in and run with the Termux app UID, never root.
 
 ## Limitations
 
@@ -66,7 +68,7 @@ Do not select **No authentication** and do not paste the legacy capability URL w
 - Android battery management, force-stop, reboot policy, and OEM background restrictions can still stop services. Boot recovery is best-effort; if Android or the device manufacturer blocks it, open the Bridge once. Shizuku may separately need to be started/authorized again after reboot.
 - Shizuku must be running and authorized for shared-storage file operations. Shizuku is not root; private data belonging to other apps and restricted Android/data or obb paths may remain inaccessible.
 - Remote access is available only while the local MCP service, ngrok agent, and network connection are online.
-- No arbitrary shell execution, root command execution, process manager, or build orchestration is exposed. The MCP toolchain is intentionally restricted to a small read-only executable allowlist and a fixed diagnostic.
+- Root command execution is not exposed. Shell commands and persistent tmux sessions are available only after explicit local opt-in; they run with the Termux app UID and remain subject to Android/Termux permissions.
 
 ## Build
 
@@ -89,9 +91,16 @@ Keep an offline backup of the keystore and credentials. Never commit them to the
 
 ## Security
 
-The MCP listener remains bound to `127.0.0.1`; ngrok is the only public ingress. Every MCP request requires either a valid OAuth Bearer access token or the legacy per-install secret (Bearer or `access_token` query parameter) during the compatibility period. The tunnel manager invokes a fixed, app-authored script and never accepts arbitrary shell input from MCP callers.
+The MCP listener remains bound to `127.0.0.1`; ngrok is the only public ingress. Every MCP request requires either a valid OAuth Bearer access token or the legacy per-install secret (Bearer or `access_token` query parameter) during the compatibility period. The tunnel manager invokes a fixed, app-authored script and never accepts arbitrary shell input for tunnel management. The separate Termux shell tools are disabled by default and require local opt-in.
 
 
 ### Full Termux shell (opt-in)
 
 The MCP tool `termux_exec` can run shell commands in the Termux environment after the user explicitly enables **ALTERNAR ACESSO REMOTO AO SHELL DO TERMUX** in the Android app. It is disabled by default. Commands run as the Termux app user, not root, with stdout/stderr returned to MCP, a maximum command length of 12,000 characters, a 1–300 second timeout, and a working directory under Termux HOME or shared storage. This is remote code execution in the Termux account: protect the MCP endpoint and OAuth/Bearer credentials as secrets, and disable the toggle when not actively using it. It does not grant root or access to other apps' private sandboxes.
+
+
+### Persistent interactive Termux sessions (alpha10)
+
+Enable the local remote-shell toggle in the Android dashboard. Then use termux_session_start with a command and working directory. It returns a UUID session ID. Use termux_session_output to capture recent terminal output, termux_session_send to type into the shell (set press_enter=true to submit), termux_session_list to enumerate active sessions, and termux_session_stop to close one. This supports long-running Gradle/NDK builds, Python and Node REPLs, Git workflows, JADX/Radare2 analysis, and interactive debugging without keeping a single MCP request open for the whole job.
+
+The session tools are authenticated by the same MCP OAuth/Bearer layer and gated by the local opt-in toggle. They do not elevate privileges or bypass scoped storage.
