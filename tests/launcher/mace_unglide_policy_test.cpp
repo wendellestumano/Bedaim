@@ -28,6 +28,14 @@ int main() {
           "Unglide only triggers for a player target");
     check(!shouldTriggerUnglideKeymap(true, true, true, 8.01f, 8.0f),
           "Unglide target policy blocks targets beyond configured range");
+
+    using bedaim::macefall::shouldDispatchUnglideWhenGliding;
+    check(shouldDispatchUnglideWhenGliding(true, true),
+          "confirmed 26.60 gliding component permits Unglide dispatch");
+    check(!shouldDispatchUnglideWhenGliding(true, false),
+          "grounded player cannot dispatch Unglide Space keymap");
+    check(!shouldDispatchUnglideWhenGliding(false, false),
+          "unknown gliding component state fails closed");
     check(bedaim::macefall::shouldDispatchUnglideBurst(false, 0),
           "first valid approach can start its bounded burst");
     check(bedaim::macefall::shouldDispatchUnglideBurst(true, 2),
@@ -74,5 +82,3 @@ int main() {
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
-
-[executed on device: localhost (df749b1e-c92e-41a8-a013-b79c2a3fe357)]
