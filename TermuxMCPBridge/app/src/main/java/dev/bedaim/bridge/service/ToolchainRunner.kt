@@ -243,7 +243,7 @@ object ToolchainRunner {
               command -v "${'$'}x" 2>/dev/null || echo "${'$'}x: MISSING"
             done
             echo '== ANDROID ENV =='
-            printf 'ANDROID_HOME=%s\\nANDROID_SDK_ROOT=%s\\nANDROID_NDK_HOME=%s\\n' "${'$'}ANDROID_HOME" "${'$'}ANDROID_SDK_ROOT" "${'$'}ANDROID_NDK_HOME"
+            printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\nANDROID_NDK_HOME=%s\n' "${'$'}ANDROID_HOME" "${'$'}ANDROID_SDK_ROOT" "${'$'}ANDROID_NDK_HOME"
             echo '== GIT =='
             git status --short --branch 2>/dev/null || echo 'Not a Git worktree'
         """.trimIndent()
