@@ -25,23 +25,26 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class BridgeService : Service() {
     private var server: EmbeddedServer<*, *>? = null
+    @Volatile private var serviceStopping = false
     private val tunnelCheckInFlight = AtomicBoolean(false)
     private val tunnelMonitorHandler = Handler(Looper.getMainLooper())
     private val tunnelMonitor = object : Runnable {
         override fun run() {
-            if (server == null) return
+            if (server == null || serviceStopping) return
             if (BridgePreferences.isTermuxAutoReconnectEnabled(this@BridgeService)) {
                 if (tunnelCheckInFlight.compareAndSet(false, true)) {
                     Thread({
                         try {
-                            val publicUrl = TunnelController.readPublicUrl(this@BridgeService)
-                            if (publicUrl == null) {
-                                BridgeStatus.recordEvent("Reconexão automática: túnel ausente; solicitando restauração pelo Termux.")
-                                if (!TunnelController.start(this@BridgeService)) {
-                                    BridgeStatus.recordEvent("Reconexão automática: Termux não aceitou RUN_COMMAND.")
+                            if (!serviceStopping) {
+                                val publicUrl = TunnelController.readPublicUrl(this@BridgeService)
+                                if (!serviceStopping && publicUrl == null) {
+                                    BridgeStatus.recordEvent("Reconexão automática: túnel ausente; solicitando restauração pelo Termux.")
+                                    if (!serviceStopping && !TunnelController.start(this@BridgeService)) {
+                                        BridgeStatus.recordEvent("Reconexão automática: Termux não aceitou RUN_COMMAND.")
+                                    }
+                                } else if (!serviceStopping && publicUrl != null) {
+                                    BridgePreferences.saveTunnelUrl(this@BridgeService, publicUrl)
                                 }
-                            } else {
-                                BridgePreferences.saveTunnelUrl(this@BridgeService, publicUrl)
                             }
                         } catch (error: Throwable) {
                             BridgeStatus.recordEvent("Reconexão automática falhou: ${error.javaClass.simpleName}")
@@ -75,6 +78,7 @@ class BridgeService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                serviceStopping = true
                 BridgePreferences.setAutoStartEnabled(this, false)
                 tunnelMonitorHandler.removeCallbacks(tunnelMonitor)
                 TunnelController.stop(this)
@@ -108,6 +112,7 @@ class BridgeService : Service() {
     }
 
     private fun startServer() {
+        serviceStopping = false
         if (server != null) {
             TunnelController.start(this)
             scheduleTunnelMonitor()
@@ -167,6 +172,7 @@ class BridgeService : Service() {
     }
 
     override fun onDestroy() {
+        serviceStopping = true
         tunnelMonitorHandler.removeCallbacks(tunnelMonitor)
         server?.stop(250, 750)
         server = null
