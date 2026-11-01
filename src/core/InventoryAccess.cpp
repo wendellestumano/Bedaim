@@ -287,7 +287,8 @@ void InventoryAccess::initialize() {
         }
     }
     if (!m_getOffhandSlot) {
-        void* candidate = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetOffhandSlot);
+        void* candidate = reinterpret_cast<void*>(
+            bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetOffhandSlot));
         if (candidate && isMinecraftFunction(candidate)) {
             m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(candidate);
             m_getOffhandSlotSource = "26.60 signature-pattern fallback (executable image validated)";
