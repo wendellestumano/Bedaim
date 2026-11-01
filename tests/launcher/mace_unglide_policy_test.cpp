@@ -72,6 +72,12 @@ int main() {
     check(!shouldKeepUnglideTriggerLatch(false, false, false, false),
           "an untriggered tracking state is not treated as a spent latch");
 
+    using bedaim::macefall::shouldRetainUnglideLatchAfterDispatch;
+    check(shouldRetainUnglideLatchAfterDispatch(true),
+          "successful Key Mapper dispatch retains the one-shot target latch");
+    check(!shouldRetainUnglideLatchAfterDispatch(false),
+          "failed Key Mapper dispatch releases the latch for a bounded retry");
+
     using bedaim::macefall::shouldRearmUnglide;
     check(!shouldRearmUnglide(5.0f, 8.0f),
           "remaining inside trigger range does not re-arm another Unglide");

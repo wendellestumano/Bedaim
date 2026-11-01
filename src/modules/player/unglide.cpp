@@ -446,11 +446,14 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     void* target = nullptr;
     AABB targetBounds{};
     std::string_view crosshairFailure;
+    int observedHitResultType = -1;
     if (!aim->crosshairPlayerSnapshot(
-            player, targetDistance, target, targetBounds, crosshairFailure) || !target) {
+            player, targetDistance, target, targetBounds, crosshairFailure,
+            observedHitResultType) || !target) {
         resetTargetState();
         reject("crosshair_player_not_found",
                std::string(crosshairFailure.empty() ? "No valid player selected by the engine crosshair" : crosshairFailure) +
+                   "; hit_result_type=" + std::to_string(observedHitResultType) +
                    "; no Space keymap request sent.", 80);
         return;
     }
@@ -568,8 +571,16 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         if (m_latchedTarget == target &&
             m_triggerState == TriggerState::Triggered) {
             const bool sent = result == AutomationBroadcastResult::Sent;
-            if (sent) --m_burstRemaining;
-            else m_burstRemaining = 0;
+            if (bedaim::macefall::shouldRetainUnglideLatchAfterDispatch(sent)) {
+                --m_burstRemaining;
+            } else {
+                // A failed JNI/broadcast attempt must not consume the approach.
+                // Re-arm the same target after a bounded retry delay instead of
+                // leaving Triggered + burstRemaining=0 forever.
+                m_burstRemaining = 0;
+                m_targetLatched = false;
+                m_triggerState = TriggerState::Tracking;
+            }
             remaining = m_burstRemaining;
             m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(
                 sent ? (remaining > 0 ? std::clamp(m_pressIntervalMs, 50, 1000) : 160) : 500);
@@ -578,7 +589,12 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         }
     }
 
-    report(automationBroadcastResultName(result),
+    // Always retain the final transport outcome. The ordinary gate reporter is
+    // throttled to one event/second and could otherwise hide this result directly
+    // after a transient crosshair rejection.
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "Unglide", "dispatch",
+        automationBroadcastResultName(result),
         std::string("state=triggered; crosshair_confirmed=true; gliding_state=") +
             (glidingState ? (*glidingState ? "true" : "false") : "unavailable") +
             "; target_distance=" + std::to_string(geometry.distance) +

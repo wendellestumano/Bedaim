@@ -4,6 +4,7 @@
 #include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
+#include "../../core/memory/SafeRead.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../hud/gamemodechecker.hpp"
@@ -54,6 +55,7 @@ struct ActorVector {
 };
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
+using LevelGetHitResultFn = bedrocktools::sdk::HitResult* (*)(void*);
 using HitResultGetEntityFn = void* (*)(void*);
 
 AimAssistModule* g_aimAssist = nullptr;
@@ -62,6 +64,7 @@ ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
+LevelGetHitResultFn g_levelGetHitResult = nullptr;
 HitResultGetEntityFn g_hitResultGetEntity = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 HitboxExpanderModule* g_hitboxExpander = nullptr;
@@ -385,6 +388,8 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    g_levelGetHitResult = reinterpret_cast<LevelGetHitResultFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::LevelGetHitResult));
     g_hitResultGetEntity = reinterpret_cast<HitResultGetEntityFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::HitResultGetEntity));
     g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
@@ -403,6 +408,7 @@ void AimAssistModule::onInit() {
         "BedrockAim", "native_dependencies", requiredReady ? "ready" : "partial",
         std::string("nearby_query=") + (targetQueryReady ? "ok" : "missing") +
         ", actor_classification=" + (targetClassificationReady ? "ok" : "missing") +
+        ", level_hit_result=" + (g_levelGetHitResult ? "ok" : "unavailable") +
         ", hit_result_entity=" + (g_hitResultGetEntity ? "ok" : "unavailable") +
         ", camera_control=" + (cameraControlReady ? "ok" : "missing") +
         ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
@@ -597,14 +603,20 @@ bool AimAssistModule::crosshairPlayerSnapshot(
     float maximumDistance,
     void*& target,
     bedrocktools::sdk::AABB& bounds,
-    std::string_view& failureReason) {
+    std::string_view& failureReason,
+    int& observedHitResultType) {
     using namespace bedrocktools::sdk;
     target = nullptr;
     bounds = {};
     failureReason = "unknown";
+    observedHitResultType = -1;
     if (!player) { failureReason = "local_player_missing"; return false; }
     if (!std::isfinite(maximumDistance) || maximumDistance <= 0.0f) {
         failureReason = "invalid_distance"; return false;
+    }
+    if (!g_levelGetHitResult) {
+        failureReason = "level_hit_result_resolver_unavailable";
+        return false;
     }
     if (!g_hitResultGetEntity) {
         failureReason = "hit_result_entity_resolver_unavailable"; return false;
@@ -618,9 +630,30 @@ bool AimAssistModule::crosshairPlayerSnapshot(
 
     auto* level = reinterpret_cast<Actor*>(player)->level();
     if (!level) { failureReason = "player_level_unavailable"; return false; }
-    auto* hitResult = level->storedHitResult();
-    if (!hitResult || hitResult->type() != 1) {
-        failureReason = "crosshair_hit_is_not_an_entity"; return false;
+
+    // 26.60's native Level::getHitResult accessor reads the HitResult pointer
+    // from Level + 0x1D8. The older SDK storedHitResult() helper assumes an
+    // inline object at +0x1D0; using it reads the wrong object and reports a
+    // non-entity even while the crosshair is over a player.
+    auto* hitResult = g_levelGetHitResult(level);
+    const auto hitResultAddress = reinterpret_cast<std::uintptr_t>(hitResult);
+    if (!hitResult || hitResultAddress <= 0x1000 ||
+        hitResultAddress > std::numeric_limits<std::uintptr_t>::max() -
+            offsets::HitResult::mType - sizeof(observedHitResultType)) {
+        failureReason = "level_hit_result_pointer_unavailable";
+        return false;
+    }
+    if (!bedrocktools::core::memory::readSelfMemory(
+            hitResultAddress + offsets::HitResult::mType,
+            &observedHitResultType, sizeof(observedHitResultType))) {
+        failureReason = "level_hit_result_type_unreadable";
+        return false;
+    }
+    if (observedHitResultType != 1) {
+        failureReason = observedHitResultType == 0
+            ? "crosshair_hit_type_0_no_entity"
+            : "crosshair_hit_type_not_entity";
+        return false;
     }
     void* selectedEntity = g_hitResultGetEntity(hitResult);
     if (!selectedEntity || reinterpret_cast<std::uintptr_t>(selectedEntity) <= 0x1000 ||
