@@ -25,6 +25,7 @@ object TunnelController {
     private const val BASH = "/data/data/com.termux/files/usr/bin/bash"
 
     internal fun buildStartScript(domain: String): String = startScript(domain)
+    internal fun buildStopScriptForTest(): String = stopScript
 
     private fun startScript(domain: String) = """
         set -eu
@@ -109,7 +110,7 @@ object TunnelController {
             ''|*[!0-9]*) rm -f "@DOLLAR@PID_FILE" ;;
             *)
               if kill -0 "@DOLLAR@PID" 2>/dev/null; then
-                CMD="@DOLLAR@(ps -p "@DOLLAR@PID" -o args= 2>/dev/null || true)"
+                CMD="@DOLLAR@(tr '\000' ' ' < "/proc/@DOLLAR@PID/cmdline" 2>/dev/null || true)"
                 case "@DOLLAR@CMD" in
                   *ngrok*|*proot*)
                     kill "@DOLLAR@PID" 2>/dev/null || true
@@ -219,7 +220,7 @@ object TunnelController {
             ''|*[!0-9]*) echo "BRIDGE_ERROR=INVALID_PID_FILE" ;;
             *)
               if kill -0 "@DOLLAR@PID" 2>/dev/null; then
-                CMD="@DOLLAR@(ps -p "@DOLLAR@PID" -o args= 2>/dev/null || true)"
+                CMD="@DOLLAR@(tr '\000' ' ' < "/proc/@DOLLAR@PID/cmdline" 2>/dev/null || true)"
                 case "@DOLLAR@CMD" in
                   *ngrok*|*proot*)
                     kill "@DOLLAR@PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true
