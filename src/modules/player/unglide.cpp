@@ -432,6 +432,21 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
+    // Fail closed: Unglide is an Elytra-flight action. A missing/false gliding
+    // signal must never dispatch Space while the player is standing, walking,
+    // swimming, or otherwise not actively gliding. The native status flag is
+    // checked first and the bounded synchronized-data fallback is consulted
+    // when the native flag is negative.
+    const auto glidingState = playerIsGlidingForUnglide(player);
+    if (!glidingState || !*glidingState) {
+        resetTargetState();
+        reject("not_gliding",
+               std::string("Elytra gliding is not positively confirmed; gliding_state=") +
+                   (glidingState ? "false" : "unavailable") +
+                   "; no Space keymap request sent.", 100);
+        return;
+    }
+
     // Use the engine's authoritative crosshair HitResult rather than the Aim
     // Assist module's cached target. Unglide therefore works with Aim Assist
     // disabled and cannot trigger on a nearby player who is not selected.
@@ -471,12 +486,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         return;
     }
     const float effectiveMaximumDistance = targetDistance;
-    // The native Elytra/gliding flag is not reliable on all supported Bedrock
-    // builds: both the status-flag API and synchronized-data fallback can report
-    // false while the player is visibly gliding. Treat it as telemetry only, not
-    // a hard gate; the fresh player target, crosshair, distance and height checks
-    // below still gate every Key Mapper dispatch.
-    const auto glidingState = playerIsGlidingForUnglide(player);
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.
@@ -645,7 +654,40 @@ void UnglideModule::onMenuRegistered(){
  sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
  ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
 }
-bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
- if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
- try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
+bool UnglideModule::onMenuConfigChanged(std::string_view key,std::string_view value){
+ // Some launcher menu paths qualify keys with a module/config prefix. Resolve
+ // the final key component so both the module page and persistent settings map
+ // to the same live fields.
+ const auto separator = key.find_last_of("./:");
+ const std::string_view k = separator == std::string_view::npos ? key : key.substr(separator + 1);
+ if(k=="m_unglideEnabled"){
+   const bool b = value=="true" || value=="1" || value=="on";
+   std::lock_guard<std::mutex> l(m_stateMutex);
+   m_unglideEnabled=b;
+   if(!b){m_burstRemaining=0;m_latchedTarget=nullptr;m_targetLatched=false;m_triggerState=TriggerState::Idle;}
+   m_nextAttempt={};
+   return true;
+ }
+ try{
+   // Slider/text controls may append their display unit to the value. Parse the
+   // numeric prefix instead of rejecting a valid value such as "12.5 blocks".
+   std::string x(value);
+   std::size_t p=0;
+   const float n=std::stof(x,&p);
+   if(p==0 || !std::isfinite(n)) return false;
+   std::lock_guard<std::mutex> l(m_stateMutex);
+   if(k=="m_unglideTargetDistance") m_targetDistance=std::clamp(n,1.0f,32.0f);
+   else if(k=="m_unglideMaxVerticalDifference") m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);
+   else if(k=="m_unglideBurstCount") m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);
+   else if(k=="m_unglidePressIntervalMs") m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);
+   else return false;
+   // Apply the new range/threshold immediately; do not retain a latch or retry
+   // deadline computed with the previous configuration.
+   m_burstRemaining=0;
+   m_latchedTarget=nullptr;
+   m_targetLatched=false;
+   m_triggerState=TriggerState::Idle;
+   m_nextAttempt={};
+   return true;
+ }catch(...){return false;}
 }
