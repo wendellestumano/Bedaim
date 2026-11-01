@@ -1326,25 +1326,23 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
     const auto entityProbe = bedrocktools::sdk::probeEntityContext(player);
 
-    bool nativeGetterAvailable = false;
+    constexpr int kGlidingActorFlag = 32;
+    const auto nativeGetter = resolveActorGetStatusFlag();
     bool nativeGliding = false;
-    bool synchronizedGliding = false;
-    if (!ecsGliding.has_value()) {
-        constexpr int kGlidingActorFlag = 32;
-        const auto nativeGetter = resolveActorGetStatusFlag();
-        nativeGetterAvailable = nativeGetter != nullptr;
-        if (nativeGetter) {
-            try {
-                nativeGliding = nativeGetter(player, kGlidingActorFlag);
-            } catch (...) {
-                nativeGliding = false;
-            }
+    if (nativeGetter) {
+        try {
+            nativeGliding = nativeGetter(player, kGlidingActorFlag);
+        } catch (...) {
+            nativeGliding = false;
         }
-        synchronizedGliding = actorIsGliding(player);
     }
-    const bool gliding = ecsGliding.has_value()
-        ? *ecsGliding
-        : (nativeGliding || synchronizedGliding);
+    const bool synchronizedGliding = actorIsGliding(player);
+
+    // The global ECS pool can exist while the local player's entity lacks the
+    // tag. A negative ECS membership check must not suppress positive Actor
+    // flag or synchronized Actor-data signals.
+    const bool gliding =
+        (ecsGliding.has_value() && *ecsGliding) || nativeGliding || synchronizedGliding;
 
     static std::atomic<std::int64_t> nextDiagnosticMs{0};
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1359,13 +1357,9 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
             std::string("gliding_state=") + (gliding ? "gliding_true" : "gliding_false") +
                 ": ecs_pool=" + (ecsGliding.has_value() ? "available" : "missing") +
                 ", ecs_component=" + (ecsGliding.has_value() ? (*ecsGliding ? "present" : "absent") : "unknown") +
-                ", native_getStatusFlag=" +
-                    (ecsGliding.has_value() ? "skipped_ecs_authoritative" :
-                        (nativeGetterAvailable ? "available" : "unavailable")) +
-                ", native_result=" +
-                    (ecsGliding.has_value() ? "skipped_ecs_authoritative" : (nativeGliding ? "true" : "false")) +
-                ", synchronized_actor_flags=" +
-                    (ecsGliding.has_value() ? "skipped_ecs_authoritative" : (synchronizedGliding ? "true" : "false")) +
+                ", native_getStatusFlag=" + (nativeGetter ? "available" : "unavailable") +
+                ", native_result=" + (nativeGliding ? "true" : "false") +
+                ", synchronized_actor_flags=" + (synchronizedGliding ? "true" : "false") +
                 ", flag_index=32" +
                 ", entity_context=" + (entityProbe.context_address_valid ? "valid" : "invalid") +
                 ", entity_id=" + std::to_string(entityProbe.entity_value) +
