@@ -432,49 +432,42 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
-    // Match AutoHit's targeting contract: use the fresh Aim Assist target,
-    // require that it is a player, and verify the camera ray intersects that
-    // same target. A nearby player elsewhere on screen is not sufficient.
+    // Use the engine's authoritative crosshair HitResult rather than the Aim
+    // Assist module's cached target. Unglide therefore works with Aim Assist
+    // disabled and cannot trigger on a nearby player who is not selected.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase || !aimBase->enabled) {
+    if (!aimBase) {
         resetTargetState();
-        reject("aim_assist_unavailable",
-               "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
+        reject("crosshair_query_unavailable",
+               "Aim Assist native query provider is not initialized; no Space keymap request sent.", 250);
         return;
     }
-
     auto* aim = static_cast<AimAssistModule*>(aimBase);
     void* target = nullptr;
     AABB targetBounds{};
-    float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+    std::string_view crosshairFailure;
+    if (!aim->crosshairPlayerSnapshot(
+            player, targetDistance, target, targetBounds, crosshairFailure) || !target) {
         resetTargetState();
-        reject("target_missing_or_stale",
-               "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
-        return;
-    }
-    if (!aim->currentTargetIsPlayerSnapshot(target)) {
-        resetTargetState();
-        reject("target_not_player",
-               "Unglide only triggers for a player target, not a mob target.", 120);
+        reject("crosshair_player_not_found",
+               std::string(crosshairFailure.empty() ? "No valid player selected by the engine crosshair" : crosshairFailure) +
+                   "; no Space keymap request sent.", 80);
         return;
     }
     if (!validBounds(targetBounds)) {
         resetTargetState();
         reject("target_bounds_invalid",
-               "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
+               "Engine-selected player bounds are invalid; no Space keymap request sent.", 120);
         return;
     }
-    const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
     const auto geometry = targetGeometryFor(player, targetBounds);
-    if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
+    if (!geometry.valid) {
         resetTargetState();
         reject("target_geometry_invalid",
-               "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
+               "Engine-selected player geometry is invalid; no Space keymap request sent.", 120);
         return;
     }
-
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
+    const float effectiveMaximumDistance = targetDistance;
     // The native Elytra/gliding flag is not reliable on all supported Bedrock
     // builds: both the status-flag API and synchronized-data fallback can report
     // false while the player is visibly gliding. Treat it as telemetry only, not
@@ -535,12 +528,6 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 ", activation_height=" + std::to_string(maximumHeightDifference));
         return;
     }
-    if (!crosshairConfirmed) {
-        reject("crosshair_not_on_target",
-               "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
-        return;
-    }
-
     const auto dispatchStarted = std::chrono::steady_clock::now();
     AutomationBroadcastResult result = AutomationBroadcastResult::BroadcastFailed;
     int remaining = 0;
