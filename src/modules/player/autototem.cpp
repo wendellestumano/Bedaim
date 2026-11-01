@@ -344,7 +344,7 @@ void AutoTotemModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const bool offhandHasTotem = containsTotem(offhandId);
-    const int totemSlot = inventory.findInventorySlot(player, "totem");
+    const int totemSlot = offhandEmpty ? inventory.findInventorySlot(player, "totem") : -1;
 
     bool inCombat = player->hurtTime() > 0;
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
@@ -572,6 +572,19 @@ void AutoTotemModule::onMenuRegistered() {
             settingsRegistered.store(false, std::memory_order_release);
     }
 
+    // Populate the schema from the persisted module state. Hard-coded current
+    // values made the menu display defaults even when loadConfig() had restored
+    // different settings from the previous session.
+    nlohmann::json currentConfig;
+    saveConfig(currentConfig);
+    auto configValueText = [&](const char* key, const char* fallback) -> std::string {
+        const auto it = currentConfig.find(key);
+        if (it == currentConfig.end() || it->is_null()) return fallback;
+        if (it->is_string()) return it->get<std::string>();
+        if (it->is_boolean()) return it->get<bool>() ? "true" : "false";
+        return it->dump();
+    };
+
     ConfigSchemaBuilder schema;
     schema.defaultCategory("behavior")
         .category("behavior", "Behavior", "Automatic offhand refill")
@@ -591,7 +604,7 @@ void AutoTotemModule::onMenuRegistered() {
     auto delay = makeNode("m_delayMs", "Refill Delay (ms)", "behavior",
                           ConfigControlTypeV2::SliderFloat);
     delay.defaultValue = "100";
-    delay.currentValue = "100";
+    delay.currentValue = configValueText("m_delayMs", "100");
     delay.hasCurrentValue = true;
     delay.minValue = "0";
     delay.maxValue = "1000";
@@ -601,14 +614,14 @@ void AutoTotemModule::onMenuRegistered() {
     auto keep = makeNode("m_keepTotemEquipped", "Keep Totem Equipped", "behavior",
                          ConfigControlTypeV2::Toggle);
     keep.defaultValue = "true";
-    keep.currentValue = "true";
+    keep.currentValue = configValueText("m_keepTotemEquipped", "true");
     keep.hasCurrentValue = true;
     schema.node(std::move(keep));
 
     auto combat = makeNode("m_combatOnly", "Combat Only", "safety",
                            ConfigControlTypeV2::Toggle);
     combat.defaultValue = "false";
-    combat.currentValue = "false";
+    combat.currentValue = configValueText("m_combatOnly", "false");
     combat.hasCurrentValue = true;
     schema.node(std::move(combat));
 

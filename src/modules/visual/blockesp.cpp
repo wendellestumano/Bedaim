@@ -76,6 +76,7 @@ std::array<std::atomic<std::uint64_t>, kApollonEventHookCount> g_apollonEventCal
 std::atomic<std::uint64_t> g_genericBlockUpdateCalls{0};
 
 std::atomic<bool> g_blockEspCaptureEvents{false};
+std::atomic<bool> g_loggedBlockEspBaselineMismatch{false};
 
 constexpr std::uintptr_t kApollonBlockUpdateRva = 0x10F7FDE0u;
 
@@ -937,6 +938,23 @@ void BlockEspModule::onDisable() {
 void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
     ++m_tickCount;
     if (!enabled || !player) return;
+
+    // BlockSource/Dimension SDK calls are version-sensitive native access too.
+    // Fail closed before invoking them unless the loaded ELF is the exact 26.60
+    // baseline. Clear the active source once so render/event paths cannot retain
+    // a stale pointer after a baseline mismatch.
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) {
+        g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
+        if (!g_loggedBlockEspBaselineMismatch.exchange(true, std::memory_order_acq_rel)) {
+            clearCache();
+            clearBlockEventCandidates();
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Error, "BlockESP",
+                "native_baseline", "unsupported",
+                "refusing Dimension/BlockSource SDK calls because libminecraftpe.so does not match the exact Minecraft 26.60 Build ID");
+        }
+        return;
+    }
 
     auto* dimension = player->dimension();
     auto* source = dimension ? dimension->blockSource() : nullptr;
