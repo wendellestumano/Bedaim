@@ -112,6 +112,11 @@ private:
     float m_moveDirectionZ = 1.0f;
     std::uint64_t m_tickCount = 0;
     std::uint64_t m_lastResolveAttemptTick = 0;
+    // Serialize game-tick scanner state with menu lifecycle/config callbacks.
+    // Frame/menu callbacks and LocalPlayerTickEvent can run on different threads.
+    mutable std::recursive_mutex m_scanMutex;
+    // Keep render-only filters/colors coherent without waiting for scanner work.
+    mutable std::recursive_mutex m_visualConfigMutex;
     mutable std::mutex m_cacheMutex;
     std::unordered_map<PositionKey, Outline, PositionHash> m_cache;
     std::vector<PositionKey> m_cacheRefreshPositions;
