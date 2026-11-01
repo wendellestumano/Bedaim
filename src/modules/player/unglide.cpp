@@ -446,14 +446,14 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     void* target = nullptr;
     AABB targetBounds{};
     std::string_view crosshairFailure;
-    int observedHitResultType = -1;
+    int observedEntityResult = -1;
     if (!aim->crosshairPlayerSnapshot(
             player, targetDistance, target, targetBounds, crosshairFailure,
-            observedHitResultType) || !target) {
+            observedEntityResult) || !target) {
         resetTargetState();
         reject("crosshair_player_not_found",
                std::string(crosshairFailure.empty() ? "No valid player selected by the engine crosshair" : crosshairFailure) +
-                   "; hit_result_type=" + std::to_string(observedHitResultType) +
+                   "; hit_result_entity_result=" + std::to_string(observedEntityResult) +
                    "; no Space keymap request sent.", 80);
         return;
     }
