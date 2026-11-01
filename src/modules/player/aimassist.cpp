@@ -2363,5 +2363,3 @@ void HitboxExpanderModule::saveConfig(nlohmann::json& j) {
     j["m_requireLineOfSight"] = m_requireLineOfSight;
     j["m_showHitbox"] = m_showHitbox;
 }
-
-[executed on device: localhost (df749b1e-c92e-41a8-a013-b79c2a3fe357)]
