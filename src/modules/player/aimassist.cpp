@@ -54,6 +54,7 @@ struct ActorVector {
 };
 
 using ActorFetchNearbyActorsSortedFn = ActorVector (*)(void*, void*, int);
+using HitResultGetEntityFn = void* (*)(void*);
 
 AimAssistModule* g_aimAssist = nullptr;
 ActorIsPlayerFn g_actorIsPlayer = nullptr;
@@ -61,6 +62,7 @@ ActorIsInvisibleFn g_actorIsInvisible = nullptr;
 ActorGetNameTagFn g_actorGetNameTag = nullptr;
 LocalPlayerApplyTurnDeltaFn g_applyLocalPlayerTurnDelta = nullptr;
 ActorFetchNearbyActorsSortedFn g_fetchNearbyActors = nullptr;
+HitResultGetEntityFn g_hitResultGetEntity = nullptr;
 BlockSourceIsSolidBlockingBlockFn g_isSolidBlockingBlock = nullptr;
 HitboxExpanderModule* g_hitboxExpander = nullptr;
 std::once_flag g_hitboxExpanderEventOnce;
@@ -383,6 +385,8 @@ void AimAssistModule::onInit() {
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
     g_actorIsPlayer = reinterpret_cast<ActorIsPlayerFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsPlayer));
+    g_hitResultGetEntity = reinterpret_cast<HitResultGetEntityFn>(
+        bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::HitResultGetEntity));
     g_actorIsInvisible = reinterpret_cast<ActorIsInvisibleFn>(
         bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorIsInvisible));
     g_actorGetNameTag = reinterpret_cast<ActorGetNameTagFn>(
@@ -399,6 +403,7 @@ void AimAssistModule::onInit() {
         "BedrockAim", "native_dependencies", requiredReady ? "ready" : "partial",
         std::string("nearby_query=") + (targetQueryReady ? "ok" : "missing") +
         ", actor_classification=" + (targetClassificationReady ? "ok" : "missing") +
+        ", hit_result_entity=" + (g_hitResultGetEntity ? "ok" : "unavailable") +
         ", camera_control=" + (cameraControlReady ? "ok" : "missing") +
         ", visibility=" + (g_isSolidBlockingBlock ? "ok" : "unavailable") +
         ", names=" + (g_actorGetNameTag ? "ok" : "unavailable"));
@@ -584,6 +589,107 @@ bool AimAssistModule::currentTargetSnapshot(void*& target, bedrocktools::sdk::AA
     bedrocktools::diagnostics::probe(bedrocktools::diagnostics::Level::Debug,
         "BedrockAim", "target_snapshot", "fresh");
     bounds = m_lastTargetBounds;
+    return true;
+}
+
+bool AimAssistModule::crosshairPlayerSnapshot(
+    bedrocktools::sdk::Player* player,
+    float maximumDistance,
+    void*& target,
+    bedrocktools::sdk::AABB& bounds,
+    std::string_view& failureReason) {
+    using namespace bedrocktools::sdk;
+    target = nullptr;
+    bounds = {};
+    failureReason = "unknown";
+    if (!player) { failureReason = "local_player_missing"; return false; }
+    if (!std::isfinite(maximumDistance) || maximumDistance <= 0.0f) {
+        failureReason = "invalid_distance"; return false;
+    }
+    if (!g_hitResultGetEntity) {
+        failureReason = "hit_result_entity_resolver_unavailable"; return false;
+    }
+    if (!g_actorIsPlayer) {
+        failureReason = "actor_player_classifier_unavailable"; return false;
+    }
+    if (!g_fetchNearbyActors) {
+        failureReason = "nearby_actor_query_unavailable"; return false;
+    }
+
+    auto* level = reinterpret_cast<Actor*>(player)->level();
+    if (!level) { failureReason = "player_level_unavailable"; return false; }
+    auto* hitResult = level->storedHitResult();
+    if (!hitResult || hitResult->type() != 1) {
+        failureReason = "crosshair_hit_is_not_an_entity"; return false;
+    }
+    void* selectedEntity = g_hitResultGetEntity(hitResult);
+    if (!selectedEntity || reinterpret_cast<std::uintptr_t>(selectedEntity) <= 0x1000 ||
+        selectedEntity == player) {
+        failureReason = "crosshair_entity_pointer_invalid"; return false;
+    }
+
+    const float safeDistance = std::clamp(maximumDistance, 1.0f, 32.0f);
+    Vec3 extent{safeDistance, safeDistance, safeDistance};
+    ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
+    const auto beginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
+    const auto endAddress = reinterpret_cast<std::uintptr_t>(actors.end);
+    if (beginAddress == 0 && endAddress == 0) {
+        failureReason = "nearby_actor_snapshot_empty"; return false;
+    }
+    if (!beginAddress || !endAddress || endAddress < beginAddress ||
+        (endAddress - beginAddress) % sizeof(DistanceSortedActor) != 0 ||
+        (endAddress - beginAddress) / sizeof(DistanceSortedActor) > 4096) {
+        failureReason = "nearby_actor_snapshot_malformed"; return false;
+    }
+
+    bool selectedEntityIsNearby = false;
+    for (auto* entry = actors.begin; entry < actors.end; ++entry) {
+        if (entry->actor == selectedEntity) { selectedEntityIsNearby = true; break; }
+    }
+    // Do not dereference the HitResult pointer until it is confirmed in the
+    // engine-owned nearby-actor snapshot for this local player and distance.
+    if (!selectedEntityIsNearby) {
+        failureReason = "crosshair_entity_not_in_nearby_snapshot"; return false;
+    }
+    if (!g_actorIsPlayer(selectedEntity)) {
+        failureReason = "crosshair_entity_is_not_player"; return false;
+    }
+
+    auto* selectedActor = reinterpret_cast<Actor*>(selectedEntity);
+    const Vec3 selectedPosition = selectedActor->position();
+    const AABB selectedBounds = selectedActor->bounds();
+    if (!finiteVec3(selectedPosition) || !validBounds(selectedBounds)) {
+        failureReason = "crosshair_player_bounds_invalid"; return false;
+    }
+    const Vec3 playerPosition = player->position();
+    if (!finiteVec3(playerPosition)) {
+        failureReason = "local_player_position_invalid"; return false;
+    }
+    const AABB playerBounds = player->bounds();
+    Vec3 eyePosition = playerPosition;
+    if (validBounds(playerBounds)) {
+        eyePosition.x = (playerBounds.min.x + playerBounds.max.x) * 0.5f;
+        eyePosition.y = playerBounds.min.y + (playerBounds.max.y - playerBounds.min.y) * 0.85f;
+        eyePosition.z = (playerBounds.min.z + playerBounds.max.z) * 0.5f;
+    } else {
+        eyePosition.y += 1.5f;
+    }
+    const Vec3 nearestPoint{
+        std::clamp(eyePosition.x, selectedBounds.min.x, selectedBounds.max.x),
+        std::clamp(eyePosition.y, selectedBounds.min.y, selectedBounds.max.y),
+        std::clamp(eyePosition.z, selectedBounds.min.z, selectedBounds.max.z)
+    };
+    const float dx = eyePosition.x - nearestPoint.x;
+    const float dy = eyePosition.y - nearestPoint.y;
+    const float dz = eyePosition.z - nearestPoint.z;
+    const float distanceSq = dx * dx + dy * dy + dz * dz;
+    if (!std::isfinite(distanceSq) || distanceSq < 0.0f ||
+        distanceSq > safeDistance * safeDistance) {
+        failureReason = "crosshair_player_outside_configured_distance"; return false;
+    }
+    target = selectedEntity;
+    bounds = selectedBounds;
+    failureReason = {};
     return true;
 }
 
