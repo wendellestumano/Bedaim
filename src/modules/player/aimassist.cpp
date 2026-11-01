@@ -603,12 +603,12 @@ bool AimAssistModule::crosshairPlayerSnapshot(
     void*& target,
     bedrocktools::sdk::AABB& bounds,
     std::string_view& failureReason,
-    int& observedHitResultType) {
+    int& observedEntityResult) {
     using namespace bedrocktools::sdk;
     target = nullptr;
     bounds = {};
     failureReason = "unknown";
-    observedHitResultType = -1;
+    observedEntityResult = -1;
     if (!player) { failureReason = "local_player_missing"; return false; }
     if (!std::isfinite(maximumDistance) || maximumDistance <= 0.0f) {
         failureReason = "invalid_distance"; return false;
@@ -637,8 +637,7 @@ bool AimAssistModule::crosshairPlayerSnapshot(
     auto* hitResult = g_levelGetHitResult(level);
     const auto hitResultAddress = reinterpret_cast<std::uintptr_t>(hitResult);
     if (!hitResult || hitResultAddress <= 0x1000 ||
-        hitResultAddress > std::numeric_limits<std::uintptr_t>::max() -
-            offsets::HitResult::mType - sizeof(observedHitResultType)) {
+        hitResultAddress > std::numeric_limits<std::uintptr_t>::max() - sizeof(void*)) {
         failureReason = "level_hit_result_pointer_unavailable";
         return false;
     }
@@ -648,12 +647,12 @@ bool AimAssistModule::crosshairPlayerSnapshot(
     // interprets the HitResult variant; its result is still treated as untrusted
     // until it matches the engine-owned nearby-actor snapshot below.
     void* selectedEntity = g_hitResultGetEntity(hitResult);
-    observedHitResultType = selectedEntity ? 1 : 0; // 1=entity result, 0=no entity
+    observedEntityResult = selectedEntity ? 1 : 0; // 1=entity result, 0=no entity
     if (!selectedEntity) {
         failureReason = "crosshair_hit_result_has_no_entity";
         return false;
     }
-    if (!selectedEntity || reinterpret_cast<std::uintptr_t>(selectedEntity) <= 0x1000 ||
+    if (reinterpret_cast<std::uintptr_t>(selectedEntity) <= 0x1000 ||
         selectedEntity == player) {
         failureReason = "crosshair_entity_pointer_invalid"; return false;
     }
