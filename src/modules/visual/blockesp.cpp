@@ -1384,6 +1384,7 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
 }
 void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosition,
                                        std::vector<Outline>& output) const {
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     output.clear();
     // The atomic capture gate reflects the combined enabled state and avoids
     // reading Module's non-atomic lifecycle flags from the render thread.
@@ -1434,6 +1435,7 @@ void BlockEspModule::getRenderSnapshot(const bedrocktools::sdk::Vec3& playerPosi
 }
 void BlockEspModule::onMenuRegistered() {
     std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     using namespace pl::modmenu;
     ConfigSchemaBuilder schema; nlohmann::json config; saveConfig(config);
     schema.defaultCategory("types")
@@ -1494,6 +1496,7 @@ void BlockEspModule::onMenuRegistered() {
 }
 bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     bool b=false;
     constexpr std::string_view utilityPrefix = "showBlock_";
     if (key.size() > utilityPrefix.size() && key.substr(0, utilityPrefix.size()) == utilityPrefix) {
@@ -1548,6 +1551,7 @@ bool BlockEspModule::onMenuConfigChanged(std::string_view key, std::string_view 
 void BlockEspModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     showTracer=j.value("showTracer",showTracer); showShulkers=j.value("showShulkers",showShulkers);
     showChests=j.value("showChests",showChests); showEnderChests=j.value("showEnderChests",showEnderChests); showVaults=j.value("showVaults",showVaults); showSpawners=j.value("showSpawners",showSpawners);
     showHoppers=j.value("showHoppers",showHoppers); showDispensers=j.value("showDispensers",showDispensers);
@@ -1575,6 +1579,7 @@ void BlockEspModule::loadConfig(const nlohmann::json& j) {
 }
 void BlockEspModule::saveConfig(nlohmann::json& j) {
     std::lock_guard<std::recursive_mutex> scanLock(m_scanMutex);
+    std::lock_guard<std::recursive_mutex> visualLock(m_visualConfigMutex);
     Module::saveConfig(j);
     j["showTracer"]=showTracer; j["showShulkers"]=showShulkers; j["showChests"]=showChests;
     j["showEnderChests"]=showEnderChests; j["showVaults"]=showVaults; j["showSpawners"]=showSpawners; j["showHoppers"]=showHoppers; j["showDispensers"]=showDispensers;
