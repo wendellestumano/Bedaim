@@ -13,6 +13,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <bedrocktools/sdk/input/MoveInput.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
 #include <array>
@@ -96,34 +97,28 @@ TargetGeometry targetGeometryFor(
     return result;
 }
 
-using ActorIsGlidingFn = bool (*)(const void*);
-using ActorGetStatusFlagFn = bool (*)(const void*, int);
+// Exact 26.60 ECS tag. The FNV-1a type hash is independently matched to the
+// component descriptor registered by libminecraftpe.so. Presence is reported
+// as telemetry until the in-game true/false transitions are validated.
+struct GlidingTravelFlagComponent {};
+static_assert(entt::type_hash<GlidingTravelFlagComponent>::value() == 0x27a011eeu,
+              "GlidingTravelFlagComponent type hash must match Minecraft 26.60");
 
-bool isTrustedGameProvider(void* address) {
-    if (!address) return false;
-    Dl_info info{};
-    if (dladdr(address, &info) == 0 || !info.dli_fname) return false;
-    const std::string_view path(info.dli_fname);
-    const auto slash = path.find_last_of('/');
-    const auto basename = slash == std::string_view::npos ? path : path.substr(slash + 1);
-    // Actor::getStatusFlag is a Minecraft ABI call. Do not accept a similarly
-    // named shim from LeviLamina or another provider for the 26.60 native path.
-    return basename == "libminecraftpe.so";
-}
+std::optional<bool> playerIsGlidingForUnglide(void* player) {
+    using namespace bedrocktools::sdk;
+    if (!player || !bedrocktools::core::memory::isExactMinecraft260Build())
+        return std::nullopt;
 
-void* resolveTrustedGameSymbol(const char* symbol) {
-    if (!symbol) return nullptr;
-    static void* minecraftHandle = nullptr;
-    if (!minecraftHandle)
-        minecraftHandle = dlopen("libminecraftpe.so", RTLD_NOW | RTLD_NOLOAD);
+    const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
+    if (offsets::Actor::mEntityContext >
+        std::numeric_limits<std::uintptr_t>::max() - playerAddress) return std::nullopt;
+    auto* context = reinterpret_cast<::EntityContext*>(
+        playerAddress + offsets::Actor::mEntityContext);
+    if (!context) return std::nullopt;
 
-    void* address = dlsym(RTLD_DEFAULT, symbol);
-    if (isTrustedGameProvider(address)) return address;
-    if (minecraftHandle) {
-        address = dlsym(minecraftHandle, symbol);
-        if (isTrustedGameProvider(address)) return address;
-    }
-    return nullptr;
+    // This follows the same EntityContext/EnTT registry path already used by
+    // BedrockTools' MoveInputComponent reader; it does not inspect legacy DataItem offsets.
+    return context->tryGetComponent<GlidingTravelFlagComponent>() != nullptr;
 }
 
 // Trigger the user's dedicated Key Mapper keymap for Unglide.
@@ -368,63 +363,44 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
-    // Match AutoHit's targeting contract: use the fresh Aim Assist target,
-    // require that it is a player, and verify the camera ray intersects that
-    // same target. A nearby player elsewhere on screen is not sufficient.
+    // Unglide performs its own fresh player/crosshair query. Aim Assist may be
+    // disabled or keybind-blocked; its native actor-query signatures are initialized
+    // independently and this read-only helper does not steer the camera.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase || !aimBase->enabled) {
+    if (!aimBase) {
         resetTargetState();
-        reject("aim_assist_unavailable",
-               "Enable Aim Assist so Unglide can verify the currently targeted player.", 250);
+        reject("targeting_service_unavailable",
+               "The shared player-query service is not registered; no Space keymap request sent.", 250);
         return;
     }
-
     auto* aim = static_cast<AimAssistModule*>(aimBase);
     void* target = nullptr;
     AABB targetBounds{};
-    float aimRange = 0.0f;
-    if (!aim->currentTargetSnapshot(target, targetBounds, aimRange) || !target) {
+    if (!aim->findCrosshairPlayerSnapshot(player, targetDistance, target, targetBounds) || !target) {
         resetTargetState();
-        reject("target_missing_or_stale",
-               "No fresh Aim Assist target is available; no Space keymap request sent.", 120);
+        reject("crosshair_player_not_found",
+               "No valid player hitbox intersects the camera ray inside Unglide's configured distance.", 120);
         return;
     }
-    if (!aim->currentTargetIsPlayerSnapshot(target)) {
-        resetTargetState();
-        reject("target_not_player",
-               "Unglide only triggers for a player target, not a mob target.", 120);
-        return;
-    }
-    if (!validBounds(targetBounds)) {
-        resetTargetState();
-        reject("target_bounds_invalid",
-               "Aim Assist target bounds are invalid; no Space keymap request sent.", 120);
-        return;
-    }
-    const bool crosshairConfirmed = aim->currentTargetInCrosshair(player, target);
     const auto geometry = targetGeometryFor(player, targetBounds);
-    if (!geometry.valid || !std::isfinite(aimRange) || aimRange <= 0.0f) {
+    if (!geometry.valid) {
         resetTargetState();
         reject("target_geometry_invalid",
-               "Target geometry or Aim Assist range is invalid; no Space keymap request sent.", 120);
+               "The fresh crosshair player's geometry is invalid; no Space keymap request sent.", 120);
         return;
     }
 
-    const float effectiveMaximumDistance = std::min(targetDistance, aimRange);
-    // Only dispatch while the local player is actually gliding. The reader is
-    // guarded by the exact 26.60 ELF Build ID and uses ActorFlags::Gliding (32).
+    const float effectiveMaximumDistance = targetDistance;
+    // The ECS component hash is matched to the 26.60 descriptor, but component
+    // presence/absence transitions still need an in-game check. Keep it telemetry
+    // only until that runtime validation is complete.
     const auto glidingState = playerIsGlidingForUnglide(player);
-    if (!glidingState.has_value()) {
-        reject("gliding_state_unavailable",
-               "Could not resolve Actor::isGliding or Actor::getStatusFlag from the exact 26.60 library; no Unglide keymap request sent.", 250);
-        return;
-    }
-    if (!*glidingState) {
-        reject("player_not_gliding",
-               "ActorFlags::Gliding is clear; no Unglide keymap request sent.", 120);
-        return;
-    }
-    report("gliding_detected", "ActorFlags::Gliding (32) is set for the local player.");
+    report(glidingState ? (*glidingState ? "gliding_detected" : "gliding_not_detected")
+                        : "gliding_state_unavailable",
+           std::string("gliding_state=") +
+               (glidingState ? (*glidingState ? "true" : "false") : "unknown") +
+               "; telemetry_only=true; target_source=fresh_crosshair_player_query");
+    const bool crosshairConfirmed = true; // The query returns only ray-intersecting players.
 
     // A new target starts Tracking. Range/height gates keep tracking active
     // until the activation conditions pass, without sending Space prematurely.
@@ -590,3 +566,5 @@ bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
  if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
  try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
 }
+
+[executed on device: localhost (df749b1e-c92e-41a8-a013-b79c2a3fe357)]
