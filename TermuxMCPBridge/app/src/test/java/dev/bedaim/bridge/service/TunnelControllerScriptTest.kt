@@ -51,6 +51,17 @@ class TunnelControllerScriptTest {
     }
 
     @Test
+    fun stopScriptSerializesWithStartAndChecksTheOwnedProcfsCommand() {
+        val script = TunnelController.buildStopScriptForTest()
+
+        assertTrue(script.contains("ngrok-start.lock"))
+        assertTrue(script.contains("START_LOCK_BUSY"))
+        assertTrue(script.contains("/proc/\$PID/cmdline"))
+        assertTrue(script.contains("PID_OWNERSHIP_MISMATCH"))
+        assertFalse(script.contains("ps -p"))
+    }
+
+    @Test
     fun endpointConflictUsesABoundedRetryCooldown() {
         val script = TunnelController.buildStartScript("https://example.ngrok-free.dev")
 
