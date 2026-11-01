@@ -408,6 +408,17 @@ void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
+    // Gate every native target/crosshair query, not only the later ECS read.
+    // This prevents BedrockTools signatures or offsets from being used when
+    // the loaded libminecraftpe.so is not the exact 26.60 baseline.
+    if (!bedrocktools::core::memory::isExactMinecraft260Build()) {
+        resetTargetState();
+        reject("unsupported_native_baseline",
+               "Loaded libminecraftpe.so does not match the required Minecraft 26.60 Build ID; no native target query or Key Mapper request sent.",
+               1000);
+        return;
+    }
+
     // Unglide performs its own fresh player/crosshair query. Aim Assist may be
     // disabled or keybind-blocked; its native actor-query signatures are initialized
     // independently and this read-only helper does not steer the camera.
