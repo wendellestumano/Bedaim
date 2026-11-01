@@ -498,8 +498,8 @@ void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
-    // Use Aim Assist's shared 26.60 ECS travel-state probe for flight state.
-    // Legacy native/synchronized ActorFlags are only fallbacks when the ECS pool is absent.
+    // Use the canonical 26.60 ActorDataFlagComponent bit 32 query parity.
+    // Missing component is fail-closed; travel tags and synchronized fallbacks do not authorize a trigger.
     auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
     if (!aimBase) {
         resetTargetState();
@@ -512,7 +512,7 @@ void UnglideModule::processPlayerUpdate(bedrocktools::sdk::Player* player) {
     if (!glidingState) {
         resetTargetState();
         reject("not_gliding",
-               "Post-ClientInstance-update ECS/native flight-state probe reports gliding=false; no Space keymap request sent.", 100);
+               "ActorDataFlagComponent bit 32 is false or unavailable after ClientInstance update; no Space keymap request sent.", 100);
         return;
     }
 
