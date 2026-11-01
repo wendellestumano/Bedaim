@@ -26,6 +26,11 @@ inline bool shouldBeginUnglideDispatch(bool enabled, bool dispatchInProgress,
            shouldDispatchUnglideBurst(alreadyTriggered, burstRemaining);
 }
 
+// Unknown or negative ECS state must never emit a Space keymap request.
+inline bool shouldDispatchUnglideWhenGliding(bool stateKnown, bool isGliding) noexcept {
+    return stateKnown && isGliding;
+}
+
 // A completed trigger stays latched through transient gate failures. Only a
 // lost/changed target or explicit separation beyond the re-arm radius may reset it.
 inline bool shouldKeepUnglideTriggerLatch(bool wasTriggered, bool targetLost,
@@ -53,5 +58,3 @@ inline bool shouldRearmUnglide(float targetDistance, float triggerDistance,
     return targetDistance > std::clamp(triggerDistance, 1.0f, 32.0f) + hysteresis;
 }
 } // namespace bedaim::macefall
-
-[executed on device: localhost (df749b1e-c92e-41a8-a013-b79c2a3fe357)]
