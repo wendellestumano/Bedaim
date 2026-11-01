@@ -23,6 +23,8 @@ class TunnelControllerScriptTest {
         assertTrue(script.contains("ngrok-start.lock"))
         assertTrue(script.contains("BRIDGE_TUNNEL_START_IN_PROGRESS"))
         assertTrue(script.contains("BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"))
+        assertTrue(script.contains("BRIDGE_TUNNEL_ALREADY_RUNNING=REMOTE_ENDPOINT"))
+        assertTrue(script.contains(".well-known/oauth-protected-resource/mcp"))
         assertTrue(script.contains("NGROK_DOMAIN_ACTIVE_WITH_WRONG_UPSTREAM"))
         assertTrue(script.contains("BRIDGE_TUNNEL_PROCESS_ALIVE"))
         assertTrue(script.contains("LOCK_PID=\"$(cat"))
@@ -35,6 +37,17 @@ class TunnelControllerScriptTest {
 
         assertTrue(script.contains("PID_OWNERSHIP_MISMATCH"))
         assertTrue(script.contains("case \"\$CMD\" in"))
+    }
+
+    @Test
+    fun remoteMetadataMustMatchTheExactMcpResource() {
+        val domain = "https://example.ngrok-free.dev"
+        val valid = """{"resource":"https://example.ngrok-free.dev/mcp"}"""
+        val wrong = """{"resource":"https://other.ngrok-free.dev/mcp"}"""
+
+        assertTrue(TunnelController.isExpectedRemoteResourceMetadata(domain, valid))
+        assertFalse(TunnelController.isExpectedRemoteResourceMetadata(domain, wrong))
+        assertFalse(TunnelController.isExpectedRemoteResourceMetadata(domain, "not-json"))
     }
 
     @Test
