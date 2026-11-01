@@ -59,7 +59,10 @@ object ToolchainRunner {
         require(directory.path == canonicalRoot.path || directory.path.startsWith(canonicalRoot.path + File.separator)) {
             "cwd deve permanecer dentro de $SHARED_ROOT"
         }
-        require(directory.isDirectory) { "Diretório de trabalho não encontrado." }
+        // This process belongs to the Bridge app, not Termux. Android scoped
+        // storage can deny stat/list access to Download even though Termux can
+        // access it. Validate the path boundary here; RUN_COMMAND, executing
+        // under Termux's UID, reports a missing or inaccessible working dir.
         args.filter { !it.startsWith("-") }.forEach { value ->
             val candidate = File(value).let { if (it.isAbsolute) it else File(directory, it.path) }.canonicalFile
             require(candidate.path == canonicalRoot.path || candidate.path.startsWith(canonicalRoot.path + File.separator)) {
