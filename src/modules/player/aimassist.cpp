@@ -1325,7 +1325,6 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     // membership confirms gliding, but an absent tag does not suppress the
     // native Actor flag or synchronized Actor-data fallbacks below.
     const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
-    const auto entityProbe = bedrocktools::sdk::probeEntityContext(player);
 
     constexpr int kGlidingActorFlag = 32;
     const auto nativeGetter = resolveActorGetStatusFlag();
@@ -1351,6 +1350,10 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     auto expected = nextDiagnosticMs.load(std::memory_order_relaxed);
     if (nowMs >= expected && nextDiagnosticMs.compare_exchange_strong(
             expected, nowMs + 1000, std::memory_order_relaxed)) {
+        // Probe the broad ECS component set only for telemetry, once per second.
+        // The per-tick flight decision remains the positive ECS tag / native flag /
+        // synchronized Actor-data combination above.
+        const auto entityProbe = bedrocktools::sdk::probeEntityContext(player);
         // This is a time-based telemetry sample. probe() deduplicates identical
         // states and would hide registry changes while the boolean remains false.
         bedrocktools::diagnostics::log(
@@ -1369,6 +1372,16 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
                 ", move_input_try_get=" + (entityProbe.move_input_try_get_present ? "present" : "absent") +
                 ", gliding_pool_check=" + (entityProbe.gliding_pool_present ? "present" : "missing") +
                 ", gliding_entity_check=" + (entityProbe.gliding_entity_present ? "present" : "absent") +
+                ", air_travel=" + (entityProbe.air_travel_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.air_travel_entity_present ? "entity" : "absent") +
+                ", ground_travel=" + (entityProbe.ground_travel_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.ground_travel_entity_present ? "entity" : "absent") +
+                ", water_travel=" + (entityProbe.water_travel_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.water_travel_entity_present ? "entity" : "absent") +
+                ", lava_travel=" + (entityProbe.lava_travel_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.lava_travel_entity_present ? "entity" : "absent") +
+                ", liquid_travel=" + (entityProbe.liquid_travel_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.liquid_travel_entity_present ? "entity" : "absent") +
                 ", mob_travel=" + std::string(entityProbe.mob_travel_pool_present ? "pool" : "missing") +
                     "/" + (entityProbe.mob_travel_entity_present ? "entity" : "absent") +
                 ", player_flying=" + (entityProbe.player_flying_pool_present ? "pool" : "missing") +
