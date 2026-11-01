@@ -929,6 +929,24 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
     ActorVector actors = g_fetchNearbyActors(player, &extent, 1);
     const auto actorsBeginAddress = reinterpret_cast<std::uintptr_t>(actors.begin);
     const auto actorsEndAddress = reinterpret_cast<std::uintptr_t>(actors.end);
+    const bool emptyActorSnapshot = actorsBeginAddress == 0 && actorsEndAddress == 0;
+    if (emptyActorSnapshot) {
+        // The engine can legitimately return {nullptr, nullptr} for an empty
+        // nearby-actor snapshot. During Elytra flight, retain only the last
+        // validated geometry briefly; never expose the missing actor to AutoHit.
+        const auto now = std::chrono::steady_clock::now();
+        const bool recentGlideTarget = m_localPlayerGliding && m_lastTarget &&
+            validBounds(m_lastTargetBounds) &&
+            m_lastTargetSeen.time_since_epoch().count() != 0 &&
+            now >= m_lastTargetSeen &&
+            now - m_lastTargetSeen <= std::chrono::milliseconds(250);
+        if (recentGlideTarget) {
+            m_targetPresent = false;
+            return;
+        }
+        resetTrackingState();
+        return;
+    }
     if (!actors.begin || !actors.end || actorsEndAddress < actorsBeginAddress ||
         (actorsEndAddress - actorsBeginAddress) % sizeof(DistanceSortedActor) != 0 ||
         (actorsEndAddress - actorsBeginAddress) / sizeof(DistanceSortedActor) > 4096) {
@@ -1089,8 +1107,10 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // The last target also gets a small 3D retention bubble, including when it
         // passes below the player or behind the camera. This prevents target loss
         // during the fast vertical movement of a slam.
-        if (angleScore > maxFov && !insideRetentionBubble && !candidateBelowPlayer &&
-            !rayHitsExpandedTarget) continue;
+        // 360 degrees is an explicit unrestricted angular mode. Keep the
+        // remaining range/type/visibility/bounds filters active.
+        if (maxFov < 359.999f && angleScore > maxFov && !insideRetentionBubble &&
+            !candidateBelowPlayer && !rayHitsExpandedTarget) continue;
 
         // A ray through the expanded box is a high-confidence crosshair match,
         // not an angle-only candidate that happens to fall inside the FOV.
@@ -1135,9 +1155,19 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         // area or the native nearby-actor list skips one tick. Do not dereference
         // the cached entity or auto-hit it while it is missing from the list.
         const auto now = std::chrono::steady_clock::now();
-        if (m_lastTarget && validBounds(m_lastTargetBounds) &&
+        const bool recentTarget = m_lastTarget && validBounds(m_lastTargetBounds) &&
             m_lastTargetSeen.time_since_epoch().count() != 0 &&
-            now - m_lastTargetSeen <= std::chrono::milliseconds(250)) {
+            now >= m_lastTargetSeen &&
+            now - m_lastTargetSeen <= std::chrono::milliseconds(250);
+        // Nearby-actor enumeration can briefly omit the target while the local
+        // player is moving quickly in Elytra flight. Keep the cached aim point
+        // for the short grace window, but leave targetPresent=false so consumers
+        // that need a live entity (for example AutoHit) cannot use stale state.
+        if (m_localPlayerGliding && recentTarget) {
+            m_targetPresent = false;
+            return;
+        }
+        if (recentTarget) {
             const Vec3 nearestOnPreviousTarget{
                 std::clamp(playerCenter.x, m_lastTargetBounds.min.x, m_lastTargetBounds.max.x),
                 std::clamp(playerCenter.y, m_lastTargetBounds.min.y, m_lastTargetBounds.max.y),
@@ -1269,14 +1299,20 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
 void AimAssistModule::processPlayerFrame() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
     auto* player = m_lastPlayer;
-    if (!enabled || !player || !m_lastTarget || !m_targetPresent ||
+    if (!enabled || !player || !m_lastTarget ||
         !m_weaponFilterAllowsCurrent || !g_applyLocalPlayerTurnDelta) return;
 
     // Candidate scanning is performed once per player tick. Re-running the native
     // nearby-actor query on every render frame caused duplicate 80-block scans and
     // unnecessary native string/geometry work on low-end Android.
     const auto now = std::chrono::steady_clock::now();
-    if (m_lastTargetSeen.time_since_epoch().count() == 0 ||
+    const bool glideAimGrace = m_localPlayerGliding && !m_targetPresent &&
+        m_lastTargetSeen.time_since_epoch().count() != 0 &&
+        now >= m_lastTargetSeen &&
+        now - m_lastTargetSeen <= std::chrono::milliseconds(250) &&
+        validBounds(m_lastTargetBounds);
+    if ((!m_targetPresent && !glideAimGrace) ||
+        m_lastTargetSeen.time_since_epoch().count() == 0 ||
         now < m_lastTargetSeen ||
         now - m_lastTargetSeen > std::chrono::milliseconds(250) ||
         !validBounds(m_lastTargetBounds)) {

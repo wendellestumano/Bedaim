@@ -72,6 +72,11 @@ std::atomic<std::uint64_t> g_genericBlockUpdateCalls{0};
 
 std::atomic<bool> g_blockEspCaptureEvents{false};
 
+// Disabled by default while the 26.60 crash is investigated. These detours use
+// Apollon-derived native addresses and event-object layouts; the bounded
+// BlockSource scan and GameModeActionEvent queue remain available without them.
+constexpr bool kEnableExperimentalNativeEventHooks = false;
+
 constexpr std::uintptr_t kApollonBlockUpdateRva = 0x10F7FDE0u;
 
 // Use the real ELF image base. BlockSourceGetBlock may move between Bedrock
@@ -782,14 +787,15 @@ void BlockEspModule::clearCache() {
     m_cacheRefreshCursor = 0;
 }
 void BlockEspModule::onInit() {
-    // EXPERIMENTAL: restore the native capture installation used by Apollon v6.7
-    // in PR #123. The original RVAs/prologue guards are intentionally retained
-    // for this first compatibility test; a 26.60 mismatch must fail closed.
-    // Keep the 26.60 tessellation hook and player-tick validation as fallbacks.
+    // Keep the version-resolved BlockSource lookup for the bounded tick scanner.
+    // Experimental Apollon-derived detours stay disabled until their 26.60 ABI
+    // and callback layouts are validated against the exact runtime binary.
     resolveBlockGetBlock();
-    installBlockUpdateHook();
-    installApollonBlockEventHooks();
-    installBlockSourceTessellationGetBlockHook();
+    if (kEnableExperimentalNativeEventHooks) {
+        installBlockUpdateHook();
+        installApollonBlockEventHooks();
+        installBlockSourceTessellationGetBlockHook();
+    }
     bedrocktools::events::bus().subscribe<bedrocktools::events::LocalPlayerTickEvent>(
         [this](auto& event) { onPlayerTick(event.player); });
     // Player-driven block changes are observable before the next chunk
@@ -816,7 +822,9 @@ void BlockEspModule::onEnable() {
     g_blockEspActiveBlockSource.store(nullptr, std::memory_order_release);
     g_blockEspCaptureEvents.store(true, std::memory_order_release);
     resolveBlockGetBlock();
-    installBlockSourceGetBlockHook();
+    if (kEnableExperimentalNativeEventHooks) {
+        installBlockSourceGetBlockHook();
+    }
     clearBlockEventCandidates();
     if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
         static_cast<HitboxModule*>(hitbox)->ensureRenderHook();
@@ -853,16 +861,17 @@ void BlockEspModule::onPlayerTick(bedrocktools::sdk::Player* player) {
         clearCache();
         clearBlockEventCandidates();
     }
-    const bool nativeHooksMissing = !g_blockUpdateHook || !g_blockSourceGetBlockHook;
-    if ((!g_blockEspGetBlock.load(std::memory_order_acquire) ||
-         !g_blockSourceTessellationGetBlockHook || nativeHooksMissing) &&
+    if (!g_blockEspGetBlock.load(std::memory_order_acquire) &&
         m_tickCount - m_lastResolveAttemptTick >= 40) {
         m_lastResolveAttemptTick = m_tickCount;
         resolveBlockGetBlock();
+    }
+    if (kEnableExperimentalNativeEventHooks &&
+        m_tickCount - m_lastResolveAttemptTick >= 40) {
+        m_lastResolveAttemptTick = m_tickCount;
+        // Retry only when the experimental 26.60 ABI-guarded path is explicitly
+        // re-enabled after runtime validation.
         installBlockSourceTessellationGetBlockHook();
-        // Signature resolution may finish after module initialization. Retry
-        // native hooks on the same bounded cadence instead of permanently
-        // missing the event path when the first onInit attempt runs too early.
         installBlockUpdateHook();
         installApollonBlockEventHooks();
         installBlockSourceGetBlockHook();

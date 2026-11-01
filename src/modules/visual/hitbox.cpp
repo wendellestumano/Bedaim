@@ -514,8 +514,13 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
         blockOutlines.clear();
         blockEsp->getRenderSnapshot(g_playerPos, blockOutlines);
         using BlockLine = std::pair<bedrocktools::sdk::Vec3, bedrocktools::sdk::Vec3>;
+        // Submit one mesh per color instead of one RenderDragon submission per
+        // block. The previous 1,024-outline limit could generate 1,024 native
+        // mesh submissions in a single frame and destabilize mobile rendering.
+        std::unordered_map<std::uint32_t, std::vector<BlockLine>> boxLinesByColor;
         std::unordered_map<std::uint32_t, std::vector<BlockLine>> tracerLinesByColor;
-        if (blockEsp->showTracer) tracerLinesByColor.reserve(64);
+        boxLinesByColor.reserve(16);
+        if (blockEsp->showTracer) tracerLinesByColor.reserve(16);
 
         // Rotation is the player's camera pitch/yaw in degrees. The first point
         // lies on the view ray, so every tracer visibly begins at the crosshair.
@@ -532,18 +537,29 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             cameraPosition.y + viewForward.y * crosshairStart,
             cameraPosition.z + viewForward.z * crosshairStart};
 
+        static constexpr std::array<std::pair<std::size_t, std::size_t>, 12> kBoxEdges{{
+            {0, 1}, {1, 2}, {2, 3}, {3, 0},
+            {4, 5}, {5, 6}, {6, 7}, {7, 4},
+            {0, 4}, {1, 5}, {2, 6}, {3, 7}
+        }};
+
         for (const auto& block : blockOutlines) {
             constexpr float expand = 0.006f;
             const float x0 = static_cast<float>(block.position.x) - expand;
             const float y0 = static_cast<float>(block.position.y) - expand;
             const float z0 = static_cast<float>(block.position.z) - expand;
-            const float x1 = static_cast<float>(block.position.x + 1) + expand;
-            const float y1 = static_cast<float>(block.position.y + 1) + expand;
-            const float z1 = static_cast<float>(block.position.z + 1) + expand;
-            // Keep BlockESP outlines to their 12 base edges. The shared drawBox
-            // thickness emulation multiplies each edge into five strokes and was
-            // producing thousands of extra segments on mobile.
-            drawBox({{x0,y0,z0},{x1,y1,z1}}, block.color, true, 0.0f);
+            const float x1 = static_cast<float>(block.position.x) + 1.0f + expand;
+            const float y1 = static_cast<float>(block.position.y) + 1.0f + expand;
+            const float z1 = static_cast<float>(block.position.z) + 1.0f + expand;
+            const std::array<bedrocktools::sdk::Vec3, 8> corners{{
+                {x0,y0,z0}, {x1,y0,z0}, {x1,y0,z1}, {x0,y0,z1},
+                {x0,y1,z0}, {x1,y1,z0}, {x1,y1,z1}, {x0,y1,z1}
+            }};
+            auto [boxIt, inserted] = boxLinesByColor.try_emplace(block.color);
+            if (inserted) boxIt->second.reserve(12u * 64u);
+            auto& boxLines = boxIt->second;
+            for (const auto& edge : kBoxEdges)
+                boxLines.push_back({corners[edge.first], corners[edge.second]});
 
             if (!blockEsp->showTracer) continue;
             const bedrocktools::sdk::Vec3 center{
@@ -555,9 +571,11 @@ static void _renderLevel_hook(void* _this, void* screenContext, void* a3) {
             const float length = std::sqrt(delta.x*delta.x + delta.y*delta.y + delta.z*delta.z);
             if (length <= 0.001f || !std::isfinite(length)) continue;
 
-            // One native line segment per block keeps the tracer lightweight.
             tracerLinesByColor[block.color].push_back({tracerStart, center});
         }
+
+        for (const auto& [color, lines] : boxLinesByColor)
+            if (!lines.empty()) drawLines(lines, color, true);
         if (blockEsp->showTracer) {
             for (const auto& [color, lines] : tracerLinesByColor)
                 if (!lines.empty()) drawLines(lines, color, true);
