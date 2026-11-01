@@ -10,7 +10,6 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
-#include <bedrocktools/sdk/input/MoveInput.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
 #include <array>
@@ -364,46 +363,17 @@ ActorGetStatusFlagFn resolveActorGetStatusFlag() {
 
 std::optional<bool> playerIsGlidingForUnglide(void* player) {
     if (!player) return std::nullopt;
-
-    // A present ECS pool gives an authoritative yes/no result for this entity.
-    // Only fall back to native/synchronized ActorFlags when 26.60 has not
-    // registered the travel component pool in this world yet.
-    const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
-
     const auto getStatusFlag = resolveActorGetStatusFlag();
-    bool nativeGliding = false;
     if (getStatusFlag) {
         try {
-            nativeGliding = getStatusFlag(player, 32);
+            // Treat the native status flag as a positive signal only; some builds
+            // differ in flag layout, so a negative result still tries safe entity data.
+            if (getStatusFlag(player, 32)) return true;
         } catch (...) {
-            nativeGliding = false;
+            // Fall through to the bounded synchronized-data reader.
         }
     }
-    const auto synchronizedGliding = actorIsGliding(player);
-    const bool gliding = ecsGliding.has_value()
-        ? *ecsGliding
-        : (nativeGliding || synchronizedGliding.value_or(false));
-
-    static std::atomic<std::int64_t> nextDiagnosticMs{0};
-    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    auto expected = nextDiagnosticMs.load(std::memory_order_relaxed);
-    if (nowMs >= expected && nextDiagnosticMs.compare_exchange_strong(
-            expected, nowMs + 1000, std::memory_order_relaxed)) {
-        bedrocktools::diagnostics::probe(
-            bedrocktools::diagnostics::Level::Debug, "Unglide", "gliding_probe",
-            gliding ? "gliding_true" : "gliding_false",
-            std::string("ecs_pool=") + (ecsGliding.has_value() ? "available" : "missing") +
-                ", ecs_component=" + (ecsGliding.has_value() ? (*ecsGliding ? "present" : "absent") : "unknown") +
-                ", native_getStatusFlag=" + (getStatusFlag ? "available" : "unavailable") +
-                ", native_result=" + (nativeGliding ? "true" : "false") +
-                ", synchronized_actor_flags=" +
-                    (synchronizedGliding.has_value() ? (*synchronizedGliding ? "true" : "false") : "unavailable"));
-    }
-
-    if (ecsGliding.has_value()) return ecsGliding;
-    if (nativeGliding) return true;
-    return synchronizedGliding;
+    return actorIsGliding(player);
 }
 
 }
