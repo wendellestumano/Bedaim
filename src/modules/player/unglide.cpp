@@ -432,32 +432,29 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
         m_triggerState = TriggerState::Idle;
     };
 
-    // Fail closed: Unglide is an Elytra-flight action. A missing/false gliding
-    // signal must never dispatch Space while the player is standing, walking,
-    // swimming, or otherwise not actively gliding. The native status flag is
-    // checked first and the bounded synchronized-data fallback is consulted
-    // when the native flag is negative.
-    const auto glidingState = playerIsGlidingForUnglide(player);
-    if (!glidingState || !*glidingState) {
+    // Use Aim Assist's existing native ActorFlags reader for flight state.
+    // This is the same implementation already consumed by Aim Assist's Elytra
+    // mode and ElytraMacing, avoiding the separate Unglide SafeRead traversal
+    // that the latest device logs show returning "unavailable".
+    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
+    if (!aimBase) {
+        resetTargetState();
+        reject("flight_state_provider_unavailable",
+               "Aim Assist native flight-state provider is not initialized; no Space keymap request sent.", 250);
+        return;
+    }
+    auto* aim = static_cast<AimAssistModule*>(aimBase);
+    const bool glidingState = aim->isPlayerGliding(player);
+    if (!glidingState) {
         resetTargetState();
         reject("not_gliding",
-               std::string("Elytra gliding is not positively confirmed; gliding_state=") +
-                   (glidingState ? "false" : "unavailable") +
-                   "; no Space keymap request sent.", 100);
+               "Shared native ActorFlags reader reports gliding=false; no Space keymap request sent.", 100);
         return;
     }
 
     // Use the engine's authoritative crosshair HitResult rather than the Aim
     // Assist module's cached target. Unglide therefore works with Aim Assist
     // disabled and cannot trigger on a nearby player who is not selected.
-    auto* aimBase = ModuleRegistry::get().find("bedrocktools.Aim Assist");
-    if (!aimBase) {
-        resetTargetState();
-        reject("crosshair_query_unavailable",
-               "Aim Assist native query provider is not initialized; no Space keymap request sent.", 250);
-        return;
-    }
-    auto* aim = static_cast<AimAssistModule*>(aimBase);
     void* target = nullptr;
     AABB targetBounds{};
     std::string_view crosshairFailure;
