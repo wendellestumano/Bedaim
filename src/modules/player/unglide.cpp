@@ -729,4 +729,37 @@ void UnglideModule::onMenuRegistered(){
    saveConfig(persistentConfig);
    auto persistentValue = [&](const char* key, const char* fallback) {
      const auto it = persistentConfig.find(key);
-   
+     if (it == persistentConfig.end() || it->is_null()) return std::string(fallback);
+     if (it->is_string()) return it->get<std::string>();
+     if (it->is_boolean()) return it->get<bool>() ? std::string("true") : std::string("false");
+     return it->dump();
+   };
+   ModuleBuilder settings("bedrocktools.unglide.persistent_settings", "Unglide Settings");
+   settings.modId("Bedaim")
+     .description("Persistent Unglide controls; values apply immediately.")
+     .defaultEnabled(true)
+     .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, persistentValue("m_unglideEnabled", "false"))
+     .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, persistentValue("m_unglideTargetDistance", "8.0"))
+     .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, persistentValue("m_unglideMaxVerticalDifference", "4.0"))
+     .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
+     .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
+     .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
+       if (onMenuConfigChanged(key, value)) {
+         // This custom ModuleBuilder callback bypasses ModuleMenu.cpp's normal
+         // persistence callback, so explicitly enqueue the updated module config.
+         bedrocktools::config::ConfigManager::get().save();
+       }
+     });
+   if (!settings.registerModule()) persistentSettingsRegistered.store(false, std::memory_order_release);
+ }
+ using namespace pl::modmenu;ConfigSchemaBuilder s;nlohmann::json c;saveConfig(c);auto vs=[&](const char*k,const char*d)->std::string{auto i=c.find(k);if(i==c.end()||i->is_null())return d;if(i->is_string())return i->get<std::string>();if(i->is_boolean())return i->get<bool>()?"true":"false";return i->dump();};
+ s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
+ ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
+ auto sl=[&](const char*k,const char*title,const char*mn,const char*mx,const char*step,const char*unit,const char*def){ConfigNodeV2 n;n.id=k;n.key=k;n.title=title;n.category="special";n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=def;n.currentValue=vs(k,def);n.hasCurrentValue=true;n.minValue=mn;n.maxValue=mx;n.step=step;n.unit=unit;s.node(std::move(n));};
+ sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
+ ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
+}
+bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
+ if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
+ try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
+}
