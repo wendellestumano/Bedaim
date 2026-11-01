@@ -4,7 +4,6 @@
 #include "AutoHitWeaponProfile.hpp"
 #include "../../core/Diagnostics.hpp"
 #include "core/InventoryAccess.hpp"
-#include "../../core/memory/SafeRead.hpp"
 #include "core/GameHooks.hpp"
 #include "../ModuleRegistry.hpp"
 #include "../hud/gamemodechecker.hpp"
@@ -643,19 +642,17 @@ bool AimAssistModule::crosshairPlayerSnapshot(
         failureReason = "level_hit_result_pointer_unavailable";
         return false;
     }
-    if (!bedrocktools::core::memory::readSelfMemory(
-            hitResultAddress + offsets::HitResult::mType,
-            &observedHitResultType, sizeof(observedHitResultType))) {
-        failureReason = "level_hit_result_type_unreadable";
-        return false;
-    }
-    if (observedHitResultType != 1) {
-        failureReason = observedHitResultType == 0
-            ? "crosshair_hit_type_0_no_entity"
-            : "crosshair_hit_type_not_entity";
-        return false;
-    }
+    // Ask the engine for the entity directly. Reading HitResult::mType through
+    // /proc/self/mem is unreliable on some Android builds (the procfs read can
+    // fail even for a live engine-owned object). The native getter already
+    // interprets the HitResult variant; its result is still treated as untrusted
+    // until it matches the engine-owned nearby-actor snapshot below.
     void* selectedEntity = g_hitResultGetEntity(hitResult);
+    observedHitResultType = selectedEntity ? 1 : 0; // 1=entity result, 0=no entity
+    if (!selectedEntity) {
+        failureReason = "crosshair_hit_result_has_no_entity";
+        return false;
+    }
     if (!selectedEntity || reinterpret_cast<std::uintptr_t>(selectedEntity) <= 0x1000 ||
         selectedEntity == player) {
         failureReason = "crosshair_entity_pointer_invalid"; return false;
