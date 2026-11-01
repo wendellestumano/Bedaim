@@ -12,8 +12,11 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Manages only the configured ngrok tunnel to the local MCP server.
- * It intentionally does not expose arbitrary Termux shell execution.
+ * Owns one ngrok process for the local MCP server.
+ *
+ * When ngrok is installed inside Debian/PRoot, the PRoot process itself is
+ * launched in the Termux background. The ngrok child remains in the
+ * foreground of that PRoot session, so PRoot does not kill it on exit.
  */
 object TunnelController {
     private const val TERMUX_PACKAGE = "com.termux"
@@ -21,110 +24,147 @@ object TunnelController {
     private const val TERMUX_HOME = "/data/data/com.termux/files/home"
     private const val BASH = "/data/data/com.termux/files/usr/bin/bash"
 
+    internal fun buildStartScript(domain: String): String = startScript(domain)
+
     private fun startScript(domain: String) = """
-        set -u
-        mkdir -p "${'$'}HOME/.bedaim-bridge"
+        set -eu
+        BASE_DIR="${'$'}HOME/.bedaim-bridge"
+        PID_FILE="${'$'}BASE_DIR/ngrok.pid"
+        LOCK_DIR="${'$'}BASE_DIR/ngrok-start.lock"
+        LOG_FILE="${'$'}BASE_DIR/ngrok.log"
+        mkdir -p "${'$'}BASE_DIR"
+
+        # Serialize starts requested by the initial service launch and the
+        # periodic reconnect monitor.
+        if ! mkdir "${'$'}LOCK_DIR" 2>/dev/null; then
+          sleep 1
+          LOCK_PID="\$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
+          case "${'$'}LOCK_PID" in
+            ''|*[!0-9]*) ;;
+            *)
+              if kill -0 "${'$'}LOCK_PID" 2>/dev/null; then
+                echo "BRIDGE_TUNNEL_START_IN_PROGRESS"
+                exit 0
+              fi
+              ;;
+          esac
+          rm -rf "${'$'}LOCK_DIR"
+          if ! mkdir "${'$'}LOCK_DIR" 2>/dev/null; then
+            echo "BRIDGE_TUNNEL_START_IN_PROGRESS"
+            exit 0
+          fi
+        fi
+        printf '%s\n' "${'$'}${'$'}" > "${'$'}LOCK_DIR/pid"
+        cleanup_lock() {
+          LOCK_OWNER="\$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
+          if [ "${'$'}LOCK_OWNER" = "${'$'}${'$'}" ]; then
+            rm -rf "${'$'}LOCK_DIR"
+          fi
+        }
+        trap cleanup_lock EXIT
+        trap 'exit 143' TERM
+        trap 'exit 130' INT
+
+        AGENT_TUNNELS="\$(curl -fsS --max-time 2 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
+        if printf '%s' "${'$'}AGENT_TUNNELS" | grep -Fq '${domain}'; then
+          if printf '%s' "${'$'}AGENT_TUNNELS" | grep -q '8765'; then
+            echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
+            exit 0
+          fi
+          echo "BRIDGE_ERROR=NGROK_DOMAIN_ACTIVE_WITH_WRONG_UPSTREAM"
+          exit 2
+        elif printf '%s' "${'$'}AGENT_TUNNELS" | grep -q '8765'; then
+          echo "BRIDGE_ERROR=OTHER_NGROK_DOMAIN_ALREADY_ACTIVE"
+          exit 2
+        fi
+
+        # Remove only a process previously recorded by this controller.
+        if [ -s "${'$'}PID_FILE" ]; then
+          PID="\$(cat "${'$'}PID_FILE" 2>/dev/null || true)"
+          case "${'$'}PID" in
+            ''|*[!0-9]*) rm -f "${'$'}PID_FILE" ;;
+            *)
+              if kill -0 "${'$'}PID" 2>/dev/null; then
+                CMD="\$(ps -p "${'$'}PID" -o args= 2>/dev/null || true)"
+                case "${'$'}CMD" in
+                  *ngrok*|*proot*)
+                    kill "${'$'}PID" 2>/dev/null || true
+                    sleep 1
+                    ;;
+                  *)
+                    echo "BRIDGE_ERROR=PID_OWNERSHIP_MISMATCH"
+                    rm -f "${'$'}PID_FILE"
+                    exit 3
+                    ;;
+                esac
+              fi
+              rm -f "${'$'}PID_FILE"
+              ;;
+          esac
+        fi
 
         if command -v ngrok >/dev/null 2>&1; then
-          PID_FILE="${'$'}HOME/.bedaim-bridge/ngrok.pid"
-          if [ -s "${'$'}PID_FILE" ]; then
-            PID="$(cat "${'$'}PID_FILE" 2>/dev/null)"
-            case "${'$'}PID" in
-              ''|*[!0-9]*) ;;
-              *)
-                if kill -0 "${'$'}PID" 2>/dev/null; then
-                  if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels 2>/dev/null | grep -Fq '${domain}'; then
-                    echo "BRIDGE_TUNNEL_ALREADY_RUNNING=TERMUX"
-                    exit 0
-                  fi
-                  kill "${'$'}PID" 2>/dev/null || true
-                fi
-                ;;
-            esac
-            rm -f "${'$'}PID_FILE"
-          fi
-          if command -v curl >/dev/null 2>&1; then
-            AGENT_TUNNELS="$(curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
-            if printf '%s' "${'$'}AGENT_TUNNELS" | grep -Fq '${domain}'; then
-              echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
-              exit 0
-            elif printf '%s' "${'$'}AGENT_TUNNELS" | grep -q '8765'; then
-              echo "BRIDGE_ERROR=OTHER_NGROK_DOMAIN_ALREADY_ACTIVE"
-              exit 2
-            fi
-          fi
-          nohup ngrok http 8765 --url ${domain} --log=stdout --log-format=logfmt > "${'$'}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
-          echo "${'$'}!" > "${'$'}PID_FILE"
-          echo "BRIDGE_TUNNEL_STARTING=TERMUX"
-          exit 0
+          nohup ngrok http 8765 --url '${domain}' --log=stdout --log-format=logfmt > "${'$'}LOG_FILE" 2>&1 < /dev/null &
+          PID="${'$'}!"
+          OWNER=TERMUX
+        elif command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- test -x /usr/local/bin/ngrok; then
+          # IMPORTANT: background PRoot from Termux, not ngrok inside a
+          # short-lived PRoot shell. PRoot's --kill-on-exit would kill a
+          # background child when that shell returns.
+          nohup proot-distro login debian -- /usr/local/bin/ngrok http 8765 --url '${domain}' --log=stdout --log-format=logfmt > "${'$'}LOG_FILE" 2>&1 < /dev/null &
+          PID="${'$'}!"
+          OWNER=DEBIAN_PROOT
+        else
+          echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
+          exit 127
         fi
 
-        if command -v proot-distro >/dev/null 2>&1 && proot-distro login debian -- bash -lc 'command -v ngrok >/dev/null 2>&1'; then
-          proot-distro login debian -- env BRIDGE_NGROK_DOMAIN=${domain} bash -lc '
-            mkdir -p "${'$'}HOME/.bedaim-bridge"
-            PID_FILE="${'$'}HOME/.bedaim-bridge/ngrok.pid"
-            if [ -s "${'$'}PID_FILE" ]; then
-              PID="$(cat "${'$'}PID_FILE" 2>/dev/null)"
-              case "${'$'}PID" in
-                ""|*[!0-9]*) ;;
-                *)
-                  if kill -0 "${'$'}PID" 2>/dev/null; then
-                    if command -v curl >/dev/null 2>&1 && curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels 2>/dev/null | grep -Fq "${'$'}BRIDGE_NGROK_DOMAIN"; then
-                      echo "BRIDGE_TUNNEL_ALREADY_RUNNING=DEBIAN"
-                      exit 0
-                    fi
-                    kill "${'$'}PID" 2>/dev/null || true
-                  fi
-                  ;;
-              esac
-              rm -f "${'$'}PID_FILE"
-            fi
-            if command -v curl >/dev/null 2>&1; then
-              AGENT_TUNNELS="$(curl -fsS --max-time 1 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
-              if printf '%s' "${'$'}AGENT_TUNNELS" | grep -Fq "${'$'}BRIDGE_NGROK_DOMAIN"; then
-                echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
-                exit 0
-              elif printf '%s' "${'$'}AGENT_TUNNELS" | grep -q "8765"; then
-                echo "BRIDGE_ERROR=OTHER_NGROK_DOMAIN_ALREADY_ACTIVE"
-                exit 2
-              fi
-            fi
-            nohup ngrok http 8765 --url "${'$'}BRIDGE_NGROK_DOMAIN" --log=stdout --log-format=logfmt > "${'$'}HOME/.bedaim-bridge/ngrok.log" 2>&1 < /dev/null &
-            echo "${'$'}!" > "${'$'}PID_FILE"
-            echo "BRIDGE_TUNNEL_STARTING=DEBIAN"
-          '
-          exit ${'$'}?
+        printf '%s\n' "${'$'}PID" > "${'$'}PID_FILE"
+        echo "BRIDGE_TUNNEL_PROCESS_STARTED=${'$'}OWNER PID=${'$'}PID"
+        sleep 2
+        if kill -0 "${'$'}PID" 2>/dev/null; then
+          echo "BRIDGE_TUNNEL_PROCESS_ALIVE"
+          AGENT_TUNNELS="\$(curl -fsS --max-time 2 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
+          if printf '%s' "${'$'}AGENT_TUNNELS" | grep -Fq '${domain}' &&
+            printf '%s' "${'$'}AGENT_TUNNELS" | grep -q '8765'; then
+            echo "BRIDGE_TUNNEL_READY"
+          else
+            echo "BRIDGE_TUNNEL_STARTING_OR_WAITING_FOR_NGROK"
+          fi
+        else
+          rm -f "${'$'}PID_FILE"
+          echo "BRIDGE_ERROR=NGROK_PROCESS_EXITED"
+          tail -40 "${'$'}LOG_FILE" 2>/dev/null || true
+          exit 1
         fi
-
-        echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
-        exit 127
     """.trimIndent()
 
     private val stopScript = """
         set +e
-        PID_FILE="${'$'}HOME/.bedaim-bridge/ngrok.pid"
+        BASE_DIR="${'$'}HOME/.bedaim-bridge"
+        PID_FILE="${'$'}BASE_DIR/ngrok.pid"
         if [ -s "${'$'}PID_FILE" ]; then
-          PID="$(cat "${'$'}PID_FILE" 2>/dev/null)"
+          PID="\$(cat "${'$'}PID_FILE" 2>/dev/null)"
           case "${'$'}PID" in
-            ''|*[!0-9]*) ;;
-            *) kill "${'$'}PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_TERMUX" || true ;;
+            ''|*[!0-9]*) echo "BRIDGE_ERROR=INVALID_PID_FILE" ;;
+            *)
+              if kill -0 "${'$'}PID" 2>/dev/null; then
+                CMD="\$(ps -p "${'$'}PID" -o args= 2>/dev/null)"
+                case "${'$'}CMD" in
+                  *ngrok*|*proot*)
+                    kill "${'$'}PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true
+                    ;;
+                  *)
+                    echo "BRIDGE_ERROR=PID_OWNERSHIP_MISMATCH"
+                    ;;
+                esac
+              fi
+              ;;
           esac
           rm -f "${'$'}PID_FILE"
-        fi
-
-        if command -v proot-distro >/dev/null 2>&1 &&
-          proot-distro login debian -- bash -lc 'test -s "${'$'}HOME/.bedaim-bridge/ngrok.pid"' >/dev/null 2>&1; then
-          proot-distro login debian -- bash -lc '
-            PID_FILE="${'$'}HOME/.bedaim-bridge/ngrok.pid"
-            if [ -s "${'$'}PID_FILE" ]; then
-              PID="$(cat "${'$'}PID_FILE" 2>/dev/null)"
-              case "${'$'}PID" in
-                ""|*[!0-9]*) ;;
-                *) kill "${'$'}PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED_DEBIAN" || true ;;
-              esac
-              rm -f "${'$'}PID_FILE"
-            fi
-          '
+        else
+          echo "BRIDGE_TUNNEL_NOT_OWNED_BY_CONTROLLER"
         fi
         exit 0
     """.trimIndent()
@@ -188,7 +228,7 @@ object TunnelController {
         }
     }
 
-    /** Returns the public HTTPS URL only when it matches the configured account domain and port. */
+    /** Returns the public HTTPS URL only when it matches the configured domain and local MCP port. */
     fun readPublicUrl(context: Context): String? {
         val connection = try {
             (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
@@ -196,6 +236,7 @@ object TunnelController {
                 connectTimeout = 1_500
                 readTimeout = 1_500
                 instanceFollowRedirects = false
+                useCaches = false
             }
         } catch (_: Throwable) {
             return null
