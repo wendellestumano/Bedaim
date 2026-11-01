@@ -799,8 +799,6 @@ void BlockEspModule::onInit() {
     resolveBlockGetBlock();
     if (kEnableTessellationLookupCapture)
         installBlockSourceTessellationGetBlockHook();
-    if (kEnableSignatureBlockSourceLookupCapture)
-        installBlockSourceGetBlockHook();
     if (kEnableExperimentalNativeEventHooks) {
         installBlockUpdateHook();
         installApollonBlockEventHooks();
@@ -834,8 +832,6 @@ void BlockEspModule::onEnable() {
     if (kEnableTessellationLookupCapture)
         installBlockSourceTessellationGetBlockHook();
     if (kEnableSignatureBlockSourceLookupCapture)
-        installBlockSourceGetBlockHook();
-    if (kEnableExperimentalNativeEventHooks)
         installBlockSourceGetBlockHook();
     clearBlockEventCandidates();
     if (auto* hitbox = ModuleRegistry::get().find("bedrocktools.Hitbox"))
