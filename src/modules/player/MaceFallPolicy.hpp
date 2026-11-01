@@ -15,14 +15,6 @@ inline bool shouldBeginMaceAction(float verticalDelta, float fallDistance,
            fallDistance >= normalizeMinimumFallDistance(minimumFallDistance);
 }
 
-inline bool isGlidingFromAnySignal(bool ecsComponentPresent,
-                                      bool nativeActorFlag,
-                                      bool synchronizedActorFlag) noexcept {
-    // A positive source confirms gliding. An absent ECS tag must not suppress
-    // the native/synchronized fallbacks when the global ECS pool exists.
-    return ecsComponentPresent || nativeActorFlag || synchronizedActorFlag;
-}
-
 inline bool shouldPulseUnglideJump(bool enabled, bool isGliding,
                                     float targetDistance, float maximumTargetDistance) noexcept {
     if (!enabled || !isGliding ||
