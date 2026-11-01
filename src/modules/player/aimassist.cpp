@@ -1324,6 +1324,7 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     // while the entity is actively in the gliding travel mode. If its pool
     // exists, it is authoritative and the legacy actor-data path is not read.
     const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
+    const auto entityProbe = bedrocktools::sdk::probeEntityContext(player);
 
     bool nativeGetterAvailable = false;
     bool nativeGliding = false;
@@ -1363,7 +1364,14 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
                     (ecsGliding.has_value() ? "skipped_ecs_authoritative" : (nativeGliding ? "true" : "false")) +
                 ", synchronized_actor_flags=" +
                     (ecsGliding.has_value() ? "skipped_ecs_authoritative" : (synchronizedGliding ? "true" : "false")) +
-                ", flag_index=32");
+                ", flag_index=32" +
+                ", entity_context=" + (entityProbe.context_address_valid ? "valid" : "invalid") +
+                ", entity_id=" + std::to_string(entityProbe.entity_value) +
+                ", move_input_pool=" + (entityProbe.move_input_pool_present ? "present" : "missing") +
+                ", move_input_entity=" + (entityProbe.move_input_entity_present ? "present" : "absent") +
+                ", move_input_try_get=" + (entityProbe.move_input_try_get_present ? "present" : "absent") +
+                ", gliding_pool_check=" + (entityProbe.gliding_pool_present ? "present" : "missing") +
+                ", gliding_entity_check=" + (entityProbe.gliding_entity_present ? "present" : "absent"));
     }
     return gliding;
 }
