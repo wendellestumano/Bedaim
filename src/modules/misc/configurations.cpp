@@ -55,8 +55,9 @@ nlohmann::json ConfigurationsModule::currentSnapshot() const {
 }
 void ConfigurationsModule::saveAll() {
     auto& manager = bedrocktools::config::ConfigManager::get();
+    // ConfigManager::save() writes both the primary config and the selected
+    // snapshot, so do not enqueue a duplicate snapshot write here.
     manager.save();
-    manager.saveTo(outputPath());
     m_lastSnapshot = currentSnapshot();
     m_hasSnapshot = true;
     m_nextSave = std::chrono::steady_clock::now() + std::chrono::seconds(intervalSeconds);
