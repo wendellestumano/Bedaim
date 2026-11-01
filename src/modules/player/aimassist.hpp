@@ -33,6 +33,8 @@ public:
     void processPlayerFrame();
     bool localPlayerIsGliding();
     bool currentTargetSnapshot(void*& target, bedrocktools::sdk::AABB& bounds, float& range);
+    bool crosshairPlayerSnapshot(bedrocktools::sdk::Player* player, float maximumDistance,
+        void*& target, bedrocktools::sdk::AABB& bounds, std::string_view& failureReason);
     bool currentTargetIsPlayerSnapshot(void* desiredTarget);
     bool targetBoundsSnapshot(void* desiredTarget, bedrocktools::sdk::AABB& bounds, float& range);
     bool currentTargetInCrosshair(bedrocktools::sdk::Player* player, void* target, float tolerance = 0.12f);
