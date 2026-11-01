@@ -32,13 +32,14 @@ object TunnelController {
         PID_FILE="${'$'}BASE_DIR/ngrok.pid"
         LOCK_DIR="${'$'}BASE_DIR/ngrok-start.lock"
         LOG_FILE="${'$'}BASE_DIR/ngrok.log"
+        RETRY_FILE="${'$'}BASE_DIR/ngrok-retry-after"
         mkdir -p "${'$'}BASE_DIR"
 
         # Serialize starts requested by the initial service launch and the
         # periodic reconnect monitor.
         if ! mkdir "${'$'}LOCK_DIR" 2>/dev/null; then
           sleep 1
-          LOCK_PID="\$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
+          LOCK_PID="$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
           case "${'$'}LOCK_PID" in
             ''|*[!0-9]*) ;;
             *)
@@ -56,7 +57,7 @@ object TunnelController {
         fi
         printf '%s\n' "${'$'}${'$'}" > "${'$'}LOCK_DIR/pid"
         cleanup_lock() {
-          LOCK_OWNER="\$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
+          LOCK_OWNER="$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
           if [ "${'$'}LOCK_OWNER" = "${'$'}${'$'}" ]; then
             rm -rf "${'$'}LOCK_DIR"
           fi
@@ -65,7 +66,7 @@ object TunnelController {
         trap 'exit 143' TERM
         trap 'exit 130' INT
 
-        AGENT_TUNNELS="\$(curl -fsS --max-time 2 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
+        AGENT_TUNNELS="$(curl -fsS --max-time 2 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
         if printf '%s' "${'$'}AGENT_TUNNELS" | grep -Fq '${domain}'; then
           if printf '%s' "${'$'}AGENT_TUNNELS" | grep -q '8765'; then
             echo "BRIDGE_TUNNEL_ALREADY_RUNNING=LOCAL_AGENT"
@@ -78,14 +79,29 @@ object TunnelController {
           exit 2
         fi
 
+        # Do not hammer a reserved endpoint while another ngrok session owns it.
+        NOW="$(date +%s)"
+        if [ -s "${'$'}RETRY_FILE" ]; then
+          RETRY_AFTER="$(cat "${'$'}RETRY_FILE" 2>/dev/null || echo 0)"
+          case "${'$'}RETRY_AFTER" in
+            ''|*[!0-9]*) rm -f "${'$'}RETRY_FILE" ;;
+            *)
+              if [ "${'$'}NOW" -lt "${'$'}RETRY_AFTER" ]; then
+                echo "BRIDGE_TUNNEL_RETRY_COOLDOWN"
+                exit 0
+              fi
+              ;;
+          esac
+        fi
+
         # Remove only a process previously recorded by this controller.
         if [ -s "${'$'}PID_FILE" ]; then
-          PID="\$(cat "${'$'}PID_FILE" 2>/dev/null || true)"
+          PID="$(cat "${'$'}PID_FILE" 2>/dev/null || true)"
           case "${'$'}PID" in
             ''|*[!0-9]*) rm -f "${'$'}PID_FILE" ;;
             *)
               if kill -0 "${'$'}PID" 2>/dev/null; then
-                CMD="\$(ps -p "${'$'}PID" -o args= 2>/dev/null || true)"
+                CMD="$(ps -p "${'$'}PID" -o args= 2>/dev/null || true)"
                 case "${'$'}CMD" in
                   *ngrok*|*proot*)
                     kill "${'$'}PID" 2>/dev/null || true
@@ -103,18 +119,19 @@ object TunnelController {
           esac
         fi
 
-        if command -v ngrok >/dev/null 2>&1; then
-          nohup ngrok http 8765 --url '${domain}' --log=stdout --log-format=logfmt > "${'$'}LOG_FILE" 2>&1 < /dev/null &
-          PID="${'$'}!"
-          OWNER=TERMUX
-        elif command -v proot-distro >/dev/null 2>&1 &&
-          proot-distro login debian -- test -x /usr/local/bin/ngrok; then
+        if command -v proot-distro >/dev/null 2>&1 &&
+          proot-distro login debian -- test -x /usr/local/bin/ngrok &&
+          proot-distro login debian -- test -s /root/.config/ngrok/ngrok.yml; then
           # IMPORTANT: background PRoot from Termux, not ngrok inside a
           # short-lived PRoot shell. PRoot's --kill-on-exit would kill a
           # background child when that shell returns.
-          nohup proot-distro login debian -- /usr/local/bin/ngrok http 8765 --url '${domain}' --log=stdout --log-format=logfmt > "${'$'}LOG_FILE" 2>&1 < /dev/null &
+          nohup proot-distro login debian -- /usr/local/bin/ngrok http 8765 --url '${domain}' --config=/root/.config/ngrok/ngrok.yml --log=stdout --log-format=logfmt > "${'$'}LOG_FILE" 2>&1 < /dev/null &
           PID="${'$'}!"
           OWNER=DEBIAN_PROOT
+        elif command -v ngrok >/dev/null 2>&1; then
+          nohup ngrok http 8765 --url '${domain}' --log=stdout --log-format=logfmt > "${'$'}LOG_FILE" 2>&1 < /dev/null &
+          PID="${'$'}!"
+          OWNER=TERMUX
         else
           echo "BRIDGE_ERROR=NGROK_NOT_FOUND"
           exit 127
@@ -122,12 +139,21 @@ object TunnelController {
 
         printf '%s\n' "${'$'}PID" > "${'$'}PID_FILE"
         echo "BRIDGE_TUNNEL_PROCESS_STARTED=${'$'}OWNER PID=${'$'}PID"
-        sleep 2
+        sleep 3
+        if grep -q 'ERR_NGROK_334' "${'$'}LOG_FILE" 2>/dev/null; then
+          kill "${'$'}PID" 2>/dev/null || true
+          rm -f "${'$'}PID_FILE"
+          printf '%s\n' "$(( $(date +%s) + 180 ))" > "${'$'}RETRY_FILE"
+          echo "BRIDGE_ERROR=NGROK_ENDPOINT_ALREADY_ONLINE"
+          tail -30 "${'$'}LOG_FILE" 2>/dev/null || true
+          exit 2
+        fi
         if kill -0 "${'$'}PID" 2>/dev/null; then
           echo "BRIDGE_TUNNEL_PROCESS_ALIVE"
-          AGENT_TUNNELS="\$(curl -fsS --max-time 2 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
+          AGENT_TUNNELS="$(curl -fsS --max-time 2 http://127.0.0.1:4040/api/tunnels 2>/dev/null || true)"
           if printf '%s' "${'$'}AGENT_TUNNELS" | grep -Fq '${domain}' &&
             printf '%s' "${'$'}AGENT_TUNNELS" | grep -q '8765'; then
+            rm -f "${'$'}RETRY_FILE"
             echo "BRIDGE_TUNNEL_READY"
           else
             echo "BRIDGE_TUNNEL_STARTING_OR_WAITING_FOR_NGROK"
@@ -144,13 +170,14 @@ object TunnelController {
         set +e
         BASE_DIR="${'$'}HOME/.bedaim-bridge"
         PID_FILE="${'$'}BASE_DIR/ngrok.pid"
+        RETRY_FILE="${'$'}BASE_DIR/ngrok-retry-after"
         if [ -s "${'$'}PID_FILE" ]; then
-          PID="\$(cat "${'$'}PID_FILE" 2>/dev/null)"
+          PID="$(cat "${'$'}PID_FILE" 2>/dev/null)"
           case "${'$'}PID" in
             ''|*[!0-9]*) echo "BRIDGE_ERROR=INVALID_PID_FILE" ;;
             *)
               if kill -0 "${'$'}PID" 2>/dev/null; then
-                CMD="\$(ps -p "${'$'}PID" -o args= 2>/dev/null)"
+                CMD="$(ps -p "${'$'}PID" -o args= 2>/dev/null)"
                 case "${'$'}CMD" in
                   *ngrok*|*proot*)
                     kill "${'$'}PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true
@@ -166,6 +193,7 @@ object TunnelController {
         else
           echo "BRIDGE_TUNNEL_NOT_OWNED_BY_CONTROLLER"
         fi
+        rm -f "${'$'}RETRY_FILE"
         exit 0
     """.trimIndent()
 
