@@ -10,6 +10,7 @@
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
+#include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <algorithm>
 #include <array>
@@ -67,6 +68,52 @@ struct TargetGeometry {
     float distance = std::numeric_limits<float>::infinity();
     float verticalDifference = std::numeric_limits<float>::infinity();
 };
+
+using BlockSourceIsSolidBlockingBlockFn =
+    bool (*)(void*, const bedrocktools::sdk::BlockPos*);
+
+// Returns the vertical clearance from the player's feet to the top of the
+// nearest solid block directly below. A missing block within the bounded scan
+// is treated as open space; unavailable world access is reported separately.
+struct GroundClearance {
+    bool available = false;
+    float blocks = 0.0f;
+};
+
+GroundClearance groundClearanceBelow(bedrocktools::sdk::Player* player) {
+    using namespace bedrocktools::sdk;
+    if (!player) return {};
+    static auto getSolidBlock = reinterpret_cast<BlockSourceIsSolidBlockingBlockFn>(
+        bedrocktools::memory::resolve(
+            bedrocktools::memory::SignatureId::BlockSourceIsSolidBlockingBlock));
+    if (!getSolidBlock) return {};
+
+    auto* dimension = player->dimension();
+    void* blockSource = dimension ? static_cast<void*>(dimension->blockSource()) : nullptr;
+    if (!blockSource) return {};
+
+    const AABB bounds = player->bounds();
+    const Vec3 position = player->position();
+    if (!validBounds(bounds) || !finiteVec(position)) return {};
+
+    const float centerX = (bounds.min.x + bounds.max.x) * 0.5f;
+    const float centerZ = (bounds.min.z + bounds.max.z) * 0.5f;
+    if (!std::isfinite(centerX) || !std::isfinite(centerZ)) return {};
+    const int x = static_cast<int>(std::floor(centerX));
+    const int z = static_cast<int>(std::floor(centerZ));
+    const int feetY = static_cast<int>(std::floor(bounds.min.y + 0.001f));
+
+    // Keep the query bounded and sample the column under the player's center.
+    constexpr int kMaximumScanDepth = 128;
+    for (int offset = 1; offset <= kMaximumScanDepth; ++offset) {
+        const BlockPos block{x, feetY - offset, z};
+        if (getSolidBlock(blockSource, &block)) {
+            const float clearance = bounds.min.y - static_cast<float>(block.y + 1);
+            return {true, std::max(0.0f, clearance)};
+        }
+    }
+    return {true, static_cast<float>(kMaximumScanDepth)};
+}
 
 TargetGeometry targetGeometryFor(
     bedrocktools::sdk::Player* player,
@@ -389,11 +436,13 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
 
     float targetDistance = 8.0f;
     float maximumHeightDifference = 4.0f;
+    float minimumHeightDifference = 4.0f;
     {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         if (!enabled || !m_unglideEnabled || !player || m_dispatchInProgress || tickStarted < m_nextAttempt) return;
         targetDistance = m_targetDistance;
         maximumHeightDifference = m_maxVerticalDifference;
+        minimumHeightDifference = m_minimumHeightDifference;
     }
 
     auto report = [&](const char* state, const std::string& detail) {
@@ -535,6 +584,30 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
                 ", activation_height=" + std::to_string(maximumHeightDifference));
         return;
     }
+    const GroundClearance ground = groundClearanceBelow(player);
+    if (!ground.available) {
+        reject("ground_clearance_unavailable",
+               "BlockSource solid-block query is unavailable; minimum ground clearance cannot be verified.", 250);
+        return;
+    }
+    if (ground.blocks <= minimumHeightDifference) {
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            const bool preserveTriggeredLatch = bedaim::macefall::shouldKeepUnglideTriggerLatch(
+                m_triggerState == TriggerState::Triggered && m_targetLatched,
+                false, false, false);
+            if (!preserveTriggeredLatch) {
+                m_targetLatched = false;
+                m_triggerState = TriggerState::Tracking;
+            }
+            m_burstRemaining = 0;
+            m_nextAttempt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+        }
+        report("tracking_below_minimum_height",
+            std::string("ground_clearance=") + std::to_string(ground.blocks) +
+                ", minimum_height_difference=" + std::to_string(minimumHeightDifference));
+        return;
+    }
     if (!crosshairConfirmed) {
         reject("crosshair_not_on_target",
                "Camera ray does not intersect the selected player's hitbox; no Space keymap request sent.", 80);
@@ -599,8 +672,8 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
             ", burst_remaining=" + std::to_string(remaining) +
             ", keymap_uid=" + kUnglideKeymapUid);
 }
-void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
-void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
+void UnglideModule::loadConfig(const nlohmann::json& j){Module::loadConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=j.value("m_unglideEnabled",m_unglideEnabled);m_targetDistance=std::clamp(j.value("m_unglideTargetDistance",m_targetDistance),1.0f,32.0f);m_maxVerticalDifference=std::clamp(j.value("m_unglideMaxVerticalDifference",m_maxVerticalDifference),0.5f,16.0f);m_minimumHeightDifference=std::clamp(j.value("m_unglideMinimumHeightDifference",m_minimumHeightDifference),0.0f,64.0f);m_burstCount=std::clamp(j.value("m_unglideBurstCount",m_burstCount),1,10);m_pressIntervalMs=std::clamp(j.value("m_unglidePressIntervalMs",m_pressIntervalMs),50,1000);}
+void UnglideModule::saveConfig(nlohmann::json& j){Module::saveConfig(j);std::lock_guard<std::mutex> l(m_stateMutex);j["m_unglideEnabled"]=m_unglideEnabled;j["m_unglideTargetDistance"]=m_targetDistance;j["m_unglideMaxVerticalDifference"]=m_maxVerticalDifference;j["m_unglideMinimumHeightDifference"]=m_minimumHeightDifference;j["m_unglideBurstCount"]=m_burstCount;j["m_unglidePressIntervalMs"]=m_pressIntervalMs;}
 void UnglideModule::onMenuRegistered(){
  using namespace pl::modmenu;
  // Launcher-owned fields provide a persistent edit path; the compact slider
@@ -624,6 +697,7 @@ void UnglideModule::onMenuRegistered(){
      .config("m_unglideEnabled", "Enable Unglide (true/false)", ConfigType::Text, persistentValue("m_unglideEnabled", "false"))
      .config("m_unglideTargetDistance", "Target distance (blocks)", ConfigType::Text, persistentValue("m_unglideTargetDistance", "8.0"))
      .config("m_unglideMaxVerticalDifference", "Maximum height difference (blocks)", ConfigType::Text, persistentValue("m_unglideMaxVerticalDifference", "4.0"))
+     .config("m_unglideMinimumHeightDifference", "Minimum height difference from ground (blocks)", ConfigType::Text, persistentValue("m_unglideMinimumHeightDifference", "4.0"))
      .config("m_unglideBurstCount", "Burst presses", ConfigType::Text, persistentValue("m_unglideBurstCount", "3"))
      .config("m_unglidePressIntervalMs", "Time between presses ms", ConfigType::Text, persistentValue("m_unglidePressIntervalMs", "120"))
      .onConfigChanged([this](std::string_view, std::string_view key, std::string_view value) {
@@ -639,10 +713,10 @@ void UnglideModule::onMenuRegistered(){
  s.defaultCategory("special").category("special","Special","Independent Unglide trigger");
  ConfigNodeV2 t;t.id="m_unglideEnabled";t.key=t.id;t.title="Enable Unglide";t.category="special";t.type=ConfigControlTypeV2::Toggle;t.defaultValue="false";t.currentValue=vs(t.key.c_str(),"false");t.hasCurrentValue=true;s.node(std::move(t));
  auto sl=[&](const char*k,const char*title,const char*mn,const char*mx,const char*step,const char*unit,const char*def){ConfigNodeV2 n;n.id=k;n.key=k;n.title=title;n.category="special";n.type=ConfigControlTypeV2::SliderFloat;n.defaultValue=def;n.currentValue=vs(k,def);n.hasCurrentValue=true;n.minValue=mn;n.maxValue=mx;n.step=step;n.unit=unit;s.node(std::move(n));};
- sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
+ sl("m_unglideTargetDistance","Target distance","1","32","0.5"," blocks","8.0");sl("m_unglideMaxVerticalDifference","Maximum height difference","0.5","16","0.5"," blocks","4.0");sl("m_unglideMinimumHeightDifference","Minimum height difference","0","64","0.5"," blocks","4.0");sl("m_unglideBurstCount","Burst presses","1","10","1","","3");sl("m_unglidePressIntervalMs","Time between presses","50","1000","10"," ms","120");
  ConfigNodeV2 k;k.id="keybind";k.key="keybind";k.title="Keybind";k.category="special";k.type=ConfigControlTypeV2::Keybind;s.node(std::move(k));setConfigSchemaJson(moduleId,s.toJson());
 }
 bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
  if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
- try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
+ try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideMinimumHeightDifference")m_minimumHeightDifference=std::clamp(n,0.0f,64.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
 }
