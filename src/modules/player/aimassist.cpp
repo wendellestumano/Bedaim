@@ -1368,7 +1368,35 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
                 ", move_input_entity=" + (entityProbe.move_input_entity_present ? "present" : "absent") +
                 ", move_input_try_get=" + (entityProbe.move_input_try_get_present ? "present" : "absent") +
                 ", gliding_pool_check=" + (entityProbe.gliding_pool_present ? "present" : "missing") +
-                ", gliding_entity_check=" + (entityProbe.gliding_entity_present ? "present" : "absent"));
+                ", gliding_entity_check=" + (entityProbe.gliding_entity_present ? "present" : "absent") +
+                ", mob_travel=" + std::string(entityProbe.mob_travel_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.mob_travel_entity_present ? "entity" : "absent") +
+                ", player_flying=" + (entityProbe.player_flying_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.player_flying_entity_present ? "entity" : "absent") +
+                ", fall_fly_ticks=" + (entityProbe.fall_fly_ticks_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.fall_fly_ticks_entity_present ? "entity" : "absent") +
+                ", elytra_flight_ticks=" + (entityProbe.elytra_flight_ticks_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.elytra_flight_ticks_entity_present ? "entity" : "absent") +
+                ", actor_data_flags=" + (entityProbe.actor_data_flags_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.actor_data_flags_entity_present ? "entity" : "absent") +
+                ", player_action=" + (entityProbe.player_action_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.player_action_entity_present ? "entity" : "absent") +
+                ", movement_abilities=" + (entityProbe.movement_abilities_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.movement_abilities_entity_present ? "entity" : "absent") +
+                ", armor_fly=" + (entityProbe.armor_fly_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.armor_fly_entity_present ? "entity" : "absent") +
+                ", movement_tick=" + (entityProbe.movement_tick_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.movement_tick_entity_present ? "entity" : "absent") +
+                ", input_request=" + (entityProbe.input_request_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.input_request_entity_present ? "entity" : "absent") +
+                ", on_ground=" + (entityProbe.on_ground_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.on_ground_entity_present ? "entity" : "absent") +
+                ", was_in_water=" + (entityProbe.was_in_water_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.was_in_water_entity_present ? "entity" : "absent") +
+                ", player_component=" + (entityProbe.player_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.player_entity_present ? "entity" : "absent") +
+                ", local_player=" + (entityProbe.local_player_pool_present ? "pool" : "missing") +
+                    "/" + (entityProbe.local_player_entity_present ? "entity" : "absent"));
     }
     return gliding;
 }
