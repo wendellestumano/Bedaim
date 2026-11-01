@@ -33,8 +33,7 @@ object TunnelController {
         LOCK_DIR="${'$'}BASE_DIR/ngrok-start.lock"
         LOG_FILE="${'$'}BASE_DIR/ngrok.log"
         RETRY_FILE="${'$'}BASE_DIR/ngrok-retry-after"
-        mkdir -p "${'$'}BASE_DIR"
-
+        mkdir -p "${'
         # Serialize starts requested by the initial service launch and the
         # periodic reconnect monitor.
         if ! mkdir "${'$'}LOCK_DIR" 2>/dev/null; then
@@ -167,17 +166,49 @@ object TunnelController {
     """.trimIndent()
 
     private val stopScript = """
-        set +e
+        set -eu
         BASE_DIR="${'$'}HOME/.bedaim-bridge"
         PID_FILE="${'$'}BASE_DIR/ngrok.pid"
+        LOCK_DIR="${'$'}BASE_DIR/ngrok-start.lock"
         RETRY_FILE="${'$'}BASE_DIR/ngrok-retry-after"
+        mkdir -p "${'$'}BASE_DIR"
+
+        # Wait for an in-flight start to finish, then acquire the same lock.
+        TRIES=0
+        while ! mkdir "${'$'}LOCK_DIR" 2>/dev/null; do
+          LOCK_PID="$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
+          case "${'$'}LOCK_PID" in
+            ''|*[!0-9]*) ;;
+            *)
+              if ! kill -0 "${'$'}LOCK_PID" 2>/dev/null; then
+                rm -rf "${'$'}LOCK_DIR"
+                continue
+              fi
+              ;;
+          esac
+          TRIES=$((TRIES + 1))
+          if [ "${'$'}TRIES" -ge 40 ]; then
+            echo "BRIDGE_ERROR=START_LOCK_BUSY"
+            exit 2
+          fi
+          sleep 0.25
+        done
+        printf '%s\n' "${'$'}${'$'}" > "${'$'}LOCK_DIR/pid"
+        cleanup_lock() {
+          LOCK_OWNER="$(cat "${'$'}LOCK_DIR/pid" 2>/dev/null || true)"
+          if [ "${'$'}LOCK_OWNER" = "${'$'}${'$'}" ]; then
+            rm -rf "${'$'}LOCK_DIR"
+          fi
+        }
+        trap cleanup_lock EXIT
+
         if [ -s "${'$'}PID_FILE" ]; then
-          PID="$(cat "${'$'}PID_FILE" 2>/dev/null)"
+          PID="$(cat "${'$'}PID_FILE" 2>/dev/null || true)"
           case "${'$'}PID" in
             ''|*[!0-9]*) echo "BRIDGE_ERROR=INVALID_PID_FILE" ;;
             *)
               if kill -0 "${'$'}PID" 2>/dev/null; then
-                CMD="$(ps -p "${'$'}PID" -o args= 2>/dev/null)"
+                CMD="$(ps -p "${'$'}PID" -o args= 2>/dev/null || true)"
                 case "${'$'}CMD" in
                   *ngrok*|*proot*)
                     kill "${'$'}PID" 2>/dev/null && echo "BRIDGE_TUNNEL_STOPPED" || true
@@ -256,8 +287,44 @@ object TunnelController {
         }
     }
 
-    /** Returns the public HTTPS URL only when it matches the configured domain and local MCP port. */
+    internal fun isExpectedRemoteResourceMetadata(domain: String, body: String): Boolean {
+        val expectedResource = domain.trimEnd('/') + "/mcp"
+        return runCatching {
+            JSONObject(body).optString("resource") == expectedResource
+        }.getOrDefault(false)
+    }
+
+    private fun readRemotePublicUrl(domain: String): String? {
+        val connection = try {
+            (URL(domain.trimEnd('/') + "/.well-known/oauth-protected-resource/mcp")
+                .openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 3_000
+                readTimeout = 3_000
+                instanceFollowRedirects = false
+                useCaches = false
+            }
+        } catch (_: Throwable) {
+            return null
+        }
+        return try {
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            if (isExpectedRemoteResourceMetadata(domain, body)) domain.trimEnd('/') else null
+        } catch (_: Throwable) {
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /** Prefer the local ngrok inspection API, then validate the public MCP resource as a fallback. */
     fun readPublicUrl(context: Context): String? {
+        val configuredDomain = BridgePreferences.getConfiguredNgrokDomain(context).trimEnd('/')
+        return readLocalPublicUrl(configuredDomain) ?: readRemotePublicUrl(configuredDomain)
+    }
+
+    private fun readLocalPublicUrl(configuredDomain: String): String? {
         val connection = try {
             (URL("http://127.0.0.1:4040/api/tunnels").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -279,7 +346,7 @@ object TunnelController {
                 val address = tunnel.optJSONObject("config")?.optString("addr").orEmpty()
                 if (publicUrl.startsWith("https://") && address.contains("8765")) {
                     val normalized = publicUrl.trimEnd('/')
-                    if (normalized.equals(BridgePreferences.getConfiguredNgrokDomain(context), ignoreCase = true)) {
+                    if (normalized.equals(configuredDomain, ignoreCase = true)) {
                         return normalized
                     }
                 }
