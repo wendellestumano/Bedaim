@@ -41,7 +41,7 @@ object ToolchainRunner {
     suspend fun check(context: Context): String = execute(
         context,
         "sh",
-        listOf("-c", "command -v readelf || echo readelf:MISSING; command -v llvm-objdump || echo llvm-objdump:MISSING; command -v strings || echo strings:MISSING; command -v sha256sum || echo sha256sum:MISSING; command -v file || echo file:MISSING; command -v unzip || echo unzip:MISSING; command -v git || echo git:MISSING; command -v python || echo python:MISSING; command -v jadx || echo jadx:MISSING; command -v radare2 || echo radare2:MISSING"),
+        listOf("-c", "command -v readelf || echo readelf:MISSING; command -v llvm-objdump || echo llvm-objdump:MISSING; command -v strings || echo strings:MISSING; command -v sha256sum || echo sha256sum:MISSING; command -v file || echo file:MISSING; command -v unzip || echo unzip:MISSING; command -v git || echo git:MISSING; command -v python || echo python:MISSING; command -v jadx || echo jadx:MISSING; command -v radare2 || echo radare2:MISSING; command -v tmux || echo tmux:MISSING; command -v clang || echo clang:MISSING; command -v cmake || echo cmake:MISSING; command -v ninja || echo ninja:MISSING; command -v gradle || echo gradle:MISSING; command -v java || echo java:MISSING; command -v node || echo node:MISSING; command -v npm || echo npm:MISSING; command -v apktool || echo apktool:MISSING; command -v aapt || echo aapt:MISSING; command -v proot-distro || echo proot-distro:MISSING"),
         SHARED_ROOT
     )
 
@@ -74,9 +74,7 @@ object ToolchainRunner {
     }
 
     suspend fun shell(context: Context, command: String, cwd: String, timeoutMs: Long): String {
-        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
-            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
-        }
+        requireRemoteShell(context)
         require(command.isNotBlank() && command.length <= 12_000) { "Comando vazio ou acima de 12.000 caracteres." }
         require(timeoutMs in 1_000L..300_000L) { "Timeout deve ficar entre 1 e 300 segundos." }
         val home = File("/data/data/com.termux/files/home").canonicalFile
@@ -91,6 +89,94 @@ object ToolchainRunner {
         // fails across app sandboxes even when Termux itself can access cwd.
         // RUN_COMMAND executes as Termux and will report a genuine bad cwd.
         return execute(context, "bash", listOf("-lc", command), directory.path, timeoutMs)
+    }
+
+
+    /** Starts a persistent interactive Termux shell in a tmux session. */
+    suspend fun sessionStart(context: Context, command: String, cwd: String): String {
+        requireRemoteShell(context)
+        require(command.isNotBlank() && command.length <= 12_000 && '\u0000' !in command) {
+            "Comando vazio, inválido ou acima de 12.000 caracteres."
+        }
+        val directory = validateShellDirectory(cwd)
+        val id = UUID.randomUUID().toString()
+        execute(context, "tmux", listOf("new-session", "-d", "-s", id, "-c", directory.path),
+            File("/data/data/com.termux/files/home").path, 15_000L)
+        try {
+            execute(context, "tmux", listOf("send-keys", "-t", id, "-l", command),
+                File("/data/data/com.termux/files/home").path, 10_000L)
+            execute(context, "tmux", listOf("send-keys", "-t", id, "Enter"),
+                File("/data/data/com.termux/files/home").path, 10_000L)
+        } catch (error: Throwable) {
+            runCatching { execute(context, "tmux", listOf("kill-session", "-t", id),
+                File("/data/data/com.termux/files/home").path, 5_000L) }
+            throw error
+        }
+        BridgeStatus.recordEvent("Termux: sessão tmux criada ($id).")
+        return "SESSION_ID=$id\nCWD=" + directory.path + "\nStarted persistent interactive Bash session."
+    }
+
+    /** Sends text to a session; pressEnter=true submits it as a command/input line. */
+    suspend fun sessionSend(context: Context, sessionId: String, input: String, pressEnter: Boolean): String {
+        requireRemoteShell(context)
+        val id = validateSessionId(sessionId)
+        require(input.length <= 8_000 && '\u0000' !in input && '\n' !in input && '\r' !in input) {
+            "Entrada inválida ou acima de 8.000 caracteres; envie uma linha por chamada."
+        }
+        execute(context, "tmux", listOf("send-keys", "-t", id, "-l", input),
+            File("/data/data/com.termux/files/home").path, 10_000L)
+        if (pressEnter) {
+            execute(context, "tmux", listOf("send-keys", "-t", id, "Enter"),
+                File("/data/data/com.termux/files/home").path, 10_000L)
+        }
+        return "Input sent to session " + id + if (pressEnter) " and submitted." else "."
+    }
+
+    /** Captures the current tmux pane, including recent output. */
+    suspend fun sessionOutput(context: Context, sessionId: String, startLine: Int): String {
+        requireRemoteShell(context)
+        val id = validateSessionId(sessionId)
+        require(startLine in -2_000..0) { "start_line must be between -2000 and 0." }
+        return execute(context, "tmux", listOf("capture-pane", "-p", "-S", startLine.toString(), "-t", id),
+            File("/data/data/com.termux/files/home").path, 10_000L)
+    }
+
+    suspend fun sessionStop(context: Context, sessionId: String): String {
+        requireRemoteShell(context)
+        val id = validateSessionId(sessionId)
+        val result = execute(context, "tmux", listOf("kill-session", "-t", id),
+            File("/data/data/com.termux/files/home").path, 10_000L)
+        BridgeStatus.recordEvent("Termux: sessão tmux encerrada ($id).")
+        return result.ifBlank { "Stopped session $id." }
+    }
+
+    suspend fun sessionList(context: Context): String {
+        requireRemoteShell(context)
+        return execute(context, "bash", listOf("-lc",
+            "tmux list-sessions -F '#{session_name}\\t#{session_windows}\\t#{session_attached}' 2>/dev/null || true"),
+            File("/data/data/com.termux/files/home").path, 10_000L).ifBlank { "(no active tmux sessions)" }
+    }
+
+    private fun validateShellDirectory(cwd: String): File {
+        val home = File("/data/data/com.termux/files/home").canonicalFile
+        val shared = File("/storage/emulated/0").canonicalFile
+        val directory = File(cwd).canonicalFile
+        require(directory.path == home.path || directory.path.startsWith(home.path + File.separator) ||
+            directory.path == shared.path || directory.path.startsWith(shared.path + File.separator)) {
+            "cwd deve estar no HOME do Termux ou no armazenamento compartilhado."
+        }
+        return directory
+    }
+
+    private fun requireRemoteShell(context: Context) {
+        require(BridgePreferences.isTermuxRemoteShellEnabled(context)) {
+            "Acesso remoto ao shell do Termux está desativado. Ative-o no painel do Bridge."
+        }
+    }
+
+    private fun validateSessionId(value: String): String {
+        require(Regex("^[0-9a-fA-F-]{36}$").matches(value)) { "Invalid session id." }
+        return value
     }
 
     private suspend fun execute(context: Context, tool: String, args: List<String>, cwd: String, timeoutMs: Long = TIMEOUT_MS): String {
