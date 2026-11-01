@@ -405,6 +405,15 @@ bool installApollonEventHook(std::size_t index, std::uintptr_t engineBase,
 
 bool installApollonBlockEventHooks() {
     if (!bedrocktools::core::memory::isExactMinecraft260Build()) return false;
+
+    // The generic 26.60 dispatcher at 0x10F7FDE0 and the BedrockTools
+    // BlockSource tessellation signature are the validated discovery paths.
+    // The specialized Apollon callbacks below originated from 26.52.3 or are
+    // still candidate mappings; a matching prologue alone does not establish
+    // their 26.60 callback ABI or event-object layout. Keep them quarantined
+    // until each target is independently mapped against the exact 26.60 ELF.
+    constexpr bool kSpecializedMappingsValidatedFor260 = false;
+    if (kSpecializedMappingsValidatedFor260) {
     const auto getBlock = g_blockEspGetBlock.load(std::memory_order_acquire);
     if (!getBlock) return false;
 
@@ -508,6 +517,13 @@ bool installApollonBlockEventHooks() {
                                             blockStateDispatchPrologue,
                                             reinterpret_cast<void*>(apollonAdditionalBlockEventHook<11u, false>));
     return installedAny;
+    }
+
+    bedrocktools::diagnostics::probe(
+        bedrocktools::diagnostics::Level::Info, "BlockESP",
+        "apollon_specialized_hooks", "quarantined",
+        "unmapped specialized callbacks are disabled; generic 26.60 block-update and tessellation capture remain active");
+    return false;
 }
 
 bool installBlockUpdateHook() {
