@@ -391,15 +391,20 @@ void UnglideModule::processPlayerTick(bedrocktools::sdk::Player* player) {
     }
 
     const float effectiveMaximumDistance = targetDistance;
-    // The ECS component hash is matched to the 26.60 descriptor, but component
-    // presence/absence transitions still need an in-game check. Keep it telemetry
-    // only until that runtime validation is complete.
+    // Use the exact 26.60 GlidingTravelFlagComponent tag. Unknown and negative
+    // states fail closed so Unglide cannot inject Space while the player is grounded.
     const auto glidingState = playerIsGlidingForUnglide(player);
-    report(glidingState ? (*glidingState ? "gliding_detected" : "gliding_not_detected")
-                        : "gliding_state_unavailable",
-           std::string("gliding_state=") +
-               (glidingState ? (*glidingState ? "true" : "false") : "unknown") +
-               "; telemetry_only=true; target_source=fresh_crosshair_player_query");
+    if (!bedaim::macefall::shouldDispatchUnglideWhenGliding(
+            glidingState.has_value(), glidingState.value_or(false))) {
+        reject(glidingState ? "player_not_gliding" : "gliding_state_unavailable",
+               glidingState
+                   ? "GlidingTravelFlagComponent is absent; no Space keymap request sent."
+                   : "26.60 GlidingTravelFlagComponent could not be read; no Space keymap request sent.",
+               glidingState ? 120 : 250);
+        return;
+    }
+    report("gliding_detected",
+           "26.60 GlidingTravelFlagComponent is present; target_source=fresh_crosshair_player_query");
     const bool crosshairConfirmed = true; // The query returns only ray-intersecting players.
 
     // A new target starts Tracking. Range/height gates keep tracking active
@@ -566,5 +571,3 @@ bool UnglideModule::onMenuConfigChanged(std::string_view k,std::string_view v){
  if(k=="m_unglideEnabled"){bool b=v=="true"||v=="1"||v=="on";std::lock_guard<std::mutex> l(m_stateMutex);m_unglideEnabled=b;return true;}
  try{std::size_t p=0;std::string x(v);float n=std::stof(x,&p);while(p<x.size()&&std::isspace(static_cast<unsigned char>(x[p])))++p;if(p!=x.size()||!std::isfinite(n))return false;std::lock_guard<std::mutex> l(m_stateMutex);if(k=="m_unglideTargetDistance")m_targetDistance=std::clamp(n,1.0f,32.0f);else if(k=="m_unglideMaxVerticalDifference")m_maxVerticalDifference=std::clamp(n,0.5f,16.0f);else if(k=="m_unglideBurstCount")m_burstCount=std::clamp(static_cast<int>(std::lround(n)),1,10);else if(k=="m_unglidePressIntervalMs")m_pressIntervalMs=std::clamp(static_cast<int>(std::lround(n)),50,1000);else return false;return true;}catch(...){return false;}
 }
-
-[executed on device: localhost (df749b1e-c92e-41a8-a013-b79c2a3fe357)]
