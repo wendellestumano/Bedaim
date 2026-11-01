@@ -287,7 +287,7 @@ void InventoryAccess::initialize() {
         }
     }
     if (!m_getOffhandSlot) {
-        void* candidate = memory::resolve(memory::SignatureId::ActorGetOffhandSlot);
+        void* candidate = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::ActorGetOffhandSlot);
         if (candidate && isMinecraftFunction(candidate)) {
             m_getOffhandSlot = reinterpret_cast<GetOffhandSlotFn>(candidate);
             m_getOffhandSlotSource = "26.60 signature-pattern fallback (executable image validated)";
@@ -772,3 +772,5 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
 }
 
 }
+
+[executed on device: localhost (df749b1e-c92e-41a8-a013-b79c2a3fe357)]
