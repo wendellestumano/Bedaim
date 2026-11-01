@@ -16,6 +16,7 @@
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/client/ClientInstance.hpp>
+#include <bedrocktools/sdk/input/MoveInput.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -894,7 +895,7 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
         "BedrockAim", "tracking_gate", "ready");
 
     m_lastPlayer = player;
-    m_localPlayerGliding = actorIsGliding(player);
+    m_localPlayerGliding = isPlayerGliding(player);
 
     // Native ItemStack description lookup is relatively expensive. Reclassify
     // immediately on hotbar changes and otherwise at 10 Hz; weapon toggles still
@@ -1313,15 +1314,17 @@ void AimAssistModule::processPlayerTickLocked(bedrocktools::sdk::Player* player)
 
 bool AimAssistModule::localPlayerIsGliding() {
     std::lock_guard<std::mutex> stateLock(m_stateMutex);
-    return m_lastPlayer && actorIsGliding(m_lastPlayer);
+    return m_lastPlayer && isPlayerGliding(m_lastPlayer);
 }
 
 bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
     if (!player) return false;
 
-    // Prefer the engine's own Actor::getStatusFlag accessor when it is exported
-    // by the active 26.60 runtime. The synchronized ActorFlags snapshot remains
-    // a fallback because some Bedrock builds hide or omit this symbol.
+    // The 26.60 travel-type sensing system adds GlidingTravelFlagComponent
+    // while the entity is actively in the gliding travel mode. Prefer this ECS
+    // state over the legacy synchronized ActorFlags snapshot.
+    const auto ecsGliding = bedrocktools::sdk::glidingTravelFlagComponent(player);
+
     constexpr int kGlidingActorFlag = 32;
     const auto nativeGetter = resolveActorGetStatusFlag();
     bool nativeGliding = false;
@@ -1333,7 +1336,9 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
         }
     }
     const bool synchronizedGliding = actorIsGliding(player);
-    const bool gliding = nativeGliding || synchronizedGliding;
+    const bool gliding = ecsGliding.has_value()
+        ? *ecsGliding
+        : (nativeGliding || synchronizedGliding);
 
     static std::atomic<std::int64_t> nextDiagnosticMs{0};
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1344,7 +1349,9 @@ bool AimAssistModule::isPlayerGliding(bedrocktools::sdk::Player* player) {
         bedrocktools::diagnostics::probe(
             bedrocktools::diagnostics::Level::Debug, "BedrockAim", "gliding_state",
             gliding ? "gliding_true" : "gliding_false",
-            std::string("native_getStatusFlag=") + (nativeGetter ? "available" : "unavailable") +
+            std::string("ecs_pool=") + (ecsGliding.has_value() ? "available" : "missing") +
+                ", ecs_component=" + (ecsGliding.has_value() ? (*ecsGliding ? "present" : "absent") : "unknown") +
+                ", native_getStatusFlag=" + (nativeGetter ? "available" : "unavailable") +
                 ", native_result=" + (nativeGliding ? "true" : "false") +
                 ", synchronized_actor_flags=" + (synchronizedGliding ? "true" : "false") +
                 ", flag_index=" + std::to_string(kGlidingActorFlag));
