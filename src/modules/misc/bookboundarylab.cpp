@@ -17,7 +17,8 @@ bool parseBoundedInteger(std::string_view value, int minimum, int maximum, int& 
         std::size_t used = 0;
         const float parsed = std::stof(text, &used);
         if (used != text.size() || !std::isfinite(parsed)) return false;
-        output = std::clamp(static_cast<int>(std::lround(parsed)), minimum, maximum);
+        const float bounded = std::clamp(parsed, static_cast<float>(minimum), static_cast<float>(maximum));
+        output = static_cast<int>(std::lround(bounded));
         return true;
     } catch (...) {
         return false;
