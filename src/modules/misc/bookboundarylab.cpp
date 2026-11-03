@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <utility>
 
 namespace {
 bool parseBoundedInteger(std::string_view value, int minimum, int maximum, int& output) {
