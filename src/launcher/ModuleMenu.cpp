@@ -545,7 +545,8 @@ private:
                 } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
                     registerUltrakillHudConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Module Diagnostics" ||
-                           entry.first == "bedrocktools.Configurations") {
+                           entry.first == "bedrocktools.Configurations" ||
+                           entry.first == "bedrocktools.Book Expander") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
                 }
@@ -571,7 +572,8 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                  mod->moduleId != "bedrocktools.ESP" &&
                  mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
                  mod->moduleId != "bedrocktools.Module Diagnostics" &&
-                 mod->moduleId != "bedrocktools.Configurations")) return;
+                 mod->moduleId != "bedrocktools.Configurations" &&
+                 mod->moduleId != "bedrocktools.Book Expander")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
     // change. Debounce continuous sliders and give the whitelist editor more time
     // so one character/drag does not reset the active widget mid-interaction.
