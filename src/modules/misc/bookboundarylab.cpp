@@ -5,10 +5,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <utility>
 
 namespace {
+constexpr const char* kBookSourcePath = "/sdcard/Download/Bedaim/book_input.txt";
+
 bool parseBoundedInteger(std::string_view value, int minimum, int maximum, int& output) {
     try {
         const std::string text(value);
@@ -114,6 +119,17 @@ void BookBoundaryLabModule::onMenuRegistered() {
     maxPagesNode.hasCurrentValue = true;
     schema.node(std::move(maxPagesNode));
 
+    ConfigNodeV2 loadFile;
+    loadFile.id = "m_loadTextFile";
+    loadFile.key = "m_loadTextFile";
+    loadFile.title = "Load text from Downloads";
+    loadFile.description = std::string("Loads up to 64 KiB from ") + kBookSourcePath +
+        ". Use this instead of opening the Android keyboard over the native book screen.";
+    loadFile.category = "book_expander";
+    loadFile.type = ConfigControlTypeV2::Button;
+    loadFile.actionValue = "load";
+    schema.node(std::move(loadFile));
+
     ConfigNodeV2 build;
     build.id = "m_buildPagePlan";
     build.key = "m_buildPagePlan";
@@ -191,6 +207,67 @@ bool BookBoundaryLabModule::onMenuConfigChanged(std::string_view key, std::strin
         if (!bedaim::books::parsePageCountSetting(value, parsed)) return false;
         std::lock_guard<std::mutex> lock(m_stateMutex);
         m_maxPages = parsed;
+        return true;
+    }
+
+    if (key == "m_loadTextFile") {
+        const std::filesystem::path sourcePath(kBookSourcePath);
+        std::error_code ec;
+        std::filesystem::create_directories(sourcePath.parent_path(), ec);
+        if (ec) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Error, moduleId,
+                "Cannot create Download/Bedaim: " + ec.message());
+            return true;
+        }
+
+        if (!std::filesystem::exists(sourcePath, ec) || ec) {
+            std::ofstream createFile(sourcePath, std::ios::binary);
+            if (!createFile) {
+                bedrocktools::diagnostics::log(
+                    bedrocktools::diagnostics::Level::Error, moduleId,
+                    std::string("Cannot create source file: ") + kBookSourcePath);
+            } else {
+                bedrocktools::diagnostics::log(
+                    bedrocktools::diagnostics::Level::Warning, moduleId,
+                    std::string("Created empty source file: ") + kBookSourcePath +
+                    ". Paste your text into it, then press Load text from Downloads again.");
+            }
+            return true;
+        }
+
+        const auto fileSize = std::filesystem::file_size(sourcePath, ec);
+        if (ec || fileSize > 65536) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Warning, moduleId,
+                "Source file rejected: it must be readable and no larger than 64 KiB.");
+            return true;
+        }
+
+        std::ifstream input(sourcePath, std::ios::binary);
+        if (!input) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Error, moduleId,
+                std::string("Cannot read source file: ") + kBookSourcePath +
+                ". Check Android storage access.");
+            return true;
+        }
+        std::string fileText((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+        if (fileText.size() > 65536) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Warning, moduleId,
+                "Source file grew beyond the 64 KiB cap while being read.");
+            return true;
+        }
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            m_sourceText = std::move(fileText);
+        }
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Info, moduleId,
+            std::string("Loaded source file: ") + kBookSourcePath +
+            ". Build the local page plan to inspect its pages.");
         return true;
     }
 
