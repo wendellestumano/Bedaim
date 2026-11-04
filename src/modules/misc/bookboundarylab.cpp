@@ -1,6 +1,7 @@
 #include "bookboundarylab.hpp"
 
 #include "../../core/Diagnostics.hpp"
+#include "../../config/AtomicConfigWriter.hpp"
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
@@ -13,6 +14,7 @@
 
 namespace {
 constexpr const char* kBookSourcePath = "/sdcard/Download/Bedaim/book_input.txt";
+constexpr const char* kBookPlanExportPath = "/sdcard/Download/Bedaim/book_pages.txt";
 
 bool parseBoundedInteger(std::string_view value, int minimum, int maximum, int& output) {
     try {
@@ -168,6 +170,17 @@ void BookBoundaryLabModule::onMenuRegistered() {
     next.actionValue = "next";
     schema.node(std::move(next));
 
+    ConfigNodeV2 exportPlan;
+    exportPlan.id = "m_exportPagePlan";
+    exportPlan.key = "m_exportPagePlan";
+    exportPlan.title = "Save all planned pages to Downloads";
+    exportPlan.description = std::string("Writes the complete local page plan to ") +
+        kBookPlanExportPath + ". This is a text export, not a Minecraft book item.";
+    exportPlan.category = "book_expander";
+    exportPlan.type = ConfigControlTypeV2::Button;
+    exportPlan.actionValue = "export";
+    schema.node(std::move(exportPlan));
+
     ConfigNodeV2 copy;
     copy.id = "m_copyCurrentPage";
     copy.key = "m_copyCurrentPage";
@@ -301,6 +314,58 @@ bool BookBoundaryLabModule::onMenuConfigChanged(std::string_view key, std::strin
         return true;
     }
 
+    if (key == "m_exportPagePlan") {
+        std::vector<bedaim::books::Page> pages;
+        {
+            std::lock_guard<std::mutex> lock(m_stateMutex);
+            pages = m_pages;
+        }
+        if (pages.empty()) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Warning, moduleId,
+                "No page plan to export; build a local page plan first.");
+            return true;
+        }
+
+        const std::filesystem::path outputPath(kBookPlanExportPath);
+        std::error_code ec;
+        std::filesystem::create_directories(outputPath.parent_path(), ec);
+        if (ec) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Error, moduleId,
+                "Cannot create Download/Bedaim for page export: " + ec.message());
+            return true;
+        }
+
+        std::string payload;
+        payload.reserve(256 + 65536 + pages.size() * 96);
+        payload += "# Bedaim Book Expander - local page export\n";
+        payload += "# pages=" + std::to_string(pages.size()) + "\n";
+        payload += "# This file is not a native Minecraft book. Copy page text manually.\n";
+        for (std::size_t i = 0; i < pages.size(); ++i) {
+            const auto& page = pages[i];
+            payload += "\n===== PAGE " + std::to_string(i + 1) + "/" +
+                std::to_string(pages.size()) + " | CODE_POINTS=" +
+                std::to_string(page.codePoints) + " | UTF8_BYTES=" +
+                std::to_string(page.utf8Bytes) + " | UTF16_UNITS=" +
+                std::to_string(page.utf16Units) + " =====\n";
+            payload += page.text;
+            if (payload.empty() || payload.back() != '\n') payload.push_back('\n');
+        }
+
+        if (!bedrocktools::config::writePayloadAtomically(outputPath.string(), payload)) {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Error, moduleId,
+                std::string("Could not write page export: ") + kBookPlanExportPath);
+        } else {
+            bedrocktools::diagnostics::log(
+                bedrocktools::diagnostics::Level::Info, moduleId,
+                "Saved " + std::to_string(pages.size()) + " planned pages to " +
+                kBookPlanExportPath + ". Export is local text, not a native book.");
+        }
+        return true;
+    }
+
     if (key == "m_copyCurrentPage") {
         std::string pageText;
         std::size_t selected = 0;
@@ -368,17 +433,8 @@ void BookBoundaryLabModule::buildPagePlan() {
     bedrocktools::diagnostics::log(
         bedrocktools::diagnostics::Level::Info, moduleId, summary);
 
-    for (std::size_t i = 0; i < plan.pages.size(); ++i) {
-        const auto& page = plan.pages[i];
-        const std::string message =
-            "PAGE " + std::to_string(i + 1) + "/" + std::to_string(plan.pages.size()) +
-            " [code_points=" + std::to_string(page.codePoints) +
-            ", utf8_bytes=" + std::to_string(page.utf8Bytes) +
-            ", utf16_units=" + std::to_string(page.utf16Units) +
-            "]: " + page.text;
-        bedrocktools::diagnostics::log(
-            bedrocktools::diagnostics::Level::Info, moduleId, message);
-    }
+    // Do not copy every page body into diagnostics or rolling auto-export logs.
+    // The user can explicitly save the entire plan to book_pages.txt or log one page.
 }
 
 void BookBoundaryLabModule::loadConfig(const nlohmann::json& j) {
