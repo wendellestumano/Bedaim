@@ -439,6 +439,8 @@ bool InventoryAccess::readInventorySnapshot(
         if (!vtable || !isReadableMemory(vtable, (ItemGetDescriptionIdVtableIndex + 1) * sizeof(std::uintptr_t))) return false;
         const auto method = read<std::uintptr_t>(vtable, ItemGetDescriptionIdVtableIndex * sizeof(void*));
         if (!method || !isReadableMemory(reinterpret_cast<const void*>(method), 1)) return false;
+        Dl_info methodInfo{};
+        if (!dladdr(reinterpret_cast<void*>(method), &methodInfo) || !methodInfo.dli_fname) return false;
 
         entry.itemIdentifier = stackIdentifier(stack);
         if (entry.itemIdentifier.empty() || entry.itemIdentifier.size() > 128) return false;

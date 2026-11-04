@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -53,10 +54,12 @@ private:
     bool m_hasPrevious = false;
     std::atomic_bool m_captureRequested{false};
 
-    int m_captureIntervalMs = 250;
-    int m_maxRecords = 256;
-    bool m_persistLogs = true;
-    bool m_captureContainerEvents = true;
+    std::atomic<int> m_captureIntervalMs{250};
+    std::atomic<int> m_maxRecords{256};
+    std::atomic_bool m_persistLogs{true};
+    std::atomic_bool m_captureContainerEvents{true};
+    mutable std::mutex m_recordsMutex;
+    std::uint64_t m_logGeneration = 0;
     bool m_logDirty = false;
     std::string m_sessionId;
 

@@ -14,6 +14,7 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <system_error>
@@ -65,11 +66,6 @@ std::string observerLogPath() {
     if (parent.empty()) parent = "/sdcard/Download/Bedaim";
     return (parent / "InventoryObserver.jsonl").string();
 }
-
-bool sameTotals(const std::map<std::string, std::uint64_t>& left,
-                const std::map<std::string, std::uint64_t>& right) {
-    return left == right;
-}
 }
 
 ItemDuplicatorModule::ItemDuplicatorModule()
@@ -86,17 +82,23 @@ ItemDuplicatorModule::~ItemDuplicatorModule() {
 void ItemDuplicatorModule::onInit() {}
 
 void ItemDuplicatorModule::onEnable() {
-    m_records.clear();
-    m_previous = {};
-    m_hasPrevious = false;
-    m_logDirty = true;
-    m_captureRequested.store(true, std::memory_order_release);
-    m_enabledAt = std::chrono::steady_clock::now();
-    m_nextCapture = {};
-    m_nextFlush = m_enabledAt + std::chrono::seconds(1);
-    m_sessionId = std::to_string(
+    const auto now = std::chrono::steady_clock::now();
+    const auto session = std::to_string(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count());
+    {
+        std::lock_guard<std::mutex> lock(m_recordsMutex);
+        m_records.clear();
+        m_previous = {};
+        m_hasPrevious = false;
+        m_sessionId = session;
+        m_logDirty = true;
+        ++m_logGeneration;
+    }
+    m_captureRequested.store(true, std::memory_order_release);
+    m_enabledAt = now;
+    m_nextCapture = {};
+    m_nextFlush = now + std::chrono::seconds(5);
 
     auto& events = bedrocktools::events::bus();
     if (m_tickSubscription == 0) {
@@ -108,8 +110,11 @@ void ItemDuplicatorModule::onEnable() {
     if (m_containerSubscription == 0) {
         m_containerSubscription = events.subscribe<bedrocktools::events::ContainerSlotSelectedEvent>(
             [this](bedrocktools::events::ContainerSlotSelectedEvent& event) {
-                if (enabled && m_captureContainerEvents && event.afterSelection)
+                if (enabled &&
+                    m_captureContainerEvents.load(std::memory_order_acquire) &&
+                    event.afterSelection) {
                     m_captureRequested.store(true, std::memory_order_release);
+                }
             });
     }
 }
@@ -129,16 +134,15 @@ void ItemDuplicatorModule::unsubscribeEvents() {
 void ItemDuplicatorModule::onDisable() {
     unsubscribeEvents();
     flushLog();
-    m_hasPrevious = false;
     m_captureRequested.store(false, std::memory_order_release);
 }
 
 void ItemDuplicatorModule::onFrame() {
-    if (!m_logDirty || !m_persistLogs) return;
+    if (!m_persistLogs.load(std::memory_order_acquire)) return;
     const auto now = std::chrono::steady_clock::now();
     if (m_nextFlush.time_since_epoch().count() == 0 || now >= m_nextFlush) {
         flushLog();
-        m_nextFlush = now + std::chrono::seconds(2);
+        m_nextFlush = now + std::chrono::seconds(5);
     }
 }
 
@@ -147,7 +151,8 @@ void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
     const auto now = std::chrono::steady_clock::now();
     const bool requested = m_captureRequested.exchange(false, std::memory_order_acq_rel);
     if (!requested && m_nextCapture.time_since_epoch().count() != 0 && now < m_nextCapture) return;
-    m_nextCapture = now + std::chrono::milliseconds(m_captureIntervalMs);
+    const int interval = std::clamp(m_captureIntervalMs.load(std::memory_order_acquire), 100, 2000);
+    m_nextCapture = now + std::chrono::milliseconds(interval);
 
     std::vector<bedrocktools::core::InventorySlotSnapshot> slots;
     int selectedSlot = -1;
@@ -173,59 +178,83 @@ void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
                 current.inventoryTotalForHeldIdentifier = static_cast<int>(it->second);
             }
         }
-
-        if (!m_hasPrevious) {
-            current.classification = "BASELINE";
-        } else {
-            const bool increased = [&] {
-                for (const auto& [identifier, count] : current.itemTotals) {
-                    const auto it = m_previous.itemTotals.find(identifier);
-                    const std::uint64_t previous = it == m_previous.itemTotals.end() ? 0 : it->second;
-                    if (count > previous) return true;
-                }
-                return false;
-            }();
-            const bool decreased = [&] {
-                for (const auto& [identifier, count] : m_previous.itemTotals) {
-                    const auto it = current.itemTotals.find(identifier);
-                    const std::uint64_t currentCount = it == current.itemTotals.end() ? 0 : it->second;
-                    if (currentCount < count) return true;
-                }
-                return false;
-            }();
-
-            if (!increased && !decreased) {
-                current.classification =
-                    (current.selectedSlot != m_previous.selectedSlot ||
-                     current.itemIdentifier != m_previous.itemIdentifier)
-                    ? "SELECTION_CHANGED" : "NO_CHANGE";
-            } else if (increased && decreased) {
-                current.classification = "LOCAL_INVENTORY_CHANGE";
-            } else if (increased) {
-                current.classification = "LOCAL_COUNT_INCREASE";
-            } else {
-                current.classification = "LOCAL_COUNT_DECREASE";
-            }
-        }
-        m_previous = current;
-        m_hasPrevious = true;
     } else {
         current.classification = "INCONCLUSIVE_READ_FAILURE";
     }
 
-    m_records.push_back(std::move(current));
-    trimRecords();
-    m_logDirty = true;
+    {
+        std::lock_guard<std::mutex> lock(m_recordsMutex);
+        if (complete) {
+            if (!m_hasPrevious) {
+                current.classification = "BASELINE";
+            } else {
+                bool increased = false;
+                for (const auto& [identifier, count] : current.itemTotals) {
+                    const auto it = m_previous.itemTotals.find(identifier);
+                    const std::uint64_t previous = it == m_previous.itemTotals.end() ? 0 : it->second;
+                    if (count > previous) { increased = true; break; }
+                }
+                bool decreased = false;
+                for (const auto& [identifier, count] : m_previous.itemTotals) {
+                    const auto it = current.itemTotals.find(identifier);
+                    const std::uint64_t currentCount = it == current.itemTotals.end() ? 0 : it->second;
+                    if (currentCount < count) { decreased = true; break; }
+                }
+
+                if (!increased && !decreased) {
+                    current.classification =
+                        (current.selectedSlot != m_previous.selectedSlot ||
+                         current.itemIdentifier != m_previous.itemIdentifier)
+                        ? "SELECTION_CHANGED" : "NO_CHANGE";
+                } else if (increased && decreased) {
+                    current.classification = "LOCAL_INVENTORY_CHANGE";
+                } else if (increased) {
+                    current.classification = "LOCAL_COUNT_INCREASE";
+                } else {
+                    current.classification = "LOCAL_COUNT_DECREASE";
+                }
+            }
+            m_previous = current;
+            m_hasPrevious = true;
+        }
+
+        m_records.push_back(std::move(current));
+        const auto limit = static_cast<std::size_t>(
+            std::clamp(m_maxRecords.load(std::memory_order_acquire), 32, 1024));
+        while (m_records.size() > limit) m_records.pop_front();
+        m_logDirty = true;
+        ++m_logGeneration;
+    }
 }
 
 void ItemDuplicatorModule::trimRecords() {
-    const auto limit = static_cast<std::size_t>(std::clamp(m_maxRecords, 32, 1024));
-    while (m_records.size() > limit) m_records.pop_front();
+    std::lock_guard<std::mutex> lock(m_recordsMutex);
+    const auto limit = static_cast<std::size_t>(
+        std::clamp(m_maxRecords.load(std::memory_order_acquire), 32, 1024));
+    bool changed = false;
+    while (m_records.size() > limit) {
+        m_records.pop_front();
+        changed = true;
+    }
+    if (changed) {
+        m_logDirty = true;
+        ++m_logGeneration;
+    }
 }
 
 bool ItemDuplicatorModule::flushLog(bool force) {
-    if (!force && !m_persistLogs) return true;
-    if (!m_logDirty && !force) return true;
+    if (!force && !m_persistLogs.load(std::memory_order_acquire)) return true;
+
+    std::deque<Observation> records;
+    std::string sessionId;
+    std::uint64_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_recordsMutex);
+        if (!m_logDirty && !force) return true;
+        records = m_records;
+        sessionId = m_sessionId;
+        generation = m_logGeneration;
+    }
 
     const std::string path = observerLogPath();
     std::error_code error;
@@ -234,9 +263,9 @@ bool ItemDuplicatorModule::flushLog(bool force) {
     if (error) return false;
 
     std::ostringstream output;
-    for (const auto& record : m_records) {
+    for (const auto& record : records) {
         json line;
-        line["session_id"] = m_sessionId;
+        line["session_id"] = sessionId;
         line["elapsed_ms"] = record.timestampMs;
         line["snapshot_complete"] = record.complete;
         line["selected_slot"] = record.selectedSlot;
@@ -252,7 +281,10 @@ bool ItemDuplicatorModule::flushLog(bool force) {
             "ItemDuplicator", "could not atomically write InventoryObserver.jsonl");
         return false;
     }
-    m_logDirty = false;
+    {
+        std::lock_guard<std::mutex> lock(m_recordsMutex);
+        if (m_logGeneration == generation) m_logDirty = false;
+    }
     return true;
 }
 
@@ -294,10 +326,10 @@ void ItemDuplicatorModule::onMenuRegistered() {
         schema.node(std::move(node));
     };
 
-    addSlider("m_captureIntervalMs", "Capture interval", "Sampling interval for the local player inventory.", m_captureIntervalMs, 100, 2000, 50, " ms");
-    addSlider("m_maxRecords", "Maximum records", "Maximum in-memory and exported JSONL records.", m_maxRecords, 32, 1024, 32, "");
-    addToggle("m_captureContainerEvents", "Capture after container slot selection", "Request an extra snapshot after a container selection event.", m_captureContainerEvents);
-    addToggle("m_persistLogs", "Persist observer log", "Atomically saves a bounded JSONL file in the active Bedaim config folder.", m_persistLogs);
+    addSlider("m_captureIntervalMs", "Capture interval", "Sampling interval for the local player inventory.", m_captureIntervalMs.load(), 100, 2000, 50, " ms");
+    addSlider("m_maxRecords", "Maximum records", "Maximum in-memory and exported JSONL records.", m_maxRecords.load(), 32, 1024, 32, "");
+    addToggle("m_captureContainerEvents", "Capture after container slot selection", "Request an extra snapshot after a container selection event.", m_captureContainerEvents.load());
+    addToggle("m_persistLogs", "Persist observer log", "Atomically saves a bounded JSONL file in the active Bedaim config folder.", m_persistLogs.load());
     addToggle("m_exportNow", "Export current observer log now", "One-shot action: writes the current records even when automatic persistence is disabled.", false);
     addToggle("m_clearSession", "Clear current observer session", "One-shot action: clears the in-memory ring and replaces the exported file with an empty log.", false);
     setConfigSchemaJson(moduleId, schema.toJson());
@@ -309,28 +341,33 @@ bool ItemDuplicatorModule::onMenuConfigChanged(std::string_view key, std::string
         if (!parseNumber(value, parsed)) return false;
         if (key == "m_captureIntervalMs") {
             const double bounded = std::clamp(parsed, 100.0, 2000.0);
-            m_captureIntervalMs = std::clamp(
-                100 + static_cast<int>(std::lround((bounded - 100.0) / 50.0)) * 50, 100, 2000);
-            m_nextCapture = {};
+            m_captureIntervalMs.store(std::clamp(
+                100 + static_cast<int>(std::lround((bounded - 100.0) / 50.0)) * 50, 100, 2000),
+                std::memory_order_release);
         } else {
             const double bounded = std::clamp(parsed, 32.0, 1024.0);
-            m_maxRecords = std::clamp(static_cast<int>(std::lround(bounded / 32.0)) * 32, 32, 1024);
+            m_maxRecords.store(std::clamp(
+                static_cast<int>(std::lround(bounded / 32.0)) * 32, 32, 1024),
+                std::memory_order_release);
             trimRecords();
-            m_logDirty = true;
         }
         return true;
     }
     if (key == "m_captureContainerEvents") {
         bool parsed = false;
         if (!parseBool(value, parsed)) return false;
-        m_captureContainerEvents = parsed;
+        m_captureContainerEvents.store(parsed, std::memory_order_release);
         return true;
     }
     if (key == "m_persistLogs") {
         bool parsed = false;
         if (!parseBool(value, parsed)) return false;
-        m_persistLogs = parsed;
-        if (parsed) m_logDirty = true;
+        m_persistLogs.store(parsed, std::memory_order_release);
+        if (parsed) {
+            std::lock_guard<std::mutex> lock(m_recordsMutex);
+            m_logDirty = true;
+            ++m_logGeneration;
+        }
         return true;
     }
     if (key == "m_exportNow") {
@@ -343,10 +380,14 @@ bool ItemDuplicatorModule::onMenuConfigChanged(std::string_view key, std::string
         bool parsed = false;
         if (!parseBool(value, parsed)) return false;
         if (parsed) {
-            m_records.clear();
-            m_previous = {};
-            m_hasPrevious = false;
-            m_logDirty = true;
+            {
+                std::lock_guard<std::mutex> lock(m_recordsMutex);
+                m_records.clear();
+                m_previous = {};
+                m_hasPrevious = false;
+                m_logDirty = true;
+                ++m_logGeneration;
+            }
             flushLog(true);
         }
         return true;
@@ -360,20 +401,26 @@ bool ItemDuplicatorModule::showInLegacyMenu(std::string_view) const {
 
 void ItemDuplicatorModule::loadConfig(const nlohmann::json& config) {
     Module::loadConfig(config);
-    m_captureIntervalMs = configInteger(config, "m_captureIntervalMs", m_captureIntervalMs, 100, 2000, 50);
-    m_maxRecords = configInteger(config, "m_maxRecords", m_maxRecords, 32, 1024, 32);
-    m_persistLogs = configBool(config, "m_persistLogs", m_persistLogs);
-    m_captureContainerEvents = configBool(config, "m_captureContainerEvents", m_captureContainerEvents);
-    m_logDirty = false;
-    m_nextCapture = {};
+    m_captureIntervalMs.store(configInteger(config, "m_captureIntervalMs", m_captureIntervalMs.load(), 100, 2000, 50),
+                              std::memory_order_release);
+    m_maxRecords.store(configInteger(config, "m_maxRecords", m_maxRecords.load(), 32, 1024, 32),
+                       std::memory_order_release);
+    m_persistLogs.store(configBool(config, "m_persistLogs", m_persistLogs.load()),
+                        std::memory_order_release);
+    m_captureContainerEvents.store(configBool(config, "m_captureContainerEvents", m_captureContainerEvents.load()),
+                                   std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(m_recordsMutex);
+        m_logDirty = false;
+    }
 }
 
 void ItemDuplicatorModule::saveConfig(nlohmann::json& config) {
     Module::saveConfig(config);
-    config["m_captureIntervalMs"] = m_captureIntervalMs;
-    config["m_maxRecords"] = m_maxRecords;
-    config["m_persistLogs"] = m_persistLogs;
-    config["m_captureContainerEvents"] = m_captureContainerEvents;
+    config["m_captureIntervalMs"] = m_captureIntervalMs.load(std::memory_order_acquire);
+    config["m_maxRecords"] = m_maxRecords.load(std::memory_order_acquire);
+    config["m_persistLogs"] = m_persistLogs.load(std::memory_order_acquire);
+    config["m_captureContainerEvents"] = m_captureContainerEvents.load(std::memory_order_acquire);
     config["m_exportNow"] = false;
     config["m_clearSession"] = false;
 }
