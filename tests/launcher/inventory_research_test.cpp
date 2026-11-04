@@ -36,11 +36,24 @@ int main() {
     });
     assert(classifyChange(baseline, clientIncrease) == ChangeClass::LocalOnly);
 
+    const auto clientDecrease = snapshot(SnapshotSource::LocalClient, SnapshotPhase::AfterOperation, {
+        {0, SlotKnowledge::Item, "minecraft:diamond", 16},
+        {1, SlotKnowledge::Empty, "", 0}
+    });
+    assert(classifyChange(baseline, clientDecrease) == ChangeClass::LocalCountDecrease);
+
+    const auto mixedChange = snapshot(SnapshotSource::LocalClient, SnapshotPhase::AfterOperation, {
+        {0, SlotKnowledge::Item, "minecraft:emerald", 16},
+        {1, SlotKnowledge::Empty, "", 0}
+    });
+    assert(classifyChange(baseline, mixedChange) == ChangeClass::LocalInventoryChanged);
+
     const auto corrected = snapshot(SnapshotSource::ServerAuthoritative, SnapshotPhase::AfterOperation, {
         {0, SlotKnowledge::Item, "minecraft:diamond", 32},
         {1, SlotKnowledge::Empty, "", 0}
     });
     assert(classifyChange(baseline, clientIncrease, &corrected) == ChangeClass::ServerCorrected);
+    assert(classifyChange(baseline, clientDecrease, &corrected) == ChangeClass::ServerCorrected);
 
     const auto persistedIncrease = snapshot(SnapshotSource::ServerAuthoritative, SnapshotPhase::AfterReconnect, {
         {0, SlotKnowledge::Item, "minecraft:diamond", 32},
@@ -59,6 +72,18 @@ int main() {
     auto invalidEmpty = unchanged;
     invalidEmpty.slots[1].count = 1;
     assert(classifyChange(baseline, invalidEmpty) == ChangeClass::Inconclusive);
+
+    auto duplicateSlot = clientIncrease;
+    duplicateSlot.slots[1].slotIndex = 0;
+    assert(classifyChange(baseline, duplicateSlot) == ChangeClass::Inconclusive);
+
+    auto wrongLayout = clientIncrease;
+    wrongLayout.slots[1].slotIndex = 2;
+    assert(classifyChange(baseline, wrongLayout) == ChangeClass::Inconclusive);
+
+    auto invalidPhase = persistedIncrease;
+    invalidPhase.phase = SnapshotPhase::Baseline;
+    assert(classifyChange(baseline, clientIncrease, &invalidPhase) == ChangeClass::Inconclusive);
 
     std::cout << "Inventory research classification tests passed\n";
     return 0;
