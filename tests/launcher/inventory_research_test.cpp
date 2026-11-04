@@ -1,4 +1,4 @@
-#include "../src/modules/misc/InventoryResearch.hpp"
+#include "../../src/modules/misc/InventoryResearch.hpp"
 
 #include <cassert>
 #include <iostream>
