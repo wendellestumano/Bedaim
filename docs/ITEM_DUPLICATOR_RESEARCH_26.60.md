@@ -151,3 +151,11 @@ Implementation consequence: begin with pure snapshot/diff/classification logic a
 ## Initial pure-logic implementation
 
 Added `src/modules/misc/InventoryResearch.hpp` and a host test target `inventory_research_test`. The classifier distinguishes unchanged state, client-only count increase, server correction, persisted count increase after reconnect, and inconclusive evidence. Its strongest positive label is intentionally `PersistedCountIncrease`, not "dupe", because count-only snapshots do not prove item lineage or independent copies.
+
+
+## Preparation verification
+
+- Experimental branch checked out successfully in a Termux-private working directory. A first clone directly into shared storage failed because the repository contains a legacy filename that Android shared storage rejects; cloning under Termux home succeeded.
+- Compiled `tests/launcher/inventory_research_test.cpp` directly with Termux `clang++ -std=c++20 -Wall -Wextra -Werror`.
+- Result: `Inventory research classification tests passed`.
+- This validates only the pure evidence classifier. It is not an Android game build and does not validate runtime memory offsets, hooks, UI registration, or a working duplication mechanism.
