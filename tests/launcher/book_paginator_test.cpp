@@ -20,6 +20,29 @@ void check(bool condition, const char* label) {
 int main() {
     using bedaim::books::paginate;
 
+    int parsedPageLimit = 0;
+    check(bedaim::books::parsePageCountSetting("200", parsedPageLimit) && parsedPageLimit == 200,
+          "page setting accepts the full 200-page cap");
+    check(bedaim::books::parsePageCountSetting("250", parsedPageLimit) && parsedPageLimit == 200,
+          "page setting clamps values above 200");
+    check(bedaim::books::parsePageCountSetting("0", parsedPageLimit) && parsedPageLimit == 1,
+          "page setting clamps values below one");
+    check(!bedaim::books::parsePageCountSetting("not-a-number", parsedPageLimit),
+          "page setting rejects invalid numeric input");
+
+    std::size_t pageCursor = 48;
+    check(bedaim::books::movePageCursor(pageCursor, 200, 1) && pageCursor == 49,
+          "local next-page cursor advances to page 50");
+    check(bedaim::books::movePageCursor(pageCursor, 200, 1) && pageCursor == 50,
+          "local next-page cursor remains active past page 50");
+    check(bedaim::books::movePageCursor(pageCursor, 200, 1) && pageCursor == 51,
+          "local next-page cursor advances to page 52");
+    pageCursor = 199;
+    check(!bedaim::books::movePageCursor(pageCursor, 200, 1) && pageCursor == 199,
+          "local next-page cursor safely stops at page 200");
+    check(bedaim::books::movePageCursor(pageCursor, 200, -1) && pageCursor == 198,
+          "local previous-page cursor remains usable at the final page");
+
     const auto basic = paginate("hello world", 7, 10);
     check(basic.ok, "basic text paginates");
     check(basic.pages.size() == 2, "whitespace boundary creates two pages");
