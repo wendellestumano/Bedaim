@@ -77,6 +77,18 @@ int main() {
     const auto empty = paginate("", 10, 10);
     check(empty.ok && empty.pages.empty(), "empty input produces an empty valid plan");
 
+    std::vector<bedaim::books::Page> exportPages = {
+        {"alpha", 5, 5, 5},
+        {"beta", 4, 4, 4}
+    };
+    const auto exportedText = bedaim::books::serializePagePlan(exportPages);
+    check(exportedText.find("PAGE 1/2") != std::string::npos &&
+          exportedText.find("PAGE 2/2") != std::string::npos,
+          "page export includes numbered boundaries for every page");
+    check(exportedText.find("alpha") != std::string::npos &&
+          exportedText.find("beta") != std::string::npos,
+          "page export preserves every page body");
+
     // Regression for the expanded local planner: 200 chunks of 256 ASCII code points.
     const std::string twoHundredPages(200u * 256u, 'x');
     const auto expanded = paginate(twoHundredPages, 256, 200);
