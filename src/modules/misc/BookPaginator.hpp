@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -24,6 +26,38 @@ struct PaginationResult {
     std::size_t totalUtf8Bytes = 0;
     std::size_t totalUtf16Units = 0;
 };
+
+inline constexpr int kMaxPlannedPages = 200;
+
+// Parse and normalize the module's page-cap setting in one place so the UI
+// callback and persisted configuration cannot disagree about the upper bound.
+inline bool parsePageCountSetting(std::string_view value, int& output) {
+    try {
+        const std::string text(value);
+        std::size_t used = 0;
+        const float parsed = std::stof(text, &used);
+        if (used != text.size() || !std::isfinite(parsed)) return false;
+        output = static_cast<int>(std::lround(
+            std::clamp(parsed, 1.0f, static_cast<float>(kMaxPlannedPages))));
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// Move a cursor within a local page plan. The UI may keep its Next button
+// visible at every page; this helper prevents overflow and clamps at either end.
+inline bool movePageCursor(std::size_t& index, std::size_t pageCount, int direction) {
+    if (pageCount == 0 || direction == 0) return false;
+    if (direction > 0) {
+        if (index + 1 >= pageCount) return false;
+        ++index;
+        return true;
+    }
+    if (index == 0 || index >= pageCount) return false;
+    --index;
+    return true;
+}
 
 inline bool decodeUtf8(std::string_view text, std::vector<std::size_t>& ends,
                        std::vector<std::size_t>& utf16Widths) {
