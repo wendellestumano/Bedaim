@@ -3,6 +3,7 @@
 #include "../../config/AtomicConfigWriter.hpp"
 #include "../../config/ConfigManager.hpp"
 #include "../../core/InventoryAccess.hpp"
+#include "../../core/Diagnostics.hpp"
 #include <bedrocktools/events/ContainerSlotSelectedEvent.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
@@ -46,7 +47,8 @@ int configInteger(const json& config, const char* key, int fallback, int minValu
     if (it == config.end() || !it->is_number()) return fallback;
     const double raw = it->get<double>();
     if (!std::isfinite(raw)) return fallback;
-    const int bounded = std::clamp(static_cast<int>(std::lround(raw)), minValue, maxValue);
+    const double boundedValue = std::clamp(raw, static_cast<double>(minValue), static_cast<double>(maxValue));
+    const int bounded = static_cast<int>(std::lround(boundedValue));
     const int snapped = minValue + static_cast<int>(std::lround(
         static_cast<double>(bounded - minValue) / static_cast<double>(step))) * step;
     return std::clamp(snapped, minValue, maxValue);
