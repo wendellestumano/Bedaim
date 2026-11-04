@@ -427,7 +427,7 @@ bool InventoryAccess::readInventorySnapshot(
             candidate.push_back(std::move(entry));
             continue;
         }
-        if (count == 0) return false;
+        if (valid != 1 || count == 0) return false;
 
         // Validate the pointer chain before reusing the established identifier
         // accessor. A malformed stack is unknown, not an empty slot.

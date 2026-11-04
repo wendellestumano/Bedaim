@@ -177,3 +177,6 @@ Branch implementation:
 - The current source can only observe the local client inventory. It does not yet receive a trusted server-authoritative snapshot after reconnect, so `LOCAL_COUNT_INCREASE` is not evidence of a persisted duplicate.
 - Offhand is not included because its getter is independently version-sensitive; adding it requires a separately validated safe accessor.
 - Host regression tests and Android ARM64 CI must pass before the package is considered build-verified. A live test in a disposable local world is still required to validate 1.26.60 runtime reads.
+
+
+Additional lifecycle hardening: event callbacks are gated by an atomic active flag before work begins, and JSONL writes are serialized to prevent two concurrent exports from overwriting each other out of order. ItemStack validity must now be exactly 0 (empty) or 1 (item); other values are treated as unreadable. Empty `complete` snapshots are rejected by the pure classifier.

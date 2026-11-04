@@ -42,7 +42,7 @@ using ItemTotals = std::map<std::string, std::uint64_t>;
 
 inline bool aggregateTotals(const InventorySnapshot& snapshot, ItemTotals& out) {
     out.clear();
-    if (!snapshot.complete || snapshot.worldToken.empty()) return false;
+    if (!snapshot.complete || snapshot.worldToken.empty() || snapshot.slots.empty()) return false;
 
     std::set<int> seenSlots;
     for (const auto& slot : snapshot.slots) {

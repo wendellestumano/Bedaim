@@ -53,12 +53,14 @@ private:
     Observation m_previous;
     bool m_hasPrevious = false;
     std::atomic_bool m_captureRequested{false};
+    std::atomic_bool m_callbacksActive{false};
 
     std::atomic<int> m_captureIntervalMs{250};
     std::atomic<int> m_maxRecords{256};
     std::atomic_bool m_persistLogs{true};
     std::atomic_bool m_captureContainerEvents{true};
     mutable std::mutex m_recordsMutex;
+    std::mutex m_flushMutex;
     std::uint64_t m_logGeneration = 0;
     bool m_logDirty = false;
     std::string m_sessionId;

@@ -97,6 +97,7 @@ void ItemDuplicatorModule::onEnable() {
     }
     m_captureRequested.store(true, std::memory_order_release);
     m_enabledAt = now;
+    m_callbacksActive.store(true, std::memory_order_release);
     m_nextCapture = {};
     m_nextFlush = now + std::chrono::seconds(5);
 
@@ -104,13 +105,13 @@ void ItemDuplicatorModule::onEnable() {
     if (m_tickSubscription == 0) {
         m_tickSubscription = events.subscribe<bedrocktools::events::LocalPlayerTickEvent>(
             [this](bedrocktools::events::LocalPlayerTickEvent& event) {
-                if (enabled) observePlayer(event.player);
+                if (m_callbacksActive.load(std::memory_order_acquire)) observePlayer(event.player);
             });
     }
     if (m_containerSubscription == 0) {
         m_containerSubscription = events.subscribe<bedrocktools::events::ContainerSlotSelectedEvent>(
             [this](bedrocktools::events::ContainerSlotSelectedEvent& event) {
-                if (enabled &&
+                if (m_callbacksActive.load(std::memory_order_acquire) &&
                     m_captureContainerEvents.load(std::memory_order_acquire) &&
                     event.afterSelection) {
                     m_captureRequested.store(true, std::memory_order_release);
@@ -132,6 +133,7 @@ void ItemDuplicatorModule::unsubscribeEvents() {
 }
 
 void ItemDuplicatorModule::onDisable() {
+    m_callbacksActive.store(false, std::memory_order_release);
     unsubscribeEvents();
     flushLog();
     m_captureRequested.store(false, std::memory_order_release);
@@ -147,7 +149,7 @@ void ItemDuplicatorModule::onFrame() {
 }
 
 void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
-    if (!enabled || !player) return;
+    if (!m_callbacksActive.load(std::memory_order_acquire) || !player) return;
     const auto now = std::chrono::steady_clock::now();
     const bool requested = m_captureRequested.exchange(false, std::memory_order_acq_rel);
     if (!requested && m_nextCapture.time_since_epoch().count() != 0 && now < m_nextCapture) return;
@@ -243,6 +245,7 @@ void ItemDuplicatorModule::trimRecords() {
 }
 
 bool ItemDuplicatorModule::flushLog(bool force) {
+    std::lock_guard<std::mutex> flushLock(m_flushMutex);
     if (!force && !m_persistLogs.load(std::memory_order_acquire)) return true;
 
     std::deque<Observation> records;
