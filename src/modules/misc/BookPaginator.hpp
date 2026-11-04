@@ -50,7 +50,7 @@ inline bool parsePageCountSetting(std::string_view value, int& output) {
 inline bool movePageCursor(std::size_t& index, std::size_t pageCount, int direction) {
     if (pageCount == 0 || direction == 0) return false;
     if (direction > 0) {
-        if (index + 1 >= pageCount) return false;
+        if (index >= pageCount - 1) return false;
         ++index;
         return true;
     }
