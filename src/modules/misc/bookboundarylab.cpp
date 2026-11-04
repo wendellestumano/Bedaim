@@ -23,10 +23,6 @@ bool parseBoundedInteger(std::string_view value, int minimum, int maximum, int& 
     }
 }
 
-std::string buttonLabel(const char* label, std::size_t current, std::size_t total) {
-    return std::string(label) + " (page " + std::to_string(current) +
-        "/" + std::to_string(total) + ")";
-}
 }
 
 BookBoundaryLabModule::BookBoundaryLabModule()
@@ -41,6 +37,7 @@ void BookBoundaryLabModule::onMenuRegistered() {
 
     int codePointsPerPage = 240;
     int maxPages = bedaim::books::kMaxPlannedPages;
+    std::string sourceText;
     std::string previewTitle = "Local page preview";
     std::string previewDescription =
         "No local page plan yet. Enter text, build the plan, then use Previous/Next to inspect pages.";
@@ -51,6 +48,7 @@ void BookBoundaryLabModule::onMenuRegistered() {
         std::lock_guard<std::mutex> lock(m_stateMutex);
         codePointsPerPage = m_codePointsPerPage;
         maxPages = m_maxPages;
+        sourceText = m_sourceText;
         total = m_pages.size();
         if (total > 0 && m_currentPageIndex < total) {
             current = m_currentPageIndex + 1;
@@ -80,7 +78,7 @@ void BookBoundaryLabModule::onMenuRegistered() {
     source.category = "book_expander";
     source.type = ConfigControlTypeV2::Text;
     source.defaultValue = "";
-    source.currentValue = "";
+    source.currentValue = sourceText;
     source.hasCurrentValue = true;
     source.placeholder = "Paste your book text here...";
     source.maxLength = 65536;
