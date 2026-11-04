@@ -337,21 +337,7 @@ bool BookBoundaryLabModule::onMenuConfigChanged(std::string_view key, std::strin
             return true;
         }
 
-        std::string payload;
-        payload.reserve(256 + 65536 + pages.size() * 96);
-        payload += "# Bedaim Book Expander - local page export\n";
-        payload += "# pages=" + std::to_string(pages.size()) + "\n";
-        payload += "# This file is not a native Minecraft book. Copy page text manually.\n";
-        for (std::size_t i = 0; i < pages.size(); ++i) {
-            const auto& page = pages[i];
-            payload += "\n===== PAGE " + std::to_string(i + 1) + "/" +
-                std::to_string(pages.size()) + " | CODE_POINTS=" +
-                std::to_string(page.codePoints) + " | UTF8_BYTES=" +
-                std::to_string(page.utf8Bytes) + " | UTF16_UNITS=" +
-                std::to_string(page.utf16Units) + " =====\n";
-            payload += page.text;
-            if (payload.empty() || payload.back() != '\n') payload.push_back('\n');
-        }
+        const std::string payload = bedaim::books::serializePagePlan(pages);
 
         if (!bedrocktools::config::writePayloadAtomically(outputPath.string(), payload)) {
             bedrocktools::diagnostics::log(
