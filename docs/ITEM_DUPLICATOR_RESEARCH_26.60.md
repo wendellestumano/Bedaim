@@ -133,3 +133,21 @@ Show counters for snapshots, detected changes, unreadable slots, and classificat
 - No false claim of duplication based solely on client-side state.
 - Host tests pass and Android ARM64 .levipack builds.
 - Existing Bedaim modules continue to initialize and run unchanged.
+
+
+## 26.60 binary reconnaissance (2026-11-04)
+
+A read-only string scan of the user's local `libminecraftpe.so` for Minecraft 1.26.60 found the following runtime names and validation/error paths:
+
+- `ItemStackNetManagerClient` and `ItemStackNetManagerServer`;
+- `ItemStackRequestPacket`, `ItemStackResponsePacket`, and `InventoryTransactionPacket`;
+- client request/response handling and server request queue/processing;
+- server-side checks including `_isRequestActionAllowed`, `_validateRequestSlot`, net-ID mismatch, `SourceItemMismatch`, and `BalanceMismatch`.
+
+This confirms that 1.26.60 has explicit request validation and authoritative transaction handling. It does not provide function addresses, class layouts, or a safe hook signature. A symbol-table query did not expose matching demangled symbols, so the strings are leads only and must not be treated as ABI proof.
+
+Implementation consequence: begin with pure snapshot/diff/classification logic and read-only inventory observation. Do not infer a dupe primitive from packet class names or attempt to bypass the server's balance/net-ID checks.
+
+## Initial pure-logic implementation
+
+Added `src/modules/misc/InventoryResearch.hpp` and a host test target `inventory_research_test`. The classifier distinguishes unchanged state, client-only count increase, server correction, persisted count increase after reconnect, and inconclusive evidence. Its strongest positive label is intentionally `PersistedCountIncrease`, not "dupe", because count-only snapshots do not prove item lineage or independent copies.
