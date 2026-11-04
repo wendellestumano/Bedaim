@@ -421,11 +421,13 @@ bool InventoryAccess::readInventorySnapshot(
         const auto count = read<std::uint8_t>(stack, ItemStackCount);
         InventorySlotSnapshot entry;
         entry.slotIndex = static_cast<int>(index);
-        if (valid == 0 || count == 0) {
+        if (valid == 0) {
+            if (count != 0) return false;
             entry.empty = true;
             candidate.push_back(std::move(entry));
             continue;
         }
+        if (count == 0) return false;
 
         // Validate the pointer chain before reusing the established identifier
         // accessor. A malformed stack is unknown, not an empty slot.

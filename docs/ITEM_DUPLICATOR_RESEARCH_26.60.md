@@ -159,3 +159,21 @@ Added `src/modules/misc/InventoryResearch.hpp` and a host test target `inventory
 - Compiled `tests/launcher/inventory_research_test.cpp` directly with Termux `clang++ -std=c++20 -Wall -Wextra -Werror`.
 - Result: `Inventory research classification tests passed`.
 - This validates only the pure evidence classifier. It is not an Android game build and does not validate runtime memory offsets, hooks, UI registration, or a working duplication mechanism.
+
+
+## Implemented read-only observer (2026-11-04)
+
+Branch implementation:
+- `src/modules/misc/itemduplicator.cpp` now provides the `ItemDuplicatorModule` implementation and `ModuleRegistry.cpp` registers it. The module is disabled by default like other modules.
+- It subscribes to `LocalPlayerTickEvent`, samples at a configurable 100–2000 ms interval, and can request an extra sample after a container-slot selection event.
+- `InventoryAccess::readInventorySnapshot` reuses the existing inventory offsets and item-identifier accessor, but validates the player/inventory/vector/stack pointer chain, vector bounds, item vtable range, and dynamic-library ownership of the item identifier method. Any unknown or inconsistent slot makes the entire snapshot fail closed.
+- The observer compares item totals by identifier and reports only `BASELINE`, `NO_CHANGE`, `SELECTION_CHANGED`, `LOCAL_COUNT_INCREASE`, `LOCAL_COUNT_DECREASE`, `LOCAL_INVENTORY_CHANGE`, or `INCONCLUSIVE_READ_FAILURE`.
+- A bounded ring (32–1024 records) can be written as JSONL via atomic replacement in the active Bedaim config directory. The file includes local item identifiers/counts and relative timestamps only; it does not include player names, server addresses, raw pointers, NBT, or packet payloads.
+- Snapshot/classifier state and configuration values are synchronized because game events and launcher menu callbacks may arrive on different threads.
+
+### Current limitations / acceptance status
+
+- This is an inventory observer, not an item mutation or duplication routine. It does not create, move, delete, replay, or modify items.
+- The current source can only observe the local client inventory. It does not yet receive a trusted server-authoritative snapshot after reconnect, so `LOCAL_COUNT_INCREASE` is not evidence of a persisted duplicate.
+- Offhand is not included because its getter is independently version-sensitive; adding it requires a separately validated safe accessor.
+- Host regression tests and Android ARM64 CI must pass before the package is considered build-verified. A live test in a disposable local world is still required to validate 1.26.60 runtime reads.
