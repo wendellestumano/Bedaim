@@ -79,3 +79,10 @@ target("blockesp_event_queue_test")
     add_files("launcher/blockesp_event_queue_test.cpp")
     add_includedirs("../src")
 target_end()
+
+
+target("book_paginator_test")
+    set_kind("binary")
+    add_files("launcher/book_paginator_test.cpp")
+    add_includedirs("../src")
+target_end()

@@ -54,7 +54,8 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         // On Android 16 / Levi Launcher 1.5.27, rebuilding the focused TextView
         // can leave focus-search pointing at a non-focusable view and crash on key-up.
         const bool editingIdentifier =
-            key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier";
+            key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier" ||
+            key == "m_sourceText";
         if (!editingIdentifier) {
             nlohmann::json snapshot;
             mod->saveConfig(snapshot);
@@ -544,7 +545,8 @@ private:
                 } else if (entry.first == "bedrocktools.ULTRAKILL HUD") {
                     registerUltrakillHudConfigSchema(entry.first, entry.second);
                 } else if (entry.first == "bedrocktools.Module Diagnostics" ||
-                           entry.first == "bedrocktools.Configurations") {
+                           entry.first == "bedrocktools.Configurations" ||
+                           entry.first == "bedrocktools.bookboundarylab") {
                     if (auto* module = ModuleRegistry::get().find(entry.first))
                         module->onMenuRegistered();
                 }
@@ -570,7 +572,8 @@ static void scheduleModuleConfigSchemaRefresh(Module* mod, std::string_view key,
                  mod->moduleId != "bedrocktools.ESP" &&
                  mod->moduleId != "bedrocktools.ULTRAKILL HUD" &&
                  mod->moduleId != "bedrocktools.Module Diagnostics" &&
-                 mod->moduleId != "bedrocktools.Configurations")) return;
+                 mod->moduleId != "bedrocktools.Configurations" &&
+                 mod->moduleId != "bedrocktools.bookboundarylab")) return;
     // The V2 settings UI polls schema revisions, then rebuilds controls when they
     // change. Debounce continuous sliders and give the whitelist editor more time
     // so one character/drag does not reset the active widget mid-interaction.
