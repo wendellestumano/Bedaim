@@ -27,6 +27,25 @@ struct PaginationResult {
     std::size_t totalUtf16Units = 0;
 };
 
+inline std::string serializePagePlan(const std::vector<Page>& pages) {
+    std::string payload;
+    payload.reserve(256 + pages.size() * 96);
+    payload += "# Bedaim Book Expander - local page export\n";
+    payload += "# pages=" + std::to_string(pages.size()) + "\n";
+    payload += "# This file is not a native Minecraft book. Copy page text manually.\n";
+    for (std::size_t i = 0; i < pages.size(); ++i) {
+        const auto& page = pages[i];
+        payload += "\n===== PAGE " + std::to_string(i + 1) + "/" +
+            std::to_string(pages.size()) + " | CODE_POINTS=" +
+            std::to_string(page.codePoints) + " | UTF8_BYTES=" +
+            std::to_string(page.utf8Bytes) + " | UTF16_UNITS=" +
+            std::to_string(page.utf16Units) + " =====\n";
+        payload += page.text;
+        if (payload.empty() || payload.back() != '\n') payload.push_back('\n');
+    }
+    return payload;
+}
+
 inline constexpr int kMaxPlannedPages = 200;
 
 // Parse and normalize the module's page-cap setting in one place so the UI
