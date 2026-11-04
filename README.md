@@ -12,7 +12,7 @@ Bedaim is a native C++20 mod for Minecraft Bedrock on Android, built for LeviLau
 - **ESP** — player indicators and off-screen target indicators.
 - **ULTRAKILL HUD** — custom combat HUD and feedback.
 - **Module Diagnostics** — diagnostics and log export.
-- **Book Expander** — locally paginates longer notes into UTF-8 code-point-safe chunks, reports UTF-8/UTF-16 metrics, and writes page text to the local diagnostics log for manual copying. It does not alter Minecraft validation or transmit book data.
+- **Book Expander** — imports notes from `Download/Bedaim/book_input.txt` or the module text field, creates a UTF-8-safe local plan of up to 200 pages, previews each page, and provides Previous/Next navigation beyond page 50. It does not alter Minecraft's native book editor, packet validation, or server limits.
 
 Shared runtime, launcher integration, configuration, event, and SDK code remains in place. Policy/math headers retained for tests are helpers, not registered launcher modules.
 
@@ -45,4 +45,4 @@ The repository includes upstream BedrockTools SDK/runtime components. Respect th
 
 ### Book Expander test build
 
-The local page planner now accepts up to 64 KiB of source text and can produce up to 200 page chunks (32–256 Unicode code points per chunk). This is strictly a local pagination/export-preparation capability. It does **not** modify Minecraft's native book editor, the integrated server, multiplayer packet validation, or a remote server's book limits. The 200-page regression test verifies only the planner's UTF-8-safe chunking and reconstruction.
+The local page planner accepts up to 64 KiB of source text and can produce up to 200 page chunks (32–256 Unicode code points per chunk). The module includes a page preview and persistent local Previous/Next controls that continue across the former 50-page boundary. To avoid using the Android keyboard while the native book screen is open, create or edit `Download/Bedaim/book_input.txt` and use **Load text from Downloads**. This is strictly a local pagination/preparation capability. It does **not** modify Minecraft's native book editor, integrated server, multiplayer packet validation, or a remote server's book limits. Regression tests cover the 200-page cap and local cursor movement.
