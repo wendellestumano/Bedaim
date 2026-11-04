@@ -79,7 +79,7 @@ inline bool isPreferredBreak(std::string_view text, std::size_t begin,
 inline PaginationResult paginate(std::string_view text,
                                  std::size_t maxCodePointsPerPage,
                                  std::size_t maxPages,
-                                 std::size_t maxInputBytes = 8192) {
+                                 std::size_t maxInputBytes = 65536) {
     PaginationResult result;
     if (text.size() > maxInputBytes) {
         result.error = "Input exceeds the local planner byte limit.";

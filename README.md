@@ -41,3 +41,8 @@ The Android release build creates `libBedrockTools.so` and `Bedaim.levipack`. Th
 ## License and credits
 
 The repository includes upstream BedrockTools SDK/runtime components. Respect the licenses and credits of retained upstream code and follow Minecraft and LeviLauncher terms.
+
+
+### Book Expander test build
+
+The local page planner now accepts up to 64 KiB of source text and can produce up to 200 page chunks (32–256 Unicode code points per chunk). This is strictly a local pagination/export-preparation capability. It does **not** modify Minecraft's native book editor, the integrated server, multiplayer packet validation, or a remote server's book limits. The 200-page regression test verifies only the planner's UTF-8-safe chunking and reconstruction.

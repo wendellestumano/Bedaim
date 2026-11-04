@@ -44,21 +44,21 @@ void BookBoundaryLabModule::onMenuRegistered() {
     source.id = "m_sourceText";
     source.key = "m_sourceText";
     source.title = "Text to paginate";
-    source.description = "Paste coordinates, poems, notes or other text (up to 8 KiB). This field is kept in memory only and is not saved in BedAim config.";
+    source.description = "Paste coordinates, poems, notes or other text (up to 64 KiB). This field is kept in memory only and is not saved in BedAim config.";
     source.category = "book_expander";
     source.type = ConfigControlTypeV2::Text;
     source.defaultValue = "";
     source.currentValue = m_sourceText;
     source.hasCurrentValue = true;
     source.placeholder = "Paste your book text here...";
-    source.maxLength = 8192;
+    source.maxLength = 65536;
     schema.node(std::move(source));
 
     ConfigNodeV2 perPage;
     perPage.id = "m_codePointsPerPage";
     perPage.key = "m_codePointsPerPage";
     perPage.title = "Planning budget per page";
-    perPage.description = "Maximum Unicode code points in each local page chunk (32–256). This is a planning setting, not a claim about the engine's exact internal limit.";
+    perPage.description = "Maximum Unicode code points in each local page chunk (32–256). This only controls local planning; native editor/server limits are not changed by this build.";
     perPage.category = "book_expander";
     perPage.type = ConfigControlTypeV2::SliderInt;
     perPage.minValue = "32";
@@ -73,13 +73,13 @@ void BookBoundaryLabModule::onMenuRegistered() {
     maxPages.id = "m_maxPages";
     maxPages.key = "m_maxPages";
     maxPages.title = "Maximum planned pages";
-    maxPages.description = "Local safety cap for the page planner (1–100).";
+    maxPages.description = "Local safety cap for the page planner (1–200). This does not increase Minecraft's native book page limit.";
     maxPages.category = "book_expander";
     maxPages.type = ConfigControlTypeV2::SliderInt;
     maxPages.minValue = "1";
-    maxPages.maxValue = "100";
+    maxPages.maxValue = "200";
     maxPages.step = "1";
-    maxPages.defaultValue = "50";
+    maxPages.defaultValue = "200";
     maxPages.currentValue = std::to_string(m_maxPages);
     maxPages.hasCurrentValue = true;
     schema.node(std::move(maxPages));
@@ -88,7 +88,7 @@ void BookBoundaryLabModule::onMenuRegistered() {
     build.id = "m_buildPagePlan";
     build.key = "m_buildPagePlan";
     build.title = "Build local page plan";
-    build.description = "Splits the text, preserves Unicode and logs each page locally for manual copying. No inventory, book item or network operation.";
+    build.description = "Splits up to 200 local pages, preserves Unicode and logs each page locally for manual copying. This build does not change the in-game book editor or server validation.";
     build.category = "book_expander";
     build.type = ConfigControlTypeV2::Button;
     build.actionValue = "build";
@@ -99,7 +99,7 @@ void BookBoundaryLabModule::onMenuRegistered() {
 
 bool BookBoundaryLabModule::onMenuConfigChanged(std::string_view key, std::string_view value) {
     if (key == "m_sourceText") {
-        if (value.size() > 8192) return false;
+        if (value.size() > 65536) return false;
         m_sourceText.assign(value);
         return true;
     }
@@ -154,7 +154,7 @@ void BookBoundaryLabModule::buildPagePlan() const {
 void BookBoundaryLabModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
     m_codePointsPerPage = std::clamp(j.value("m_codePointsPerPage", m_codePointsPerPage), 32, 256);
-    m_maxPages = std::clamp(j.value("m_maxPages", j.value("m_targetPages", m_maxPages)), 1, 100);
+    m_maxPages = std::clamp(j.value("m_maxPages", j.value("m_targetPages", m_maxPages)), 1, 200);
     // Deliberately do not restore source text from config: notes may contain private coordinates.
     m_sourceText.clear();
 }

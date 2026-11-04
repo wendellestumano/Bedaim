@@ -54,6 +54,27 @@ int main() {
     const auto empty = paginate("", 10, 10);
     check(empty.ok && empty.pages.empty(), "empty input produces an empty valid plan");
 
+    // Regression for the expanded local planner: 200 chunks of 256 ASCII code points.
+    const std::string twoHundredPages(200u * 256u, 'x');
+    const auto expanded = paginate(twoHundredPages, 256, 200);
+    check(expanded.ok, "expanded planner accepts a 200-page local plan");
+    check(expanded.pages.size() == 200, "expanded planner produces exactly 200 pages");
+    bool pageSizesValid = expanded.pages.size() == 200;
+    reconstructed.clear();
+    for (const auto& page : expanded.pages) {
+        pageSizesValid = pageSizesValid && page.codePoints <= 256;
+        reconstructed += page.text;
+    }
+    check(pageSizesValid, "all expanded plan pages stay within the configured 256-code-point budget");
+    check(reconstructed == twoHundredPages, "expanded 200-page plan preserves every input byte");
+
+    const auto overExpanded = paginate(std::string(201u * 256u, 'x'), 256, 200);
+    check(!overExpanded.ok && overExpanded.pages.empty(), "expanded planner rejects page 201 without partial output");
+
+    const auto largerInput = paginate(std::string(32u * 1024u, 'z'), 256, 200);
+    check(largerInput.ok && largerInput.pages.size() == 128,
+          "expanded planner accepts input larger than the former 8 KiB cap");
+
     std::cout << checks << " checks, " << failures << " failures\n";
     return failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

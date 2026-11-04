@@ -18,5 +18,5 @@ private:
 
     std::string m_sourceText;
     int m_codePointsPerPage = 240;
-    int m_maxPages = 50;
+    int m_maxPages = 200;
 };
