@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../Module.hpp"
-#include <cstdint>
+#include <string>
 #include <string_view>
 
 class BookBoundaryLabModule final : public Module {
@@ -14,8 +14,9 @@ public:
     void saveConfig(nlohmann::json& j) override;
 
 private:
-    void logEstimate() const;
+    void buildPagePlan() const;
 
-    int m_targetPages = 67;
-    int m_codePointsPerPage = 1000;
+    std::string m_sourceText;
+    int m_codePointsPerPage = 240;
+    int m_maxPages = 50;
 };

@@ -54,7 +54,8 @@ static void onModuleConfigChanged(std::string_view module_id, std::string_view k
         // On Android 16 / Levi Launcher 1.5.27, rebuilding the focused TextView
         // can leave focus-search pointing at a non-focusable view and crash on key-up.
         const bool editingIdentifier =
-            key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier";
+            key == "m_customEquipmentIdentifier" || key == "m_customWeaponIdentifier" ||
+            key == "m_sourceText";
         if (!editingIdentifier) {
             nlohmann::json snapshot;
             mod->saveConfig(snapshot);

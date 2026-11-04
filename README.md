@@ -12,7 +12,7 @@ Bedaim is a native C++20 mod for Minecraft Bedrock on Android, built for LeviLau
 - **ESP** — player indicators and off-screen target indicators.
 - **ULTRAKILL HUD** — custom combat HUD and feedback.
 - **Module Diagnostics** — diagnostics and log export.
-- **Book Boundary Lab** — local-only estimates of book page counts, Unicode code-point counts, and UTF-8 size; does not generate or transmit books.
+- **Book Expander** — locally paginates longer notes into UTF-8 code-point-safe chunks, reports UTF-8/UTF-16 metrics, and writes page text to the local diagnostics log for manual copying. It does not alter Minecraft validation or transmit book data.
 
 Shared runtime, launcher integration, configuration, event, and SDK code remains in place. Policy/math headers retained for tests are helpers, not registered launcher modules.
 
