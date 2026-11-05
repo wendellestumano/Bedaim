@@ -6,7 +6,7 @@ concurrency:
 
 on:
   push:
-    branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017, test/autohit-autototem-mainline-20261017, feature/diagnostics-download-autosave-20261017, fix/local-player-tick-diagnostics-20261017, feature/elytra-aim-gamemode-checker-20261022, feat/unglide-java-vm-and-custom-profiles-20261023, feat/blockesp-independent-module-20261029, research/itemduplicator-inventory-observer-26.60, research/mainhand-survival-dupe-26.60]
+    branches: [main, master, integrate/bedaim-shiftblade-hitbox-20261017, test/autohit-autototem-mainline-20261017, feature/diagnostics-download-autosave-20261017, fix/local-player-tick-diagnostics-20261017, feature/elytra-aim-gamemode-checker-20261022, feat/unglide-java-vm-and-custom-profiles-20261023, feat/blockesp-independent-module-20261029, research/itemduplicator-inventory-observer-26.60, research/mainhand-survival-dupe-26.60, research/bundle-hopper-extractor-26.60]
   pull_request:
   workflow_dispatch:
 
@@ -15,6 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Apply experimental Bundle Extractor patch
+        run: |
+          gzip -dc bundle-hopper-extractor-26.60.patch.gz > /tmp/bundle-extractor.patch
+          git apply --check --exclude=.github/workflows/build.yml /tmp/bundle-extractor.patch
+          git apply --exclude=.github/workflows/build.yml /tmp/bundle-extractor.patch
 
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
