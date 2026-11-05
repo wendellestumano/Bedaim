@@ -138,6 +138,7 @@ void ItemDuplicatorModule::onDisable() {
     unsubscribeEvents();
     flushLog();
     m_captureRequested.store(false, std::memory_order_release);
+    m_duplicateMainHandRequested.store(false, std::memory_order_release);
 }
 
 void ItemDuplicatorModule::onFrame() {
@@ -152,23 +153,35 @@ void ItemDuplicatorModule::onFrame() {
 void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
     if (!m_callbacksActive.load(std::memory_order_acquire)) return;
 
+    const auto now = std::chrono::steady_clock::now();
+    const bool duplicateRequested =
+        m_duplicateMainHandRequested.exchange(false, std::memory_order_acq_rel);
+    const bool captureRequested =
+        m_captureRequested.exchange(false, std::memory_order_acq_rel);
+    if (!duplicateRequested && !captureRequested &&
+        m_nextCapture.time_since_epoch().count() != 0 && now < m_nextCapture) return;
+
+    const int interval = std::clamp(m_captureIntervalMs.load(std::memory_order_acquire), 100, 2000);
+    m_nextCapture = now + std::chrono::milliseconds(interval);
+
     // NormalTick is an actor hook. Resolve the actual local player from the live
     // ClientInstance instead of assuming the hook's actor argument is LocalPlayer.
     if (auto* client = bedrocktools::sdk::ClientInstance::current()) {
         if (auto* localPlayer = client->localPlayer()) player = localPlayer;
     }
-    if (!player) return;
-
-    if (m_duplicateMainHandRequested.exchange(false, std::memory_order_acq_rel)) {
-        bedrocktools::core::InventoryAccess::get().copyMainHandToEmptyHotbar(player);
-        m_captureRequested.store(true, std::memory_order_release);
+    if (!player) {
+        if (duplicateRequested) {
+            bedrocktools::diagnostics::probe(
+                bedrocktools::diagnostics::Level::Warning,
+                "ItemDuplicator", "mainhand_copy_request", "local_player_unavailable",
+                "no LocalPlayer was available on the next game tick");
+        }
+        return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
-    const bool requested = m_captureRequested.exchange(false, std::memory_order_acq_rel);
-    if (!requested && m_nextCapture.time_since_epoch().count() != 0 && now < m_nextCapture) return;
-    const int interval = std::clamp(m_captureIntervalMs.load(std::memory_order_acquire), 100, 2000);
-    m_nextCapture = now + std::chrono::milliseconds(interval);
+    if (duplicateRequested) {
+        bedrocktools::core::InventoryAccess::get().copyMainHandToEmptyHotbar(player);
+    }
 
     std::vector<bedrocktools::core::InventorySlotSnapshot> slots;
     int selectedSlot = -1;
