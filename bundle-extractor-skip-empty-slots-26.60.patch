@@ -1,0 +1,19 @@
+diff --git a/src/modules/misc/bundleextractor.cpp b/src/modules/misc/bundleextractor.cpp
+--- a/src/modules/misc/bundleextractor.cpp
++++ b/src/modules/misc/bundleextractor.cpp
+@@ -267,7 +267,7 @@
+-        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidController ||
+-            readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
++        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidController) {
+@@
+             }
+             break;
+         }
+ 
++        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
++            std::lock_guard<std::mutex> lock(m_stateMutex);
++            if (m_controller == controller) m_slotWatches[slotIndex] = SlotWatch{};
++            continue;
++        }
++
+         if (readStatus == bedrocktools::core::BundleReadStatus::NotBundle) {
