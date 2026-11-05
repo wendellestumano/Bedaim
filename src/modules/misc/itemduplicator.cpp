@@ -158,8 +158,9 @@ void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
 
     std::vector<bedrocktools::core::InventorySlotSnapshot> slots;
     int selectedSlot = -1;
+    std::string failureReason;
     const bool complete = bedrocktools::core::InventoryAccess::get().readInventorySnapshot(
-        player, slots, &selectedSlot);
+        player, slots, &selectedSlot, &failureReason);
 
     Observation current;
     current.timestampMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_enabledAt).count();
@@ -182,6 +183,11 @@ void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
         }
     } else {
         current.classification = "INCONCLUSIVE_READ_FAILURE";
+        current.failureReason = failureReason.empty() ? "UNKNOWN_READ_FAILURE" : failureReason;
+        bedrocktools::diagnostics::probe(
+            bedrocktools::diagnostics::Level::Warning,
+            "ItemDuplicator", "inventory_snapshot", current.failureReason,
+            "read-only inventory snapshot rejected; no inventory mutation attempted");
     }
 
     {
@@ -275,6 +281,7 @@ bool ItemDuplicatorModule::flushLog(bool force) {
         line["selected_item_identifier"] = record.itemIdentifier;
         line["selected_item_total"] = record.inventoryTotalForHeldIdentifier;
         line["classification"] = record.classification;
+        if (!record.failureReason.empty()) line["failure_reason"] = record.failureReason;
         line["inventory_item_totals"] = record.itemTotals;
         output << line.dump() << '\n';
     }
