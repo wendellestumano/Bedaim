@@ -22,6 +22,17 @@ enum class OffhandTransferResult {
     VerificationFailed
 };
 
+enum class MainHandCopyResult {
+    Success,
+    InvalidPlayer,
+    NotCreative,
+    SnapshotUnavailable,
+    EmptyMainHand,
+    NoEmptyHotbarSlot,
+    NativeApiUnavailable,
+    VerificationFailed
+};
+
 struct InventorySlotSnapshot {
     int slotIndex = -1;
     bool empty = true;
@@ -52,6 +63,9 @@ public:
                                std::string* error = nullptr) const;
     bool selectHotbarSlot(sdk::Player* player, int slot) const;
     OffhandTransferResult moveInventoryItemToOffhand(sdk::Player* player, int slot) const;
+    // Creative-only native copy test. It uses ItemStack's copy constructor and
+    // FillingContainer::setItem; it does not craft or replay inventory packets.
+    MainHandCopyResult copyMainHandToEmptyHotbar(sdk::Player* player) const;
 
 private:
     using GetOffhandSlotFn = const void* (*)(const void*);
