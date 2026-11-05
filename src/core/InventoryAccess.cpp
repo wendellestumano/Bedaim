@@ -857,14 +857,22 @@ MainHandCopyResult InventoryAccess::duplicateMainHandToEmptyHotbar(sdk::Player* 
     std::vector<InventorySlotSnapshot> after;
     int afterSelected = -1;
     if (readInventorySnapshot(player, after, &afterSelected, nullptr) &&
-        static_cast<std::size_t>(destinationSlot) < after.size() &&
-        !after[static_cast<std::size_t>(destinationSlot)].empty &&
-        after[static_cast<std::size_t>(destinationSlot)].itemIdentifier ==
-            slots[static_cast<std::size_t>(selectedSlot)].itemIdentifier &&
-        after[static_cast<std::size_t>(destinationSlot)].count ==
-            slots[static_cast<std::size_t>(selectedSlot)].count) {
-        return report(MainHandCopyResult::LocalCopyApplied,
-                      "local Survival ItemStack copy is visible in the destination hotbar slot; server acceptance and persistence remain unverified");
+        afterSelected == selectedSlot &&
+        static_cast<std::size_t>(selectedSlot) < after.size() &&
+        static_cast<std::size_t>(destinationSlot) < after.size()) {
+        const auto& sourceAfter = after[static_cast<std::size_t>(selectedSlot)];
+        const auto& destinationAfter = after[static_cast<std::size_t>(destinationSlot)];
+        const auto& original = slots[static_cast<std::size_t>(selectedSlot)];
+        const bool sourceRetained = !sourceAfter.empty &&
+            sourceAfter.itemIdentifier == original.itemIdentifier &&
+            sourceAfter.count == original.count;
+        const bool destinationMatches = !destinationAfter.empty &&
+            destinationAfter.itemIdentifier == original.itemIdentifier &&
+            destinationAfter.count == original.count;
+        if (sourceRetained && destinationMatches) {
+            return report(MainHandCopyResult::LocalCopyApplied,
+                          "source stack remained unchanged and matching copy is visible in the destination hotbar slot; server acceptance and persistence remain unverified");
+        }
     }
 
     if (removeItem) {
