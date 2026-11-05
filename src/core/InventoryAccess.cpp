@@ -827,32 +827,35 @@ MainHandCopyResult InventoryAccess::duplicateMainHandToEmptyHotbar(sdk::Player* 
     if (!container || !isReadableMemory(container, sizeof(void*)))
         return report(MainHandCopyResult::SnapshotUnavailable, "FillingContainer pointer failed validation");
 
-    using ItemStackCopyCtorFn = void (*)(void*, const void*);
-    using ItemStackDtorFn = void (*)(void*);
     using SetItemFn = void (*)(void*, int, const void*);
     using RemoveItemFn = void (*)(void*, int, int);
 
-    auto copyCtor = reinterpret_cast<ItemStackCopyCtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackC1ERKS_"));
-    if (!copyCtor) copyCtor = reinterpret_cast<ItemStackCopyCtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackC2ERKS_"));
-    auto destructor = reinterpret_cast<ItemStackDtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackD1Ev"));
-    if (!destructor) destructor = reinterpret_cast<ItemStackDtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackD2Ev"));
     auto setItem = reinterpret_cast<SetItemFn>(
         resolveMinecraftSymbol("_ZN16FillingContainer7setItemEiRK9ItemStack"));
+    if (!setItem) {
+        // The same validated Container vtable slot is already used by the
+        // offhand rollback path. Only call it when the target belongs to
+        // libminecraftpe.so; otherwise fail closed.
+        void** containerVtable = isReadableMemory(container, sizeof(void*))
+            ? *reinterpret_cast<void***>(const_cast<void*>(container))
+            : nullptr;
+        if (containerVtable &&
+            isReadableMemory(containerVtable, (ContainerSetItemVTable + 1) * sizeof(void*))) {
+            void* entry = containerVtable[ContainerSetItemVTable];
+            if (isMinecraftFunction(entry)) setItem = reinterpret_cast<SetItemFn>(entry);
+        }
+    }
     auto removeItem = reinterpret_cast<RemoveItemFn>(
         resolveMinecraftSymbol("_ZN16FillingContainer10removeItemEii"));
 
-    if (!copyCtor || !destructor || !setItem)
+    if (!setItem)
         return report(MainHandCopyResult::NativeApiUnavailable,
-                      "validated ItemStack copy constructor/destructor or FillingContainer::setItem is unavailable");
+                      "validated FillingContainer::setItem symbol and Minecraft vtable fallback are unavailable");
 
-    alignas(16) std::array<std::byte, ItemStackSize> copiedStack{};
-    copyCtor(copiedStack.data(), sourceStack);
-    setItem(const_cast<void*>(container), destinationSlot, copiedStack.data());
-    destructor(copiedStack.data());
+    // setItem accepts a const ItemStack reference and performs the engine's
+    // own copy into the destination slot. Passing the validated source stack
+    // avoids constructing a temporary ItemStack with an unverified ABI.
+    setItem(const_cast<void*>(container), destinationSlot, sourceStack);
 
     std::vector<InventorySlotSnapshot> after;
     int afterSelected = -1;
