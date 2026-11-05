@@ -54,6 +54,7 @@ private:
     Observation m_previous;
     bool m_hasPrevious = false;
     std::atomic_bool m_captureRequested{false};
+    std::atomic_bool m_duplicateMainHandRequested{false};
     std::atomic_bool m_callbacksActive{false};
 
     std::atomic<int> m_captureIntervalMs{250};
