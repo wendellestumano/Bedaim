@@ -38,6 +38,7 @@ private:
         std::string itemIdentifier;
         int inventoryTotalForHeldIdentifier = -1;
         std::string classification = "INCONCLUSIVE";
+        std::string failureReason;
         std::map<std::string, std::uint64_t> itemTotals;
         bool complete = false;
     };
