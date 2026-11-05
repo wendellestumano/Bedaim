@@ -28,6 +28,77 @@ jobs:
           git apply --check /tmp/bundle-extractor-autoscan.patch
           git apply /tmp/bundle-extractor-autoscan.patch
 
+      - name: Continue scan after unreadable container slots
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/modules/misc/bundleextractor.cpp")
+          source = path.read_text()
+          old = """        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidController ||
+            readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
+            bool shouldLog = false;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                if (m_controller == controller && !m_rangeEndLogged) {
+                    m_rangeEndLogged = true;
+                    shouldLog = true;
+                }
+            }
+            if (shouldLog) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Info,
+                    "BundleExtractor", "container_scan", "scan_range_end",
+                    "container slot scan reached an unreadable/end-of-collection slot at index=" +
+                        std::to_string(slotIndex) + "; higher indices were skipped");
+            }
+            break;
+        }
+"""
+          new = """        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidController) {
+            bool shouldLog = false;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                if (m_controller == controller && !m_nativeApiWarningLogged) {
+                    m_nativeApiWarningLogged = true;
+                    shouldLog = true;
+                }
+            }
+            if (shouldLog) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Error,
+                    "BundleExtractor", "container_scan", "invalid_container_controller",
+                    "the active container controller became unreadable; automatic scanning stopped for safety");
+            }
+            return;
+        }
+
+        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
+            bool shouldLog = false;
+            {
+                std::lock_guard<std::mutex> lock(m_stateMutex);
+                if (m_controller == controller) {
+                    m_slotWatches[slotIndex] = SlotWatch{};
+                    if (!m_rangeEndLogged) {
+                        m_rangeEndLogged = true;
+                        shouldLog = true;
+                    }
+                }
+            }
+            if (shouldLog) {
+                bedrocktools::diagnostics::probe(
+                    bedrocktools::diagnostics::Level::Debug,
+                    "BundleExtractor", "container_scan", "unreadable_slot_skipped",
+                    "slot=" + std::to_string(slotIndex) +
+                        " returned no readable ItemStack; continuing the scan so an empty slot does not hide later Bundles");
+            }
+            continue;
+        }
+"""
+          if old not in source:
+              raise SystemExit("Expected scan block not found; refusing a partial patch")
+          path.write_text(source.replace(old, new, 1))
+          PY
+
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
 
@@ -39,7 +110,7 @@ jobs:
         working-directory: tests
         run: |
           xmake f -y -P . -p linux -a x86_64 -m debug
-          xmake -y -P . 
+          xmake -y -P .
           xmake run -P . menu_config_value_test
           xmake run -P . aimassist_math_test
           xmake run -P . atomic_config_writer_test
