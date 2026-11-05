@@ -756,24 +756,24 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     return report(OffhandTransferResult::Success, "offhand and source slot verified");
 }
 
-MainHandCopyResult InventoryAccess::copyMainHandToEmptyHotbar(sdk::Player* player) const {
+MainHandCopyResult InventoryAccess::duplicateMainHandToEmptyHotbar(sdk::Player* player) const {
     auto report = [](MainHandCopyResult result, const char* detail) {
         const char* state = "unknown";
         using R = MainHandCopyResult;
         switch (result) {
-            case R::Success: state = "success"; break;
+            case R::LocalCopyApplied: state = "local_copy_applied"; break;
             case R::InvalidPlayer: state = "invalid_player"; break;
-            case R::NotCreative: state = "blocked_not_creative"; break;
+            case R::NotSurvival: state = "blocked_not_survival"; break;
             case R::SnapshotUnavailable: state = "snapshot_unavailable"; break;
             case R::EmptyMainHand: state = "mainhand_empty"; break;
             case R::NoEmptyHotbarSlot: state = "no_empty_hotbar_slot"; break;
             case R::NativeApiUnavailable: state = "native_api_unavailable"; break;
             case R::VerificationFailed: state = "verification_failed"; break;
         }
-        const bool success = result == R::Success;
+        const bool success = result == R::LocalCopyApplied;
         bedrocktools::diagnostics::probe(
             success ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
-            "InventoryAccess", "mainhand_copy_test", state, detail ? detail : "");
+            "InventoryAccess", "mainhand_survival_trial", state, detail ? detail : "");
         return result;
     };
 
@@ -781,9 +781,9 @@ MainHandCopyResult InventoryAccess::copyMainHandToEmptyHotbar(sdk::Player* playe
         return report(MainHandCopyResult::InvalidPlayer, "local player pointer failed memory validation");
 
     std::int32_t gameType = -1;
-    if (!bedrocktools::core::gamehooks::tryGetPlayerGameType(player, gameType) || gameType != 1)
-        return report(MainHandCopyResult::NotCreative,
-                      "copy test is restricted to a verified Creative player; no inventory mutation attempted");
+    if (!bedrocktools::core::gamehooks::tryGetPlayerGameType(player, gameType) || gameType != 0)
+        return report(MainHandCopyResult::NotSurvival,
+                      "trial is restricted to a verified Survival player; no inventory mutation attempted");
 
     std::vector<InventorySlotSnapshot> slots;
     int selectedSlot = -1;
@@ -827,44 +827,55 @@ MainHandCopyResult InventoryAccess::copyMainHandToEmptyHotbar(sdk::Player* playe
     if (!container || !isReadableMemory(container, sizeof(void*)))
         return report(MainHandCopyResult::SnapshotUnavailable, "FillingContainer pointer failed validation");
 
-    using ItemStackCopyCtorFn = void (*)(void*, const void*);
-    using ItemStackDtorFn = void (*)(void*);
     using SetItemFn = void (*)(void*, int, const void*);
     using RemoveItemFn = void (*)(void*, int, int);
 
-    auto copyCtor = reinterpret_cast<ItemStackCopyCtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackC1ERKS_"));
-    if (!copyCtor) copyCtor = reinterpret_cast<ItemStackCopyCtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackC2ERKS_"));
-    auto destructor = reinterpret_cast<ItemStackDtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackD1Ev"));
-    if (!destructor) destructor = reinterpret_cast<ItemStackDtorFn>(
-        resolveMinecraftSymbol("_ZN9ItemStackD2Ev"));
     auto setItem = reinterpret_cast<SetItemFn>(
         resolveMinecraftSymbol("_ZN16FillingContainer7setItemEiRK9ItemStack"));
+    if (!setItem) {
+        // The same validated Container vtable slot is already used by the
+        // offhand rollback path. Only call it when the target belongs to
+        // libminecraftpe.so; otherwise fail closed.
+        void** containerVtable = isReadableMemory(container, sizeof(void*))
+            ? *reinterpret_cast<void***>(const_cast<void*>(container))
+            : nullptr;
+        if (containerVtable &&
+            isReadableMemory(containerVtable, (ContainerSetItemVTable + 1) * sizeof(void*))) {
+            void* entry = containerVtable[ContainerSetItemVTable];
+            if (isMinecraftFunction(entry)) setItem = reinterpret_cast<SetItemFn>(entry);
+        }
+    }
     auto removeItem = reinterpret_cast<RemoveItemFn>(
         resolveMinecraftSymbol("_ZN16FillingContainer10removeItemEii"));
 
-    if (!copyCtor || !destructor || !setItem)
+    if (!setItem)
         return report(MainHandCopyResult::NativeApiUnavailable,
-                      "validated ItemStack copy constructor/destructor or FillingContainer::setItem is unavailable");
+                      "validated FillingContainer::setItem symbol and Minecraft vtable fallback are unavailable");
 
-    alignas(16) std::array<std::byte, ItemStackSize> copiedStack{};
-    copyCtor(copiedStack.data(), sourceStack);
-    setItem(const_cast<void*>(container), destinationSlot, copiedStack.data());
-    destructor(copiedStack.data());
+    // setItem accepts a const ItemStack reference and performs the engine's
+    // own copy into the destination slot. Passing the validated source stack
+    // avoids constructing a temporary ItemStack with an unverified ABI.
+    setItem(const_cast<void*>(container), destinationSlot, sourceStack);
 
     std::vector<InventorySlotSnapshot> after;
     int afterSelected = -1;
     if (readInventorySnapshot(player, after, &afterSelected, nullptr) &&
-        static_cast<std::size_t>(destinationSlot) < after.size() &&
-        !after[static_cast<std::size_t>(destinationSlot)].empty &&
-        after[static_cast<std::size_t>(destinationSlot)].itemIdentifier ==
-            slots[static_cast<std::size_t>(selectedSlot)].itemIdentifier &&
-        after[static_cast<std::size_t>(destinationSlot)].count ==
-            slots[static_cast<std::size_t>(selectedSlot)].count) {
-        return report(MainHandCopyResult::Success,
-                      "Creative-only local ItemStack copy is visible in the destination hotbar slot; server persistence is not implied");
+        afterSelected == selectedSlot &&
+        static_cast<std::size_t>(selectedSlot) < after.size() &&
+        static_cast<std::size_t>(destinationSlot) < after.size()) {
+        const auto& sourceAfter = after[static_cast<std::size_t>(selectedSlot)];
+        const auto& destinationAfter = after[static_cast<std::size_t>(destinationSlot)];
+        const auto& original = slots[static_cast<std::size_t>(selectedSlot)];
+        const bool sourceRetained = !sourceAfter.empty &&
+            sourceAfter.itemIdentifier == original.itemIdentifier &&
+            sourceAfter.count == original.count;
+        const bool destinationMatches = !destinationAfter.empty &&
+            destinationAfter.itemIdentifier == original.itemIdentifier &&
+            destinationAfter.count == original.count;
+        if (sourceRetained && destinationMatches) {
+            return report(MainHandCopyResult::LocalCopyApplied,
+                          "source stack remained unchanged and matching copy is visible in the destination hotbar slot; server acceptance and persistence remain unverified");
+        }
     }
 
     if (removeItem) {
