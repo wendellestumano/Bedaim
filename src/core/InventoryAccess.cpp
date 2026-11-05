@@ -756,24 +756,24 @@ OffhandTransferResult InventoryAccess::moveInventoryItemToOffhand(sdk::Player* p
     return report(OffhandTransferResult::Success, "offhand and source slot verified");
 }
 
-MainHandCopyResult InventoryAccess::copyMainHandToEmptyHotbar(sdk::Player* player) const {
+MainHandCopyResult InventoryAccess::duplicateMainHandToEmptyHotbar(sdk::Player* player) const {
     auto report = [](MainHandCopyResult result, const char* detail) {
         const char* state = "unknown";
         using R = MainHandCopyResult;
         switch (result) {
-            case R::Success: state = "success"; break;
+            case R::LocalCopyApplied: state = "local_copy_applied"; break;
             case R::InvalidPlayer: state = "invalid_player"; break;
-            case R::NotCreative: state = "blocked_not_creative"; break;
+            case R::NotSurvival: state = "blocked_not_survival"; break;
             case R::SnapshotUnavailable: state = "snapshot_unavailable"; break;
             case R::EmptyMainHand: state = "mainhand_empty"; break;
             case R::NoEmptyHotbarSlot: state = "no_empty_hotbar_slot"; break;
             case R::NativeApiUnavailable: state = "native_api_unavailable"; break;
             case R::VerificationFailed: state = "verification_failed"; break;
         }
-        const bool success = result == R::Success;
+        const bool success = result == R::LocalCopyApplied;
         bedrocktools::diagnostics::probe(
             success ? bedrocktools::diagnostics::Level::Info : bedrocktools::diagnostics::Level::Warning,
-            "InventoryAccess", "mainhand_copy_test", state, detail ? detail : "");
+            "InventoryAccess", "mainhand_survival_trial", state, detail ? detail : "");
         return result;
     };
 
@@ -781,9 +781,9 @@ MainHandCopyResult InventoryAccess::copyMainHandToEmptyHotbar(sdk::Player* playe
         return report(MainHandCopyResult::InvalidPlayer, "local player pointer failed memory validation");
 
     std::int32_t gameType = -1;
-    if (!bedrocktools::core::gamehooks::tryGetPlayerGameType(player, gameType) || gameType != 1)
-        return report(MainHandCopyResult::NotCreative,
-                      "copy test is restricted to a verified Creative player; no inventory mutation attempted");
+    if (!bedrocktools::core::gamehooks::tryGetPlayerGameType(player, gameType) || gameType != 0)
+        return report(MainHandCopyResult::NotSurvival,
+                      "trial is restricted to a verified Survival player; no inventory mutation attempted");
 
     std::vector<InventorySlotSnapshot> slots;
     int selectedSlot = -1;
@@ -863,8 +863,8 @@ MainHandCopyResult InventoryAccess::copyMainHandToEmptyHotbar(sdk::Player* playe
             slots[static_cast<std::size_t>(selectedSlot)].itemIdentifier &&
         after[static_cast<std::size_t>(destinationSlot)].count ==
             slots[static_cast<std::size_t>(selectedSlot)].count) {
-        return report(MainHandCopyResult::Success,
-                      "Creative-only local ItemStack copy is visible in the destination hotbar slot; server persistence is not implied");
+        return report(MainHandCopyResult::LocalCopyApplied,
+                      "local Survival ItemStack copy is visible in the destination hotbar slot; server acceptance and persistence remain unverified");
     }
 
     if (removeItem) {
