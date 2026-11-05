@@ -23,9 +23,9 @@ enum class OffhandTransferResult {
 };
 
 enum class MainHandCopyResult {
-    Success,
+    LocalCopyApplied,
     InvalidPlayer,
-    NotCreative,
+    NotSurvival,
     SnapshotUnavailable,
     EmptyMainHand,
     NoEmptyHotbarSlot,
@@ -63,9 +63,10 @@ public:
                                std::string* error = nullptr) const;
     bool selectHotbarSlot(sdk::Player* player, int slot) const;
     OffhandTransferResult moveInventoryItemToOffhand(sdk::Player* player, int slot) const;
-    // Creative-only native copy test. It uses ItemStack's copy constructor and
-    // FillingContainer::setItem; it does not craft or replay inventory packets.
-    MainHandCopyResult copyMainHandToEmptyHotbar(sdk::Player* player) const;
+    // Experimental Survival main-hand copy trial. This mutates the local
+    // FillingContainer using ItemStack's native copy constructor. Immediate
+    // local verification is NOT server acceptance or persistence.
+    MainHandCopyResult duplicateMainHandToEmptyHotbar(sdk::Player* player) const;
 
 private:
     using GetOffhandSlotFn = const void* (*)(const void*);
