@@ -1,15 +1,52 @@
 diff --git a/src/modules/misc/bundleextractor.cpp b/src/modules/misc/bundleextractor.cpp
---- a/src/modules/misc/bundleextractor.cpp
-+++ b/src/modules/misc/bundleextractor.cpp
-@@ -312,5 +312,9 @@
-                     "container slot scan reached an unreadable/end-of-collection slot at index=" +
-                         std::to_string(slotIndex) + "; higher indices were skipped");
+@@ -295,21 +295,41 @@
+-        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidController ||
+-            readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
++        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidController) {
+             bool shouldLog = false;
+             {
+                 std::lock_guard<std::mutex> lock(m_stateMutex);
+-                if (m_controller == controller && !m_rangeEndLogged) {
+-                    m_rangeEndLogged = true;
++                if (m_controller == controller && !m_nativeApiWarningLogged) {
++                    m_nativeApiWarningLogged = true;
+                     shouldLog = true;
+                 }
+             }
+             if (shouldLog) {
+                 bedrocktools::diagnostics::probe(
+-                    bedrocktools::diagnostics::Level::Info,
+-                    "BundleExtractor", "container_scan", "scan_range_end",
+-                    "container slot scan reached an unreadable/end-of-collection slot at index=" +
+-                        std::to_string(slotIndex) + "; higher indices were skipped");
++                    bedrocktools::diagnostics::Level::Error,
++                    "BundleExtractor", "container_scan", "invalid_container_controller",
++                    "the active container controller became unreadable; automatic scanning stopped for safety");
              }
 -            break;
-+            if (readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
++            return;
++        }
++
++        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
++            bool shouldLog = false;
++            {
 +                std::lock_guard<std::mutex> lock(m_stateMutex);
-+                if (m_controller == controller) m_slotWatches[slotIndex] = SlotWatch{};
-+                continue;
++                if (m_controller == controller) {
++                    m_slotWatches[slotIndex] = SlotWatch{};
++                    if (!m_rangeEndLogged) {
++                        m_rangeEndLogged = true;
++                        shouldLog = true;
++                    }
++                }
 +            }
-+            break;
++            if (shouldLog) {
++                bedrocktools::diagnostics::probe(
++                    bedrocktools::diagnostics::Level::Debug,
++                    "BundleExtractor", "container_scan", "unreadable_slot_skipped",
++                    "slot=" + std::to_string(slotIndex) +
++                        " returned no readable ItemStack; continuing the scan so an empty slot does not hide later Bundles");
++            }
++            continue;
          }
+ 
+         if (readStatus == bedrocktools::core::BundleReadStatus::NotBundle) {
