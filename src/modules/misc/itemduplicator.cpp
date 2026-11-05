@@ -71,7 +71,7 @@ std::string observerLogPath() {
 
 ItemDuplicatorModule::ItemDuplicatorModule()
     : Module("Item Duplicator",
-             "Inventory observer plus a Creative-only Main Hand copy test. The test does not bypass server authority or replay packets.") {
+             "Inventory observer plus an experimental Survival Main Hand copy trial. Server acceptance and persistence are not assumed.") {
     keybind = 0;
 }
 
@@ -180,7 +180,7 @@ void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
     }
 
     if (duplicateRequested) {
-        bedrocktools::core::InventoryAccess::get().copyMainHandToEmptyHotbar(player);
+        bedrocktools::core::InventoryAccess::get().duplicateMainHandToEmptyHotbar(player);
     }
 
     std::vector<bedrocktools::core::InventorySlotSnapshot> slots;
@@ -367,13 +367,13 @@ void ItemDuplicatorModule::onMenuRegistered() {
     addSlider("m_maxRecords", "Maximum records", "Maximum in-memory and exported JSONL records.", m_maxRecords.load(), 32, 1024, 32, "");
     addToggle("m_captureContainerEvents", "Capture after container slot selection", "Request an extra snapshot after a container selection event.", m_captureContainerEvents.load());
     addToggle("m_persistLogs", "Persist observer log", "Atomically saves a bounded JSONL file in the active Bedaim config folder.", m_persistLogs.load());
-    schema.category("mainhand", "Main Hand Test", "Creative-only native ItemStack copy validation.");
+    schema.category("mainhand", "Main Hand Duplicator", "Experimental Survival main-hand copy trial; server persistence is unverified.");
 
     ConfigNodeV2 duplicateMainHand;
     duplicateMainHand.id = "m_duplicateMainHand";
     duplicateMainHand.key = "m_duplicateMainHand";
-    duplicateMainHand.title = "Duplicate Main Hand (Creative test)";
-    duplicateMainHand.description = "Attempts a native ItemStack copy into the first empty hotbar slot. Requires a verified Creative player and a readable Main Hand stack. This is a local client test, not a server dupe.";
+    duplicateMainHand.title = "Duplicate Main Hand (Survival trial)";
+    duplicateMainHand.description = "Attempts to copy the held ItemStack into the first empty hotbar slot in verified Survival. Requires a readable Main Hand stack and an empty hotbar slot. Immediate local visibility is not proof the server accepted or saved the copy.";
     duplicateMainHand.category = "mainhand";
     duplicateMainHand.type = ConfigControlTypeV2::Button;
     duplicateMainHand.actionValue = "attempt";
@@ -381,8 +381,8 @@ void ItemDuplicatorModule::onMenuRegistered() {
 
     ConfigNodeV2 duplicateInfo;
     duplicateInfo.id = "m_duplicateMainHandInfo";
-    duplicateInfo.title = "Main Hand test is Creative-only; survival and server-authority bypasses are not attempted.";
-    duplicateInfo.description = "A local client-side copy does not prove that a server accepted or persisted another item.";
+    duplicateInfo.title = "Survival copy trial only; local visibility is not server confirmation.";
+    duplicateInfo.description = "The engine container is changed locally. A server-authoritative inventory may reject or overwrite this state; reconnect verification is required.";
     duplicateInfo.category = "mainhand";
     duplicateInfo.type = ConfigControlTypeV2::Info;
     schema.node(std::move(duplicateInfo));
@@ -433,7 +433,7 @@ bool ItemDuplicatorModule::onMenuConfigChanged(std::string_view key, std::string
         bedrocktools::diagnostics::log(
             bedrocktools::diagnostics::Level::Info,
             "ItemDuplicator",
-            "Main Hand Creative copy test queued; waiting for the next local-player tick");
+            "Main Hand Survival copy trial queued; waiting for the next local-player tick");
         return true;
     }
     if (key == "m_exportNow") {
