@@ -1,4 +1,6 @@
 diff --git a/src/modules/misc/bundleextractor.cpp b/src/modules/misc/bundleextractor.cpp
+--- a/src/modules/misc/bundleextractor.cpp
++++ b/src/modules/misc/bundleextractor.cpp
 @@ -295,21 +295,41 @@
 -        if (readStatus == bedrocktools::core::BundleReadStatus::InvalidController ||
 -            readStatus == bedrocktools::core::BundleReadStatus::InvalidBundleStack) {
