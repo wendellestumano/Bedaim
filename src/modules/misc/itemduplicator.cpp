@@ -367,6 +367,7 @@ void ItemDuplicatorModule::onMenuRegistered() {
     addSlider("m_maxRecords", "Maximum records", "Maximum in-memory and exported JSONL records.", m_maxRecords.load(), 32, 1024, 32, "");
     addToggle("m_captureContainerEvents", "Capture after container slot selection", "Request an extra snapshot after a container selection event.", m_captureContainerEvents.load());
     addToggle("m_persistLogs", "Persist observer log", "Atomically saves a bounded JSONL file in the active Bedaim config folder.", m_persistLogs.load());
+    schema.category("mainhand", "Main Hand Test", "Creative-only native ItemStack copy validation.");
 
     ConfigNodeV2 duplicateMainHand;
     duplicateMainHand.id = "m_duplicateMainHand";
@@ -427,6 +428,7 @@ bool ItemDuplicatorModule::onMenuConfigChanged(std::string_view key, std::string
         return true;
     }
     if (key == "m_duplicateMainHand") {
+        if (!enabled) return false;
         m_duplicateMainHandRequested.store(true, std::memory_order_release);
         bedrocktools::diagnostics::log(
             bedrocktools::diagnostics::Level::Info,
