@@ -372,80 +372,109 @@ int InventoryAccess::selectedHotbarSlot(const sdk::Player* player) const {
 bool InventoryAccess::readInventorySnapshot(
     const sdk::Player* player,
     std::vector<InventorySlotSnapshot>& slots,
-    int* selectedSlot) const {
+    int* selectedSlot,
+    std::string* failureReason) const {
     slots.clear();
     if (selectedSlot) *selectedSlot = -1;
-    if (!player || !isReadableMemory(player, sizeof(void*))) return false;
+    if (failureReason) failureReason->clear();
+    const auto fail = [&](const char* reason) {
+        if (failureReason) *failureReason = reason;
+        return false;
+    };
+
+    if (!player || !isReadableMemory(player, sizeof(void*)))
+        return fail("PLAYER_POINTER_INVALID");
 
     const auto playerAddress = reinterpret_cast<std::uintptr_t>(player);
-    if (PlayerInventory > std::numeric_limits<std::uintptr_t>::max() - playerAddress) return false;
+    if (PlayerInventory > std::numeric_limits<std::uintptr_t>::max() - playerAddress)
+        return fail("PLAYER_INVENTORY_FIELD_OVERFLOW");
     const auto* inventoryField = reinterpret_cast<const void*>(playerAddress + PlayerInventory);
-    if (!isReadableMemory(inventoryField, sizeof(void*))) return false;
+    if (!isReadableMemory(inventoryField, sizeof(void*)))
+        return fail("PLAYER_INVENTORY_FIELD_UNREADABLE");
     const void* inventoryProxy = read<const void*>(player, PlayerInventory);
-    if (!inventoryProxy || !isReadableMemory(inventoryProxy, sizeof(void*))) return false;
+    if (!inventoryProxy || !isReadableMemory(inventoryProxy, sizeof(void*)))
+        return fail("PLAYER_INVENTORY_PROXY_INVALID");
 
     const auto proxyAddress = reinterpret_cast<std::uintptr_t>(inventoryProxy);
     if (PlayerInventoryContainer > std::numeric_limits<std::uintptr_t>::max() - proxyAddress ||
-        PlayerInventorySelectedSlot > std::numeric_limits<std::uintptr_t>::max() - proxyAddress) return false;
+        PlayerInventorySelectedSlot > std::numeric_limits<std::uintptr_t>::max() - proxyAddress)
+        return fail("INVENTORY_PROXY_FIELD_OVERFLOW");
     const auto* containerField = reinterpret_cast<const void*>(proxyAddress + PlayerInventoryContainer);
     const auto* selectedField = reinterpret_cast<const void*>(proxyAddress + PlayerInventorySelectedSlot);
     if (!isReadableMemory(containerField, sizeof(void*)) ||
-        !isReadableMemory(selectedField, sizeof(int))) return false;
+        !isReadableMemory(selectedField, sizeof(int)))
+        return fail("INVENTORY_PROXY_FIELDS_UNREADABLE");
     const void* container = read<const void*>(inventoryProxy, PlayerInventoryContainer);
-    if (!container || !isReadableMemory(container, sizeof(void*))) return false;
+    if (!container || !isReadableMemory(container, sizeof(void*)))
+        return fail("INVENTORY_CONTAINER_INVALID");
 
     const auto containerAddress = reinterpret_cast<std::uintptr_t>(container);
-    if (FillingContainerItems > std::numeric_limits<std::uintptr_t>::max() - containerAddress) return false;
+    if (FillingContainerItems > std::numeric_limits<std::uintptr_t>::max() - containerAddress)
+        return fail("CONTAINER_VECTOR_FIELD_OVERFLOW");
     const auto* vectorFields = reinterpret_cast<const void*>(containerAddress + FillingContainerItems);
-    if (!isReadableMemory(vectorFields, 2 * sizeof(std::uintptr_t))) return false;
+    if (!isReadableMemory(vectorFields, 2 * sizeof(std::uintptr_t)))
+        return fail("CONTAINER_VECTOR_FIELDS_UNREADABLE");
     const auto begin = read<std::uintptr_t>(container, FillingContainerItems);
     const auto end = read<std::uintptr_t>(container, FillingContainerItems + sizeof(void*));
-    if (!begin || end <= begin || begin % alignof(void*) != 0) return false;
+    if (!begin || end <= begin || begin % alignof(void*) != 0)
+        return fail("SLOT_VECTOR_BOUNDS_INVALID");
 
     const auto byteCount = end - begin;
-    if (byteCount % ItemStackSize != 0) return false;
+    if (byteCount % ItemStackSize != 0)
+        return fail("SLOT_VECTOR_SIZE_INVALID");
     const auto slotCount = byteCount / ItemStackSize;
-    if (slotCount < 9 || slotCount > 64 || !isReadableMemory(reinterpret_cast<const void*>(begin), byteCount)) return false;
+    if (slotCount < 9 || slotCount > 64)
+        return fail("SLOT_COUNT_OUT_OF_RANGE");
+    if (!isReadableMemory(reinterpret_cast<const void*>(begin), byteCount))
+        return fail("SLOT_VECTOR_MEMORY_UNREADABLE");
 
     const int selected = read<int>(inventoryProxy, PlayerInventorySelectedSlot);
-    if (selected < 0 || selected >= 9 || static_cast<std::size_t>(selected) >= slotCount) return false;
+    if (selected < 0 || selected >= 9 || static_cast<std::size_t>(selected) >= slotCount)
+        return fail("SELECTED_SLOT_INVALID");
 
     std::vector<InventorySlotSnapshot> candidate;
     candidate.reserve(slotCount);
     for (std::size_t index = 0; index < slotCount; ++index) {
         const auto stackAddress = begin + index * ItemStackSize;
         const auto* stack = reinterpret_cast<const void*>(stackAddress);
-        if (!isReadableMemory(stack, ItemStackSize)) return false;
+        if (!isReadableMemory(stack, ItemStackSize))
+            return fail("STACK_MEMORY_UNREADABLE");
 
         const auto valid = read<std::uint8_t>(stack, ItemStackValid);
         const auto count = read<std::uint8_t>(stack, ItemStackCount);
         InventorySlotSnapshot entry;
         entry.slotIndex = static_cast<int>(index);
         if (valid == 0) {
-            if (count != 0) return false;
+            if (count != 0) return fail("EMPTY_STACK_COUNT_MISMATCH");
             entry.empty = true;
             candidate.push_back(std::move(entry));
             continue;
         }
-        if (valid != 1 || count == 0) return false;
+        if (valid != 1 || count == 0)
+            return fail("STACK_VALIDITY_OR_COUNT_INVALID");
 
-        // Validate the pointer chain before reusing the established identifier
-        // accessor. A malformed stack is unknown, not an empty slot.
         const auto* counterField = reinterpret_cast<const void*>(stackAddress + ItemStackItemCounter);
-        if (!isReadableMemory(counterField, sizeof(void*))) return false;
+        if (!isReadableMemory(counterField, sizeof(void*)))
+            return fail("STACK_COUNTER_FIELD_UNREADABLE");
         const void* counter = read<const void*>(stack, ItemStackItemCounter);
-        if (!counter || !isReadableMemory(counter, sizeof(void*))) return false;
+        if (!counter || !isReadableMemory(counter, sizeof(void*)))
+            return fail("STACK_COUNTER_INVALID");
         const void* item = read<const void*>(counter, 0);
-        if (!item || !isReadableMemory(item, sizeof(void*))) return false;
+        if (!item || !isReadableMemory(item, sizeof(void*)))
+            return fail("STACK_ITEM_INVALID");
         const auto* vtable = read<const std::uintptr_t*>(item, 0);
-        if (!vtable || !isReadableMemory(vtable, (ItemGetDescriptionIdVtableIndex + 1) * sizeof(std::uintptr_t))) return false;
+        if (!vtable || !isReadableMemory(vtable, (ItemGetDescriptionIdVtableIndex + 1) * sizeof(std::uintptr_t)))
+            return fail("ITEM_VTABLE_UNREADABLE");
         const auto method = read<std::uintptr_t>(vtable, ItemGetDescriptionIdVtableIndex * sizeof(void*));
-        if (!method || !isReadableMemory(reinterpret_cast<const void*>(method), 1)) return false;
+        if (!method || !isReadableMemory(reinterpret_cast<const void*>(method), 1))
+            return fail("ITEM_IDENTIFIER_METHOD_UNREADABLE");
         Dl_info methodInfo{};
-        if (!dladdr(reinterpret_cast<void*>(method), &methodInfo) || !methodInfo.dli_fname) return false;
+        if (!dladdr(reinterpret_cast<void*>(method), &methodInfo) || !methodInfo.dli_fname)
+            return fail("ITEM_IDENTIFIER_METHOD_UNRESOLVED");
 
         entry.itemIdentifier = stackIdentifier(stack);
-        if (entry.itemIdentifier.empty() || entry.itemIdentifier.size() > 128) return false;
+        if (entry.itemIdentifier.empty() || entry.itemIdentifier.size() > 128)
+            return fail("ITEM_IDENTIFIER_INVALID");
         entry.count = count;
         entry.empty = false;
         candidate.push_back(std::move(entry));
@@ -455,7 +484,6 @@ bool InventoryAccess::readInventorySnapshot(
     if (selectedSlot) *selectedSlot = selected;
     return true;
 }
-
 std::string InventoryAccess::selectedHotbarIdentifier(const sdk::Player* player) const {
     if (!player) return {};
     std::uintptr_t begin = 0;
