@@ -44,7 +44,8 @@ public:
     // for any unreadable/unknown slot so callers never mistake unknown for empty.
     bool readInventorySnapshot(const sdk::Player* player,
                                std::vector<InventorySlotSnapshot>& slots,
-                               int* selectedSlot = nullptr) const;
+                               int* selectedSlot = nullptr,
+                               std::string* failureReason = nullptr) const;
     std::string selectedHotbarIdentifier(const sdk::Player* player) const;
     std::string offhandIdentifier(const sdk::Player* player) const;
     bool readOffhandIdentifier(const sdk::Player* player, std::string& identifier,
