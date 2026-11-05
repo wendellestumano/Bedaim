@@ -7,6 +7,7 @@
 #include <bedrocktools/events/ContainerSlotSelectedEvent.hpp>
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/events/LocalPlayerTickEvent.hpp>
+#include <bedrocktools/sdk/client/ClientInstance.hpp>
 #include <pl/ModMenu.hpp>
 
 #include <algorithm>
@@ -70,7 +71,7 @@ std::string observerLogPath() {
 
 ItemDuplicatorModule::ItemDuplicatorModule()
     : Module("Item Duplicator",
-             "Read-only inventory research observer. Records local item counts and detects client-side changes; it does not duplicate, move, or modify items.") {
+             "Inventory observer plus a Creative-only Main Hand copy test. The test does not bypass server authority or replay packets.") {
     keybind = 0;
 }
 
@@ -149,7 +150,20 @@ void ItemDuplicatorModule::onFrame() {
 }
 
 void ItemDuplicatorModule::observePlayer(bedrocktools::sdk::Player* player) {
-    if (!m_callbacksActive.load(std::memory_order_acquire) || !player) return;
+    if (!m_callbacksActive.load(std::memory_order_acquire)) return;
+
+    // NormalTick is an actor hook. Resolve the actual local player from the live
+    // ClientInstance instead of assuming the hook's actor argument is LocalPlayer.
+    if (auto* client = bedrocktools::sdk::ClientInstance::current()) {
+        if (auto* localPlayer = client->localPlayer()) player = localPlayer;
+    }
+    if (!player) return;
+
+    if (m_duplicateMainHandRequested.exchange(false, std::memory_order_acq_rel)) {
+        bedrocktools::core::InventoryAccess::get().copyMainHandToEmptyHotbar(player);
+        m_captureRequested.store(true, std::memory_order_release);
+    }
+
     const auto now = std::chrono::steady_clock::now();
     const bool requested = m_captureRequested.exchange(false, std::memory_order_acq_rel);
     if (!requested && m_nextCapture.time_since_epoch().count() != 0 && now < m_nextCapture) return;
@@ -340,6 +354,25 @@ void ItemDuplicatorModule::onMenuRegistered() {
     addSlider("m_maxRecords", "Maximum records", "Maximum in-memory and exported JSONL records.", m_maxRecords.load(), 32, 1024, 32, "");
     addToggle("m_captureContainerEvents", "Capture after container slot selection", "Request an extra snapshot after a container selection event.", m_captureContainerEvents.load());
     addToggle("m_persistLogs", "Persist observer log", "Atomically saves a bounded JSONL file in the active Bedaim config folder.", m_persistLogs.load());
+
+    ConfigNodeV2 duplicateMainHand;
+    duplicateMainHand.id = "m_duplicateMainHand";
+    duplicateMainHand.key = "m_duplicateMainHand";
+    duplicateMainHand.title = "Duplicate Main Hand (Creative test)";
+    duplicateMainHand.description = "Attempts a native ItemStack copy into the first empty hotbar slot. Requires a verified Creative player and a readable Main Hand stack. This is a local client test, not a server dupe.";
+    duplicateMainHand.category = "mainhand";
+    duplicateMainHand.type = ConfigControlTypeV2::Button;
+    duplicateMainHand.actionValue = "attempt";
+    schema.node(std::move(duplicateMainHand));
+
+    ConfigNodeV2 duplicateInfo;
+    duplicateInfo.id = "m_duplicateMainHandInfo";
+    duplicateInfo.title = "Main Hand test is Creative-only; survival and server-authority bypasses are not attempted.";
+    duplicateInfo.description = "A local client-side copy does not prove that a server accepted or persisted another item.";
+    duplicateInfo.category = "mainhand";
+    duplicateInfo.type = ConfigControlTypeV2::Info;
+    schema.node(std::move(duplicateInfo));
+
     addToggle("m_exportNow", "Export current observer log now", "One-shot action: writes the current records even when automatic persistence is disabled.", false);
     addToggle("m_clearSession", "Clear current observer session", "One-shot action: clears the in-memory ring and replaces the exported file with an empty log.", false);
     setConfigSchemaJson(moduleId, schema.toJson());
@@ -378,6 +411,14 @@ bool ItemDuplicatorModule::onMenuConfigChanged(std::string_view key, std::string
             m_logDirty = true;
             ++m_logGeneration;
         }
+        return true;
+    }
+    if (key == "m_duplicateMainHand") {
+        m_duplicateMainHandRequested.store(true, std::memory_order_release);
+        bedrocktools::diagnostics::log(
+            bedrocktools::diagnostics::Level::Info,
+            "ItemDuplicator",
+            "Main Hand Creative copy test queued; waiting for the next local-player tick");
         return true;
     }
     if (key == "m_exportNow") {
