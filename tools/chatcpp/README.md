@@ -44,7 +44,7 @@ Copy config.example.json to config.local.json and set workspace to the absolute 
     chatcpp --config config.local.json priority set aimassist 10
     chatcpp --config config.local.json experiment add "FOV causes drift" "Compare target smoothing with FOV changes" "inconclusive" --evidence "test notes" --learned "Do not assume the camera update is frame invariant"
 
-cycle --loop is opt-in and stops on Ctrl+C or SIGTERM. Do not run an unbounded loop in GitHub Actions. Cloud jobs execute one bounded cycle and let the scheduler invoke the next run.
+cycle --loop is opt-in and stops on Ctrl+C or SIGTERM. Do not run an unbounded loop in GitHub Actions. Cloud jobs execute one bounded cycle per scheduled workflow. Change the workflow cron expression to select hourly or another supported cloud cadence.
 
 ## Scanner scope and limitations
 
@@ -54,7 +54,7 @@ The scanner inventories supported text/source files and records TODO/FIXME/HACK/
 
 SQLite stores tasks, findings, memory entries, experiments, cycles, priorities, and audit events. FTS5 is used when available; a LIKE-based fallback is used when the system SQLite lacks FTS5. Full-state snapshots are versioned JSON and can be imported into a fresh worker.
 
-The initial cloud worker stores technical snapshots on a dedicated public chatcpp-memory branch. Anyone who can view the public repository can read that branch. Never put secrets, tokens, signing keys, private user data, or credentials in ChatC++ memory. Supabase/Postgres is a later option if Git-based snapshots become too large.
+The initial cloud worker uses a dedicated public chatcpp-memory branch for versioned technical state snapshots. Snapshots contain durable tasks, findings, decisions/lessons, experiments, and priorities; per-run cycle and audit telemetry stays local so unchanged scans do not create commits. The snapshot is visible to anyone who can view the public repository. Never put secrets, tokens, signing keys, private user data, or credentials in ChatC++ memory. Supabase/Postgres is a later option if Git-based snapshots become too large.
 
 ## Safety policy
 
