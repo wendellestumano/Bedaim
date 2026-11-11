@@ -196,12 +196,15 @@ class MemoryStore:
         return datetime.now(timezone.utc) - last >= timedelta(minutes=interval_minutes)
 
     def export_state(self, destination: Path) -> int:
-        tables = ("tasks", "findings", "memory_entries", "experiments", "cycles", "priorities", "audit_events")
+        # Export only durable engineering knowledge. Per-run cycles and audit events
+        # stay local so a no-change scheduled scan does not create a Git commit.
+        tables = ("tasks", "findings", "memory_entries", "experiments", "priorities")
+        order_by = {"tasks": "created_at,id", "findings": "fingerprint", "memory_entries": "created_at,id", "experiments": "created_at,id", "priorities": "area"}
         destination.parent.mkdir(parents=True, exist_ok=True)
-        snapshot: dict[str, Any] = {"schema_version": 1, "exported_at": utcnow(), "tables": {}}
+        snapshot: dict[str, Any] = {"schema_version": 1, "tables": {}}
         with self.connect() as db:
             for table in tables:
-                snapshot["tables"][table] = [dict(row) for row in db.execute(f"SELECT * FROM {table}").fetchall()]
+                snapshot["tables"][table] = [dict(row) for row in db.execute(f"SELECT * FROM {table} ORDER BY {order_by[table]}").fetchall()]
         destination.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return sum(len(rows) for rows in snapshot["tables"].values())
 
