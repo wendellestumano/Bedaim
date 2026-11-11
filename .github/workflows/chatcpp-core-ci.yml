@@ -72,7 +72,7 @@ jobs:
           CHATCPP_WORKSPACE: ${{ github.workspace }}
           CHATCPP_DATABASE: ${{ runner.temp }}/chatcpp.sqlite3
           CHATCPP_CONTINUOUS: "false"
-        run: chatcpp --config tools/chatcpp/config.example.json cycle --if-due
+        run: chatcpp --config tools/chatcpp/config.example.json cycle
       - name: Save persistent project state
         env:
           CHATCPP_WORKSPACE: ${{ github.workspace }}
@@ -81,7 +81,7 @@ jobs:
         run: |
           chatcpp --config tools/chatcpp/config.example.json export-state .chatcpp-memory/chatcpp-state.json
           git -C .chatcpp-memory config user.name "github-actions[bot]"
-          git -C .chatcpp-memory config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C .chatcpp-memory config user.email "41898282+users.noreply.github.com"
           git -C .chatcpp-memory add chatcpp-state.json
           if ! git -C .chatcpp-memory diff --cached --quiet; then
             git -C .chatcpp-memory commit -m "chore(chatcpp): persist engineering memory snapshot"
