@@ -1,0 +1,24 @@
+{
+  "workspace": "../..",
+  "database": "~/.local/share/chatcpp/bedaim.sqlite3",
+  "interval_minutes": 30,
+  "continuous": false,
+  "max_cycles_per_process": 1,
+  "max_files_per_scan": 20000,
+  "max_file_bytes": 2000000,
+  "monthly_budget_brl": 0,
+  "daily_model_call_limit": 30,
+  "model_provider": "disabled",
+  "model_name": "",
+  "priorities": {
+    "stability": 10,
+    "aimassist": 9,
+    "blockesp": 8,
+    "oreesp": 8,
+    "hitbox": 7,
+    "player_radar": 6,
+    "hud": 5,
+    "documentation": 4,
+    "tooling": 7
+  }
+}
