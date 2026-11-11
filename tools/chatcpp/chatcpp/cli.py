@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     task_add.add_argument("title")
     task_add.add_argument("--description", default="")
     task_add.add_argument("--area", default="general")
-    task_add.add_argument("--priority", type=int, default=5)
+    task_add.add_argument("--priority", type=int, default=None)
     task_sub.add_parser("list")
     findings = sub.add_parser("findings", help="List open scanner findings")
     findings.add_argument("--limit", type=int, default=100)
@@ -97,7 +97,9 @@ def main() -> None:
             print(f"Exported {store.export_memory(args.destination)} memory entries to {args.destination}")
     elif args.command == "task":
         if args.task_command == "add":
-            print(store.add_task(args.title, args.description, args.area, args.priority))
+            configured_priority = store.list_priorities().get(args.area.lower(), settings.priorities.get(args.area.lower(), 5))
+            priority = args.priority if args.priority is not None else configured_priority
+            print(store.add_task(args.title, args.description, args.area, priority))
         else:
             print(json.dumps(store.list_tasks(), ensure_ascii=False, indent=2))
     elif args.command == "findings":
