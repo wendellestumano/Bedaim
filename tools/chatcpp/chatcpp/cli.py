@@ -61,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     experiment_add.add_argument("--learned", default="")
     experiment_add.add_argument("--task-id")
     experiment_sub.add_parser("list")
-    export_state = sub.add_parser("export-state", help="Export all persistent state to JSON")
+    export_state = sub.add_parser("export-state", help="Export durable project knowledge to JSON")
     export_state.add_argument("destination", type=Path)
     import_state = sub.add_parser("import-state", help="Merge a JSON state snapshot into the local database")
     import_state.add_argument("source", type=Path)
