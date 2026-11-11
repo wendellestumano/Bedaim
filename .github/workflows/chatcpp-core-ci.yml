@@ -1,0 +1,89 @@
+name: ChatC++ Core CI and Scheduled Inspection
+
+on:
+  push:
+    branches: ["feat/chatcpp-core-v0.1", "main"]
+    paths:
+      - "tools/chatcpp/**"
+      - ".github/workflows/chatcpp-core-ci.yml"
+  pull_request:
+    paths:
+      - "tools/chatcpp/**"
+      - ".github/workflows/chatcpp-core-ci.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chatcpp-core-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools/chatcpp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install package
+        run: python -m pip install --no-deps .
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Validate CLI
+        run: chatcpp --help
+
+  scheduled-inspection:
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: chatcpp-memory
+          path: .chatcpp-memory
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ChatC++ Core
+        working-directory: tools/chatcpp
+        run: python -m pip install --no-deps .
+      - name: Restore persistent project state
+        env:
+          CHATCPP_WORKSPACE: ${{ github.workspace }}
+          CHATCPP_DATABASE: ${{ runner.temp }}/chatcpp.sqlite3
+          CHATCPP_CONTINUOUS: "false"
+        run: |
+          if [ -f .chatcpp-memory/chatcpp-state.json ]; then
+            chatcpp --config tools/chatcpp/config.example.json import-state .chatcpp-memory/chatcpp-state.json
+          fi
+      - name: Run bounded inspection cycle
+        env:
+          CHATCPP_WORKSPACE: ${{ github.workspace }}
+          CHATCPP_DATABASE: ${{ runner.temp }}/chatcpp.sqlite3
+          CHATCPP_CONTINUOUS: "false"
+        run: chatcpp --config tools/chatcpp/config.example.json cycle --if-due
+      - name: Save persistent project state
+        env:
+          CHATCPP_WORKSPACE: ${{ github.workspace }}
+          CHATCPP_DATABASE: ${{ runner.temp }}/chatcpp.sqlite3
+          CHATCPP_CONTINUOUS: "false"
+        run: |
+          chatcpp --config tools/chatcpp/config.example.json export-state .chatcpp-memory/chatcpp-state.json
+          git -C .chatcpp-memory config user.name "github-actions[bot]"
+          git -C .chatcpp-memory config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C .chatcpp-memory add chatcpp-state.json
+          if ! git -C .chatcpp-memory diff --cached --quiet; then
+            git -C .chatcpp-memory commit -m "chore(chatcpp): persist engineering memory snapshot"
+            git -C .chatcpp-memory push origin HEAD:chatcpp-memory
+          fi
