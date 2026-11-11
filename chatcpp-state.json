@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "exported_at": "2026-11-11T03:56:10.154Z",
+  "tables": {
+    "tasks": [],
+    "findings": [],
+    "memory_entries": [],
+    "experiments": [],
+    "cycles": [],
+    "priorities": [],
+    "audit_events": []
+  }
+}
