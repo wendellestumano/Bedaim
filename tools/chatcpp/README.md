@@ -52,7 +52,7 @@ The scanner inventories supported text/source files and records TODO/FIXME/HACK/
 
 ## Memory model
 
-SQLite stores tasks, findings, memory entries, experiments, cycles, priorities, and audit events. FTS5 is used when available; a LIKE-based fallback is used when the system SQLite lacks FTS5. Full-state snapshots are versioned JSON and can be imported into a fresh worker.
+SQLite stores tasks, findings, memory entries, experiments, cycles, priorities, and audit events. FTS5 is used when available; a LIKE-based fallback is used when the system SQLite lacks FTS5. Durable-knowledge snapshots are versioned JSON and can be imported into a fresh worker.
 
 The initial cloud worker uses a dedicated public chatcpp-memory branch for versioned technical state snapshots. Snapshots contain durable tasks, findings, decisions/lessons, experiments, and priorities; per-run cycle and audit telemetry stays local so unchanged scans do not create commits. The snapshot is visible to anyone who can view the public repository. Never put secrets, tokens, signing keys, private user data, or credentials in ChatC++ memory. Supabase/Postgres is a later option if Git-based snapshots become too large.
 
