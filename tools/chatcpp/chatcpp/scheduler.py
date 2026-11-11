@@ -27,14 +27,12 @@ class Scheduler:
             created = sum(1 for finding in report["findings"] if self.store.add_finding(finding))
             summary = f"Scanned {report['files_scanned']} files; discovered {len(report['findings'])} maintenance markers; {created} new findings."
             self.store.finish_cycle(cycle_id, "completed", summary, report["files_scanned"], created)
-            self.store.add_memory("scan_report", f"Repository scan {cycle_id}", json.dumps(report, ensure_ascii=False), ["scan", "inventory", "bedaim"], report.get("git", {}).get("commit"))
             report["cycle_id"] = cycle_id
             report["new_findings"] = created
             report["summary"] = summary
             return report
         except Exception as exc:
             self.store.finish_cycle(cycle_id, "failed", f"{type(exc).__name__}: {exc}", 0, 0)
-            self.store.add_memory("failure", f"Failed scan {cycle_id}", f"{type(exc).__name__}: {exc}", ["scheduler", "failure"], cycle_id, 1.0)
             raise
 
     def run(self, once: bool = True, interval_minutes: int | None = None, max_cycles: int | None = None) -> int:
